@@ -308,7 +308,8 @@ async function loadVMs() {
       <td class="hide-sm">${vm.disks.map((d) => `${d.size_gb} GB`).join(", ")}</td>
       <td class="actions">
         ${vm.state === "running"
-          ? `<button data-act="stop" data-id="${vm.uuid}">Shutdown</button>
+          ? `<button data-act="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button>
+             <button data-act="stop" data-id="${vm.uuid}">Shutdown</button>
              <button data-act="poweroff" data-id="${vm.uuid}">Power off</button>`
           : `<button data-act="start" data-id="${vm.uuid}">Start</button>
              <button class="danger" data-act="delete" data-id="${vm.uuid}">ลบ</button>`}
@@ -321,6 +322,11 @@ document.getElementById("vms").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-act]");
   if (!btn) return;
   const { act, id } = btn.dataset;
+  if (act === "console") {
+    const q = new URLSearchParams({ vm: id, name: btn.dataset.name });
+    window.open(`console.html?${q}`, `console-${id}`, "width=1100,height=760");
+    return;
+  }
   msg();
   try {
     if (act === "start") await api(`/vms/${id}/start`, { method: "POST" });

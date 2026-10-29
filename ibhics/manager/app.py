@@ -7,12 +7,12 @@ import contextlib
 import socket
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, status
+from fastapi import APIRouter, FastAPI, WebSocket, status
 from fastapi.staticfiles import StaticFiles
 
-from .. import __version__
+from .. import __version__, console
 from ..cluster import Cluster, NodeUnavailable, Topology
-from ..hypervisor import HypervisorDriver, VMExists
+from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
 from .schemas import (
@@ -191,6 +191,32 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         member.driver.delete_vm(uuid)
+
+    # VM console: the browser's noVNC WebSocket is relayed to the VM's VNC display, on this
+    # node directly or through the agent of the VM's node.
+
+    @app.websocket("/api/v1/vms/{uuid}/console")
+    async def vm_console(ws: WebSocket, uuid: str) -> None:
+        await console.accept(ws)
+        try:
+            member, vm = await asyncio.to_thread(cluster.find_vm, uuid)
+        except VMNotFound:
+            await console.refuse(ws, "VM not found")
+            return
+        if vm.state != VMState.RUNNING:
+            await console.refuse(ws, "start the VM to open its console")
+            return
+        try:
+            if member.local:
+                host, port = await asyncio.to_thread(member.driver.console_address, uuid)
+                await console.bridge_tcp(ws, host, port)
+            else:
+                async with member.client.open_console(uuid) as remote:
+                    await console.bridge_ws(ws, remote)
+        except (InvalidState, NotImplementedError) as exc:
+            await console.refuse(ws, str(exc) or "this node has no console")
+        except Exception as exc:  # unreachable node or display: tell the browser why
+            await console.refuse(ws, f"console unavailable: {exc}")
 
     # Backup. Targets and policies are cluster configuration and need quorum to change;
     # taking a backup does not, so VMs stay protected while a node is down.

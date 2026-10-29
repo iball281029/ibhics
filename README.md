@@ -120,6 +120,12 @@ curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: applicat
   -d '{"name": "nightly", "target": "nas", "at": "02:00", "keep_last": 14}'
 ```
 
+## Console ของ VM
+
+กดปุ่ม **Console** ที่ VM ที่เปิดอยู่ จะเปิดหน้าจอของ VM ในเบราว์เซอร์ (noVNC) มีปุ่ม Ctrl+Alt+Del, วางข้อความ (พิมพ์ข้อความจาก clipboard ลงใน VM) และเต็มจอ
+
+VNC ของทุก VM ฟังเฉพาะ `127.0.0.1` ของ node ตัวเอง เบราว์เซอร์คุยกับ manager ผ่าน WebSocket `/api/v1/vms/{uuid}/console` แล้ว manager ส่งต่อไปยัง VNC บน node ของตัวเอง หรือผ่าน agent ของ node ที่ VM อยู่ (ยืนยันด้วย cluster token) จึงไม่ต้องเปิดพอร์ต VNC ออกนอกเครื่อง โหมดพัฒนา (`--driver fake`) มี VNC จำลองแสดงภาพทดสอบ
+
 ## REST API
 
 | Method | Path | ทำอะไร |
@@ -159,5 +165,7 @@ ruff check . && ruff format --check .
 ## License
 
 ibHiCS ใช้ license [GNU AGPLv3](LICENSE) ใช้งาน ติดตั้ง และแก้ไขได้ฟรี แต่ถ้านำไปแก้แล้วแจกจ่ายหรือเปิดเป็นบริการผ่านเครือข่าย ต้องเปิดซอร์สส่วนที่แก้ภายใต้ AGPLv3 ด้วย
+
+Web console ใช้ [noVNC](https://github.com/novnc/noVNC) 1.6.0 (MPL-2.0) และ pako (MIT) ที่รวมไว้ใน `ibhics/manager/static/novnc/` พร้อมไฟล์ license ของแต่ละโครงการ
 
 ผู้ร่วมพัฒนาต้องยอมรับ [Contributor License Agreement](CLA.md) ก่อน PR แรกจะถูก merge ดูขั้นตอนใน [CONTRIBUTING.md](CONTRIBUTING.md)

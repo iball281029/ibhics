@@ -14,6 +14,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",
     "httpx>=0.27",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +29,7 @@ ibhics-manager = "ibhics.manager.__main__:main"
 include = ["ibhics*"]
 
 [tool.setuptools.package-data]
-"ibhics.manager" = ["static/*"]
+"ibhics.manager" = ["static/*", "static/**/*"]
 
 [tool.ruff]
 line-length = 100
