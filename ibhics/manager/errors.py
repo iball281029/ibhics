@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from ..hypervisor import InvalidState, VMExists, VMNotFound
+from ..hypervisor import InvalidState, PoolNotFound, VMExists, VMNotFound
 
 
 def _handler(status: int, prefix: str = ""):
@@ -17,6 +17,7 @@ def _handler(status: int, prefix: str = ""):
 
 def install_driver_errors(app: FastAPI) -> None:
     app.add_exception_handler(VMNotFound, _handler(404, "VM not found: "))
+    app.add_exception_handler(PoolNotFound, _handler(404, "storage pool not found: "))
     app.add_exception_handler(VMExists, _handler(409))
     app.add_exception_handler(InvalidState, _handler(409))
     # Validation the driver does beyond the request schema.

@@ -10,7 +10,7 @@ from .. import __version__
 from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver
 from ..manager.errors import install_driver_errors
-from ..manager.schemas import HostOut, StopRequest, VMCreate, VMOut
+from ..manager.schemas import HostOut, PoolCreate, PoolOut, StopRequest, VMCreate, VMOut
 
 
 def create_agent_app(
@@ -65,6 +65,18 @@ def create_agent_app(
         @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_vm(uuid: str) -> None:
             driver.delete_vm(uuid)
+
+        @api.get("/pools", response_model=list[PoolOut])
+        def list_pools() -> list[PoolOut]:
+            return [PoolOut.from_info(p) for p in driver.list_pools()]
+
+        @api.post("/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
+        def create_pool(body: PoolCreate) -> PoolOut:
+            return PoolOut.from_info(driver.create_pool(body.to_spec()))
+
+        @api.delete("/pools/{name}", status_code=status.HTTP_204_NO_CONTENT)
+        def delete_pool(name: str) -> None:
+            driver.delete_pool(name)
 
     app.include_router(api)
     return app

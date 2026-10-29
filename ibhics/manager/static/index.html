@@ -53,6 +53,8 @@
       <label>vCPU <input name="vcpus" type="number" min="1" value="2"></label>
       <label>RAM (MB) <input name="memory_mb" type="number" min="128" step="128" value="2048"></label>
       <label>ดิสก์ (GB) <input name="disk_gb" type="number" min="1" value="40"></label>
+      <label>Storage pool <input name="pool" value="default" list="pool-names"></label>
+      <datalist id="pool-names"></datalist>
       <label>Firmware
         <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
       </label>
@@ -76,6 +78,34 @@
       </label>
       <label>Agent URL <input name="address" required placeholder="http://10.0.0.12:8007"></label>
       <button type="submit">เพิ่ม node</button>
+    </form>
+  </section>
+  <section>
+    <h2>Storage</h2>
+    <table>
+      <thead><tr><th>Node</th><th>Pool</th><th>ชนิด</th><th class="hide-sm">ที่มา</th><th>ใช้ / ทั้งหมด</th><th></th></tr></thead>
+      <tbody id="pools"></tbody>
+    </table>
+    <h2 style="margin-top:16px">เพิ่ม storage pool</h2>
+    <form id="pool-form">
+      <label>Node <select name="node" class="node-list" required></select></label>
+      <label>ชื่อ pool <input name="name" required placeholder="nas01"></label>
+      <label>ชนิด
+        <select name="type" id="pool-type">
+          <option value="dir">Local directory</option>
+          <option value="nfs">NFS</option>
+          <option value="iscsi">iSCSI (LVM บน LUN)</option>
+          <option value="lvm">FC / local disk (LVM)</option>
+        </select>
+      </label>
+      <label data-for="dir">Path (ว่าง = ค่าเริ่มต้น) <input name="path" placeholder="/var/lib/ibhics/pools/..."></label>
+      <label data-for="nfs iscsi">Server / Portal <input name="host" placeholder="10.0.0.50"></label>
+      <label data-for="nfs">Export <input name="export" placeholder="/vol/vms"></label>
+      <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:lun1"></label>
+      <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
+      <label data-for="lvm">Device <input name="device" placeholder="/dev/mapper/mpatha"></label>
+      <label data-for="iscsi lvm" class="wipe"><span><input name="confirm_wipe" type="checkbox" style="width:auto"> ยืนยันว่าลบข้อมูลบน device ได้</span></label>
+      <button type="submit">เพิ่ม pool</button>
     </form>
   </section>
   <section>
@@ -126,7 +156,69 @@ async function loadCluster() {
     .filter((m) => m.role === "compute" && m.healthy)
     .map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
   select.value = keep;
+  for (const list of document.querySelectorAll(".node-list")) {
+    const prev = list.value;
+    list.innerHTML = c.members.filter((m) => m.role === "compute" && m.healthy)
+      .map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+    if (prev) list.value = prev;
+  }
 }
+
+const POOL_TYPES = { dir: "Local", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC/disk)" };
+
+async function loadPools() {
+  const pools = await api("/pools");
+  document.getElementById("pools").innerHTML = pools.map((p) => `
+    <tr>
+      <td>${esc(p.node)}</td>
+      <td>${esc(p.name)}</td>
+      <td>${esc(POOL_TYPES[p.type] || p.type)}</td>
+      <td class="hide-sm">${esc(p.source)}</td>
+      <td>${p.allocation_gb} / ${p.capacity_gb} GB</td>
+      <td><button class="danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">นำออก</button></td>
+    </tr>`).join("");
+  const names = [...new Set(pools.map((p) => p.name))];
+  document.getElementById("pool-names").innerHTML = names.map((n) => `<option value="${esc(n)}">`).join("");
+}
+
+function showPoolFields() {
+  const type = document.getElementById("pool-type").value;
+  for (const el of document.querySelectorAll("#pool-form [data-for]")) {
+    el.style.display = el.dataset.for.split(" ").includes(type) ? "" : "none";
+  }
+}
+document.getElementById("pool-type").addEventListener("change", showPoolFields);
+showPoolFields();
+
+document.getElementById("pool-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const type = f.get("type");
+  const body = { name: f.get("name"), type, confirm_wipe: f.get("confirm_wipe") === "on" };
+  if (type === "dir" && f.get("path")) body.path = f.get("path");
+  if (type === "nfs" || type === "iscsi") body.host = f.get("host");
+  if (type === "nfs") body.export = f.get("export");
+  if (type === "iscsi") { body.iqn = f.get("iqn"); body.lun = Number(f.get("lun")); }
+  if (type === "lvm") body.device = f.get("device");
+  if (body.confirm_wipe && !confirm("ข้อมูลทั้งหมดบน device นี้จะถูกลบ ดำเนินการต่อ?")) return;
+  msg();
+  try {
+    await api(`/nodes/${encodeURIComponent(f.get("node"))}/pools`, { method: "POST", body: JSON.stringify(body) });
+    e.target.reset();
+    showPoolFields();
+    await loadPools();
+  } catch (err) { msg(err.message); }
+});
+
+document.getElementById("pools").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-pool]");
+  if (!btn || !confirm(`นำ pool ${btn.dataset.pool} ออกจาก ${btn.dataset.node}? (ข้อมูลบน storage จะยังอยู่)`)) return;
+  msg();
+  try {
+    await api(`/nodes/${encodeURIComponent(btn.dataset.node)}/pools/${encodeURIComponent(btn.dataset.pool)}`, { method: "DELETE" });
+    await loadPools();
+  } catch (err) { msg(err.message); }
+});
 
 async function loadVMs() {
   const vms = await api("/vms");
@@ -167,6 +259,7 @@ document.getElementById("vms").addEventListener("click", async (e) => {
       await api(`/vms/${id}`, { method: "DELETE" });
     }
     await loadVMs();
+    await loadPools();
   } catch (err) { msg(err.message); }
 });
 
@@ -182,13 +275,14 @@ document.getElementById("create").addEventListener("submit", async (e) => {
         vcpus: Number(f.get("vcpus")),
         memory_mb: Number(f.get("memory_mb")),
         firmware: f.get("firmware"),
-        disks: [{ size_gb: Number(f.get("disk_gb")) }],
+        disks: [{ size_gb: Number(f.get("disk_gb")), pool: f.get("pool") || "default" }],
         nics: [{ network: f.get("network") }],
         node: f.get("node") || null,
       }),
     });
     e.target.reset();
     await loadVMs();
+    await loadPools();
   } catch (err) { msg(err.message); }
 });
 
@@ -217,6 +311,7 @@ document.getElementById("join").addEventListener("submit", async (e) => {
 });
 
 loadCluster().catch((err) => msg(err.message));
+loadPools().catch((err) => msg(err.message));
 setInterval(() => { loadCluster().catch(() => {}); loadVMs().catch(() => {}); }, 10000);
 loadVMs().catch((err) => msg(err.message));
 </script>

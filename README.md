@@ -73,6 +73,24 @@ curl -X POST http://node1:8006/api/v1/cluster/nodes -H 'content-type: applicatio
 
 ถ้าสมาชิกที่ online เหลือไม่ถึงครึ่ง (เช่น 2 node + witness แต่ล่มไป 2 เครื่อง) ระบบจะเสีย quorum และไม่ยอมให้สร้าง เปิด ปิด หรือลบ VM เพื่อกัน split-brain แต่ยังดูสถานะได้ตามปกติ
 
+## Storage
+
+แต่ละ node มี storage pool ของตัวเอง เพิ่มได้จากส่วน Storage ในหน้า Web Console หรือผ่าน API
+
+| ชนิด | ใช้กับ | ดิสก์ VM |
+| --- | --- | --- |
+| `dir` | ดิสก์ในเครื่อง (ค่าเริ่มต้น `/var/lib/ibhics/pools/<ชื่อ>`) | qcow2 |
+| `nfs` | NAS / NFS server | qcow2 |
+| `iscsi` | iSCSI target: login แล้วสร้าง LVM บน LUN ที่เลือก | raw (LVM) |
+| `lvm` | FC LUN ผ่าน multipath (`/dev/mapper/mpathX`) หรือดิสก์ในเครื่อง | raw (LVM) |
+
+`iscsi` และ `lvm` จะลบข้อมูลบน device จึงต้องส่ง `"confirm_wipe": true` ส่วน FC ต้องตั้งค่า multipath บนเครื่องให้เห็น device ก่อน ถ้าใช้ storage ร่วมกันหลาย node (เช่น NFS ตัวเดียวกัน) ให้เพิ่ม pool ชื่อเดียวกันในทุก node ที่ต้องเข้าถึง LVM บน LUN เดียวกันจากหลาย node พร้อมกันยังไม่รองรับในรอบนี้ (ต้องใช้ lvmlockd)
+
+```bash
+curl -X POST http://node1:8006/api/v1/nodes/node1/pools -H 'content-type: application/json' \
+  -d '{"name": "nas01", "type": "nfs", "host": "10.0.0.50", "export": "/vol/vms"}'
+```
+
 ## REST API
 
 | Method | Path | ทำอะไร |
@@ -82,6 +100,9 @@ curl -X POST http://node1:8006/api/v1/cluster/nodes -H 'content-type: applicatio
 | POST | `/api/v1/cluster/nodes` | เพิ่ม node (compute หรือ witness) |
 | DELETE | `/api/v1/cluster/nodes/{name}` | นำ node ออก |
 | GET | `/api/v1/nodes/{name}/host` | ข้อมูลฮาร์ดแวร์ของ node |
+| GET | `/api/v1/pools` | storage pool ทุก node |
+| POST | `/api/v1/nodes/{name}/pools` | เพิ่ม pool (`dir`, `nfs`, `iscsi`, `lvm`) |
+| DELETE | `/api/v1/nodes/{name}/pools/{pool}` | นำ pool ออก (ข้อมูลบน storage ยังอยู่) |
 | GET | `/api/v1/vms` | รายการ VM ทุก node |
 | POST | `/api/v1/vms` | สร้าง VM (`node` ว่าง = เลือก node ให้อัตโนมัติ) |
 | GET | `/api/v1/vms/{uuid}` | ข้อมูล VM |

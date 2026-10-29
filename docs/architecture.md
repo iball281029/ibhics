@@ -28,6 +28,7 @@ Web Console / REST API / CLI
 | `ibhics/hypervisor/base.py` | interface `HypervisorDriver` และ data model (VMSpec, VMInfo) |
 | `ibhics/hypervisor/libvirt_driver.py` | driver สำหรับ KVM ผ่าน libvirt |
 | `ibhics/hypervisor/domain_xml.py` | แปลง VMSpec เป็น libvirt domain/volume XML |
+| `ibhics/hypervisor/pool_xml.py` | แปลง storage pool (dir, NFS, iSCSI, LVM/FC) เป็น libvirt pool XML |
 | `ibhics/hypervisor/fake.py` | driver จำลองในหน่วยความจำ ใช้พัฒนาและเทสต์ |
 | `ibhics/cluster/topology.py` | รูปแบบ cluster (standalone, 2 node + witness, cluster) และกฎ quorum |
 | `ibhics/cluster/registry.py` | สมาชิก cluster, heartbeat, เลือก node วาง VM |
@@ -50,10 +51,11 @@ Manager คุยกับ hypervisor ผ่าน `HypervisorDriver` เท่�
 - [x] เทสต์และ CI
 - [x] Agent แยก process + การลงทะเบียน node (compute, witness)
 - [x] Standalone, 2 node + witness, cluster 3 node ขึ้นไป + quorum
+- [x] Storage pool: local, NFS, iSCSI, FC (multipath + LVM)
 
 ## งานถัดไปในเฟส 1
 
-- [ ] Storage pool: local, NFS, iSCSI, FC (multipath + LVM)
+- [ ] iSCSI CHAP, LVM ร่วมหลาย node (lvmlockd), DRBD สำหรับ 2 node
 - [ ] Backup ในตัว + ส่งออก NFS, SMB, USB, S3
 - [ ] etcd เป็นที่เก็บสมาชิก cluster + manager ย้าย node ได้
 - [ ] Console VM ผ่าน noVNC
