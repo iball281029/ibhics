@@ -7,10 +7,24 @@ import hmac
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, status
 
 from .. import __version__
+from ..backup import BackupTarget, NodeBackup
 from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver
 from ..manager.errors import install_driver_errors
-from ..manager.schemas import HostOut, PoolCreate, PoolOut, StopRequest, VMCreate, VMOut
+from ..manager.schemas import (
+    AgentBackupDelete,
+    AgentBackupList,
+    AgentBackupRun,
+    AgentPrune,
+    AgentRestore,
+    BackupOut,
+    HostOut,
+    PoolCreate,
+    PoolOut,
+    StopRequest,
+    VMCreate,
+    VMOut,
+)
 
 
 def create_agent_app(
@@ -18,6 +32,7 @@ def create_agent_app(
     role: NodeRole,
     token: str,
     driver: HypervisorDriver | None = None,
+    backups: NodeBackup | None = None,
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -77,6 +92,37 @@ def create_agent_app(
         @api.delete("/pools/{name}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_pool(name: str) -> None:
             driver.delete_pool(name)
+
+        backups = backups or NodeBackup(driver)
+
+        def target(data: dict) -> BackupTarget:
+            try:
+                return BackupTarget.from_dict(data)
+            except (KeyError, TypeError) as exc:
+                raise ValueError(f"bad backup target: {exc}") from None
+
+        # Backup jobs are long; they run in FastAPI's worker threads, one request each.
+
+        @api.post("/backups/run", response_model=BackupOut)
+        def run_backup(body: AgentBackupRun) -> BackupOut:
+            return BackupOut.from_info(backups.backup(body.uuid, target(body.target)))
+
+        @api.post("/backups/list", response_model=list[BackupOut])
+        def list_backups(body: AgentBackupList) -> list[BackupOut]:
+            return [BackupOut.from_info(b) for b in backups.list(target(body.target), body.vm_name)]
+
+        @api.post("/backups/restore", response_model=VMOut)
+        def restore(body: AgentRestore) -> VMOut:
+            vm = backups.restore(target(body.target), body.backup_id, body.name, body.pool)
+            return VMOut.from_info(vm)
+
+        @api.post("/backups/delete")
+        def delete_backup(body: AgentBackupDelete) -> dict:
+            return {"freed_chunks": backups.delete(target(body.target), body.backup_id)}
+
+        @api.post("/backups/prune")
+        def prune(body: AgentPrune) -> dict:
+            return {"removed": backups.prune(target(body.target), body.vm_name, body.keep_last)}
 
     app.include_router(api)
     return app

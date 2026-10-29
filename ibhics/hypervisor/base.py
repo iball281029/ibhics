@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import abc
 import re
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
 
@@ -198,3 +200,15 @@ class HypervisorDriver(abc.ABC):
     @abc.abstractmethod
     def delete_pool(self, name: str) -> None:
         """Stop managing the pool. Data on it (images, LVM volumes) is left in place."""
+
+    # Backup primitives. Agents and the manager's own node implement them; the backup
+    # engine (ibhics.backup) does the rest.
+
+    def export_disks(self, uuid: str) -> AbstractContextManager[list[Path]]:
+        """Raw images of the VM's disks, consistent with each other, for the length of the
+        with-block. Running VMs keep running."""
+        raise NotImplementedError
+
+    def import_disk(self, uuid: str, index: int, raw_image: Path) -> None:
+        """Overwrite disk `index` of a stopped VM with a raw image."""
+        raise NotImplementedError

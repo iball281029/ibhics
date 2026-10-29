@@ -14,8 +14,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..backup import NodeBackup
 from ..hypervisor import HypervisorDriver, VMInfo, VMNotFound
-from .remote import AgentClient, NodeUnavailable, RemoteDriver
+from .remote import AgentClient, NodeUnavailable, RemoteBackup, RemoteDriver
 from .topology import NodeRole, Topology, classify, has_quorum
 
 
@@ -34,6 +35,7 @@ class Member:
     address: str | None  # None: runs inside the manager process
     driver: HypervisorDriver | None = None
     client: AgentClient | None = None
+    backups: NodeBackup | RemoteBackup | None = None  # runs backup jobs on this node
     last_seen: float | None = None
     last_error: str | None = None
 
@@ -70,10 +72,18 @@ class Cluster:
 
     # Membership
 
-    def add_local(self, name: str, driver: HypervisorDriver) -> Member:
+    def add_local(
+        self, name: str, driver: HypervisorDriver, backups: NodeBackup | None = None
+    ) -> Member:
         with self._lock:
             self._ensure_free(name)
-            member = Member(name=name, role=NodeRole.COMPUTE, address=None, driver=driver)
+            member = Member(
+                name=name,
+                role=NodeRole.COMPUTE,
+                address=None,
+                driver=driver,
+                backups=backups or NodeBackup(driver),
+            )
             self._members[name] = member
             return member
 
@@ -102,6 +112,7 @@ class Cluster:
                 address=address,
                 client=client,
                 driver=RemoteDriver(client) if role == NodeRole.COMPUTE else None,
+                backups=RemoteBackup(client) if role == NodeRole.COMPUTE else None,
                 last_seen=self._clock(),
             )
             self._members[name] = member
@@ -134,6 +145,7 @@ class Cluster:
                     address=entry["address"],
                     client=client,
                     driver=RemoteDriver(client) if role == NodeRole.COMPUTE else None,
+                    backups=RemoteBackup(client) if role == NodeRole.COMPUTE else None,
                 )
 
     # Health and quorum

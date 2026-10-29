@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
 from ..hypervisor import (
     DiskSpec,
@@ -167,3 +168,135 @@ class PoolOut(BaseModel):
     @classmethod
     def from_info(cls, info: PoolInfo, node: str | None = None) -> PoolOut:
         return cls(node=node, **info.__dict__)
+
+
+NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$"
+
+
+class BackupTargetIn(BaseModel):
+    name: str = Field(pattern=NAME_PATTERN)
+    type: TargetType
+    path: str | None = Field(default=None, description="local: backup directory on each node")
+    host: str | None = Field(default=None, description="nfs or smb server")
+    export: str | None = Field(default=None, description="nfs export path")
+    share: str | None = Field(default=None, description="smb share name")
+    username: str | None = None
+    password: str | None = None
+    domain: str | None = None
+    device: str | None = Field(default=None, description="usb: e.g. /dev/disk/by-label/BACKUP")
+    endpoint: str | None = Field(default=None, description="s3: e.g. https://minio.local:9000")
+    bucket: str | None = None
+    region: str = "us-east-1"
+    access_key: str | None = None
+    secret_key: str | None = None
+    prefix: str = "ibhics"
+
+    def to_target(self) -> BackupTarget:
+        return BackupTarget(**self.model_dump())
+
+
+class BackupTargetOut(BaseModel):
+    name: str
+    type: TargetType
+    source: str
+    shared: bool
+    settings: dict  # the target's fields, secrets masked
+
+    @classmethod
+    def from_target(cls, target: BackupTarget) -> BackupTargetOut:
+        settings = {
+            k: v for k, v in target.public_dict().items() if k not in ("name", "type") and v
+        }
+        return cls(
+            name=target.name,
+            type=target.type,
+            source=target.describe(),
+            shared=target.shared,
+            settings=settings,
+        )
+
+
+class BackupOut(BaseModel):
+    id: str
+    vm_name: str
+    vm_uuid: str
+    created: str
+    size_bytes: int
+    stored_bytes: int
+    disks: int
+    node: str | None = None  # set for local targets: the node that holds the backup
+
+    @classmethod
+    def from_info(cls, info: BackupInfo, node: str | None = None) -> BackupOut:
+        return cls(node=node, **info.__dict__)
+
+
+class BackupRequest(BaseModel):
+    target: str
+    keep_last: int | None = Field(default=None, ge=1, description="prune older backups after")
+
+
+class RestoreRequest(BaseModel):
+    name: str | None = Field(default=None, pattern=NAME_PATTERN, description="default: original")
+    node: str | None = Field(default=None, description="shared targets: where to restore")
+    pool: str | None = Field(default=None, description="put every disk in this pool")
+    source_node: str | None = Field(default=None, description="local targets: node holding it")
+
+
+class PolicyIn(BaseModel):
+    name: str = Field(pattern=NAME_PATTERN)
+    target: str
+    vms: list[str] = Field(default_factory=list, description="VM names; empty means every VM")
+    at: str | None = Field(default=None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="daily")
+    every_hours: int | None = Field(default=None, ge=1, le=168)
+    keep_last: int = Field(default=7, ge=1, le=1000)
+    enabled: bool = True
+
+
+class PolicyOut(PolicyIn):
+    last_run: str | None = None
+
+
+class JobOut(BaseModel):
+    id: str
+    kind: str
+    state: str
+    target: str
+    vm: str
+    node: str | None
+    policy: str | None
+    created: str
+    finished: str | None
+    result: str | None
+    error: str | None
+
+
+# Agent-only request bodies: the manager sends the whole target, credentials included.
+
+
+class AgentBackupRun(BaseModel):
+    uuid: str
+    target: dict
+
+
+class AgentBackupList(BaseModel):
+    target: dict
+    vm_name: str | None = None
+
+
+class AgentRestore(BaseModel):
+    target: dict
+    backup_id: str
+    name: str | None = Field(default=None, pattern=NAME_PATTERN)
+    pool: str | None = None
+
+
+class AgentBackupDelete(BaseModel):
+    target: dict
+    backup_id: str
+
+
+class AgentPrune(BaseModel):
+    target: dict
+    vm_name: str
+    keep_last: int = Field(ge=1)

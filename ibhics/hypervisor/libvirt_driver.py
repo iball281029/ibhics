@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
+import time
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
 from .base import (
     DiskSpec,
@@ -31,6 +39,7 @@ from .pool_xml import (
 )
 
 GIB = 1024**3
+SCRATCH_DIR = "/var/lib/ibhics/scratch"
 
 try:
     import libvirt
@@ -49,7 +58,18 @@ def _state_from_libvirt(code: int) -> VMState:
     return VMState.UNKNOWN
 
 
+def _run(cmd: list[str]) -> None:
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"{cmd[0]} failed: {result.stderr.strip() or result.returncode}")
+
+
 class LibvirtDriver(HypervisorDriver):
+    # Backups copy disks here before they are chunked; it needs room for the largest VM
+    # (raw images are sparse, so only the data actually written counts).
+    scratch_dir = SCRATCH_DIR
+    run = staticmethod(_run)
+
     def __init__(self, uri: str = "qemu:///system") -> None:
         if libvirt is None:
             raise RuntimeError("libvirt-python is not installed: pip install 'ibhics[libvirt]'")
@@ -192,6 +212,62 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             pass
 
+    @contextmanager
+    def export_disks(self, uuid: str) -> Iterator[list[Path]]:
+        dom = self._lookup(uuid)
+        disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
+        Path(self.scratch_dir).mkdir(parents=True, exist_ok=True)
+        scratch = Path(tempfile.mkdtemp(prefix=f"backup-{uuid}-", dir=self.scratch_dir))
+        try:
+            images = [scratch / f"disk{i}.raw" for i in range(len(disks))]
+            if dom.isActive():
+                # Push-mode backup: QEMU copies a point-in-time view while the guest runs.
+                self._push_backup(dom, disks, images)
+            else:
+                for disk, image in zip(disks, images, strict=True):
+                    self.run(
+                        ["qemu-img", "convert", "-O", "raw", self._disk_path(disk), str(image)]
+                    )
+            yield images
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def import_disk(self, uuid: str, index: int, raw_image: Path) -> None:
+        dom = self._lookup(uuid)
+        if dom.isActive():
+            raise InvalidState("stop the VM before overwriting its disks")
+        disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
+        vol = self._volume(disks[index])
+        if Path(raw_image).stat().st_size > vol.info()[1]:
+            raise ValueError(f"image is larger than disk {index}")
+        driver = disks[index].find("driver")
+        fmt = driver.get("type", "qcow2") if driver is not None else "qcow2"
+        self.run(["qemu-img", "convert", "-n", "-f", "raw", "-O", fmt, str(raw_image), vol.path()])
+
+    def _push_backup(self, dom, disks, images: list[Path], poll: float = 1.0) -> None:
+        entries = "".join(
+            f"<disk name={quoteattr(d.find('target').get('dev'))} backup='yes' type='file'>"
+            f"<target file={quoteattr(str(image))}/><driver type='raw'/></disk>"
+            for d, image in zip(disks, images, strict=True)
+        )
+        dom.backupBegin(f"<domainbackup mode='push'><disks>{entries}</disks></domainbackup>", None)
+        while (
+            dom.jobStats(0).get("type", libvirt.VIR_DOMAIN_JOB_NONE) != libvirt.VIR_DOMAIN_JOB_NONE
+        ):
+            time.sleep(poll)
+        done = dom.jobStats(libvirt.VIR_DOMAIN_JOB_STATS_COMPLETED)
+        if done.get("type") != libvirt.VIR_DOMAIN_JOB_COMPLETED:
+            raise RuntimeError(f"disk backup of {dom.name()} did not complete: {done}")
+
+    def _volume(self, disk):
+        source = disk.find("source")
+        if source is None or source.get("volume") is None:
+            raise InvalidState("only disks in ibHiCS storage pools can be backed up")
+        return self._pool(source.get("pool")).storageVolLookupByName(source.get("volume"))
+
+    def _disk_path(self, disk) -> str:
+        return self._volume(disk).path()
+
     def _pool(self, name: str):
         try:
             return self._conn.storagePoolLookupByName(name)
@@ -216,11 +292,17 @@ class LibvirtDriver(HypervisorDriver):
 
     def _info(self, dom) -> VMInfo:
         state, _reason = dom.state()
-        return VMInfo(
-            uuid=dom.UUIDString(),
-            spec=_spec_from_xml(dom.XMLDesc(0)),
-            state=_state_from_libvirt(state),
-        )
+        xml = dom.XMLDesc(0)
+        spec = _spec_from_xml(xml)
+        # The domain XML doesn't carry disk sizes; read them from the volumes.
+        for disk, el in zip(
+            spec.disks, ET.fromstring(xml).findall("./devices/disk[@device='disk']"), strict=True
+        ):
+            try:
+                disk.size_gb = -(-self._volume(el).info()[1] // GIB)
+            except (InvalidState, PoolNotFound, libvirt.libvirtError):
+                pass
+        return VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
 
 
 def _pool_kind(pool) -> str:
