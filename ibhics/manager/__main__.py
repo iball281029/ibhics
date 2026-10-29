@@ -9,6 +9,7 @@ from pathlib import Path
 
 import uvicorn
 
+from ..backup import NodeBackup
 from ..cluster import Cluster
 from ..hypervisor import load_driver
 from .app import create_app
@@ -53,7 +54,10 @@ def main() -> None:
         heartbeat_timeout=args.heartbeat * 3,
         state_path=args.state_file,
     )
-    cluster.add_local(args.node_name, load_driver(args.driver, args.libvirt_uri))
+    driver = load_driver(args.driver, args.libvirt_uri)
+    node_backup = NodeBackup(driver)
+    node_backup.cleanup()  # detach backup targets a crash may have left attached
+    cluster.add_local(args.node_name, driver, node_backup)
     cluster.load()
 
     backups = BackupManager(cluster, state_path=args.backup_state_file)

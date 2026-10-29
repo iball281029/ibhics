@@ -26,6 +26,7 @@ from ibhics.manager import create_app
 from ibhics.manager.backups import BackupManager, Policy
 
 CHUNK = 16 * 1024
+IQN = "iqn.2004-04.com.example:backup"
 
 
 class Inline(Executor):
@@ -56,6 +57,8 @@ class Clock:
         BackupTarget(name="nas", type=TargetType.NFS, host="10.0.0.50", export="/backup"),
         BackupTarget(name="win", type=TargetType.SMB, host="fs01", share="Backup$", username="u"),
         BackupTarget(name="usb", type=TargetType.USB, device="/dev/disk/by-label/BACKUP"),
+        BackupTarget(name="san", type=TargetType.ISCSI, host="10.0.0.60", iqn=IQN, lun=2),
+        BackupTarget(name="fc", type=TargetType.FC, device="/dev/mapper/mpathb"),
         BackupTarget(
             name="minio",
             type=TargetType.S3,
@@ -79,6 +82,9 @@ def test_valid_targets(target):
         BackupTarget(name="win", type=TargetType.SMB, host="fs01"),
         BackupTarget(name="win", type=TargetType.SMB, host="fs01", share="b", password="a,b"),
         BackupTarget(name="usb", type=TargetType.USB, device="/etc/fstab"),
+        BackupTarget(name="san", type=TargetType.ISCSI, host="10.0.0.60", iqn="nope"),
+        BackupTarget(name="san", type=TargetType.ISCSI, iqn=IQN),
+        BackupTarget(name="fc", type=TargetType.FC, device="/dev/sdb; reboot"),
         BackupTarget(name="s3", type=TargetType.S3, endpoint="https://x", bucket="Bad_Bucket"),
         BackupTarget(name="s3", type=TargetType.S3, endpoint="https://x", bucket="ok-bucket"),
         BackupTarget(name="esc", type=TargetType.NFS, host="h", export="/e", prefix="../../etc"),
@@ -212,16 +218,23 @@ def test_unknown_backup(repo):
 
 
 class Recorder:
-    def __init__(self):
+    def __init__(self, outputs=None, fail=()):
         self.calls = []
         self.smb_credentials = None
+        self.outputs = outputs or {}  # command name -> stdout
+        self.fail = fail  # command names that fail
 
-    def __call__(self, cmd):
+    def __call__(self, cmd, ok_codes=(0,)):
         self.calls.append(cmd)
+        if cmd[0] in self.fail:
+            from ibhics.backup import TargetUnavailable
+
+            raise TargetUnavailable(f"{cmd[0]} failed")
         if "cifs" in cmd:
             creds = cmd[-1].split(",")[0].removeprefix("credentials=")
             self.smb_credentials = open(creds).read()
             assert stat.S_IMODE(os.stat(creds).st_mode) == 0o600
+        return self.outputs.get(cmd[0], "")
 
 
 def test_nfs_mounted_for_job_and_shared(tmp_path):
@@ -257,6 +270,85 @@ def test_usb_store_uses_prefix_directory(tmp_path):
         store.put("a/b", b"1")
     assert (tmp_path / "usb" / "vms" / "a" / "b").read_bytes() == b"1"
     assert run.calls[0] == ["mount", "/dev/sdc1", str(tmp_path / "usb")]
+
+
+def test_iscsi_lun_logged_in_formatted_once_and_logged_out(tmp_path):
+    run = Recorder()  # blkid prints nothing: the LUN is empty
+    target = BackupTarget(
+        name="san", type=TargetType.ISCSI, host="10.0.0.60", iqn=IQN, lun=1, confirm_wipe=True
+    )
+    with open_store(target, Mounter(run=run, root=str(tmp_path))) as store:
+        store.put("x", b"1")
+    device = f"/dev/disk/by-path/ip-10.0.0.60:3260-iscsi-{IQN}-lun-1"
+    portal = "10.0.0.60:3260"
+    assert run.calls == [
+        ["iscsiadm", "-m", "discovery", "-t", "sendtargets", "-p", portal],
+        ["iscsiadm", "-m", "node", "-T", IQN, "-p", portal, "--login"],
+        ["udevadm", "settle"],
+        ["blkid", "-p", "-o", "value", "-s", "TYPE", device],
+        ["mkfs.xfs", "-q", device],
+        ["mount", device, str(tmp_path / "san")],
+        ["umount", str(tmp_path / "san")],
+        ["iscsiadm", "-m", "node", "-T", IQN, "-p", portal, "--logout"],
+    ]
+    assert not list((tmp_path / ".iscsi-sessions").iterdir())  # nothing left to clean up
+
+
+def test_cleanup_detaches_what_a_crash_left(tmp_path):
+    root = tmp_path / "mnt"
+    run = Recorder(outputs={"blkid": "xfs"})
+    mounter = Mounter(run=run, root=str(root))
+    target = BackupTarget(name="san", type=TargetType.ISCSI, host="10.0.0.60", iqn=IQN)
+    mounter._mount(target, root / "san")  # the node dies before the job ends...
+    mounts = tmp_path / "mounts"
+    mounts.write_text(
+        f"/dev/sda1 / ext4 rw 0 0\n/dev/sdx {root}/san xfs rw 0 0\n"
+        f"10.0.0.50:/b {root}/my\\040nas nfs rw 0 0\n"
+    )
+    run.calls.clear()
+    fresh = Mounter(run=run, root=str(root))  # ...and comes back
+    assert fresh.cleanup(str(mounts)) == [f"{root}/san", f"{root}/my nas", IQN]
+    assert run.calls == [
+        ["umount", "-l", f"{root}/san"],
+        ["umount", "-l", f"{root}/my nas"],
+        ["iscsiadm", "-m", "node", "-T", IQN, "-p", "10.0.0.60:3260", "--logout"],
+    ]
+    assert fresh.cleanup(str(mounts))[-1] != IQN  # session record is gone
+
+
+def test_lun_with_filesystem_is_not_formatted(tmp_path):
+    run = Recorder(outputs={"blkid": "xfs\n"})
+    target = BackupTarget(name="fc", type=TargetType.FC, device="/dev/mapper/mpathb")
+    with Mounter(run=run, root=str(tmp_path)).mounted(target):
+        pass
+    assert [c[0] for c in run.calls] == ["blkid", "mount", "umount"]
+
+
+def test_empty_lun_needs_confirm_wipe(tmp_path):
+    from ibhics.backup import TargetUnavailable
+
+    run = Recorder()
+    target = BackupTarget(name="san", type=TargetType.ISCSI, host="10.0.0.60", iqn=IQN)
+    with pytest.raises(TargetUnavailable, match="confirm_wipe"):
+        with Mounter(run=run, root=str(tmp_path)).mounted(target):
+            pass
+    assert "mkfs.xfs" not in [c[0] for c in run.calls]
+    assert run.calls[-1][-1] == "--logout"  # no session left behind
+
+
+def test_failed_mount_logs_out(tmp_path):
+    run = Recorder(outputs={"blkid": "xfs"}, fail=("mount",))
+    target = BackupTarget(name="san", type=TargetType.ISCSI, host="10.0.0.60", iqn=IQN)
+    mounter = Mounter(run=run, root=str(tmp_path))
+    with pytest.raises(Exception, match="mount failed"):
+        with mounter.mounted(target):
+            pass
+    assert run.calls[-1][-1] == "--logout"
+    # The failed attempt left nothing counted as mounted: the next job mounts again.
+    run.fail = ()
+    with mounter.mounted(target):
+        pass
+    assert run.calls[-2][0] == "umount"
 
 
 # S3
@@ -518,3 +610,15 @@ def test_state_saved_privately_and_secrets_hidden(api, tmp_path):
     again = BackupManager(backups._cluster, state_path=path)
     again.load()
     assert again.target("minio").secret_key == "topsecret"
+
+
+def test_exclusive_target_blocks_listing_while_a_job_runs(api):
+    client, _, backups, _ = api
+    target = BackupTarget(name="fc", type=TargetType.FC, device="/dev/mapper/mpathb")
+    backups._targets["fc"] = target
+    with backups._using(target, wait=False):
+        resp = client.get("/api/v1/backup/targets/fc/backups")
+        assert resp.status_code == 409 and "try again" in resp.json()["detail"]
+    shared = backups.target("local")
+    with backups._using(shared, wait=False), backups._using(shared, wait=False):
+        pass  # directories and NAS shares are never locked

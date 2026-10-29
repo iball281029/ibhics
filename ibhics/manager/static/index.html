@@ -118,7 +118,7 @@
   <section>
     <h2>Backup</h2>
     <table>
-      <thead><tr><th>ปลายทาง</th><th>ชนิด</th><th class="hide-sm">ที่อยู่</th><th></th></tr></thead>
+      <thead><tr><th>ปลายทาง</th><th>ชนิด</th><th class="hide-sm">ที่อยู่</th><th>การเชื่อมต่อ</th><th></th></tr></thead>
       <tbody id="targets"></tbody>
     </table>
     <h2 style="margin-top:16px">เพิ่มปลายทาง backup</h2>
@@ -130,16 +130,21 @@
           <option value="nfs">NFS</option>
           <option value="smb">SMB / Windows share</option>
           <option value="usb">USB disk</option>
+          <option value="iscsi">iSCSI LUN (SAN / NAS)</option>
+          <option value="fc">FC LUN / block device</option>
           <option value="s3">S3 / MinIO</option>
         </select>
       </label>
       <label data-for="local">Path (ว่าง = ค่าเริ่มต้น) <input name="path" placeholder="/var/lib/ibhics/backup/..."></label>
-      <label data-for="nfs smb">Server <input name="host" placeholder="10.0.0.50"></label>
+      <label data-for="nfs smb iscsi">Server / Portal <input name="host" placeholder="10.0.0.50"></label>
+      <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:backup"></label>
+      <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
       <label data-for="nfs">Export <input name="export" placeholder="/backup"></label>
       <label data-for="smb">Share <input name="share" placeholder="Backup"></label>
       <label data-for="smb">Username <input name="username"></label>
       <label data-for="smb">Password <input name="password" type="password" autocomplete="new-password"></label>
-      <label data-for="usb">Device <input name="device" placeholder="/dev/disk/by-label/BACKUP"></label>
+      <label data-for="usb fc">Device <input name="device" placeholder="/dev/disk/by-label/BACKUP"></label>
+      <label data-for="iscsi fc"><span><input name="confirm_wipe" type="checkbox" style="width:auto"> format ให้ถ้า LUN ยังไม่มี filesystem</span></label>
       <label data-for="s3">Endpoint <input name="endpoint" placeholder="https://minio.local:9000"></label>
       <label data-for="s3">Bucket <input name="bucket" placeholder="vm-backup"></label>
       <label data-for="s3">Access key <input name="access_key"></label>
@@ -386,7 +391,7 @@ document.getElementById("join").addEventListener("submit", async (e) => {
 
 // Backup
 
-const TARGET_TYPES = { local: "ดิสก์ในเครื่อง", nfs: "NFS", smb: "SMB", usb: "USB", s3: "S3" };
+const TARGET_TYPES = { local: "ดิสก์ในเครื่อง", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const size = (bytes) => {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
@@ -416,8 +421,9 @@ async function loadTargets() {
       <td>${esc(t.name)}</td>
       <td>${esc(TARGET_TYPES[t.type] || t.type)}</td>
       <td class="hide-sm">${esc(t.source)}</td>
+      <td>${t.on_demand ? "เฉพาะตอนรัน job (แยกออกเมื่อเสร็จ)" : "ตลอดเวลา"}</td>
       <td><button class="danger" data-target="${esc(t.name)}">นำออก</button></td>
-    </tr>`).join("") : '<tr><td colspan="4" class="empty">ยังไม่มีปลายทาง backup</td></tr>';
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">ยังไม่มีปลายทาง backup</td></tr>';
   for (const list of document.querySelectorAll(".target-list")) {
     const prev = list.value;
     list.innerHTML = targets.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
@@ -479,6 +485,7 @@ async function loadJobs() {
 const BACKUP_FIELDS = {
   local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
   usb: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
+  iscsi: ["host", "iqn"], fc: ["device"],
 };
 
 targetForm.addEventListener("submit", async (e) => {
@@ -486,6 +493,11 @@ targetForm.addEventListener("submit", async (e) => {
   const f = new FormData(e.target);
   const body = { name: f.get("name"), type: f.get("type") };
   for (const key of BACKUP_FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
+  if (body.type === "iscsi") body.lun = Number(f.get("lun"));
+  if (body.type === "iscsi" || body.type === "fc") {
+    body.confirm_wipe = f.get("confirm_wipe") === "on";
+    if (body.confirm_wipe && !confirm("ถ้า LUN นี้ยังไม่มี filesystem ระบบจะ format ใหม่ ดำเนินการต่อ?")) return;
+  }
   msg();
   try {
     await api("/backup/targets", { method: "POST", body: JSON.stringify(body) });

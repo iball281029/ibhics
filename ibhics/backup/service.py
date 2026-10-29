@@ -34,6 +34,10 @@ class NodeBackup:
         # races a backup started from the same node.
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 
+    def cleanup(self) -> list[str]:
+        """Detach targets left attached by a crash; call once when the node starts."""
+        return self._mounter.cleanup()
+
     def _open(self, target: BackupTarget):
         target.validate()
         return open_store(target, self._mounter, self._s3_factory)

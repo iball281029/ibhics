@@ -65,7 +65,7 @@ manager (ปลายทาง, ตารางเวลา, คิวงาน)
 - [x] Agent แยก process + การลงทะเบียน node (compute, witness)
 - [x] Standalone, 2 node + witness, cluster 3 node ขึ้นไป + quorum
 - [x] Storage pool: local, NFS, iSCSI, FC (multipath + LVM)
-- [x] Backup ในตัว (dedup, ตั้งเวลา, เก็บ N ชุด, restore) + ปลายทาง local, NFS, SMB, USB, S3
+- [x] Backup ในตัว (dedup, ตั้งเวลา, เก็บ N ชุด, restore) + ปลายทาง local, NFS, SMB, USB, iSCSI, FC, S3 ที่ต่อเฉพาะตอนรัน job
 
 ## งานถัดไปในเฟส 1
 

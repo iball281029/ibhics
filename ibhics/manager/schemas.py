@@ -183,7 +183,15 @@ class BackupTargetIn(BaseModel):
     username: str | None = None
     password: str | None = None
     domain: str | None = None
-    device: str | None = Field(default=None, description="usb: e.g. /dev/disk/by-label/BACKUP")
+    port: int = Field(default=3260, ge=1, le=65535, description="iscsi portal port")
+    iqn: str | None = Field(default=None, description="iscsi target IQN")
+    lun: int = Field(default=0, ge=0)
+    device: str | None = Field(
+        default=None, description="usb: /dev/disk/by-label/BACKUP; fc: /dev/mapper/mpathb"
+    )
+    confirm_wipe: bool = Field(
+        default=False, description="iscsi/fc: format the LUN if it has no filesystem"
+    )
     endpoint: str | None = Field(default=None, description="s3: e.g. https://minio.local:9000")
     bucket: str | None = None
     region: str = "us-east-1"
@@ -195,23 +203,35 @@ class BackupTargetIn(BaseModel):
         return BackupTarget(**self.model_dump())
 
 
+TARGET_FIELDS = {
+    TargetType.LOCAL: ("path",),
+    TargetType.NFS: ("host", "export", "prefix"),
+    TargetType.SMB: ("host", "share", "username", "password", "domain", "prefix"),
+    TargetType.USB: ("device", "prefix"),
+    TargetType.ISCSI: ("host", "port", "iqn", "lun", "confirm_wipe", "prefix"),
+    TargetType.FC: ("device", "confirm_wipe", "prefix"),
+    TargetType.S3: ("endpoint", "bucket", "region", "access_key", "secret_key", "prefix"),
+}
+
+
 class BackupTargetOut(BaseModel):
     name: str
     type: TargetType
     source: str
     shared: bool
+    on_demand: bool  # attached only while a job runs, detached (isolated) otherwise
     settings: dict  # the target's fields, secrets masked
 
     @classmethod
     def from_target(cls, target: BackupTarget) -> BackupTargetOut:
-        settings = {
-            k: v for k, v in target.public_dict().items() if k not in ("name", "type") and v
-        }
+        fields = TARGET_FIELDS[target.type]
+        settings = {k: v for k, v in target.public_dict().items() if k in fields and v}
         return cls(
             name=target.name,
             type=target.type,
             source=target.describe(),
             shared=target.shared,
+            on_demand=target.on_demand,
             settings=settings,
         )
 

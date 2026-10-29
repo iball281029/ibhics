@@ -7,14 +7,15 @@ import json
 import os
 import re
 import threading
-from collections import deque
-from collections.abc import Callable
+from collections import defaultdict, deque
+from collections.abc import Callable, Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..backup import BackupInfo, BackupTarget
+from ..backup import BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
 from ..backup.repository import parse_id
 from ..cluster import Cluster, Member, NodeUnavailable
 from ..hypervisor import VMExists
@@ -94,6 +95,9 @@ class BackupManager:
         self._jobs: deque[Job] = deque(maxlen=200)
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
+        # A SAN LUN or USB disk holds an ordinary filesystem that only one node may mount
+        # at a time, so work on such a target is serialised across the whole cluster.
+        self._target_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 
     # Targets
 
@@ -176,6 +180,19 @@ class BackupManager:
                 )
         return jobs
 
+    @contextmanager
+    def _using(self, target: BackupTarget, wait: bool) -> Iterator[None]:
+        if not target.exclusive:
+            yield
+            return
+        lock = self._target_locks[target.name]
+        if not lock.acquire(blocking=wait):
+            raise RepositoryBusy(f"a job is using target {target.name!r}; try again when it ends")
+        try:
+            yield
+        finally:
+            lock.release()
+
     # Jobs
 
     def jobs(self) -> list[Job]:
@@ -200,9 +217,10 @@ class BackupManager:
 
         def work() -> str:
             target = self.target(target_name)
-            info = member.backups.backup(uuid, target)
-            if keep_last:
-                member.backups.prune(target, vm_name, keep_last)
+            with self._using(target, wait=True):
+                info = member.backups.backup(uuid, target)
+                if keep_last:
+                    member.backups.prune(target, vm_name, keep_last)
             return info.id
 
         self._submit(job, work)
@@ -234,7 +252,8 @@ class BackupManager:
         job = self._new_job("restore", target_name, new_name, member.name, None)
 
         def work() -> str:
-            return member.backups.restore(target, backup_id, name, pool).uuid
+            with self._using(target, wait=True):
+                return member.backups.restore(target, backup_id, name, pool).uuid
 
         self._submit(job, work)
         return job
@@ -272,18 +291,24 @@ class BackupManager:
         target = self.target(target_name)
         if target.shared:
             last_error = None
+            with self._using(target, wait=False):
+                for member in self._cluster.compute_members():
+                    try:
+                        return [(None, b) for b in member.backups.list(target)]
+                    except NodeUnavailable as exc:
+                        last_error = exc
+            raise last_error or NodeUnavailable("no compute node is available")
+        result, errors = [], []
+        with self._using(target, wait=False):
             for member in self._cluster.compute_members():
                 try:
-                    return [(None, b) for b in member.backups.list(target)]
+                    result.extend((member.name, b) for b in member.backups.list(target))
                 except NodeUnavailable as exc:
-                    last_error = exc
-            raise last_error or NodeUnavailable("no compute node is available")
-        result = []
-        for member in self._cluster.compute_members():
-            try:
-                result.extend((member.name, b) for b in member.backups.list(target))
-            except NodeUnavailable as exc:
-                member.last_error = str(exc)
+                    member.last_error = str(exc)
+                except TargetUnavailable as exc:
+                    errors.append(exc)  # e.g. the USB disk is plugged into another node
+        if errors and not result:
+            raise errors[0]
         return result
 
     def delete_backup(self, target_name: str, backup_id: str, node: str | None = None) -> None:
@@ -297,7 +322,8 @@ class BackupManager:
             if not node:
                 raise ValueError("say which node holds this backup (node)")
             member = self._cluster.member(node)
-        member.backups.delete(target, backup_id)
+        with self._using(target, wait=False):
+            member.backups.delete(target, backup_id)
 
     # Persistence: targets hold credentials, so the file is readable by root only.
 

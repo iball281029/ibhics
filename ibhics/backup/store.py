@@ -131,23 +131,58 @@ class S3Store(Store):
         self._s3.delete_object(Bucket=self._bucket, Key=self._prefix + key)
 
 
-Runner = Callable[[list[str]], None]
+# run(cmd, ok_codes) returns stdout; any other exit code raises TargetUnavailable.
+Runner = Callable[..., str]
 
 
-def _run(cmd: list[str]) -> None:
+def _run(cmd: list[str], ok_codes: tuple[int, ...] = (0,)) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+    if result.returncode not in ok_codes:
         raise TargetUnavailable(f"{cmd[0]} failed: {result.stderr.strip() or result.returncode}")
+    return result.stdout
+
+
+def iscsi_device(target: BackupTarget) -> str:
+    return f"/dev/disk/by-path/ip-{target.host}:{target.port}-iscsi-{target.iqn}-lun-{target.lun}"
 
 
 class Mounter:
-    """Mounts NFS, SMB and USB targets for the length of a job, shared by concurrent jobs."""
+    """Attaches NAS, SAN and USB targets for the length of a job and detaches them after,
+    so between jobs nothing on the node (ransomware included) can reach the backups.
+    Concurrent jobs on one target share the attachment."""
 
     def __init__(self, run: Runner = _run, root: str = MOUNT_ROOT) -> None:
         self._run = run
         self._root = Path(root)
+        self._sessions = self._root / ".iscsi-sessions"
         self._lock = threading.Lock()
         self._users: dict[str, int] = {}
+
+    def cleanup(self, mounts_file: str = "/proc/mounts") -> list[str]:
+        """Detach whatever a crash or power loss left attached. Run when the node starts."""
+        detached = []
+        root = str(self._root.resolve()) + "/"
+        with self._lock:
+            try:
+                lines = Path(mounts_file).read_text().splitlines()
+            except OSError:
+                lines = []
+            for line in lines:
+                point = line.split()[1] if len(line.split()) > 1 else ""
+                point = point.replace("\\040", " ")
+                if point.startswith(root):
+                    self._run(["umount", "-l", point])
+                    detached.append(point)
+            if self._sessions.is_dir():
+                for record in self._sessions.iterdir():
+                    iqn, portal = record.read_text().split()
+                    self._run(
+                        ["iscsiadm", "-m", "node", "-T", iqn, "-p", portal, "--logout"],
+                        ok_codes=(0, 21),
+                    )
+                    record.unlink()
+                    detached.append(iqn)
+        return detached
 
     @contextmanager
     def mounted(self, target: BackupTarget) -> Iterator[Path]:
@@ -163,13 +198,40 @@ class Mounter:
             with self._lock:
                 self._users[target.name] -= 1
                 if not self._users[target.name]:
-                    self._run(["umount", str(point)])
+                    try:
+                        self._run(["umount", str(point)])
+                    finally:
+                        if target.type == TargetType.ISCSI:
+                            self._iscsi_logout(target)
 
     def _mount(self, target: BackupTarget, point: Path) -> None:
         if target.type == TargetType.NFS:
             self._run(["mount", "-t", "nfs", f"{target.host}:{target.export}", str(point)])
         elif target.type == TargetType.USB:
             self._run(["mount", target.device, str(point)])
+        elif target.type == TargetType.FC:
+            self._mount_block(target, target.device, point)
+        elif target.type == TargetType.ISCSI:
+            portal = f"{target.host}:{target.port}"
+            self._run(["iscsiadm", "-m", "discovery", "-t", "sendtargets", "-p", portal])
+            # Note the session first, so cleanup() can log out if the node dies mid-job.
+            self._sessions.mkdir(parents=True, exist_ok=True)
+            (self._sessions / target.name).write_text(f"{target.iqn} {portal}\n")
+            # 15: already logged in (another job, or a session left from before)
+            try:
+                self._run(
+                    ["iscsiadm", "-m", "node", "-T", target.iqn, "-p", portal, "--login"],
+                    ok_codes=(0, 15),
+                )
+            except BaseException:
+                (self._sessions / target.name).unlink(missing_ok=True)
+                raise
+            try:
+                self._run(["udevadm", "settle"])
+                self._mount_block(target, iscsi_device(target), point)
+            except BaseException:
+                self._iscsi_logout(target)
+                raise
         elif target.type == TargetType.SMB:
             # Credentials go in a root-only file so they never show up in the process list.
             fd, creds = tempfile.mkstemp(prefix="ibhics-smb-")
@@ -186,6 +248,26 @@ class Mounter:
                 os.unlink(creds)
         else:
             raise ValueError(f"{target.type} targets are not mounted")
+
+    def _mount_block(self, target: BackupTarget, device: str, point: Path) -> None:
+        # blkid exits 2 when it finds no filesystem.
+        fstype = self._run(["blkid", "-p", "-o", "value", "-s", "TYPE", device], ok_codes=(0, 2))
+        if not fstype.strip():
+            if not target.confirm_wipe:
+                raise TargetUnavailable(
+                    f"{device} has no filesystem; set confirm_wipe to format it for backups"
+                )
+            self._run(["mkfs.xfs", "-q", device])
+        self._run(["mount", device, str(point)])
+
+    def _iscsi_logout(self, target: BackupTarget) -> None:
+        portal = f"{target.host}:{target.port}"
+        # 21: no session to log out of
+        self._run(
+            ["iscsiadm", "-m", "node", "-T", target.iqn, "-p", portal, "--logout"],
+            ok_codes=(0, 21),
+        )
+        (self._sessions / target.name).unlink(missing_ok=True)
 
 
 @contextmanager

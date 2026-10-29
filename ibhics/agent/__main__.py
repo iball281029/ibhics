@@ -8,6 +8,7 @@ import socket
 
 import uvicorn
 
+from ..backup import NodeBackup
 from ..cluster.topology import NodeRole
 from ..hypervisor import load_driver
 from .app import create_agent_app
@@ -38,8 +39,13 @@ def main() -> None:
         parser.error("set IBHICS_CLUSTER_TOKEN to the cluster's shared token")
 
     role = NodeRole(args.role)
-    driver = load_driver(args.driver, args.libvirt_uri) if role == NodeRole.COMPUTE else None
-    uvicorn.run(create_agent_app(args.name, role, token, driver), host=args.host, port=args.port)
+    driver = backups = None
+    if role == NodeRole.COMPUTE:
+        driver = load_driver(args.driver, args.libvirt_uri)
+        backups = NodeBackup(driver)
+        backups.cleanup()  # detach backup targets a crash may have left attached
+    app = create_agent_app(args.name, role, token, driver, backups)
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
