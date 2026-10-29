@@ -19,10 +19,16 @@ def test_health(client):
     assert client.get("/api/v1/health").json()["status"] == "ok"
 
 
-def test_host(client):
-    host = client.get("/api/v1/host").json()
+def test_standalone_cluster(client):
+    status = client.get("/api/v1/cluster").json()
+    assert status["topology"] == "standalone"
+    assert status["quorum"] is True
+    assert status["ha_capable"] is False
+    (member,) = status["members"]
+    assert member["local"] and member["healthy"]
+
+    host = client.get(f"/api/v1/nodes/{member['name']}/host").json()
     assert host["hypervisor"] == "fake"
-    assert host["cpus"] > 0
 
 
 def test_console_served(client):

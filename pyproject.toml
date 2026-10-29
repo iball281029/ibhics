@@ -13,11 +13,12 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 libvirt = ["libvirt-python>=10.0"]
-dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.5"]
+dev = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]
 ibhics-manager = "ibhics.manager.__main__:main"
