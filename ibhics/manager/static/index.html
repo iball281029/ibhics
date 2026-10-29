@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ibHiCS Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #5b6475; --line: #dde1e8;
+    --accent: #1f6feb; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #9aa3b2; --line: #2a303b;
+      --accent: #4c8dff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, "Noto Sans Thai", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 18px; }
+  header .host { color: var(--muted); font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px; display: grid; gap: 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  h2 { margin: 0 0 12px; font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .state { font-weight: 600; }
+  .state.running { color: var(--ok); } .state.stopped { color: var(--muted); } .state.paused { color: var(--warn); }
+  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+  label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+  input, select { padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; font: inherit; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  #msg { min-height: 20px; color: var(--bad); }
+  .empty { color: var(--muted); padding: 16px 8px; }
+  @media (max-width: 640px) { .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ibHiCS Console</h1>
+  <div class="host" id="host">กำลังโหลด…</div>
+</header>
+<main>
+  <section>
+    <h2>สร้าง VM ใหม่</h2>
+    <form id="create">
+      <label>ชื่อ VM <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" placeholder="web-01"></label>
+      <label>vCPU <input name="vcpus" type="number" min="1" value="2"></label>
+      <label>RAM (MB) <input name="memory_mb" type="number" min="128" step="128" value="2048"></label>
+      <label>ดิสก์ (GB) <input name="disk_gb" type="number" min="1" value="40"></label>
+      <label>Firmware
+        <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
+      </label>
+      <label>Network <input name="network" value="default"></label>
+      <button class="primary" type="submit">สร้าง VM</button>
+    </form>
+    <div id="msg"></div>
+  </section>
+  <section>
+    <h2>Virtual Machines</h2>
+    <table>
+      <thead><tr><th>ชื่อ</th><th>สถานะ</th><th>vCPU</th><th>RAM</th><th class="hide-sm">ดิสก์</th><th></th></tr></thead>
+      <tbody id="vms"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const api = (path, opts = {}) =>
+  fetch(`/api/v1${path}`, { headers: { "Content-Type": "application/json" }, ...opts }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join(", ") : body.detail;
+      throw new Error(detail || r.statusText);
+    }
+    return r.status === 204 ? null : r.json();
+  });
+
+const msg = (text) => { document.getElementById("msg").textContent = text || ""; };
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+async function loadHost() {
+  const h = await api("/host");
+  document.getElementById("host").textContent =
+    `${h.hostname} · ${h.cpus} CPU · ${Math.round(h.memory_mb / 1024)} GB · ${h.hypervisor}`;
+}
+
+async function loadVMs() {
+  const vms = await api("/vms");
+  const tbody = document.getElementById("vms");
+  if (!vms.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">ยังไม่มี VM</td></tr>';
+    return;
+  }
+  tbody.innerHTML = vms.map((vm) => `
+    <tr>
+      <td>${esc(vm.name)}</td>
+      <td class="state ${esc(vm.state)}">${esc(vm.state)}</td>
+      <td>${vm.vcpus}</td>
+      <td>${vm.memory_mb} MB</td>
+      <td class="hide-sm">${vm.disks.map((d) => `${d.size_gb} GB`).join(", ")}</td>
+      <td class="actions">
+        ${vm.state === "running"
+          ? `<button data-act="stop" data-id="${vm.uuid}">Shutdown</button>
+             <button data-act="poweroff" data-id="${vm.uuid}">Power off</button>`
+          : `<button data-act="start" data-id="${vm.uuid}">Start</button>
+             <button class="danger" data-act="delete" data-id="${vm.uuid}">ลบ</button>`}
+      </td>
+    </tr>`).join("");
+}
+
+document.getElementById("vms").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const { act, id } = btn.dataset;
+  msg();
+  try {
+    if (act === "start") await api(`/vms/${id}/start`, { method: "POST" });
+    if (act === "stop") await api(`/vms/${id}/stop`, { method: "POST", body: "{}" });
+    if (act === "poweroff") await api(`/vms/${id}/stop`, { method: "POST", body: '{"force": true}' });
+    if (act === "delete") {
+      if (!confirm("ลบ VM และดิสก์ทั้งหมด?")) return;
+      await api(`/vms/${id}`, { method: "DELETE" });
+    }
+    await loadVMs();
+  } catch (err) { msg(err.message); }
+});
+
+document.getElementById("create").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  msg();
+  try {
+    await api("/vms", {
+      method: "POST",
+      body: JSON.stringify({
+        name: f.get("name"),
+        vcpus: Number(f.get("vcpus")),
+        memory_mb: Number(f.get("memory_mb")),
+        firmware: f.get("firmware"),
+        disks: [{ size_gb: Number(f.get("disk_gb")) }],
+        nics: [{ network: f.get("network") }],
+      }),
+    });
+    e.target.reset();
+    await loadVMs();
+  } catch (err) { msg(err.message); }
+});
+
+loadHost().catch((err) => msg(err.message));
+loadVMs().catch((err) => msg(err.message));
+</script>
+</body>
+</html>
