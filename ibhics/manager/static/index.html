@@ -1,591 +1,329 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ibHiCS Console</title>
-<style>
-  :root {
-    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #5b6475; --line: #dde1e8;
-    --accent: #1f6feb; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0f1218; --panel: #171b23; --text: #e6e9ef; --muted: #9aa3b2; --line: #2a303b;
-      --accent: #4c8dff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 system-ui, "Noto Sans Thai", sans-serif; background: var(--bg); color: var(--text); }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  header h1 { margin: 0; font-size: 18px; }
-  header .host { color: var(--muted); font-size: 13px; }
-  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px; display: grid; gap: 20px; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
-  h2 { margin: 0 0 12px; font-size: 15px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; }
-  .state { font-weight: 600; }
-  .state.running { color: var(--ok); } .state.stopped { color: var(--muted); } .state.paused { color: var(--warn); } .state.failed { color: var(--bad); }
-  form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; }
-  label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-  input, select { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
-  button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; font: inherit; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.danger { color: var(--bad); }
-  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  #msg { min-height: 20px; color: var(--bad); }
-  .empty { color: var(--muted); padding: 16px 8px; }
-  @media (max-width: 640px) { .hide-sm { display: none; } }
-</style>
+<title>ibHiCS</title>
+<link rel="icon" href="logo-mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header>
-  <h1>ibHiCS Console</h1>
-  <div class="host" id="host">กำลังโหลด…</div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="g-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+    <linearGradient id="g-left" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+    <linearGradient id="g-right" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#4338ca"/></linearGradient>
+  </defs>
+  <symbol id="logo" viewBox="0 0 64 64">
+    <path d="M32 4 56 18 32 32 8 18Z" fill="url(#g-top)"/>
+    <path d="M8 18 32 32V60L8 46Z" fill="url(#g-left)"/>
+    <path d="M56 18 32 32V60L56 46Z" fill="url(#g-right)"/>
+    <path d="M32 12.5 41.5 18 32 23.5 22.5 18Z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M13 30.5 27 38.6M13 37.5 27 45.6" stroke="#fff" stroke-opacity=".85" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="44" cy="39" r="3" fill="#fff" fill-opacity=".85"/>
+  </symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-compute" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></g></symbol>
+  <symbol id="i-storage" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></g></symbol>
+  <symbol id="i-nodes" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01"/></g></symbol>
+  <symbol id="i-backup" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></g></symbol>
+  <symbol id="i-system" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></g></symbol>
+  <symbol id="i-server" viewBox="0 0 56 56"><g fill="currentColor"><rect x="6" y="4" width="20" height="48" rx="3"/><rect x="30" y="4" width="20" height="48" rx="3" opacity=".75"/></g><g fill="#fff"><rect x="10" y="10" width="12" height="3" rx="1"/><rect x="10" y="17" width="12" height="3" rx="1"/><rect x="34" y="10" width="12" height="3" rx="1"/><rect x="34" y="17" width="12" height="3" rx="1"/><circle cx="16" cy="44" r="2.5"/><circle cx="40" cy="44" r="2.5"/></g></symbol>
+  <symbol id="i-disk" viewBox="0 0 56 56"><g fill="currentColor"><ellipse cx="28" cy="13" rx="20" ry="7"/><path d="M8 19c0 3.9 9 7 20 7s20-3.1 20-7v8c0 3.9-9 7-20 7S8 30.9 8 27z" opacity=".85"/><path d="M8 33c0 3.9 9 7 20 7s20-3.1 20-7v8c0 3.9-9 7-20 7S8 44.9 8 41z" opacity=".7"/></g></symbol>
+</svg>
+
+<header class="topbar">
+  <a class="brand" href="#home" aria-label="ibHiCS home">
+    <svg><use href="#logo"/></svg>
+    <span class="brand-name">ib<b>HiCS</b><span class="brand-sub">Hyper-Converged Infrastructure</span></span>
+  </a>
+  <nav class="menu" id="menu">
+    <a href="#home" data-page="home"><svg><use href="#i-home"/></svg><span>Home</span></a>
+    <a href="#compute" data-page="compute"><svg><use href="#i-compute"/></svg><span>Compute</span></a>
+    <a href="#storage" data-page="storage"><svg><use href="#i-storage"/></svg><span>Storage</span></a>
+    <a href="#nodes" data-page="nodes"><svg><use href="#i-nodes"/></svg><span>Nodes</span></a>
+    <a href="#backup" data-page="backup"><svg><use href="#i-backup"/></svg><span>Backup</span></a>
+    <a href="#system" data-page="system"><svg><use href="#i-system"/></svg><span>System</span></a>
+  </nav>
+  <div class="topbar-right">
+    <span class="pill cluster" id="topology">…</span>
+    <span class="pill" id="quorum"><span class="dot"></span> Quorum</span>
+  </div>
 </header>
+
 <main>
-  <section>
-    <h2>สร้าง VM ใหม่</h2>
-    <form id="create">
-      <label>ชื่อ VM <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" placeholder="web-01"></label>
+  <section class="page" id="page-home">
+    <div class="hero">
+      <div class="wrap">
+        <div>
+          <h2>Hyper-Converged Infrastructure</h2>
+          <p>Compute, storage and backup for your virtual machines on standard servers from any vendor. Start with one node, grow to two nodes with a witness, then to a full cluster.</p>
+          <div class="actions">
+            <button class="primary" data-open="vm-dialog">+ New VM</button>
+            <button class="ghost" data-goto="nodes">Add node</button>
+            <button class="ghost" data-goto="backup">Protect VMs</button>
+          </div>
+        </div>
+        <svg class="hero-art" viewBox="0 0 64 64"><use href="#logo"/></svg>
+      </div>
+    </div>
+    <div class="band"><div class="wrap" id="rings"></div></div>
+    <div class="wrap">
+      <h3 class="section-title">Nodes and Storage</h3>
+      <div class="cards" id="home-cards"></div>
+    </div>
+  </section>
+
+  <section class="page" id="page-compute">
+    <div class="wrap">
+      <div class="page-head">
+        <h1>Virtual Machines</h1><span class="sub" id="vm-count"></span>
+        <span class="spacer"></span>
+        <input class="search" id="vm-search" placeholder="Search VMs">
+        <select id="vm-filter" style="width:auto">
+          <option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option>
+        </select>
+        <button class="primary" data-open="vm-dialog">+ New VM</button>
+      </div>
+      <div class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>State</th><th>Node</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th></th></tr></thead>
+        <tbody id="vms"></tbody>
+      </table></div></div>
+    </div>
+  </section>
+
+  <section class="page" id="page-storage">
+    <div class="wrap">
+      <div class="page-head">
+        <h1>Storage</h1><span class="sub">Storage pools on each node: local disk, NFS, iSCSI or FC</span>
+        <span class="spacer"></span>
+        <button class="primary" data-open="pool-dialog">+ Add pool</button>
+      </div>
+      <div class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Pool</th><th>Node</th><th>Type</th><th>Source</th><th style="min-width:200px">Usage</th><th></th></tr></thead>
+        <tbody id="pools"></tbody>
+      </table></div></div>
+    </div>
+  </section>
+
+  <section class="page" id="page-nodes">
+    <div class="wrap">
+      <div class="page-head">
+        <h1>Nodes</h1><span class="sub" id="nodes-sub"></span>
+        <span class="spacer"></span>
+        <button class="primary" data-open="node-dialog">+ Add node</button>
+      </div>
+      <div class="panel"><div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Role</th><th>Address</th><th>Status</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead>
+        <tbody id="nodes"></tbody>
+      </table></div></div>
+      <p class="hint">High availability needs at least two compute nodes and a witness. Changes need a majority of members online (quorum).</p>
+    </div>
+  </section>
+
+  <section class="page" id="page-backup">
+    <div class="wrap">
+      <div class="page-head">
+        <h1>Backup</h1><span class="sub">Incremental, deduplicated backups to local disk, NAS, SAN, USB or S3</span>
+      </div>
+      <div class="tabs" id="backup-tabs">
+        <button data-tab="backups" class="active">Restore points</button>
+        <button data-tab="policies">Schedules</button>
+        <button data-tab="targets">Targets</button>
+        <button data-tab="jobs">Jobs</button>
+      </div>
+
+      <div class="subpage active" id="tab-backups">
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Restore points</h3><span class="spacer"></span>
+            <label style="display:flex;align-items:center;gap:8px">Target <select id="browse-target" class="target-list" style="width:auto"></select></label>
+            <button id="refresh-backups">Refresh</button>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>VM</th><th>Created</th><th>Node</th><th>Size</th><th>New data</th><th></th></tr></thead>
+            <tbody id="backups"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <div class="subpage" id="tab-policies">
+        <div class="panel">
+          <div class="panel-head"><h3>Schedules</h3><span class="spacer"></span><button class="primary" data-open="policy-dialog">+ New schedule</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Target</th><th>When</th><th>VMs</th><th>Keep</th><th>Last run</th><th></th></tr></thead>
+            <tbody id="policies"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <div class="subpage" id="tab-targets">
+        <div class="panel">
+          <div class="panel-head"><h3>Backup targets</h3><span class="spacer"></span><button class="primary" data-open="target-dialog">+ Add target</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Type</th><th>Location</th><th>Connection</th><th></th></tr></thead>
+            <tbody id="targets"></tbody>
+          </table></div>
+        </div>
+      </div>
+
+      <div class="subpage" id="tab-jobs">
+        <div class="panel">
+          <div class="panel-head"><h3>Recent jobs</h3></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Job</th><th>VM</th><th>Target</th><th>Node</th><th>Started</th><th>Status</th><th>Details</th></tr></thead>
+            <tbody id="jobs"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-system">
+    <div class="wrap">
+      <div class="page-head"><h1>System</h1></div>
+      <div class="panel">
+        <div class="panel-head"><h3>About</h3></div>
+        <div class="panel-body"><dl class="kv" id="about"></dl></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Developer</h3></div>
+        <div class="panel-body">
+          <p style="margin:0">Everything in this console goes through the REST API. Interactive API reference: <a href="/docs" target="_blank">/docs</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="vm-dialog">
+  <form method="dialog" id="vm-form">
+    <header><h3>New virtual machine</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" placeholder="web-01"></label>
+      <label>Node <select name="node" class="node-list-auto"></select></label>
       <label>vCPU <input name="vcpus" type="number" min="1" value="2"></label>
-      <label>RAM (MB) <input name="memory_mb" type="number" min="128" step="128" value="2048"></label>
-      <label>ดิสก์ (GB) <input name="disk_gb" type="number" min="1" value="40"></label>
+      <label>Memory (MB) <input name="memory_mb" type="number" min="128" step="128" value="2048"></label>
+      <label>Disk (GB) <input name="disk_gb" type="number" min="1" value="40"></label>
       <label>Storage pool <input name="pool" value="default" list="pool-names"></label>
-      <datalist id="pool-names"></datalist>
-      <label>Firmware
-        <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
-      </label>
+      <label>Firmware <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select></label>
       <label>Network <input name="network" value="default"></label>
-      <label>Node <select name="node" id="node-select"><option value="">อัตโนมัติ</option></select></label>
-      <button class="primary" type="submit">สร้าง VM</button>
-    </form>
-    <div id="msg"></div>
-  </section>
-  <section>
-    <h2>Nodes</h2>
-    <table>
-      <thead><tr><th>ชื่อ</th><th>Role</th><th class="hide-sm">Address</th><th>สถานะ</th><th></th></tr></thead>
-      <tbody id="nodes"></tbody>
-    </table>
-    <h2 style="margin-top:16px">เพิ่ม node เข้า cluster</h2>
-    <form id="join">
-      <label>ชื่อ node <input name="name" required placeholder="node2"></label>
-      <label>Role
-        <select name="role"><option value="compute">compute</option><option value="witness">witness</option></select>
-      </label>
-      <label>Agent URL <input name="address" required placeholder="http://10.0.0.12:8007"></label>
-      <button type="submit">เพิ่ม node</button>
-    </form>
-  </section>
-  <section>
-    <h2>Storage</h2>
-    <table>
-      <thead><tr><th>Node</th><th>Pool</th><th>ชนิด</th><th class="hide-sm">ที่มา</th><th>ใช้ / ทั้งหมด</th><th></th></tr></thead>
-      <tbody id="pools"></tbody>
-    </table>
-    <h2 style="margin-top:16px">เพิ่ม storage pool</h2>
-    <form id="pool-form">
+      <label>ISO (optional) <input name="iso" placeholder="/var/lib/ibhics/iso/debian.iso"></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create</button></footer>
+  </form>
+</dialog>
+<datalist id="pool-names"></datalist>
+
+<dialog id="pool-dialog">
+  <form method="dialog" id="pool-form">
+    <header><h3>Add storage pool</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
       <label>Node <select name="node" class="node-list" required></select></label>
-      <label>ชื่อ pool <input name="name" required placeholder="nas01"></label>
-      <label>ชนิด
-        <select name="type" id="pool-type">
-          <option value="dir">Local directory</option>
-          <option value="nfs">NFS</option>
-          <option value="iscsi">iSCSI (LVM บน LUN)</option>
-          <option value="lvm">FC / local disk (LVM)</option>
+      <label>Name <input name="name" required placeholder="nas01"></label>
+      <label>Type
+        <select name="type" data-switch>
+          <option value="dir">Local directory</option><option value="nfs">NFS</option>
+          <option value="iscsi">iSCSI (LVM on a LUN)</option><option value="lvm">FC / local disk (LVM)</option>
         </select>
       </label>
-      <label data-for="dir">Path (ว่าง = ค่าเริ่มต้น) <input name="path" placeholder="/var/lib/ibhics/pools/..."></label>
-      <label data-for="nfs iscsi">Server / Portal <input name="host" placeholder="10.0.0.50"></label>
+      <label data-for="dir">Path (blank = default) <input name="path" placeholder="/var/lib/ibhics/pools/..."></label>
+      <label data-for="nfs iscsi">Server / portal <input name="host" placeholder="10.0.0.50"></label>
       <label data-for="nfs">Export <input name="export" placeholder="/vol/vms"></label>
       <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:lun1"></label>
       <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
       <label data-for="lvm">Device <input name="device" placeholder="/dev/mapper/mpatha"></label>
-      <label data-for="iscsi lvm" class="wipe"><span><input name="confirm_wipe" type="checkbox" style="width:auto"> ยืนยันว่าลบข้อมูลบน device ได้</span></label>
-      <button type="submit">เพิ่ม pool</button>
-    </form>
-  </section>
-  <section>
-    <h2>Virtual Machines</h2>
-    <table>
-      <thead><tr><th>ชื่อ</th><th>Node</th><th>สถานะ</th><th>vCPU</th><th>RAM</th><th class="hide-sm">ดิสก์</th><th></th></tr></thead>
-      <tbody id="vms"></tbody>
-    </table>
-  </section>
-  <section>
-    <h2>Backup</h2>
-    <table>
-      <thead><tr><th>ปลายทาง</th><th>ชนิด</th><th class="hide-sm">ที่อยู่</th><th>การเชื่อมต่อ</th><th></th></tr></thead>
-      <tbody id="targets"></tbody>
-    </table>
-    <h2 style="margin-top:16px">เพิ่มปลายทาง backup</h2>
-    <form id="target-form">
-      <label>ชื่อ <input name="name" required placeholder="nas-backup"></label>
-      <label>ชนิด
-        <select name="type" id="target-type">
-          <option value="local">ดิสก์ในเครื่อง</option>
-          <option value="nfs">NFS</option>
-          <option value="smb">SMB / Windows share</option>
-          <option value="usb">USB disk</option>
-          <option value="iscsi">iSCSI LUN (SAN / NAS)</option>
-          <option value="fc">FC LUN / block device</option>
-          <option value="s3">S3 / MinIO</option>
+      <label class="check" data-for="iscsi lvm"><input name="confirm_wipe" type="checkbox"> I understand all data on the device will be erased</label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add pool</button></footer>
+  </form>
+</dialog>
+
+<dialog id="node-dialog">
+  <form method="dialog" id="node-form">
+    <header><h3>Add node to cluster</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Node name <input name="name" required placeholder="node2"></label>
+      <label>Role <select name="role"><option value="compute">Compute</option><option value="witness">Witness</option></select></label>
+      <label>Agent URL <input name="address" required placeholder="http://10.0.0.12:8007"></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add node</button></footer>
+  </form>
+</dialog>
+
+<dialog id="target-dialog">
+  <form method="dialog" id="target-form">
+    <header><h3>Add backup target</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Name <input name="name" required placeholder="nas-backup"></label>
+      <label>Type
+        <select name="type" data-switch>
+          <option value="local">Local disk</option><option value="nfs">NFS</option><option value="smb">SMB / Windows share</option>
+          <option value="usb">USB disk</option><option value="iscsi">iSCSI LUN (SAN / NAS)</option>
+          <option value="fc">FC LUN / block device</option><option value="s3">S3 / MinIO</option>
         </select>
       </label>
-      <label data-for="local">Path (ว่าง = ค่าเริ่มต้น) <input name="path" placeholder="/var/lib/ibhics/backup/..."></label>
-      <label data-for="nfs smb iscsi">Server / Portal <input name="host" placeholder="10.0.0.50"></label>
-      <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:backup"></label>
-      <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
+      <label data-for="local">Path (blank = default) <input name="path" placeholder="/var/lib/ibhics/backup/..."></label>
+      <label data-for="nfs smb iscsi">Server / portal <input name="host" placeholder="10.0.0.50"></label>
       <label data-for="nfs">Export <input name="export" placeholder="/backup"></label>
       <label data-for="smb">Share <input name="share" placeholder="Backup"></label>
       <label data-for="smb">Username <input name="username"></label>
       <label data-for="smb">Password <input name="password" type="password" autocomplete="new-password"></label>
+      <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:backup"></label>
+      <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
       <label data-for="usb fc">Device <input name="device" placeholder="/dev/disk/by-label/BACKUP"></label>
-      <label data-for="iscsi fc"><span><input name="confirm_wipe" type="checkbox" style="width:auto"> format ให้ถ้า LUN ยังไม่มี filesystem</span></label>
       <label data-for="s3">Endpoint <input name="endpoint" placeholder="https://minio.local:9000"></label>
       <label data-for="s3">Bucket <input name="bucket" placeholder="vm-backup"></label>
       <label data-for="s3">Access key <input name="access_key"></label>
       <label data-for="s3">Secret key <input name="secret_key" type="password" autocomplete="new-password"></label>
-      <button type="submit">เพิ่มปลายทาง</button>
-    </form>
+      <label class="check" data-for="iscsi fc"><input name="confirm_wipe" type="checkbox"> Format the LUN if it has no filesystem</label>
+    </div>
+    <p class="hint" style="padding:0 18px">NAS, SAN and USB targets are attached only while a job runs and detached when it ends.</p>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add target</button></footer>
+  </form>
+</dialog>
 
-    <h2 style="margin-top:20px">ตั้งเวลา backup อัตโนมัติ</h2>
-    <table>
-      <thead><tr><th>ชื่อ</th><th>ปลายทาง</th><th>เวลา</th><th class="hide-sm">VM</th><th>เก็บ</th><th class="hide-sm">รันล่าสุด</th><th></th></tr></thead>
-      <tbody id="policies"></tbody>
-    </table>
-    <form id="policy-form" style="margin-top:12px">
-      <label>ชื่อ <input name="name" required placeholder="nightly"></label>
-      <label>ปลายทาง <select name="target" class="target-list" required></select></label>
-      <label>รอบ
-        <select name="mode" id="policy-mode"><option value="at">ทุกวัน เวลา</option><option value="every">ทุก ๆ (ชั่วโมง)</option></select>
-      </label>
-      <label data-mode="at">เวลา <input name="at" type="time" value="02:00"></label>
-      <label data-mode="every">ชั่วโมง <input name="every_hours" type="number" min="1" max="168" value="6"></label>
-      <label>VM (คั่นด้วย , ว่าง = ทุก VM) <input name="vms" placeholder="web-01, db-01"></label>
-      <label>เก็บล่าสุด (ชุด) <input name="keep_last" type="number" min="1" value="7"></label>
-      <button type="submit">เพิ่ม policy</button>
-    </form>
+<dialog id="policy-dialog">
+  <form method="dialog" id="policy-form">
+    <header><h3>New backup schedule</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Name <input name="name" required placeholder="nightly"></label>
+      <label>Target <select name="target" class="target-list" required></select></label>
+      <label>Repeat <select name="mode" data-switch><option value="at">Daily at</option><option value="every">Every N hours</option></select></label>
+      <label data-for="at">Time <input name="at" type="time" value="02:00"></label>
+      <label data-for="every">Hours <input name="every_hours" type="number" min="1" max="168" value="6"></label>
+      <label>VMs (comma separated, blank = all) <input name="vms" placeholder="web-01, db-01"></label>
+      <label>Keep last <input name="keep_last" type="number" min="1" value="7"></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create schedule</button></footer>
+  </form>
+</dialog>
 
-    <h2 style="margin-top:20px">Backup ที่มีอยู่</h2>
-    <form id="browse" style="margin-bottom:8px">
-      <label>ปลายทาง <select id="browse-target" class="target-list"></select></label>
-      <button type="submit">รีเฟรช</button>
-    </form>
-    <table>
-      <thead><tr><th>VM</th><th>เวลา</th><th class="hide-sm">Node</th><th>ขนาด</th><th class="hide-sm">ใช้พื้นที่เพิ่ม</th><th></th></tr></thead>
-      <tbody id="backups"></tbody>
-    </table>
+<dialog id="restore-dialog">
+  <form method="dialog" id="restore-form">
+    <header><h3>Restore VM</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>New VM name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
+      <label>Node <select name="node" class="node-list-auto"></select></label>
+      <label>Storage pool (blank = original) <input name="pool" list="pool-names"></label>
+    </div>
+    <p class="hint" style="padding:0 18px">Restoring under the original name works only if that VM no longer exists.</p>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Restore</button></footer>
+  </form>
+</dialog>
 
-    <h2 style="margin-top:20px">งานล่าสุด</h2>
-    <table>
-      <thead><tr><th>งาน</th><th>VM</th><th>ปลายทาง</th><th>สถานะ</th><th class="hide-sm">รายละเอียด</th></tr></thead>
-      <tbody id="jobs"></tbody>
-    </table>
-  </section>
-</main>
-<script>
-const api = (path, opts = {}) =>
-  fetch(`/api/v1${path}`, { headers: { "Content-Type": "application/json" }, ...opts }).then(async (r) => {
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join(", ") : body.detail;
-      throw new Error(detail || r.statusText);
-    }
-    return r.status === 204 ? null : r.json();
-  });
+<dialog id="backup-dialog">
+  <form method="dialog" id="backup-form">
+    <header><h3>Back up VM</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Target <select name="target" class="target-list" required></select></label>
+      <label>Keep last (optional) <input name="keep_last" type="number" min="1"></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Back up now</button></footer>
+  </form>
+</dialog>
 
-const msg = (text) => { document.getElementById("msg").textContent = text || ""; };
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-
-const TOPOLOGY = {
-  "standalone": "Standalone (node เดียว)",
-  "two-node-witness": "2 node + witness",
-  "cluster": "Cluster",
-  "incomplete": "ยังไม่ครบ (ไม่มี HA)",
-};
-
-async function loadCluster() {
-  const c = await api("/cluster");
-  document.getElementById("host").textContent =
-    `${TOPOLOGY[c.topology] || c.topology} · ${c.members.length} node · ` +
-    (c.quorum ? "quorum OK" : "เสีย quorum: สั่งงานไม่ได้");
-  document.getElementById("nodes").innerHTML = c.members.map((m) => `
-    <tr>
-      <td>${esc(m.name)}${m.local ? " (manager)" : ""}</td>
-      <td>${esc(m.role)}</td>
-      <td class="hide-sm">${esc(m.address || "local")}</td>
-      <td class="state ${m.healthy ? "running" : "paused"}">${m.healthy ? "online" : "offline"}</td>
-      <td>${m.local ? "" : `<button class="danger" data-node="${esc(m.name)}">นำออก</button>`}</td>
-    </tr>`).join("");
-  const select = document.getElementById("node-select");
-  const keep = select.value;
-  select.innerHTML = '<option value="">อัตโนมัติ</option>' + c.members
-    .filter((m) => m.role === "compute" && m.healthy)
-    .map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
-  select.value = keep;
-  for (const list of document.querySelectorAll(".node-list")) {
-    const prev = list.value;
-    list.innerHTML = c.members.filter((m) => m.role === "compute" && m.healthy)
-      .map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
-    if (prev) list.value = prev;
-  }
-}
-
-const POOL_TYPES = { dir: "Local", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC/disk)" };
-
-async function loadPools() {
-  const pools = await api("/pools");
-  document.getElementById("pools").innerHTML = pools.map((p) => `
-    <tr>
-      <td>${esc(p.node)}</td>
-      <td>${esc(p.name)}</td>
-      <td>${esc(POOL_TYPES[p.type] || p.type)}</td>
-      <td class="hide-sm">${esc(p.source)}</td>
-      <td>${p.allocation_gb} / ${p.capacity_gb} GB</td>
-      <td><button class="danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">นำออก</button></td>
-    </tr>`).join("");
-  const names = [...new Set(pools.map((p) => p.name))];
-  document.getElementById("pool-names").innerHTML = names.map((n) => `<option value="${esc(n)}">`).join("");
-}
-
-function showPoolFields() {
-  const type = document.getElementById("pool-type").value;
-  for (const el of document.querySelectorAll("#pool-form [data-for]")) {
-    el.style.display = el.dataset.for.split(" ").includes(type) ? "" : "none";
-  }
-}
-document.getElementById("pool-type").addEventListener("change", showPoolFields);
-showPoolFields();
-
-document.getElementById("pool-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const type = f.get("type");
-  const body = { name: f.get("name"), type, confirm_wipe: f.get("confirm_wipe") === "on" };
-  if (type === "dir" && f.get("path")) body.path = f.get("path");
-  if (type === "nfs" || type === "iscsi") body.host = f.get("host");
-  if (type === "nfs") body.export = f.get("export");
-  if (type === "iscsi") { body.iqn = f.get("iqn"); body.lun = Number(f.get("lun")); }
-  if (type === "lvm") body.device = f.get("device");
-  if (body.confirm_wipe && !confirm("ข้อมูลทั้งหมดบน device นี้จะถูกลบ ดำเนินการต่อ?")) return;
-  msg();
-  try {
-    await api(`/nodes/${encodeURIComponent(f.get("node"))}/pools`, { method: "POST", body: JSON.stringify(body) });
-    e.target.reset();
-    showPoolFields();
-    await loadPools();
-  } catch (err) { msg(err.message); }
-});
-
-document.getElementById("pools").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-pool]");
-  if (!btn || !confirm(`นำ pool ${btn.dataset.pool} ออกจาก ${btn.dataset.node}? (ข้อมูลบน storage จะยังอยู่)`)) return;
-  msg();
-  try {
-    await api(`/nodes/${encodeURIComponent(btn.dataset.node)}/pools/${encodeURIComponent(btn.dataset.pool)}`, { method: "DELETE" });
-    await loadPools();
-  } catch (err) { msg(err.message); }
-});
-
-async function loadVMs() {
-  const vms = await api("/vms");
-  const tbody = document.getElementById("vms");
-  if (!vms.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">ยังไม่มี VM</td></tr>';
-    return;
-  }
-  tbody.innerHTML = vms.map((vm) => `
-    <tr>
-      <td>${esc(vm.name)}</td>
-      <td>${esc(vm.node || "")}</td>
-      <td class="state ${esc(vm.state)}">${esc(vm.state)}</td>
-      <td>${vm.vcpus}</td>
-      <td>${vm.memory_mb} MB</td>
-      <td class="hide-sm">${vm.disks.map((d) => `${d.size_gb} GB`).join(", ")}</td>
-      <td class="actions">
-        ${vm.state === "running"
-          ? `<button data-act="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button>
-             <button data-act="stop" data-id="${vm.uuid}">Shutdown</button>
-             <button data-act="poweroff" data-id="${vm.uuid}">Power off</button>`
-          : `<button data-act="start" data-id="${vm.uuid}">Start</button>
-             <button class="danger" data-act="delete" data-id="${vm.uuid}">ลบ</button>`}
-        <button data-act="backup" data-id="${vm.uuid}">Backup</button>
-      </td>
-    </tr>`).join("");
-}
-
-document.getElementById("vms").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-act]");
-  if (!btn) return;
-  const { act, id } = btn.dataset;
-  if (act === "console") {
-    const q = new URLSearchParams({ vm: id, name: btn.dataset.name });
-    window.open(`console.html?${q}`, `console-${id}`, "width=1100,height=760");
-    return;
-  }
-  msg();
-  try {
-    if (act === "start") await api(`/vms/${id}/start`, { method: "POST" });
-    if (act === "stop") await api(`/vms/${id}/stop`, { method: "POST", body: "{}" });
-    if (act === "poweroff") await api(`/vms/${id}/stop`, { method: "POST", body: '{"force": true}' });
-    if (act === "delete") {
-      if (!confirm("ลบ VM และดิสก์ทั้งหมด?")) return;
-      await api(`/vms/${id}`, { method: "DELETE" });
-    }
-    if (act === "backup") {
-      const target = document.getElementById("browse-target").value;
-      if (!target) { msg("เพิ่มปลายทาง backup ก่อน (ส่วน Backup ด้านล่าง)"); return; }
-      await api(`/vms/${id}/backup`, { method: "POST", body: JSON.stringify({ target }) });
-      await loadJobs();
-      return;
-    }
-    await loadVMs();
-    await loadPools();
-  } catch (err) { msg(err.message); }
-});
-
-document.getElementById("create").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  msg();
-  try {
-    await api("/vms", {
-      method: "POST",
-      body: JSON.stringify({
-        name: f.get("name"),
-        vcpus: Number(f.get("vcpus")),
-        memory_mb: Number(f.get("memory_mb")),
-        firmware: f.get("firmware"),
-        disks: [{ size_gb: Number(f.get("disk_gb")), pool: f.get("pool") || "default" }],
-        nics: [{ network: f.get("network") }],
-        node: f.get("node") || null,
-      }),
-    });
-    e.target.reset();
-    await loadVMs();
-    await loadPools();
-  } catch (err) { msg(err.message); }
-});
-
-document.getElementById("nodes").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-node]");
-  if (!btn || !confirm(`นำ ${btn.dataset.node} ออกจาก cluster?`)) return;
-  msg();
-  try {
-    await api(`/cluster/nodes/${encodeURIComponent(btn.dataset.node)}`, { method: "DELETE" });
-    await loadCluster();
-  } catch (err) { msg(err.message); }
-});
-
-document.getElementById("join").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  msg();
-  try {
-    await api("/cluster/nodes", {
-      method: "POST",
-      body: JSON.stringify({ name: f.get("name"), role: f.get("role"), address: f.get("address") }),
-    });
-    e.target.reset();
-    await loadCluster();
-  } catch (err) { msg(err.message); }
-});
-
-// Backup
-
-const TARGET_TYPES = { local: "ดิสก์ในเครื่อง", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
-const size = (bytes) => {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i += 1; }
-  return `${bytes.toFixed(i ? 1 : 0)} ${units[i]}`;
-};
-const when = (iso) => (iso ? new Date(iso).toLocaleString("th-TH") : "-");
-
-function showFields(form, attr, value) {
-  for (const el of form.querySelectorAll(`[${attr}]`)) {
-    el.style.display = el.getAttribute(attr).split(" ").includes(value) ? "" : "none";
-  }
-}
-const targetForm = document.getElementById("target-form");
-const policyForm = document.getElementById("policy-form");
-const showTargetFields = () => showFields(targetForm, "data-for", document.getElementById("target-type").value);
-const showPolicyFields = () => showFields(policyForm, "data-mode", document.getElementById("policy-mode").value);
-document.getElementById("target-type").addEventListener("change", showTargetFields);
-document.getElementById("policy-mode").addEventListener("change", showPolicyFields);
-showTargetFields();
-showPolicyFields();
-
-async function loadTargets() {
-  const targets = await api("/backup/targets");
-  document.getElementById("targets").innerHTML = targets.length ? targets.map((t) => `
-    <tr>
-      <td>${esc(t.name)}</td>
-      <td>${esc(TARGET_TYPES[t.type] || t.type)}</td>
-      <td class="hide-sm">${esc(t.source)}</td>
-      <td>${t.on_demand ? "เฉพาะตอนรัน job (แยกออกเมื่อเสร็จ)" : "ตลอดเวลา"}</td>
-      <td><button class="danger" data-target="${esc(t.name)}">นำออก</button></td>
-    </tr>`).join("") : '<tr><td colspan="5" class="empty">ยังไม่มีปลายทาง backup</td></tr>';
-  for (const list of document.querySelectorAll(".target-list")) {
-    const prev = list.value;
-    list.innerHTML = targets.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
-    if (prev && targets.some((t) => t.name === prev)) list.value = prev;
-  }
-}
-
-async function loadPolicies() {
-  const policies = await api("/backup/policies");
-  document.getElementById("policies").innerHTML = policies.length ? policies.map((p) => `
-    <tr>
-      <td>${esc(p.name)}</td>
-      <td>${esc(p.target)}</td>
-      <td>${p.at ? `ทุกวัน ${esc(p.at)}` : `ทุก ${p.every_hours} ชม.`}</td>
-      <td class="hide-sm">${p.vms.length ? esc(p.vms.join(", ")) : "ทุก VM"}</td>
-      <td>${p.keep_last} ชุด</td>
-      <td class="hide-sm">${esc(when(p.last_run))}</td>
-      <td class="actions">
-        <button data-policy-run="${esc(p.name)}">รันตอนนี้</button>
-        <button class="danger" data-policy-del="${esc(p.name)}">ลบ</button>
-      </td>
-    </tr>`).join("") : '<tr><td colspan="7" class="empty">ยังไม่ได้ตั้งเวลา</td></tr>';
-}
-
-async function loadBackups() {
-  const target = document.getElementById("browse-target").value;
-  const tbody = document.getElementById("backups");
-  if (!target) { tbody.innerHTML = ""; return; }
-  const backups = await api(`/backup/targets/${encodeURIComponent(target)}/backups`);
-  tbody.innerHTML = backups.length ? backups.slice().reverse().map((b) => `
-    <tr>
-      <td>${esc(b.vm_name)}</td>
-      <td>${esc(when(b.created))}</td>
-      <td class="hide-sm">${esc(b.node || "-")}</td>
-      <td>${size(b.size_bytes)}</td>
-      <td class="hide-sm">${size(b.stored_bytes)}</td>
-      <td class="actions">
-        <button data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button>
-        <button class="danger" data-backup-del="${esc(b.id)}" data-node="${esc(b.node || "")}">ลบ</button>
-      </td>
-    </tr>`).join("") : '<tr><td colspan="6" class="empty">ยังไม่มี backup บนปลายทางนี้</td></tr>';
-}
-
-const JOB_STATE = { queued: "รอคิว", running: "กำลังทำ", done: "สำเร็จ", failed: "ล้มเหลว" };
-const JOB_CLASS = { queued: "paused", running: "paused", done: "running", failed: "failed" };
-
-async function loadJobs() {
-  const jobs = (await api("/backup/jobs")).slice(0, 10);
-  document.getElementById("jobs").innerHTML = jobs.length ? jobs.map((j) => `
-    <tr>
-      <td>${j.kind === "backup" ? "Backup" : "Restore"}${j.policy ? ` (${esc(j.policy)})` : ""}</td>
-      <td>${esc(j.vm)}</td>
-      <td>${esc(j.target)}</td>
-      <td class="state ${JOB_CLASS[j.state]}">${JOB_STATE[j.state] || esc(j.state)}</td>
-      <td class="hide-sm">${esc(j.error || j.result || "")}</td>
-    </tr>`).join("") : '<tr><td colspan="5" class="empty">ยังไม่มีงาน</td></tr>';
-}
-
-const BACKUP_FIELDS = {
-  local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
-  usb: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
-  iscsi: ["host", "iqn"], fc: ["device"],
-};
-
-targetForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const body = { name: f.get("name"), type: f.get("type") };
-  for (const key of BACKUP_FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
-  if (body.type === "iscsi") body.lun = Number(f.get("lun"));
-  if (body.type === "iscsi" || body.type === "fc") {
-    body.confirm_wipe = f.get("confirm_wipe") === "on";
-    if (body.confirm_wipe && !confirm("ถ้า LUN นี้ยังไม่มี filesystem ระบบจะ format ใหม่ ดำเนินการต่อ?")) return;
-  }
-  msg();
-  try {
-    await api("/backup/targets", { method: "POST", body: JSON.stringify(body) });
-    e.target.reset();
-    showTargetFields();
-    await loadTargets();
-    await loadBackups();
-  } catch (err) { msg(err.message); }
-});
-
-policyForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const body = {
-    name: f.get("name"),
-    target: f.get("target"),
-    vms: f.get("vms").split(",").map((v) => v.trim()).filter(Boolean),
-    keep_last: Number(f.get("keep_last")),
-  };
-  if (f.get("mode") === "at") body.at = f.get("at"); else body.every_hours = Number(f.get("every_hours"));
-  msg();
-  try {
-    await api("/backup/policies", { method: "POST", body: JSON.stringify(body) });
-    e.target.reset();
-    showPolicyFields();
-    await loadPolicies();
-  } catch (err) { msg(err.message); }
-});
-
-document.getElementById("browse").addEventListener("submit", (e) => {
-  e.preventDefault();
-  loadBackups().catch((err) => msg(err.message));
-});
-document.getElementById("browse-target").addEventListener("change", () => loadBackups().catch((err) => msg(err.message)));
-
-document.querySelector("main").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-target], button[data-policy-run], button[data-policy-del], button[data-restore], button[data-backup-del]");
-  if (!btn) return;
-  const d = btn.dataset;
-  const target = document.getElementById("browse-target").value;
-  msg();
-  try {
-    if (d.target) {
-      if (!confirm(`นำปลายทาง ${d.target} ออก? (ไฟล์ backup บนปลายทางจะยังอยู่)`)) return;
-      await api(`/backup/targets/${encodeURIComponent(d.target)}`, { method: "DELETE" });
-      await loadTargets();
-      await loadBackups();
-    } else if (d.policyRun) {
-      await api(`/backup/policies/${encodeURIComponent(d.policyRun)}/run`, { method: "POST" });
-      await loadPolicies();
-    } else if (d.policyDel) {
-      if (!confirm(`ลบ policy ${d.policyDel}?`)) return;
-      await api(`/backup/policies/${encodeURIComponent(d.policyDel)}`, { method: "DELETE" });
-      await loadPolicies();
-    } else if (d.restore) {
-      const name = prompt(`Restore เป็น VM ชื่อ (ว่าง = ${d.vm} ซึ่งต้องไม่มีอยู่แล้ว)`, `${d.vm}-restore`);
-      if (name === null) return;
-      const body = { name: name.trim() || null, source_node: d.node || null };
-      await api(`/backup/targets/${encodeURIComponent(target)}/backups/${encodeURIComponent(d.restore)}/restore`,
-        { method: "POST", body: JSON.stringify(body) });
-    } else if (d.backupDel) {
-      if (!confirm(`ลบ backup ${d.backupDel}?`)) return;
-      const q = d.node ? `?node=${encodeURIComponent(d.node)}` : "";
-      await api(`/backup/targets/${encodeURIComponent(target)}/backups/${encodeURIComponent(d.backupDel)}${q}`, { method: "DELETE" });
-      await loadBackups();
-    }
-    await loadJobs();
-  } catch (err) { msg(err.message); }
-});
-
-loadCluster().catch((err) => msg(err.message));
-loadPools().catch((err) => msg(err.message));
-loadTargets().then(loadBackups).catch((err) => msg(err.message));
-loadPolicies().catch((err) => msg(err.message));
-loadJobs().catch(() => {});
-setInterval(() => {
-  loadCluster().catch(() => {});
-  loadVMs().catch(() => {});
-  loadJobs().catch(() => {});
-  loadBackups().catch(() => {});
-}, 10000);
-loadVMs().catch((err) => msg(err.message));
-</script>
+<div id="toast"></div>
+<script src="app.js"></script>
 </body>
 </html>
