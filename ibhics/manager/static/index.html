@@ -27,7 +27,7 @@
   th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   .state { font-weight: 600; }
-  .state.running { color: var(--ok); } .state.stopped { color: var(--muted); } .state.paused { color: var(--warn); }
+  .state.running { color: var(--ok); } .state.stopped { color: var(--muted); } .state.paused { color: var(--warn); } .state.failed { color: var(--bad); }
   form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; }
   label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
   input, select { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
@@ -113,6 +113,77 @@
     <table>
       <thead><tr><th>ชื่อ</th><th>Node</th><th>สถานะ</th><th>vCPU</th><th>RAM</th><th class="hide-sm">ดิสก์</th><th></th></tr></thead>
       <tbody id="vms"></tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Backup</h2>
+    <table>
+      <thead><tr><th>ปลายทาง</th><th>ชนิด</th><th class="hide-sm">ที่อยู่</th><th>การเชื่อมต่อ</th><th></th></tr></thead>
+      <tbody id="targets"></tbody>
+    </table>
+    <h2 style="margin-top:16px">เพิ่มปลายทาง backup</h2>
+    <form id="target-form">
+      <label>ชื่อ <input name="name" required placeholder="nas-backup"></label>
+      <label>ชนิด
+        <select name="type" id="target-type">
+          <option value="local">ดิสก์ในเครื่อง</option>
+          <option value="nfs">NFS</option>
+          <option value="smb">SMB / Windows share</option>
+          <option value="usb">USB disk</option>
+          <option value="iscsi">iSCSI LUN (SAN / NAS)</option>
+          <option value="fc">FC LUN / block device</option>
+          <option value="s3">S3 / MinIO</option>
+        </select>
+      </label>
+      <label data-for="local">Path (ว่าง = ค่าเริ่มต้น) <input name="path" placeholder="/var/lib/ibhics/backup/..."></label>
+      <label data-for="nfs smb iscsi">Server / Portal <input name="host" placeholder="10.0.0.50"></label>
+      <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:backup"></label>
+      <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
+      <label data-for="nfs">Export <input name="export" placeholder="/backup"></label>
+      <label data-for="smb">Share <input name="share" placeholder="Backup"></label>
+      <label data-for="smb">Username <input name="username"></label>
+      <label data-for="smb">Password <input name="password" type="password" autocomplete="new-password"></label>
+      <label data-for="usb fc">Device <input name="device" placeholder="/dev/disk/by-label/BACKUP"></label>
+      <label data-for="iscsi fc"><span><input name="confirm_wipe" type="checkbox" style="width:auto"> format ให้ถ้า LUN ยังไม่มี filesystem</span></label>
+      <label data-for="s3">Endpoint <input name="endpoint" placeholder="https://minio.local:9000"></label>
+      <label data-for="s3">Bucket <input name="bucket" placeholder="vm-backup"></label>
+      <label data-for="s3">Access key <input name="access_key"></label>
+      <label data-for="s3">Secret key <input name="secret_key" type="password" autocomplete="new-password"></label>
+      <button type="submit">เพิ่มปลายทาง</button>
+    </form>
+
+    <h2 style="margin-top:20px">ตั้งเวลา backup อัตโนมัติ</h2>
+    <table>
+      <thead><tr><th>ชื่อ</th><th>ปลายทาง</th><th>เวลา</th><th class="hide-sm">VM</th><th>เก็บ</th><th class="hide-sm">รันล่าสุด</th><th></th></tr></thead>
+      <tbody id="policies"></tbody>
+    </table>
+    <form id="policy-form" style="margin-top:12px">
+      <label>ชื่อ <input name="name" required placeholder="nightly"></label>
+      <label>ปลายทาง <select name="target" class="target-list" required></select></label>
+      <label>รอบ
+        <select name="mode" id="policy-mode"><option value="at">ทุกวัน เวลา</option><option value="every">ทุก ๆ (ชั่วโมง)</option></select>
+      </label>
+      <label data-mode="at">เวลา <input name="at" type="time" value="02:00"></label>
+      <label data-mode="every">ชั่วโมง <input name="every_hours" type="number" min="1" max="168" value="6"></label>
+      <label>VM (คั่นด้วย , ว่าง = ทุก VM) <input name="vms" placeholder="web-01, db-01"></label>
+      <label>เก็บล่าสุด (ชุด) <input name="keep_last" type="number" min="1" value="7"></label>
+      <button type="submit">เพิ่ม policy</button>
+    </form>
+
+    <h2 style="margin-top:20px">Backup ที่มีอยู่</h2>
+    <form id="browse" style="margin-bottom:8px">
+      <label>ปลายทาง <select id="browse-target" class="target-list"></select></label>
+      <button type="submit">รีเฟรช</button>
+    </form>
+    <table>
+      <thead><tr><th>VM</th><th>เวลา</th><th class="hide-sm">Node</th><th>ขนาด</th><th class="hide-sm">ใช้พื้นที่เพิ่ม</th><th></th></tr></thead>
+      <tbody id="backups"></tbody>
+    </table>
+
+    <h2 style="margin-top:20px">งานล่าสุด</h2>
+    <table>
+      <thead><tr><th>งาน</th><th>VM</th><th>ปลายทาง</th><th>สถานะ</th><th class="hide-sm">รายละเอียด</th></tr></thead>
+      <tbody id="jobs"></tbody>
     </table>
   </section>
 </main>
@@ -241,6 +312,7 @@ async function loadVMs() {
              <button data-act="poweroff" data-id="${vm.uuid}">Power off</button>`
           : `<button data-act="start" data-id="${vm.uuid}">Start</button>
              <button class="danger" data-act="delete" data-id="${vm.uuid}">ลบ</button>`}
+        <button data-act="backup" data-id="${vm.uuid}">Backup</button>
       </td>
     </tr>`).join("");
 }
@@ -257,6 +329,13 @@ document.getElementById("vms").addEventListener("click", async (e) => {
     if (act === "delete") {
       if (!confirm("ลบ VM และดิสก์ทั้งหมด?")) return;
       await api(`/vms/${id}`, { method: "DELETE" });
+    }
+    if (act === "backup") {
+      const target = document.getElementById("browse-target").value;
+      if (!target) { msg("เพิ่มปลายทาง backup ก่อน (ส่วน Backup ด้านล่าง)"); return; }
+      await api(`/vms/${id}/backup`, { method: "POST", body: JSON.stringify({ target }) });
+      await loadJobs();
+      return;
     }
     await loadVMs();
     await loadPools();
@@ -310,9 +389,196 @@ document.getElementById("join").addEventListener("submit", async (e) => {
   } catch (err) { msg(err.message); }
 });
 
+// Backup
+
+const TARGET_TYPES = { local: "ดิสก์ในเครื่อง", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
+const size = (bytes) => {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i += 1; }
+  return `${bytes.toFixed(i ? 1 : 0)} ${units[i]}`;
+};
+const when = (iso) => (iso ? new Date(iso).toLocaleString("th-TH") : "-");
+
+function showFields(form, attr, value) {
+  for (const el of form.querySelectorAll(`[${attr}]`)) {
+    el.style.display = el.getAttribute(attr).split(" ").includes(value) ? "" : "none";
+  }
+}
+const targetForm = document.getElementById("target-form");
+const policyForm = document.getElementById("policy-form");
+const showTargetFields = () => showFields(targetForm, "data-for", document.getElementById("target-type").value);
+const showPolicyFields = () => showFields(policyForm, "data-mode", document.getElementById("policy-mode").value);
+document.getElementById("target-type").addEventListener("change", showTargetFields);
+document.getElementById("policy-mode").addEventListener("change", showPolicyFields);
+showTargetFields();
+showPolicyFields();
+
+async function loadTargets() {
+  const targets = await api("/backup/targets");
+  document.getElementById("targets").innerHTML = targets.length ? targets.map((t) => `
+    <tr>
+      <td>${esc(t.name)}</td>
+      <td>${esc(TARGET_TYPES[t.type] || t.type)}</td>
+      <td class="hide-sm">${esc(t.source)}</td>
+      <td>${t.on_demand ? "เฉพาะตอนรัน job (แยกออกเมื่อเสร็จ)" : "ตลอดเวลา"}</td>
+      <td><button class="danger" data-target="${esc(t.name)}">นำออก</button></td>
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">ยังไม่มีปลายทาง backup</td></tr>';
+  for (const list of document.querySelectorAll(".target-list")) {
+    const prev = list.value;
+    list.innerHTML = targets.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+    if (prev && targets.some((t) => t.name === prev)) list.value = prev;
+  }
+}
+
+async function loadPolicies() {
+  const policies = await api("/backup/policies");
+  document.getElementById("policies").innerHTML = policies.length ? policies.map((p) => `
+    <tr>
+      <td>${esc(p.name)}</td>
+      <td>${esc(p.target)}</td>
+      <td>${p.at ? `ทุกวัน ${esc(p.at)}` : `ทุก ${p.every_hours} ชม.`}</td>
+      <td class="hide-sm">${p.vms.length ? esc(p.vms.join(", ")) : "ทุก VM"}</td>
+      <td>${p.keep_last} ชุด</td>
+      <td class="hide-sm">${esc(when(p.last_run))}</td>
+      <td class="actions">
+        <button data-policy-run="${esc(p.name)}">รันตอนนี้</button>
+        <button class="danger" data-policy-del="${esc(p.name)}">ลบ</button>
+      </td>
+    </tr>`).join("") : '<tr><td colspan="7" class="empty">ยังไม่ได้ตั้งเวลา</td></tr>';
+}
+
+async function loadBackups() {
+  const target = document.getElementById("browse-target").value;
+  const tbody = document.getElementById("backups");
+  if (!target) { tbody.innerHTML = ""; return; }
+  const backups = await api(`/backup/targets/${encodeURIComponent(target)}/backups`);
+  tbody.innerHTML = backups.length ? backups.slice().reverse().map((b) => `
+    <tr>
+      <td>${esc(b.vm_name)}</td>
+      <td>${esc(when(b.created))}</td>
+      <td class="hide-sm">${esc(b.node || "-")}</td>
+      <td>${size(b.size_bytes)}</td>
+      <td class="hide-sm">${size(b.stored_bytes)}</td>
+      <td class="actions">
+        <button data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button>
+        <button class="danger" data-backup-del="${esc(b.id)}" data-node="${esc(b.node || "")}">ลบ</button>
+      </td>
+    </tr>`).join("") : '<tr><td colspan="6" class="empty">ยังไม่มี backup บนปลายทางนี้</td></tr>';
+}
+
+const JOB_STATE = { queued: "รอคิว", running: "กำลังทำ", done: "สำเร็จ", failed: "ล้มเหลว" };
+const JOB_CLASS = { queued: "paused", running: "paused", done: "running", failed: "failed" };
+
+async function loadJobs() {
+  const jobs = (await api("/backup/jobs")).slice(0, 10);
+  document.getElementById("jobs").innerHTML = jobs.length ? jobs.map((j) => `
+    <tr>
+      <td>${j.kind === "backup" ? "Backup" : "Restore"}${j.policy ? ` (${esc(j.policy)})` : ""}</td>
+      <td>${esc(j.vm)}</td>
+      <td>${esc(j.target)}</td>
+      <td class="state ${JOB_CLASS[j.state]}">${JOB_STATE[j.state] || esc(j.state)}</td>
+      <td class="hide-sm">${esc(j.error || j.result || "")}</td>
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">ยังไม่มีงาน</td></tr>';
+}
+
+const BACKUP_FIELDS = {
+  local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
+  usb: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
+  iscsi: ["host", "iqn"], fc: ["device"],
+};
+
+targetForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const body = { name: f.get("name"), type: f.get("type") };
+  for (const key of BACKUP_FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
+  if (body.type === "iscsi") body.lun = Number(f.get("lun"));
+  if (body.type === "iscsi" || body.type === "fc") {
+    body.confirm_wipe = f.get("confirm_wipe") === "on";
+    if (body.confirm_wipe && !confirm("ถ้า LUN นี้ยังไม่มี filesystem ระบบจะ format ใหม่ ดำเนินการต่อ?")) return;
+  }
+  msg();
+  try {
+    await api("/backup/targets", { method: "POST", body: JSON.stringify(body) });
+    e.target.reset();
+    showTargetFields();
+    await loadTargets();
+    await loadBackups();
+  } catch (err) { msg(err.message); }
+});
+
+policyForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const body = {
+    name: f.get("name"),
+    target: f.get("target"),
+    vms: f.get("vms").split(",").map((v) => v.trim()).filter(Boolean),
+    keep_last: Number(f.get("keep_last")),
+  };
+  if (f.get("mode") === "at") body.at = f.get("at"); else body.every_hours = Number(f.get("every_hours"));
+  msg();
+  try {
+    await api("/backup/policies", { method: "POST", body: JSON.stringify(body) });
+    e.target.reset();
+    showPolicyFields();
+    await loadPolicies();
+  } catch (err) { msg(err.message); }
+});
+
+document.getElementById("browse").addEventListener("submit", (e) => {
+  e.preventDefault();
+  loadBackups().catch((err) => msg(err.message));
+});
+document.getElementById("browse-target").addEventListener("change", () => loadBackups().catch((err) => msg(err.message)));
+
+document.querySelector("main").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-target], button[data-policy-run], button[data-policy-del], button[data-restore], button[data-backup-del]");
+  if (!btn) return;
+  const d = btn.dataset;
+  const target = document.getElementById("browse-target").value;
+  msg();
+  try {
+    if (d.target) {
+      if (!confirm(`นำปลายทาง ${d.target} ออก? (ไฟล์ backup บนปลายทางจะยังอยู่)`)) return;
+      await api(`/backup/targets/${encodeURIComponent(d.target)}`, { method: "DELETE" });
+      await loadTargets();
+      await loadBackups();
+    } else if (d.policyRun) {
+      await api(`/backup/policies/${encodeURIComponent(d.policyRun)}/run`, { method: "POST" });
+      await loadPolicies();
+    } else if (d.policyDel) {
+      if (!confirm(`ลบ policy ${d.policyDel}?`)) return;
+      await api(`/backup/policies/${encodeURIComponent(d.policyDel)}`, { method: "DELETE" });
+      await loadPolicies();
+    } else if (d.restore) {
+      const name = prompt(`Restore เป็น VM ชื่อ (ว่าง = ${d.vm} ซึ่งต้องไม่มีอยู่แล้ว)`, `${d.vm}-restore`);
+      if (name === null) return;
+      const body = { name: name.trim() || null, source_node: d.node || null };
+      await api(`/backup/targets/${encodeURIComponent(target)}/backups/${encodeURIComponent(d.restore)}/restore`,
+        { method: "POST", body: JSON.stringify(body) });
+    } else if (d.backupDel) {
+      if (!confirm(`ลบ backup ${d.backupDel}?`)) return;
+      const q = d.node ? `?node=${encodeURIComponent(d.node)}` : "";
+      await api(`/backup/targets/${encodeURIComponent(target)}/backups/${encodeURIComponent(d.backupDel)}${q}`, { method: "DELETE" });
+      await loadBackups();
+    }
+    await loadJobs();
+  } catch (err) { msg(err.message); }
+});
+
 loadCluster().catch((err) => msg(err.message));
 loadPools().catch((err) => msg(err.message));
-setInterval(() => { loadCluster().catch(() => {}); loadVMs().catch(() => {}); }, 10000);
+loadTargets().then(loadBackups).catch((err) => msg(err.message));
+loadPolicies().catch((err) => msg(err.message));
+loadJobs().catch(() => {});
+setInterval(() => {
+  loadCluster().catch(() => {});
+  loadVMs().catch(() => {});
+  loadJobs().catch(() => {});
+  loadBackups().catch(() => {});
+}, 10000);
 loadVMs().catch((err) => msg(err.message));
 </script>
 </body>

@@ -13,14 +13,23 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, VMExists
+from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
 from .schemas import (
+    BackupOut,
+    BackupRequest,
+    BackupTargetIn,
+    BackupTargetOut,
     ClusterOut,
     HostOut,
+    JobOut,
     MemberOut,
     NodeJoin,
+    PolicyIn,
+    PolicyOut,
     PoolCreate,
     PoolOut,
+    RestoreRequest,
     StopRequest,
     VMCreate,
     VMOut,
@@ -32,9 +41,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 def create_app(
     cluster: Cluster | HypervisorDriver,
     heartbeat_interval: float = 0,
+    backups: BackupManager | None = None,
+    scheduler_interval: float = 0,
 ) -> FastAPI:
     if isinstance(cluster, HypervisorDriver):
         cluster = Cluster.standalone(socket.gethostname(), cluster)
+    backups = backups or BackupManager(cluster)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -47,12 +59,23 @@ def create_app(
                     await asyncio.sleep(heartbeat_interval)
 
             task = asyncio.create_task(beat())
+        scheduler = None
+        if scheduler_interval > 0:
+
+            async def schedule() -> None:
+                while True:
+                    await asyncio.to_thread(backups.tick)
+                    await asyncio.sleep(scheduler_interval)
+
+            scheduler = asyncio.create_task(schedule())
         yield
-        if task:
-            task.cancel()
+        for t in (task, scheduler):
+            if t:
+                t.cancel()
 
     app = FastAPI(title="ibHiCS Manager", version=__version__, lifespan=lifespan)
     app.state.cluster = cluster
+    app.state.backups = backups
     install_driver_errors(app)
     install_cluster_errors(app)
 
@@ -168,6 +191,78 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         member.driver.delete_vm(uuid)
+
+    # Backup. Targets and policies are cluster configuration and need quorum to change;
+    # taking a backup does not, so VMs stay protected while a node is down.
+
+    @api.get("/backup/targets", response_model=list[BackupTargetOut])
+    def list_targets() -> list[BackupTargetOut]:
+        return [BackupTargetOut.from_target(t) for t in backups.targets()]
+
+    @api.post(
+        "/backup/targets", response_model=BackupTargetOut, status_code=status.HTTP_201_CREATED
+    )
+    def add_target(body: BackupTargetIn) -> BackupTargetOut:
+        cluster.require_quorum()
+        return BackupTargetOut.from_target(backups.add_target(body.to_target()))
+
+    @api.delete("/backup/targets/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def remove_target(name: str) -> None:
+        cluster.require_quorum()
+        backups.remove_target(name)
+
+    @api.get("/backup/targets/{name}/backups", response_model=list[BackupOut])
+    def list_backups(name: str) -> list[BackupOut]:
+        return [BackupOut.from_info(info, node) for node, info in backups.list_backups(name)]
+
+    @api.delete(
+        "/backup/targets/{name}/backups/{backup_id}", status_code=status.HTTP_204_NO_CONTENT
+    )
+    def delete_backup(name: str, backup_id: str, node: str | None = None) -> None:
+        cluster.require_quorum()
+        backups.delete_backup(name, backup_id, node)
+
+    @api.post(
+        "/backup/targets/{name}/backups/{backup_id}/restore",
+        response_model=JobOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def restore_backup(name: str, backup_id: str, body: RestoreRequest) -> JobOut:
+        cluster.require_quorum()
+        job = backups.start_restore(
+            name, backup_id, body.name, body.node, body.pool, body.source_node
+        )
+        return JobOut(**job.__dict__)
+
+    @api.post("/vms/{uuid}/backup", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
+    def backup_vm(uuid: str, body: BackupRequest) -> JobOut:
+        return JobOut(**backups.start_backup(uuid, body.target, body.keep_last).__dict__)
+
+    @api.get("/backup/jobs", response_model=list[JobOut])
+    def list_jobs() -> list[JobOut]:
+        return [JobOut(**job.__dict__) for job in backups.jobs()]
+
+    @api.get("/backup/policies", response_model=list[PolicyOut])
+    def list_policies() -> list[PolicyOut]:
+        return [PolicyOut(**p.__dict__) for p in backups.policies()]
+
+    @api.post("/backup/policies", response_model=PolicyOut, status_code=status.HTTP_201_CREATED)
+    def add_policy(body: PolicyIn) -> PolicyOut:
+        cluster.require_quorum()
+        return PolicyOut(**backups.add_policy(Policy(**body.model_dump())).__dict__)
+
+    @api.delete("/backup/policies/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def remove_policy(name: str) -> None:
+        cluster.require_quorum()
+        backups.remove_policy(name)
+
+    @api.post(
+        "/backup/policies/{name}/run",
+        response_model=list[JobOut],
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def run_policy(name: str) -> list[JobOut]:
+        return [JobOut(**job.__dict__) for job in backups.run_policy(name)]
 
     app.include_router(api)
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="console")

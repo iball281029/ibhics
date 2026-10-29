@@ -91,6 +91,35 @@ curl -X POST http://node1:8006/api/v1/nodes/node1/pools -H 'content-type: applic
   -d '{"name": "nas01", "type": "nfs", "host": "10.0.0.50", "export": "/vol/vms"}'
 ```
 
+## Backup
+
+backup ทำบน node ที่ VM อยู่ แล้วเก็บไว้ที่ปลายทางที่เลือก
+
+| ชนิดปลายทาง | ใช้กับ |
+| --- | --- |
+| `local` | ดิสก์ใน node (ค่าเริ่มต้น `/var/lib/ibhics/backup/<ชื่อ>`) แต่ละ node เก็บของตัวเอง |
+| `nfs` | NAS / NFS server |
+| `smb` | Windows share หรือ NAS ผ่าน SMB/CIFS (รหัสผ่านส่งผ่านไฟล์ ไม่โผล่ใน process list) |
+| `usb` | USB disk ที่ format แล้ว เสียบไว้ที่ node (ใช้ได้เฉพาะ node นั้น) ถอดเก็บนอกสถานที่ได้ |
+| `iscsi` | LUN จาก SAN หรือ NAS ผ่าน iSCSI: login ตอนเริ่มงาน และ logout เมื่อเสร็จ |
+| `fc` | LUN ผ่าน Fibre Channel (`/dev/mapper/mpathX`) หรือ block device อื่น |
+| `s3` | AWS S3, MinIO, Ceph RGW (ต้องติดตั้ง `pip install 'ibhics[s3]'`) |
+
+- **ต่อเฉพาะตอนรัน job**: NFS, SMB, USB, iSCSI และ FC ถูก mount ตอนเริ่ม job และถอดออกเมื่อจบ ไม่ว่าสำเร็จหรือล้มเหลว (iSCSI logout ด้วย เครื่องจึงมองไม่เห็น LUN ระหว่างไม่มีงาน) ถ้าเครื่องดับระหว่าง job ตอนเปิดเครื่อง agent จะถอดของที่ค้างให้ ส่วน FC ถูก unmount แต่ LUN ยังต่ออยู่ที่ HBA ถ้าต้องตัดขาดจริงให้ทำ LUN masking ที่ storage
+- **LUN ใหม่**: ถ้า LUN ของ iSCSI/FC ยังไม่มี filesystem ระบบจะ format เป็น XFS ให้เมื่อส่ง `"confirm_wipe": true` และใช้ได้ทีละ node ระบบจึงจัดคิวงานบนปลายทางเหล่านี้ไม่ให้ซ้อนกันทั้ง cluster
+- **Backup ทั้ง VM ขณะเปิดอยู่ได้**: ใช้ push-mode backup ของ QEMU ได้ภาพดิสก์ ณ จุดเวลาเดียวกันทุกดิสก์ ส่วน VM ที่ปิดอยู่จะ copy volume ตรง
+- **ใช้พื้นที่แบบ incremental**: แบ่งดิสก์เป็นก้อน 4 MB เก็บเฉพาะก้อนที่ยังไม่มี (dedup) และไม่เก็บก้อนที่เป็นศูนย์ ทุกชุดจึง restore ได้เต็ม VM แต่ชุดถัดไปใช้พื้นที่เท่าข้อมูลที่เปลี่ยน
+- **ตั้งเวลา**: ทุกวันตามเวลาที่กำหนด หรือทุก N ชั่วโมง เลือก VM หรือทุก VM และเก็บไว้ N ชุดล่าสุด ชุดเก่าจะถูกลบ และคืนพื้นที่ที่ไม่มีชุดไหนใช้แล้ว
+- **Restore**: กลับเป็น VM เดิม (ถ้าลบไปแล้ว) หรือเป็นสำเนาชื่อใหม่ เลือก node และ pool ปลายทางได้
+- ตรวจ checksum ทุกก้อนตอน restore ค่าตั้งปลายทางพร้อมรหัสผ่านเก็บใน `/var/lib/ibhics/backup.json` (อ่านได้เฉพาะ root) และ API แสดงรหัสผ่านเป็น `********`
+
+```bash
+curl -X POST http://node1:8006/api/v1/backup/targets -H 'content-type: application/json' \
+  -d '{"name": "nas", "type": "nfs", "host": "10.0.0.50", "export": "/backup"}'
+curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: application/json' \
+  -d '{"name": "nightly", "target": "nas", "at": "02:00", "keep_last": 14}'
+```
+
 ## REST API
 
 | Method | Path | ทำอะไร |
@@ -109,6 +138,15 @@ curl -X POST http://node1:8006/api/v1/nodes/node1/pools -H 'content-type: applic
 | POST | `/api/v1/vms/{uuid}/start` | เปิด VM |
 | POST | `/api/v1/vms/{uuid}/stop` | ปิด VM (`{"force": true}` = power off) |
 | DELETE | `/api/v1/vms/{uuid}` | ลบ VM และดิสก์ |
+| POST | `/api/v1/vms/{uuid}/backup` | backup ทันที (`{"target": "nas"}`) |
+| GET/POST | `/api/v1/backup/targets` | ปลายทาง backup |
+| DELETE | `/api/v1/backup/targets/{name}` | นำปลายทางออก (ไฟล์ backup ยังอยู่) |
+| GET | `/api/v1/backup/targets/{name}/backups` | backup ที่อยู่บนปลายทาง |
+| POST | `/api/v1/backup/targets/{name}/backups/{id}/restore` | restore (`name`, `node`, `pool`, `source_node`) |
+| DELETE | `/api/v1/backup/targets/{name}/backups/{id}` | ลบ backup (`?node=` สำหรับปลายทาง local) |
+| GET/POST | `/api/v1/backup/policies` | ตารางเวลา backup |
+| POST | `/api/v1/backup/policies/{name}/run` | รัน policy ทันที |
+| GET | `/api/v1/backup/jobs` | งาน backup/restore ล่าสุดและผลลัพธ์ |
 
 ## พัฒนา
 

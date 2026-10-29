@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import httpx
 
+from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
 from ..hypervisor import (
-    DiskSpec,
     HostInfo,
     HypervisorDriver,
     InvalidState,
-    NicSpec,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
@@ -18,6 +17,7 @@ from ..hypervisor import (
     VMNotFound,
     VMSpec,
 )
+from ..hypervisor.serialize import info_from_json, spec_to_json
 
 TOKEN_HEADER = "X-Ibhics-Token"
 
@@ -52,33 +52,6 @@ class AgentClient:
         if resp.status_code != 200:
             raise NodeUnavailable(f"{self.address}: health check returned {resp.status_code}")
         return resp.json()
-
-
-def info_from_json(data: dict) -> VMInfo:
-    spec = VMSpec(
-        name=data["name"],
-        vcpus=data["vcpus"],
-        memory_mb=data["memory_mb"],
-        firmware=data["firmware"],
-        disks=[DiskSpec(**d) for d in data["disks"]],
-        nics=[NicSpec(**n) for n in data["nics"]],
-        iso=data.get("iso"),
-        description=data.get("description", ""),
-    )
-    return VMInfo(uuid=data["uuid"], spec=spec, state=data["state"])
-
-
-def spec_to_json(spec: VMSpec) -> dict:
-    return {
-        "name": spec.name,
-        "vcpus": spec.vcpus,
-        "memory_mb": spec.memory_mb,
-        "firmware": str(spec.firmware),
-        "disks": [{"size_gb": d.size_gb, "backend": d.backend, "pool": d.pool} for d in spec.disks],
-        "nics": [{"network": n.network, "model": n.model, "mac": n.mac} for n in spec.nics],
-        "iso": spec.iso,
-        "description": spec.description,
-    }
 
 
 def _pool_info(data: dict) -> PoolInfo:
@@ -146,3 +119,59 @@ class RemoteDriver(HypervisorDriver):
         if resp.status_code >= 400:
             raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code}")
         return resp
+
+
+def _backup_info(data: dict) -> BackupInfo:
+    return BackupInfo(**{k: v for k, v in data.items() if k != "node"})
+
+
+class RemoteBackup:
+    """NodeBackup on another node, through its agent. Jobs can take hours, so no timeout."""
+
+    def __init__(self, client: AgentClient) -> None:
+        self._client = client
+
+    def backup(self, uuid: str, target: BackupTarget) -> BackupInfo:
+        body = {"uuid": uuid, "target": target.to_dict()}
+        return _backup_info(self._call("/backups/run", body, uuid).json())
+
+    def list(self, target: BackupTarget, vm_name: str | None = None) -> list[BackupInfo]:
+        body = {"target": target.to_dict(), "vm_name": vm_name}
+        return [_backup_info(b) for b in self._call("/backups/list", body).json()]
+
+    def restore(
+        self,
+        target: BackupTarget,
+        backup_id: str,
+        name: str | None = None,
+        pool: str | None = None,
+    ) -> VMInfo:
+        body = {"target": target.to_dict(), "backup_id": backup_id, "name": name, "pool": pool}
+        return info_from_json(self._call("/backups/restore", body).json())
+
+    def delete(self, target: BackupTarget, backup_id: str) -> int:
+        body = {"target": target.to_dict(), "backup_id": backup_id}
+        return self._call("/backups/delete", body).json()["freed_chunks"]
+
+    def prune(self, target: BackupTarget, vm_name: str, keep_last: int) -> list[str]:
+        body = {"target": target.to_dict(), "vm_name": vm_name, "keep_last": keep_last}
+        return self._call("/backups/prune", body).json()["removed"]
+
+    def _call(self, path: str, body: dict, uuid: str = "") -> httpx.Response:
+        resp = self._client.request("POST", path, json=body, timeout=None)
+        if resp.status_code < 400:
+            return resp
+        detail = str(resp.json().get("detail", "")) if resp.content else ""
+        if resp.status_code == 404:
+            if detail.startswith("backup not found: "):
+                raise BackupNotFound(detail.removeprefix("backup not found: "))
+            if detail.startswith("storage pool not found: "):
+                raise PoolNotFound(detail.removeprefix("storage pool not found: "))
+            raise VMNotFound(uuid)
+        if resp.status_code == 409:
+            raise InvalidState(detail)
+        if resp.status_code == 422:
+            raise ValueError(detail)
+        if resp.status_code == 502:
+            raise TargetUnavailable(detail.removeprefix("backup target unavailable: "))
+        raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code} {detail}")

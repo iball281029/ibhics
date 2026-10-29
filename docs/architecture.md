@@ -33,11 +33,24 @@ Web Console / REST API / CLI
 | `ibhics/cluster/topology.py` | รูปแบบ cluster (standalone, 2 node + witness, cluster) และกฎ quorum |
 | `ibhics/cluster/registry.py` | สมาชิก cluster, heartbeat, เลือก node วาง VM |
 | `ibhics/cluster/remote.py` | client คุยกับ Agent และ `RemoteDriver` |
+| `ibhics/backup/` | ปลายทาง backup, mount NFS/SMB/USB, S3, repository แบบ dedup, งาน backup/restore บน node |
+| `ibhics/manager/backups.py` | ปลายทาง, ตารางเวลา และคิวงาน backup ฝั่ง manager |
 | `ibhics/agent/app.py` | Agent บนแต่ละ node (role compute หรือ witness) |
 | `ibhics/manager/app.py` | FastAPI app: REST API + Web Console |
 | `ibhics/manager/static/` | Web Console |
 
 Manager คุยกับ hypervisor ผ่าน `HypervisorDriver` เท่านั้น node ที่ manager รันอยู่ใช้ driver ตรง ส่วน node อื่นใช้ `RemoteDriver` ที่เรียก Agent ผ่าน HTTP (ยืนยันตัวด้วย cluster token)
+
+## Backup
+
+```
+manager (ปลายทาง, ตารางเวลา, คิวงาน)
+   └─▶ node ที่ VM อยู่: export ดิสก์ (QEMU push backup) ─▶ แบ่งก้อน 4 MB + sha256 ─▶ ปลายทาง
+                                                              chunks/aa/<sha256>
+                                                              backups/<vm>/<เวลา>.json
+```
+
+แต่ละชุดคือ manifest ที่ชี้ไปยังก้อนข้อมูล ก้อนที่ซ้ำกับชุดก่อนไม่ถูกเขียนซ้ำ การลบชุดเก่าจะลบ manifest แล้วเก็บกวาดก้อนที่ไม่มีใครใช้ ระหว่างที่มีงาน backup กำลังเขียน (มีไฟล์ `locks/`) การเก็บกวาดจะรอรอบถัดไป
 
 ## Quorum
 
@@ -52,11 +65,12 @@ Manager คุยกับ hypervisor ผ่าน `HypervisorDriver` เท่�
 - [x] Agent แยก process + การลงทะเบียน node (compute, witness)
 - [x] Standalone, 2 node + witness, cluster 3 node ขึ้นไป + quorum
 - [x] Storage pool: local, NFS, iSCSI, FC (multipath + LVM)
+- [x] Backup ในตัว (dedup, ตั้งเวลา, เก็บ N ชุด, restore) + ปลายทาง local, NFS, SMB, USB, iSCSI, FC, S3 ที่ต่อเฉพาะตอนรัน job
 
 ## งานถัดไปในเฟส 1
 
 - [ ] iSCSI CHAP, LVM ร่วมหลาย node (lvmlockd), DRBD สำหรับ 2 node
-- [ ] Backup ในตัว + ส่งออก NFS, SMB, USB, S3
+- [ ] Backup: เข้ารหัส, ใช้ dirty bitmap อ่านเฉพาะส่วนที่เปลี่ยน, restore ทีละไฟล์
 - [ ] etcd เป็นที่เก็บสมาชิก cluster + manager ย้าย node ได้
 - [ ] Console VM ผ่าน noVNC
 - [ ] Live migration

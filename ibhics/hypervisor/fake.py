@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import copy
+import shutil
 import socket
+import tempfile
 import threading
 import uuid as uuidlib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 
 from .base import (
     HostInfo,
@@ -22,6 +27,9 @@ from .base import (
     VMState,
 )
 
+# Fake disks hold real bytes so backup and restore can be tested; keep them small.
+FAKE_BYTES_PER_GB = 64 * 1024
+
 
 class FakeDriver(HypervisorDriver):
     def __init__(self, cpus: int = 32, memory_mb: int = 131072) -> None:
@@ -31,6 +39,7 @@ class FakeDriver(HypervisorDriver):
         self._pools: dict[str, tuple[PoolSpec, float]] = {
             "default": (PoolSpec(name="default", type=PoolType.DIR), 1000.0)
         }
+        self._disks: dict[str, list[bytearray]] = {}
         self._lock = threading.Lock()
 
     def host_info(self) -> HostInfo:
@@ -61,6 +70,7 @@ class FakeDriver(HypervisorDriver):
                 disk.backend = self._pools[disk.pool][0].disk_backend
             vm = VMInfo(uuid=str(uuidlib.uuid4()), spec=spec, state=VMState.STOPPED)
             self._vms[vm.uuid] = vm
+            self._disks[vm.uuid] = [bytearray(d.size_gb * FAKE_BYTES_PER_GB) for d in spec.disks]
             return copy.deepcopy(vm)
 
     def start_vm(self, uuid: str) -> VMInfo:
@@ -85,6 +95,7 @@ class FakeDriver(HypervisorDriver):
             if vm.state == VMState.RUNNING:
                 raise InvalidState("stop the VM before deleting it")
             del self._vms[uuid]
+            del self._disks[uuid]
 
     def list_pools(self) -> list[PoolInfo]:
         with self._lock:
@@ -106,6 +117,43 @@ class FakeDriver(HypervisorDriver):
                 if any(d.pool == name for d in vm.spec.disks):
                     raise InvalidState(f"VM {vm.spec.name!r} still has disks in pool {name!r}")
             del self._pools[name]
+
+    @contextmanager
+    def export_disks(self, uuid: str) -> Iterator[list[Path]]:
+        with self._lock:
+            self._get(uuid)
+            contents = [bytes(d) for d in self._disks[uuid]]
+        scratch = Path(tempfile.mkdtemp(prefix="ibhics-fake-"))
+        try:
+            paths = []
+            for index, data in enumerate(contents):
+                path = scratch / f"disk{index}.raw"
+                path.write_bytes(data)
+                paths.append(path)
+            yield paths
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def import_disk(self, uuid: str, index: int, raw_image: Path) -> None:
+        data = Path(raw_image).read_bytes()
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.STOPPED:
+                raise InvalidState("stop the VM before overwriting its disks")
+            disk = self._disks[uuid][index]
+            if len(data) > len(disk):
+                raise ValueError(f"image is larger than disk {index}")
+            disk[: len(data)] = data
+
+    # Test helpers: what a guest would do to its disks.
+
+    def write_disk(self, uuid: str, index: int, offset: int, data: bytes) -> None:
+        with self._lock:
+            self._disks[uuid][index][offset : offset + len(data)] = data
+
+    def read_disk(self, uuid: str, index: int) -> bytes:
+        with self._lock:
+            return bytes(self._disks[uuid][index])
 
     def _pool_info(self, name: str) -> PoolInfo:
         spec, capacity = self._pools[name]

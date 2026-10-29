@@ -9,9 +9,11 @@ from pathlib import Path
 
 import uvicorn
 
+from ..backup import NodeBackup
 from ..cluster import Cluster
 from ..hypervisor import load_driver
 from .app import create_app
+from .backups import BackupManager
 
 
 def main() -> None:
@@ -38,6 +40,12 @@ def main() -> None:
         default=Path(os.environ.get("IBHICS_STATE_FILE", "/var/lib/ibhics/cluster.json")),
         help="where cluster membership is saved",
     )
+    parser.add_argument(
+        "--backup-state-file",
+        type=Path,
+        default=Path(os.environ.get("IBHICS_BACKUP_STATE_FILE", "/var/lib/ibhics/backup.json")),
+        help="where backup targets (with their credentials) and policies are saved",
+    )
     parser.add_argument("--heartbeat", type=float, default=5.0, help="seconds between checks")
     args = parser.parse_args()
 
@@ -46,10 +54,18 @@ def main() -> None:
         heartbeat_timeout=args.heartbeat * 3,
         state_path=args.state_file,
     )
-    cluster.add_local(args.node_name, load_driver(args.driver, args.libvirt_uri))
+    driver = load_driver(args.driver, args.libvirt_uri)
+    node_backup = NodeBackup(driver)
+    node_backup.cleanup()  # detach backup targets a crash may have left attached
+    cluster.add_local(args.node_name, driver, node_backup)
     cluster.load()
 
-    app = create_app(cluster, heartbeat_interval=args.heartbeat)
+    backups = BackupManager(cluster, state_path=args.backup_state_file)
+    backups.load()
+
+    app = create_app(
+        cluster, heartbeat_interval=args.heartbeat, backups=backups, scheduler_interval=30
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 

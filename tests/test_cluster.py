@@ -1,5 +1,7 @@
 """Manager + agents end to end, with agents served in-process through TestClient."""
 
+from concurrent.futures import Executor, Future
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -26,8 +28,8 @@ class Agents:
         self.apps = {}
         self.down = set()
 
-    def add(self, address, name, role, driver=None):
-        self.apps[address] = create_agent_app(name, role, TOKEN, driver)
+    def add(self, address, name, role, driver=None, backups=None):
+        self.apps[address] = create_agent_app(name, role, TOKEN, driver, backups)
 
     def client(self, address, token):
         agents = self
@@ -38,6 +40,7 @@ class Agents:
                     import httpx
 
                     raise httpx.ConnectError("node is down")
+                kwargs.pop("timeout", None)  # TestClient doesn't support per-request timeouts
                 return super().request(*args, **kwargs)
 
         return AgentClient(address, token, http=Switchable(self.apps[address], base_url=address))
@@ -239,3 +242,43 @@ def test_pools_on_remote_node(env):
     assert missing.status_code == 404
     assert client.delete("/api/v1/nodes/node2/pools/fc").status_code == 409
     assert client.delete("/api/v1/nodes/node2/pools/ghost").status_code == 404
+
+
+def test_backup_and_restore_on_remote_node(env, tmp_path):
+    from ibhics.backup import NodeBackup
+    from ibhics.manager.backups import BackupManager
+
+    class Inline(Executor):
+        def submit(self, fn, *args, **kwargs):
+            future = Future()
+            fn(*args, **kwargs)
+            future.set_result(None)
+            return future
+
+    client, cluster, agents, _ = env
+    node2 = FakeDriver(memory_mb=262144)
+    agents.add("http://node2:8007", "node2", NodeRole.COMPUTE, node2, NodeBackup(node2))
+    build_two_node_witness(client)
+    client = TestClient(create_app(cluster, backups=BackupManager(cluster, executor=Inline())))
+
+    # In this test both nodes' "local" directory is the same one, so each node lists it.
+    shared = tmp_path / "nas"
+    client.post(
+        "/api/v1/backup/targets", json={"name": "nas", "type": "local", "path": str(shared)}
+    )
+    vm = client.post("/api/v1/vms", json={"name": "app", "node": "node2"}).json()
+    node2.write_disk(vm["uuid"], 0, 0, b"payload")
+
+    job = client.post(f"/api/v1/vms/{vm['uuid']}/backup", json={"target": "nas"}).json()
+    assert (job["state"], job["node"]) == ("done", "node2"), job["error"]
+    listed = client.get("/api/v1/backup/targets/nas/backups").json()
+    assert sorted(b["node"] for b in listed) == ["node1", "node2"]
+    backup = listed[0]
+
+    url = f"/api/v1/backup/targets/nas/backups/{backup['id']}/restore"
+    job = client.post(url, json={"source_node": "node2", "name": "app-copy"}).json()
+    assert (job["state"], job["node"]) == ("done", "node2"), job["error"]
+    assert node2.read_disk(job["result"], 0)[:7] == b"payload"
+
+    missing = client.post(url.replace("app@", "ghost@"), json={"source_node": "node2"}).json()
+    assert missing["state"] == "failed" and "BackupNotFound" in missing["error"]
