@@ -11,7 +11,7 @@ from fastapi import APIRouter, FastAPI, status
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
-from ..cluster import Cluster, Topology
+from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, VMExists
 from .errors import install_cluster_errors, install_driver_errors
 from .schemas import (
@@ -19,6 +19,8 @@ from .schemas import (
     HostOut,
     MemberOut,
     NodeJoin,
+    PoolCreate,
+    PoolOut,
     StopRequest,
     VMCreate,
     VMOut,
@@ -101,6 +103,32 @@ def create_app(
     @api.get("/nodes/{name}/host", response_model=HostOut)
     def node_host(name: str) -> HostOut:
         return HostOut.from_info(cluster.member(name).driver.host_info())
+
+    # Storage pools live on each node. Shared storage (NFS, a shared LUN) is added
+    # to every node that should reach it, under the same pool name.
+
+    @api.get("/pools", response_model=list[PoolOut])
+    def list_pools() -> list[PoolOut]:
+        result = []
+        for member in cluster.compute_members():
+            try:
+                pools = member.driver.list_pools()
+            except NodeUnavailable as exc:
+                member.last_error = str(exc)
+                continue
+            result.extend(PoolOut.from_info(pool, member.name) for pool in pools)
+        return result
+
+    @api.post("/nodes/{name}/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
+    def create_pool(name: str, body: PoolCreate) -> PoolOut:
+        cluster.require_quorum()
+        member = cluster.member(name)
+        return PoolOut.from_info(member.driver.create_pool(body.to_spec()), member.name)
+
+    @api.delete("/nodes/{name}/pools/{pool}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_pool(name: str, pool: str) -> None:
+        cluster.require_quorum()
+        cluster.member(name).driver.delete_pool(pool)
 
     # VMs: reads work without quorum so operators can see what is going on;
     # anything that changes state needs a majority of nodes.

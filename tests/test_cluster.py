@@ -212,3 +212,30 @@ def test_cluster_without_token_cannot_join(tmp_path):
     resp = join(client, "node2", "compute", "http://node2:8007")
     assert resp.status_code == 400
     assert "token" in resp.json()["detail"]
+
+
+def test_pools_on_remote_node(env):
+    client, *_ = env
+    build_two_node_witness(client)
+    resp = client.post(
+        "/api/v1/nodes/node2/pools",
+        json={"name": "fc", "type": "lvm", "device": "/dev/mapper/mpatha", "confirm_wipe": True},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["node"] == "node2"
+    pools = {(p["node"], p["name"]) for p in client.get("/api/v1/pools").json()}
+    assert pools == {("node1", "default"), ("node2", "default"), ("node2", "fc")}
+
+    vm = client.post(
+        "/api/v1/vms",
+        json={"name": "db", "node": "node2", "disks": [{"size_gb": 10, "pool": "fc"}]},
+    )
+    assert vm.json()["disks"][0]["backend"] == "block"
+
+    missing = client.post(
+        "/api/v1/vms",
+        json={"name": "x", "node": "node1", "disks": [{"size_gb": 10, "pool": "fc"}]},
+    )
+    assert missing.status_code == 404
+    assert client.delete("/api/v1/nodes/node2/pools/fc").status_code == 409
+    assert client.delete("/api/v1/nodes/node2/pools/ghost").status_code == 404

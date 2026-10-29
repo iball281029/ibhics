@@ -13,8 +13,8 @@ DISK_DEVS = "abcdefghijklmnopqrstuvwxyz"
 
 
 def volume_name(vm_name: str, index: int, disk: DiskSpec) -> str:
-    # RBD images are raw; local images use qcow2 so they stay thin and support snapshots.
-    suffix = "" if disk.backend == "rbd" else ".qcow2"
+    # Block volumes are raw; file images use qcow2 so they stay thin and support snapshots.
+    suffix = "" if disk.backend == "block" else ".qcow2"
     return f"{vm_name}-disk{index}{suffix}"
 
 
@@ -66,7 +66,7 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
             disk_el,
             "driver",
             name="qemu",
-            type="raw" if disk.backend == "rbd" else "qcow2",
+            type="raw" if disk.backend == "block" else "qcow2",
             cache="none",
             discard="unmap",
         )

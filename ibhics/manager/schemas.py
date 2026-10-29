@@ -5,12 +5,23 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from ..cluster.topology import NodeRole, Topology
-from ..hypervisor import DiskSpec, Firmware, HostInfo, NicSpec, VMInfo, VMSpec, VMState
+from ..hypervisor import (
+    DiskSpec,
+    Firmware,
+    HostInfo,
+    NicSpec,
+    PoolInfo,
+    PoolSpec,
+    PoolType,
+    VMInfo,
+    VMSpec,
+    VMState,
+)
 
 
 class DiskIn(BaseModel):
     size_gb: int = Field(ge=1, le=65536)
-    backend: str = Field(default="file", pattern="^(file|rbd)$")
+    backend: str = Field(default="file", pattern="^(file|block)$")
     pool: str = "default"
 
 
@@ -123,3 +134,36 @@ class ClusterOut(BaseModel):
     quorum: bool
     ha_capable: bool
     members: list[MemberOut]
+
+
+class PoolCreate(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    type: PoolType
+    path: str | None = Field(default=None, description="dir: image directory")
+    host: str | None = Field(default=None, description="nfs server or iSCSI portal")
+    port: int = Field(default=3260, ge=1, le=65535)
+    export: str | None = Field(default=None, description="nfs export path")
+    iqn: str | None = None
+    lun: int = Field(default=0, ge=0)
+    device: str | None = Field(default=None, description="lvm: e.g. /dev/mapper/mpatha")
+    confirm_wipe: bool = Field(
+        default=False, description="required for iscsi and lvm: the device is erased"
+    )
+
+    def to_spec(self) -> PoolSpec:
+        return PoolSpec(**self.model_dump())
+
+
+class PoolOut(BaseModel):
+    name: str
+    type: PoolType
+    active: bool
+    capacity_gb: float
+    allocation_gb: float
+    available_gb: float
+    source: str
+    node: str | None = None
+
+    @classmethod
+    def from_info(cls, info: PoolInfo, node: str | None = None) -> PoolOut:
+        return cls(node=node, **info.__dict__)

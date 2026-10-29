@@ -12,7 +12,7 @@ def spec(**kw):
         name="db-01",
         vcpus=4,
         memory_mb=8192,
-        disks=[DiskSpec(size_gb=100), DiskSpec(size_gb=500, backend="rbd", pool="ceph-vm")],
+        disks=[DiskSpec(size_gb=100), DiskSpec(size_gb=500, backend="block", pool="san-lvm")],
         nics=[NicSpec(network="prod", mac="52:54:00:aa:bb:cc")],
     )
     defaults.update(kw)
@@ -36,7 +36,7 @@ def test_disks_map_to_volumes():
     assert disks[0].find("driver").get("type") == "qcow2"
     assert disks[0].find("source").get("volume") == "db-01-disk0.qcow2"
     assert disks[1].find("driver").get("type") == "raw"
-    assert disks[1].find("source").attrib == {"pool": "ceph-vm", "volume": "db-01-disk1"}
+    assert disks[1].find("source").attrib == {"pool": "san-lvm", "volume": "db-01-disk1"}
 
 
 def test_uefi_and_iso():
@@ -55,8 +55,8 @@ def test_volume_xml():
     file_vol = ET.fromstring(build_volume_xml("vm", 0, DiskSpec(size_gb=20)))
     assert file_vol.findtext("capacity") == "20"
     assert file_vol.find("./target/format").get("type") == "qcow2"
-    rbd_vol = ET.fromstring(build_volume_xml("vm", 1, DiskSpec(size_gb=20, backend="rbd")))
-    assert rbd_vol.find("target") is None
+    block_vol = ET.fromstring(build_volume_xml("vm", 1, DiskSpec(size_gb=20, backend="block")))
+    assert block_vol.find("target") is None
 
 
 def test_round_trip_through_libvirt_xml():
@@ -66,7 +66,7 @@ def test_round_trip_through_libvirt_xml():
     assert parsed.vcpus == 4
     assert parsed.memory_mb == 8192
     assert parsed.firmware == Firmware.UEFI
-    assert [d.backend for d in parsed.disks] == ["file", "rbd"]
+    assert [d.backend for d in parsed.disks] == ["file", "block"]
     assert parsed.nics[0].mac == "52:54:00:aa:bb:cc"
     assert parsed.iso == "/isos/x.iso"
     assert parsed.description == "primary db"
