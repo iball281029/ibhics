@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from ..cluster.topology import NodeRole, Topology
 from ..hypervisor import DiskSpec, Firmware, HostInfo, NicSpec, VMInfo, VMSpec, VMState
 
 
@@ -40,6 +41,8 @@ class VMCreate(BaseModel):
     nics: list[NicIn] = Field(default_factory=lambda: [NicIn()])
     iso: str | None = None
     description: str = Field(default="", max_length=1024)
+    # Manager only: which compute node to place the VM on. Empty picks automatically.
+    node: str | None = None
 
     def to_spec(self) -> VMSpec:
         return VMSpec(
@@ -65,11 +68,13 @@ class VMOut(BaseModel):
     nics: list[NicOut]
     iso: str | None
     description: str
+    node: str | None = None
 
     @classmethod
-    def from_info(cls, info: VMInfo) -> VMOut:
+    def from_info(cls, info: VMInfo, node: str | None = None) -> VMOut:
         spec = info.spec
         return cls(
+            node=node,
             uuid=info.uuid,
             name=spec.name,
             state=info.state,
@@ -96,3 +101,25 @@ class HostOut(BaseModel):
 
 class StopRequest(BaseModel):
     force: bool = False
+
+
+class NodeJoin(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    role: NodeRole
+    address: str = Field(pattern=r"^https?://", description="Agent URL, e.g. http://10.0.0.12:8007")
+
+
+class MemberOut(BaseModel):
+    name: str
+    role: NodeRole
+    address: str | None
+    local: bool
+    healthy: bool
+    last_error: str | None
+
+
+class ClusterOut(BaseModel):
+    topology: Topology
+    quorum: bool
+    ha_capable: bool
+    members: list[MemberOut]

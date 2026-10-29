@@ -24,7 +24,7 @@ ibHiCS รวม compute, storage และ network ไว้ในระบบ�
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-python -m ibhics.manager --driver fake
+python -m ibhics.manager --driver fake --state-file ./.ibhics/cluster.json
 ```
 
 เปิด http://127.0.0.1:8006 เพื่อใช้ Web Console หรือ http://127.0.0.1:8006/docs เพื่อดู API
@@ -41,14 +41,49 @@ sudo python -m ibhics.manager --driver libvirt --host 0.0.0.0
 
 ต้องมี libvirt storage pool ชื่อ `default` และ network ชื่อ `default` (หรือระบุชื่ออื่นตอนสร้าง VM)
 
+## รูปแบบการติดตั้ง
+
+| รูปแบบ | เครื่อง | HA |
+| --- | --- | --- |
+| Standalone | 1 node | ไม่มี |
+| 2 node + witness | 2 compute + witness 1 เครื่อง (mini PC หรือ VM ที่อื่น) | ทน node ล่มได้ 1 เครื่อง |
+| Cluster | 3 compute ขึ้นไป | มี |
+
+Manager รันบน compute node แรก ส่วนเครื่องอื่นรัน Agent ทุกเครื่องใช้ token เดียวกัน:
+
+```bash
+export IBHICS_CLUSTER_TOKEN="$(openssl rand -hex 32)"   # ใช้ค่าเดียวกันทุกเครื่อง
+
+# node1 (manager + compute)
+sudo -E python -m ibhics.manager --driver libvirt --node-name node1 --host 0.0.0.0
+
+# node2 (compute)
+sudo -E python -m ibhics.agent --role compute --name node2
+
+# witness
+python -m ibhics.agent --role witness --name witness
+```
+
+จากนั้นเพิ่ม node ในหน้า Web Console (ส่วน Nodes) หรือผ่าน API:
+
+```bash
+curl -X POST http://node1:8006/api/v1/cluster/nodes -H 'content-type: application/json' \
+  -d '{"name": "node2", "role": "compute", "address": "http://10.0.0.12:8007"}'
+```
+
+ถ้าสมาชิกที่ online เหลือไม่ถึงครึ่ง (เช่น 2 node + witness แต่ล่มไป 2 เครื่อง) ระบบจะเสีย quorum และไม่ยอมให้สร้าง เปิด ปิด หรือลบ VM เพื่อกัน split-brain แต่ยังดูสถานะได้ตามปกติ
+
 ## REST API
 
 | Method | Path | ทำอะไร |
 | --- | --- | --- |
 | GET | `/api/v1/health` | ตรวจสถานะ |
-| GET | `/api/v1/host` | ข้อมูล node |
-| GET | `/api/v1/vms` | รายการ VM |
-| POST | `/api/v1/vms` | สร้าง VM |
+| GET | `/api/v1/cluster` | รูปแบบ cluster, quorum, สมาชิก |
+| POST | `/api/v1/cluster/nodes` | เพิ่ม node (compute หรือ witness) |
+| DELETE | `/api/v1/cluster/nodes/{name}` | นำ node ออก |
+| GET | `/api/v1/nodes/{name}/host` | ข้อมูลฮาร์ดแวร์ของ node |
+| GET | `/api/v1/vms` | รายการ VM ทุก node |
+| POST | `/api/v1/vms` | สร้าง VM (`node` ว่าง = เลือก node ให้อัตโนมัติ) |
 | GET | `/api/v1/vms/{uuid}` | ข้อมูล VM |
 | POST | `/api/v1/vms/{uuid}/start` | เปิด VM |
 | POST | `/api/v1/vms/{uuid}/stop` | ปิด VM (`{"force": true}` = power off) |

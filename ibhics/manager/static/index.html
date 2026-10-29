@@ -30,7 +30,7 @@
   .state.running { color: var(--ok); } .state.stopped { color: var(--muted); } .state.paused { color: var(--warn); }
   form { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; }
   label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-  input, select { padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+  input, select { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
   button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; font: inherit; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { color: var(--bad); }
@@ -57,14 +57,31 @@
         <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
       </label>
       <label>Network <input name="network" value="default"></label>
+      <label>Node <select name="node" id="node-select"><option value="">อัตโนมัติ</option></select></label>
       <button class="primary" type="submit">สร้าง VM</button>
     </form>
     <div id="msg"></div>
   </section>
   <section>
+    <h2>Nodes</h2>
+    <table>
+      <thead><tr><th>ชื่อ</th><th>Role</th><th class="hide-sm">Address</th><th>สถานะ</th><th></th></tr></thead>
+      <tbody id="nodes"></tbody>
+    </table>
+    <h2 style="margin-top:16px">เพิ่ม node เข้า cluster</h2>
+    <form id="join">
+      <label>ชื่อ node <input name="name" required placeholder="node2"></label>
+      <label>Role
+        <select name="role"><option value="compute">compute</option><option value="witness">witness</option></select>
+      </label>
+      <label>Agent URL <input name="address" required placeholder="http://10.0.0.12:8007"></label>
+      <button type="submit">เพิ่ม node</button>
+    </form>
+  </section>
+  <section>
     <h2>Virtual Machines</h2>
     <table>
-      <thead><tr><th>ชื่อ</th><th>สถานะ</th><th>vCPU</th><th>RAM</th><th class="hide-sm">ดิสก์</th><th></th></tr></thead>
+      <thead><tr><th>ชื่อ</th><th>Node</th><th>สถานะ</th><th>vCPU</th><th>RAM</th><th class="hide-sm">ดิสก์</th><th></th></tr></thead>
       <tbody id="vms"></tbody>
     </table>
   </section>
@@ -83,22 +100,45 @@ const api = (path, opts = {}) =>
 const msg = (text) => { document.getElementById("msg").textContent = text || ""; };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-async function loadHost() {
-  const h = await api("/host");
+const TOPOLOGY = {
+  "standalone": "Standalone (node เดียว)",
+  "two-node-witness": "2 node + witness",
+  "cluster": "Cluster",
+  "incomplete": "ยังไม่ครบ (ไม่มี HA)",
+};
+
+async function loadCluster() {
+  const c = await api("/cluster");
   document.getElementById("host").textContent =
-    `${h.hostname} · ${h.cpus} CPU · ${Math.round(h.memory_mb / 1024)} GB · ${h.hypervisor}`;
+    `${TOPOLOGY[c.topology] || c.topology} · ${c.members.length} node · ` +
+    (c.quorum ? "quorum OK" : "เสีย quorum: สั่งงานไม่ได้");
+  document.getElementById("nodes").innerHTML = c.members.map((m) => `
+    <tr>
+      <td>${esc(m.name)}${m.local ? " (manager)" : ""}</td>
+      <td>${esc(m.role)}</td>
+      <td class="hide-sm">${esc(m.address || "local")}</td>
+      <td class="state ${m.healthy ? "running" : "paused"}">${m.healthy ? "online" : "offline"}</td>
+      <td>${m.local ? "" : `<button class="danger" data-node="${esc(m.name)}">นำออก</button>`}</td>
+    </tr>`).join("");
+  const select = document.getElementById("node-select");
+  const keep = select.value;
+  select.innerHTML = '<option value="">อัตโนมัติ</option>' + c.members
+    .filter((m) => m.role === "compute" && m.healthy)
+    .map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+  select.value = keep;
 }
 
 async function loadVMs() {
   const vms = await api("/vms");
   const tbody = document.getElementById("vms");
   if (!vms.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">ยังไม่มี VM</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">ยังไม่มี VM</td></tr>';
     return;
   }
   tbody.innerHTML = vms.map((vm) => `
     <tr>
       <td>${esc(vm.name)}</td>
+      <td>${esc(vm.node || "")}</td>
       <td class="state ${esc(vm.state)}">${esc(vm.state)}</td>
       <td>${vm.vcpus}</td>
       <td>${vm.memory_mb} MB</td>
@@ -144,6 +184,7 @@ document.getElementById("create").addEventListener("submit", async (e) => {
         firmware: f.get("firmware"),
         disks: [{ size_gb: Number(f.get("disk_gb")) }],
         nics: [{ network: f.get("network") }],
+        node: f.get("node") || null,
       }),
     });
     e.target.reset();
@@ -151,7 +192,32 @@ document.getElementById("create").addEventListener("submit", async (e) => {
   } catch (err) { msg(err.message); }
 });
 
-loadHost().catch((err) => msg(err.message));
+document.getElementById("nodes").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-node]");
+  if (!btn || !confirm(`นำ ${btn.dataset.node} ออกจาก cluster?`)) return;
+  msg();
+  try {
+    await api(`/cluster/nodes/${encodeURIComponent(btn.dataset.node)}`, { method: "DELETE" });
+    await loadCluster();
+  } catch (err) { msg(err.message); }
+});
+
+document.getElementById("join").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  msg();
+  try {
+    await api("/cluster/nodes", {
+      method: "POST",
+      body: JSON.stringify({ name: f.get("name"), role: f.get("role"), address: f.get("address") }),
+    });
+    e.target.reset();
+    await loadCluster();
+  } catch (err) { msg(err.message); }
+});
+
+loadCluster().catch((err) => msg(err.message));
+setInterval(() => { loadCluster().catch(() => {}); loadVMs().catch(() => {}); }, 10000);
 loadVMs().catch((err) => msg(err.message));
 </script>
 </body>
