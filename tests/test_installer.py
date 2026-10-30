@@ -139,6 +139,8 @@ def test_detect_interfaces(tmp_path):
         if physical:
             (tmp_path / name / "device").mkdir()
     assert setup.detect_interfaces(tmp_path) == ["eno1", "ens2f0"]
+    (tmp_path / "ens2f0" / "carrier").write_text("1\n")
+    assert setup.detect_interfaces(tmp_path) == ["ens2f0", "eno1"]  # the cabled port first
 
 
 def test_installer_files_agree():

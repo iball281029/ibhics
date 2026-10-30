@@ -276,10 +276,19 @@ def apply(
 
 
 def detect_interfaces(sys_net: Path = Path("/sys/class/net")) -> list[str]:
-    """Physical NICs: the ones backed by a device, so not lo, bridges or tap devices."""
+    """Physical NICs: the ones backed by a device, so not lo, bridges or tap devices.
+    Ports with a cable plugged in come first, so the default choice is one that works."""
     if not sys_net.exists():
         return []
-    return sorted(p.name for p in sys_net.iterdir() if (p / "device").exists())
+    nics = [p.name for p in sys_net.iterdir() if (p / "device").exists()]
+    return sorted(nics, key=lambda n: (not has_link(n, sys_net), n))
+
+
+def has_link(interface: str, sys_net: Path = Path("/sys/class/net")) -> bool:
+    try:
+        return (sys_net / interface / "carrier").read_text().strip() == "1"
+    except OSError:  # reading carrier fails while the port is down
+        return False
 
 
 def current_address(interface: str) -> tuple[str, str]:
@@ -410,9 +419,8 @@ def main() -> int:
     if not nics:
         print("No network interface found.")
         return 1
-    interface = (
-        nics[0] if len(nics) == 1 else choose("Management network port", [(n, n) for n in nics])
-    )
+    ports = [(n, f"{n}  (cable connected)" if has_link(n) else n) for n in nics]
+    interface = nics[0] if len(nics) == 1 else choose("Management network port", ports)
     suggested, gateway = current_address(interface)
     address = ask("Management address with prefix", suggested, check_cidr)
     gateway = ask("Default gateway", gateway, check_ip)
