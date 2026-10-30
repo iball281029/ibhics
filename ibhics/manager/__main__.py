@@ -71,6 +71,8 @@ def main() -> None:
         default=Path(os.environ.get("IBHICS_AUDIT_LOG", "/var/log/ibhics/audit.log")),
         help="append-only record of every change and sign-in",
     )
+    parser.add_argument("--tls-cert", default=os.environ.get("IBHICS_TLS_CERT"), help="HTTPS")
+    parser.add_argument("--tls-key", default=os.environ.get("IBHICS_TLS_KEY"))
     parser.add_argument("--heartbeat", type=float, default=5.0, help="seconds between checks")
     args = parser.parse_args()
 
@@ -117,7 +119,15 @@ def main() -> None:
         migrations=migrations,
         auth=auth,
     )
-    uvicorn.run(app, host=args.host, port=args.port)
+    if bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("--tls-cert and --tls-key go together")
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ssl_certfile=args.tls_cert,
+        ssl_keyfile=args.tls_key,
+    )
 
 
 if __name__ == "__main__":

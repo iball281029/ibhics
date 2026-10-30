@@ -24,6 +24,8 @@ dev = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]
 ibhics-manager = "ibhics.manager.__main__:main"
+ibhics-agent = "ibhics.agent.__main__:main"
+ibhics-setup = "ibhics.installer.setup:main"
 
 [tool.setuptools.packages.find]
 include = ["ibhics*"]

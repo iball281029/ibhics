@@ -1,0 +1,14 @@
+[Unit]
+Description=ibHiCS node agent
+After=network-online.target libvirtd.service
+Wants=network-online.target
+ConditionPathExists=/etc/ibhics/configured
+
+[Service]
+EnvironmentFile=/etc/ibhics/ibhics.env
+ExecStart=/opt/ibhics/venv/bin/ibhics-agent
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

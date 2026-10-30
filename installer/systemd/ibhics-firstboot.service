@@ -1,0 +1,19 @@
+[Unit]
+Description=ibHiCS first-boot setup
+After=systemd-user-sessions.service network.target libvirtd.service
+Before=getty@tty1.service
+ConditionPathExists=!/etc/ibhics/configured
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ibhics/venv/bin/ibhics-setup
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
