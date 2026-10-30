@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, status
 
-from .. import __version__
+from .. import __version__, console
 from ..backup import BackupTarget, NodeBackup
+from ..cluster.remote import TOKEN_HEADER
 from ..cluster.topology import NodeRole
-from ..hypervisor import HypervisorDriver
+from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
 from ..manager.errors import install_driver_errors
 from ..manager.schemas import (
     AgentBackupDelete,
@@ -123,6 +125,21 @@ def create_agent_app(
         @api.post("/backups/prune")
         def prune(body: AgentPrune) -> dict:
             return {"removed": backups.prune(target(body.target), body.vm_name, body.keep_last)}
+
+        @app.websocket("/agent/v1/vms/{uuid}/console")
+        async def vm_console(ws: WebSocket, uuid: str) -> None:
+            sent = ws.headers.get(TOKEN_HEADER, "")
+            if not hmac.compare_digest(sent.encode(), token.encode()):
+                await ws.close(code=1008)
+                return
+            await console.accept(ws)
+            try:
+                host, port = await asyncio.to_thread(driver.console_address, uuid)
+                await console.bridge_tcp(ws, host, port)
+            except VMNotFound:
+                await console.refuse(ws, "VM not found on this node")
+            except (InvalidState, OSError) as exc:
+                await console.refuse(ws, str(exc))
 
     app.include_router(api)
     return app

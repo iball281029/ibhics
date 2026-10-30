@@ -35,6 +35,7 @@ Web Console / REST API / CLI
 | `ibhics/cluster/remote.py` | client คุยกับ Agent และ `RemoteDriver` |
 | `ibhics/backup/` | ปลายทาง backup, mount NFS/SMB/USB, S3, repository แบบ dedup, งาน backup/restore บน node |
 | `ibhics/manager/backups.py` | ปลายทาง, ตารางเวลา และคิวงาน backup ฝั่ง manager |
+| `ibhics/console.py` | ส่งต่อ WebSocket ของ noVNC ไปยัง VNC ของ VM |
 | `ibhics/agent/app.py` | Agent บนแต่ละ node (role compute หรือ witness) |
 | `ibhics/manager/app.py` | FastAPI app: REST API + Web Console |
 | `ibhics/manager/static/` | Web Console |
@@ -65,6 +66,7 @@ manager (ปลายทาง, ตารางเวลา, คิวงาน)
 - [x] Agent แยก process + การลงทะเบียน node (compute, witness)
 - [x] Standalone, 2 node + witness, cluster 3 node ขึ้นไป + quorum
 - [x] Storage pool: local, NFS, iSCSI, FC (multipath + LVM)
+- [x] Console VM ผ่าน noVNC (relay ผ่าน manager และ agent)
 - [x] Backup ในตัว (dedup, ตั้งเวลา, เก็บ N ชุด, restore) + ปลายทาง local, NFS, SMB, USB, iSCSI, FC, S3 ที่ต่อเฉพาะตอนรัน job
 
 ## งานถัดไปในเฟส 1
@@ -72,7 +74,6 @@ manager (ปลายทาง, ตารางเวลา, คิวงาน)
 - [ ] iSCSI CHAP, LVM ร่วมหลาย node (lvmlockd), DRBD สำหรับ 2 node
 - [ ] Backup: เข้ารหัส, ใช้ dirty bitmap อ่านเฉพาะส่วนที่เปลี่ยน, restore ทีละไฟล์
 - [ ] etcd เป็นที่เก็บสมาชิก cluster + manager ย้าย node ได้
-- [ ] Console VM ผ่าน noVNC
 - [ ] Live migration
 - [ ] ตั้งค่า Ceph อัตโนมัติ
 - [ ] Installer ISO + wizard

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VM Console</title>
+<style>
+  :root { --bar: #171b23; --text: #e6e9ef; --muted: #9aa3b2; --line: #2a303b; --ok: #3fb950; --bad: #f85149; --warn: #d29922; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #000; color: var(--text); font: 13px/1.4 system-ui, "Noto Sans Thai", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--bar); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header strong { margin-right: 8px; }
+  #status { color: var(--muted); margin-right: auto; }
+  #status.ok { color: var(--ok); } #status.bad { color: var(--bad); } #status.wait { color: var(--warn); }
+  button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: #232936; color: var(--text); cursor: pointer; font: inherit; }
+  button:disabled { opacity: .5; cursor: default; }
+  #screen { flex: 1; min-height: 0; overflow: hidden; }
+</style>
+</head>
+<body>
+<header>
+  <strong id="title">VM Console</strong>
+  <span id="status" class="wait">Connecting…</span>
+  <button id="cad" disabled>Ctrl+Alt+Del</button>
+  <button id="paste" disabled title="Type the clipboard text into the VM">Paste text</button>
+  <button id="full">Fullscreen</button>
+  <button id="reconnect">Reconnect</button>
+</header>
+<div id="screen"></div>
+<script type="module">
+import RFB from "./novnc/core/rfb.js";
+
+const params = new URLSearchParams(location.search);
+const uuid = params.get("vm") || "";
+const name = params.get("name") || uuid;
+document.title = `${name} · Console`;
+document.getElementById("title").textContent = name;
+
+const status = document.getElementById("status");
+const setStatus = (text, cls) => { status.textContent = text; status.className = cls; };
+const buttons = ["cad", "paste"].map((id) => document.getElementById(id));
+let rfb = null;
+
+function connect() {
+  if (rfb) rfb.disconnect();
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${scheme}://${location.host}/api/v1/vms/${encodeURIComponent(uuid)}/console`;
+  setStatus("Connecting…", "wait");
+  rfb = new RFB(document.getElementById("screen"), url);
+  rfb.scaleViewport = true;
+  rfb.resizeSession = false;
+  rfb.addEventListener("connect", () => {
+    setStatus("Connected", "ok");
+    buttons.forEach((b) => { b.disabled = false; });
+    rfb.focus();
+  });
+  rfb.addEventListener("disconnect", (e) => {
+    buttons.forEach((b) => { b.disabled = true; });
+    setStatus(e.detail.clean ? "Disconnected" : "Cannot connect (the VM may be off or its node unreachable)", "bad");
+  });
+  rfb.addEventListener("desktopname", (e) => { if (!params.get("name")) document.title = e.detail.name; });
+}
+
+document.getElementById("cad").addEventListener("click", () => rfb && rfb.sendCtrlAltDel());
+document.getElementById("reconnect").addEventListener("click", connect);
+document.getElementById("full").addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
+});
+document.getElementById("paste").addEventListener("click", async () => {
+  // Types the clipboard text as key presses, for guests without a clipboard agent.
+  let text = "";
+  try { text = await navigator.clipboard.readText(); } catch { text = prompt("Text to type into the VM") || ""; }
+  for (const ch of text) {
+    const code = ch === "\n" ? 0xff0d : ch.codePointAt(0);
+    rfb.sendKey(code < 0x100 || code === 0xff0d ? code : 0x01000000 + code);
+  }
+  rfb.focus();
+});
+
+if (uuid) connect(); else setStatus("No VM given", "bad");
+</script>
+</body>
+</html>

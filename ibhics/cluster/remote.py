@@ -47,6 +47,14 @@ class AgentClient:
             raise NodeUnavailable(f"{self.address}: cluster token rejected")
         return resp
 
+    def open_console(self, uuid: str):
+        """Async context manager: a WebSocket to the agent's console relay for this VM."""
+        from websockets.asyncio.client import connect
+
+        scheme, rest = self.address.split("://", 1)
+        url = f"{'wss' if scheme == 'https' else 'ws'}://{rest}/agent/v1/vms/{uuid}/console"
+        return connect(url, additional_headers=self._headers, max_size=None, open_timeout=5)
+
     def health(self) -> dict:
         resp = self.request("GET", "/health")
         if resp.status_code != 200:

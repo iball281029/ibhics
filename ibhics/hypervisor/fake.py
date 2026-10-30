@@ -32,7 +32,7 @@ FAKE_BYTES_PER_GB = 64 * 1024
 
 
 class FakeDriver(HypervisorDriver):
-    def __init__(self, cpus: int = 32, memory_mb: int = 131072) -> None:
+    def __init__(self, cpus: int = 32, memory_mb: int = 131072, demo_console: bool = True) -> None:
         self._cpus = cpus
         self._memory_mb = memory_mb
         self._vms: dict[str, VMInfo] = {}
@@ -40,6 +40,10 @@ class FakeDriver(HypervisorDriver):
             "default": (PoolSpec(name="default", type=PoolType.DIR), 1000.0)
         }
         self._disks: dict[str, list[bytearray]] = {}
+        # Where each VM's "screen" is. By default a running VM gets a small built-in VNC
+        # server with a test picture; tests can map a uuid to any (host, port) instead.
+        self.consoles: dict[str, tuple[str, int]] = {}
+        self.demo_console = demo_console
         self._lock = threading.Lock()
 
     def host_info(self) -> HostInfo:
@@ -117,6 +121,20 @@ class FakeDriver(HypervisorDriver):
                 if any(d.pool == name for d in vm.spec.disks):
                     raise InvalidState(f"VM {vm.spec.name!r} still has disks in pool {name!r}")
             del self._pools[name]
+
+    def console_address(self, uuid: str) -> tuple[str, int]:
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                raise InvalidState("start the VM to open its console")
+            if uuid not in self.consoles:
+                if not self.demo_console:
+                    raise InvalidState("the VM has no VNC display")
+                from .fake_vnc import FakeVNCServer
+
+                seed = sum(vm.spec.name.encode())
+                self.consoles[uuid] = FakeVNCServer(vm.spec.name, seed).address
+            return self.consoles[uuid]
 
     @contextmanager
     def export_disks(self, uuid: str) -> Iterator[list[Path]]:

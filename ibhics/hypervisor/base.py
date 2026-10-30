@@ -201,6 +201,10 @@ class HypervisorDriver(abc.ABC):
     def delete_pool(self, name: str) -> None:
         """Stop managing the pool. Data on it (images, LVM volumes) is left in place."""
 
+    def console_address(self, uuid: str) -> tuple[str, int]:
+        """Host and TCP port of the running VM's VNC display, reachable from this node."""
+        raise NotImplementedError
+
     # Backup primitives. Agents and the manager's own node implement them; the backup
     # engine (ibhics.backup) does the rest.
 

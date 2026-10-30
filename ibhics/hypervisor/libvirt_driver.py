@@ -212,6 +212,16 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             pass
 
+    def console_address(self, uuid: str) -> tuple[str, int]:
+        dom = self._lookup(uuid)
+        if not dom.isActive():
+            raise InvalidState("start the VM to open its console")
+        graphics = ET.fromstring(dom.XMLDesc(0)).find("./devices/graphics[@type='vnc']")
+        port = int(graphics.get("port", "-1")) if graphics is not None else -1
+        if port <= 0:
+            raise InvalidState("the VM has no VNC display")
+        return "127.0.0.1", port
+
     @contextmanager
     def export_disks(self, uuid: str) -> Iterator[list[Path]]:
         dom = self._lookup(uuid)
