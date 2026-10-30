@@ -4,7 +4,7 @@ Open-source hyper-converged infrastructure platform.
 
 ibHiCS รวม compute, storage และ network ไว้ในระบบเดียว ติดตั้งบนเซิร์ฟเวอร์ x86 ทั่วไป (Dell, HPE, Lenovo, Supermicro) และจัดการทั้งหมดผ่าน Web Console กับ REST API แนวคิดคล้าย Proxmox VE แต่เน้นประสบการณ์ใช้งานแบบ appliance
 
-> สถานะ: **ibHiCS Hyper-Converged Infrastructure beta version 0.1** (`0.1.0b1`) รุ่นทดลองใช้ ยังไม่แนะนำสำหรับ production
+> สถานะ: **ibHiCS Hyper-Converged Infrastructure beta version 0.2** (`0.2.0b1`) รุ่นทดลองใช้ ยังไม่แนะนำสำหรับ production
 
 ## สถาปัตยกรรม
 

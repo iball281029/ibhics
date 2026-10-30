@@ -72,7 +72,7 @@ python3 -m pip download --quiet --dest "$PAYLOAD/wheelhouse" \
     --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 \
     --platform manylinux2014_x86_64 \
     "$PAYLOAD"/wheelhouse/ibhics-*.whl
-cp "$HERE/preseed.cfg" "$HERE/install-ibhics.sh" "$HERE/packages.txt" "$PAYLOAD/"
+cp "$HERE/preseed.cfg" "$HERE/install-ibhics.sh" "$HERE/upgrade.sh" "$HERE/packages.txt" "$PAYLOAD/"
 
 if [ -z "$DEBREPO" ]; then
     echo ">> Downloading the Debian packages a node needs (in a debian:trixie container)"

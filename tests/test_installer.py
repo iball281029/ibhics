@@ -79,7 +79,7 @@ def test_console_banner_says_where_to_go():
     assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
-    assert "beta version 0.1" in issue
+    assert "beta version 0.2" in issue
 
 
 def test_apply_manager(tmp_path):
