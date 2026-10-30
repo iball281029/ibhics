@@ -16,6 +16,7 @@ from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, V
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
+from .imports import ImportManager
 from .migrations import MigrationManager
 from .schemas import (
     AuditOut,
@@ -25,6 +26,8 @@ from .schemas import (
     BackupTargetOut,
     ClusterOut,
     HostOut,
+    ImportJobOut,
+    ImportRequest,
     JobOut,
     LoginOut,
     LoginRequest,
@@ -38,6 +41,9 @@ from .schemas import (
     PoolCreate,
     PoolOut,
     RestoreRequest,
+    SourceIn,
+    SourceOut,
+    SourceVMOut,
     StopRequest,
     UserIn,
     UserOut,
@@ -67,6 +73,8 @@ ADMIN_ROUTES = {
     ("PATCH", f"{API}/users/{{name}}"),
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
+    ("POST", f"{API}/migrate/sources"),
+    ("DELETE", f"{API}/migrate/sources/{{name}}"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
 SELF_ROUTES = {f"{API}/auth/me", f"{API}/auth/logout", f"{API}/auth/password"}
@@ -94,6 +102,7 @@ def create_app(
     scheduler_interval: float = 0,
     migrations: MigrationManager | None = None,
     auth: Auth | None = None,
+    imports: ImportManager | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -139,6 +148,8 @@ def create_app(
     app.state.backups = backups
     app.state.migrations = migrations
     app.state.auth = auth
+    imports = imports or ImportManager(cluster)
+    app.state.imports = imports
     install_driver_errors(app)
     install_cluster_errors(app)
 
@@ -393,6 +404,46 @@ def create_app(
     )
     def evacuate_node(name: str) -> list[MigrationOut]:
         return [MigrationOut(**job.__dict__) for job in migrations.evacuate(name)]
+
+    # ibHiCS Migrate: bring VMs over from VMware, OVA exports and disk images.
+
+    @api.get("/migrate/sources", response_model=list[SourceOut])
+    def list_sources() -> list[SourceOut]:
+        return [SourceOut(name=s.name, type=s.type, settings=s.masked()) for s in imports.sources()]
+
+    @api.post("/migrate/sources", response_model=SourceOut, status_code=status.HTTP_201_CREATED)
+    def add_source(body: SourceIn) -> SourceOut:
+        cluster.require_quorum()
+        source = imports.add_source(body.to_source())
+        return SourceOut(name=source.name, type=source.type, settings=source.masked())
+
+    @api.delete("/migrate/sources/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def remove_source(name: str) -> None:
+        cluster.require_quorum()
+        imports.remove_source(name)
+
+    @api.get("/migrate/sources/{name}/vms", response_model=list[SourceVMOut])
+    def source_vms(name: str) -> list[SourceVMOut]:
+        return [SourceVMOut(**vm.to_dict()) for vm in imports.source_vms(name)]
+
+    @api.post("/migrate/jobs", response_model=ImportJobOut, status_code=status.HTTP_202_ACCEPTED)
+    def start_import(body: ImportRequest) -> ImportJobOut:
+        job = imports.start(
+            body.source,
+            body.vm,
+            body.name,
+            body.node,
+            body.pool,
+            body.network,
+            body.vcpus,
+            body.memory_mb,
+            body.start,
+        )
+        return ImportJobOut(**job.__dict__)
+
+    @api.get("/migrate/jobs", response_model=list[ImportJobOut])
+    def list_imports() -> list[ImportJobOut]:
+        return [ImportJobOut(**job.__dict__) for job in imports.jobs()]
 
     # VM console: the browser's noVNC WebSocket is relayed to the VM's VNC display, on this
     # node directly or through the agent of the VM's node.

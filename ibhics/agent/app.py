@@ -12,11 +12,13 @@ from ..backup import BackupTarget, NodeBackup
 from ..cluster.remote import TOKEN_HEADER
 from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
+from ..importer import NodeImport, Source, SourceVM
 from ..manager.errors import install_driver_errors
 from ..manager.schemas import (
     AgentBackupDelete,
     AgentBackupList,
     AgentBackupRun,
+    AgentImport,
     AgentMigrate,
     AgentPrune,
     AgentRestore,
@@ -36,6 +38,7 @@ def create_agent_app(
     token: str,
     driver: HypervisorDriver | None = None,
     backups: NodeBackup | None = None,
+    imports: NodeImport | None = None,
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -131,6 +134,27 @@ def create_agent_app(
         @api.post("/backups/prune")
         def prune(body: AgentPrune) -> dict:
             return {"removed": backups.prune(target(body.target), body.vm_name, body.keep_last)}
+
+        imports = imports or NodeImport(driver)
+
+        @api.post("/imports/run", response_model=VMOut)
+        def run_import(body: AgentImport) -> VMOut:
+            try:
+                source, vm = Source.from_dict(body.source), SourceVM.from_dict(body.vm)
+                source.validate()
+            except (KeyError, TypeError) as exc:
+                raise ValueError(f"bad import request: {exc}") from None
+            info = imports.run(
+                source,
+                vm,
+                body.name,
+                body.pool,
+                body.network,
+                body.vcpus,
+                body.memory_mb,
+                body.start,
+            )
+            return VMOut.from_info(info)
 
         @app.websocket("/agent/v1/vms/{uuid}/console")
         async def vm_console(ws: WebSocket, uuid: str) -> None:
