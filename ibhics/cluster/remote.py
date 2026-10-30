@@ -9,6 +9,7 @@ from ..hypervisor import (
     HostInfo,
     HypervisorDriver,
     InvalidState,
+    MigrationFailed,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
@@ -102,6 +103,24 @@ class RemoteDriver(HypervisorDriver):
 
     def delete_vm(self, uuid: str) -> None:
         self._ok(self._client.request("DELETE", f"/vms/{uuid}"), uuid)
+
+    def migrate_vm(
+        self,
+        uuid: str,
+        dest_uri: str,
+        copy_storage: bool = False,
+        bandwidth_mib: int | None = None,
+    ) -> None:
+        body = {"dest_uri": dest_uri, "copy_storage": copy_storage, "bandwidth_mib": bandwidth_mib}
+        resp = self._client.request("POST", f"/vms/{uuid}/migrate", json=body, timeout=None)
+        detail = str(resp.json().get("detail", "")) if resp.content else ""
+        if resp.status_code == 502:
+            raise MigrationFailed(detail.removeprefix("migration failed: "))
+        if resp.status_code == 404 and detail.startswith("storage pool not found: "):
+            raise PoolNotFound(detail.removeprefix("storage pool not found: "))
+        if resp.status_code == 422:
+            raise ValueError(detail)
+        self._ok(resp, uuid)
 
     def list_pools(self) -> list[PoolInfo]:
         return [_pool_info(p) for p in self._ok(self._client.request("GET", "/pools")).json()]

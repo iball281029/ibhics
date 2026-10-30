@@ -17,6 +17,7 @@ from ..manager.schemas import (
     AgentBackupDelete,
     AgentBackupList,
     AgentBackupRun,
+    AgentMigrate,
     AgentPrune,
     AgentRestore,
     BackupOut,
@@ -82,6 +83,11 @@ def create_agent_app(
         @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_vm(uuid: str) -> None:
             driver.delete_vm(uuid)
+
+        # Runs until the VM has moved, which can take minutes for a busy guest.
+        @api.post("/vms/{uuid}/migrate", status_code=status.HTTP_204_NO_CONTENT)
+        def migrate_vm(uuid: str, body: AgentMigrate) -> None:
+            driver.migrate_vm(uuid, body.dest_uri, body.copy_storage, body.bandwidth_mib)
 
         @api.get("/pools", response_model=list[PoolOut])
         def list_pools() -> list[PoolOut]:

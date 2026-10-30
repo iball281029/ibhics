@@ -126,6 +126,39 @@ curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: applicat
 
 VNC ของทุก VM ฟังเฉพาะ `127.0.0.1` ของ node ตัวเอง เบราว์เซอร์คุยกับ manager ผ่าน WebSocket `/api/v1/vms/{uuid}/console` แล้ว manager ส่งต่อไปยัง VNC บน node ของตัวเอง หรือผ่าน agent ของ node ที่ VM อยู่ (ยืนยันด้วย cluster token) จึงไม่ต้องเปิดพอร์ต VNC ออกนอกเครื่อง โหมดพัฒนา (`--driver fake`) มี VNC จำลองแสดงภาพทดสอบ
 
+## Live migration
+
+ย้าย VM ไปอีก node โดย VM ยังทำงานต่อ (ผู้ใช้แทบไม่รู้สึก) ใช้ live migration ของ libvirt แบบ peer-to-peer: libvirtd ของ node ต้นทางคุยกับ node ปลายทางโดยตรง เมื่อย้ายเสร็จ VM จะถูก define ที่ปลายทางและลบออกจากต้นทาง จึงไม่มีช่วงที่ VM อยู่สองที่
+
+```bash
+# ย้ายไป node2 (ไม่ใส่ node = เลือก node ที่หน่วยความจำว่างมากที่สุดให้)
+curl -X POST localhost:8006/api/v1/vms/<uuid>/migrate -H 'Content-Type: application/json' \
+  -d '{"node": "node2", "bandwidth_mib": 500}'
+curl localhost:8006/api/v1/migrations          # ดูความคืบหน้า
+
+# ก่อนปิด node ไปซ่อม: ย้าย VM ทุกตัวออกจาก node2
+curl -X POST localhost:8006/api/v1/nodes/node2/evacuate
+```
+
+ก่อนย้าย manager ตรวจให้ ถ้าไม่ผ่านจะบอกเหตุผล:
+
+- ต้องมี quorum ระหว่างนั้นต้องไม่มี backup ของ VM ตัวนี้ทำงานอยู่ และ VM ตัวนี้ต้องไม่ได้กำลังถูกย้ายอยู่แล้ว
+- node ปลายทางต้องมี storage pool ชื่อเดียวกับที่ดิสก์ของ VM อยู่ และต้องมีหน่วยความจำว่างพอ
+- **Storage ที่ใช้ร่วมกัน** (NFS, iSCSI, FC/LVM ที่ชี้ไปยังแหล่งเดียวกันทั้งสอง node) ย้ายเฉพาะหน่วยความจำ จึงเร็ว
+- **ดิสก์ local** (pool แบบ `dir`) ระบบจะคัดลอกดิสก์ไป pool ชื่อเดียวกันที่ปลายทางขณะ VM ทำงาน แล้วลบของเดิม ใช้เวลานานตามขนาดดิสก์ ถ้าไม่ต้องการให้คัดลอก ส่ง `"copy_storage": false`
+- VM ที่ปิดอยู่ย้ายได้เฉพาะเมื่อดิสก์อยู่บน storage ที่ใช้ร่วมกัน (ย้ายแค่ definition)
+- `evacuate` ย้ายทุกตัวที่ย้ายได้ ตัวที่ย้ายไม่ได้จะขึ้นเป็น job ที่ `failed` พร้อมเหตุผล
+
+ให้ libvirtd ของแต่ละ node เชื่อมกันได้ เลือกด้วย `--migration-transport` (หรือ `IBHICS_MIGRATION_TRANSPORT`):
+
+| ค่า | ต้องเตรียม |
+| --- | --- |
+| `tls` (ค่าเริ่มต้น) | ใบรับรอง libvirt TLS ของ cluster บนทุก node และเปิด `libvirtd-tls.socket` (พอร์ต 16514) |
+| `ssh` | กุญแจ SSH ของ root ระหว่าง node |
+| `tcp` | ไม่เข้ารหัส ใช้ในแล็บเท่านั้น |
+
+ชื่อ host ของ node ปลายทางมาจาก address ของ agent ส่วน node ที่รัน manager ใช้ `--migration-host` (ค่าเริ่มต้นคือ FQDN ของเครื่อง) ตอนนี้ VM ใช้ CPU model มาตรฐานของ QEMU จึงย้ายข้าม node ที่ใช้ CPU ต่างรุ่นกันได้
+
 ## REST API
 
 | Method | Path | ทำอะไร |
@@ -144,6 +177,9 @@ VNC ของทุก VM ฟังเฉพาะ `127.0.0.1` ของ node �
 | POST | `/api/v1/vms/{uuid}/start` | เปิด VM |
 | POST | `/api/v1/vms/{uuid}/stop` | ปิด VM (`{"force": true}` = power off) |
 | DELETE | `/api/v1/vms/{uuid}` | ลบ VM และดิสก์ |
+| POST | `/api/v1/vms/{uuid}/migrate` | live migration (`node`, `copy_storage`, `bandwidth_mib`) |
+| GET | `/api/v1/migrations` | งานย้าย VM และผลลัพธ์ |
+| POST | `/api/v1/nodes/{name}/evacuate` | ย้าย VM ทุกตัวออกจาก node ก่อนซ่อมบำรุง |
 | POST | `/api/v1/vms/{uuid}/backup` | backup ทันที (`{"target": "nas"}`) |
 | GET/POST | `/api/v1/backup/targets` | ปลายทาง backup |
 | DELETE | `/api/v1/backup/targets/{name}` | นำปลายทางออก (ไฟล์ backup ยังอยู่) |

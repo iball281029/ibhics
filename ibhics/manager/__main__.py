@@ -14,6 +14,7 @@ from ..cluster import Cluster
 from ..hypervisor import load_driver
 from .app import create_app
 from .backups import BackupManager
+from .migrations import TRANSPORTS, MigrationManager
 
 
 def main() -> None:
@@ -46,6 +47,17 @@ def main() -> None:
         default=Path(os.environ.get("IBHICS_BACKUP_STATE_FILE", "/var/lib/ibhics/backup.json")),
         help="where backup targets (with their credentials) and policies are saved",
     )
+    parser.add_argument(
+        "--migration-transport",
+        choices=sorted(TRANSPORTS),
+        default=os.environ.get("IBHICS_MIGRATION_TRANSPORT", "tls"),
+        help="how nodes' libvirt daemons reach each other during live migration",
+    )
+    parser.add_argument(
+        "--migration-host",
+        default=os.environ.get("IBHICS_MIGRATION_HOST"),
+        help="name other nodes use to reach this node's libvirtd (default: its FQDN)",
+    )
     parser.add_argument("--heartbeat", type=float, default=5.0, help="seconds between checks")
     args = parser.parse_args()
 
@@ -63,8 +75,22 @@ def main() -> None:
     backups = BackupManager(cluster, state_path=args.backup_state_file)
     backups.load()
 
+    migrations = MigrationManager(
+        cluster,
+        transport=args.migration_transport,
+        local_host=args.migration_host,
+        busy=lambda vm: any(
+            j.kind == "backup" and j.vm == vm and j.state in ("queued", "running")
+            for j in backups.jobs()
+        ),
+    )
+
     app = create_app(
-        cluster, heartbeat_interval=args.heartbeat, backups=backups, scheduler_interval=30
+        cluster,
+        heartbeat_interval=args.heartbeat,
+        backups=backups,
+        scheduler_interval=30,
+        migrations=migrations,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
