@@ -207,6 +207,17 @@
           <tbody id="pools"></tbody>
         </table></div>
       </div>
+      <div class="sheet" style="margin-top:18px">
+        <div class="page-head">
+          <h1>Networks</h1><span class="sub">The LAN (untagged on br0) and VLANs on it, on every compute node</span>
+          <span class="spacer"></span>
+          <button class="primary admin-only" data-open="net-dialog">+ Add VLAN network</button>
+        </div>
+        <div class="table-wrap" style="margin-top:14px"><table>
+          <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
+          <tbody id="networks"></tbody>
+        </table></div>
+      </div>
     </section>
 
     <section class="page" id="page-nodes">
@@ -370,7 +381,7 @@
       <label>Storage pool <select name="pool" class="pool-list" required></select></label>
       <label>Firmware <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select></label>
       <label>Operating system <input name="os_type" maxlength="64" list="os-names" placeholder="Ubuntu 24.04 LTS"></label>
-      <label>Network <select name="network"><option value="default">default (bridge br0, management LAN)</option></select></label>
+      <label>Network <select name="network" class="net-list"><option value="default">default</option></select></label>
       <label>ISO (optional) <input name="iso" placeholder="/var/lib/ibhics/iso/debian.iso"></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create</button></footer>
@@ -412,6 +423,18 @@
       </div>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save</button></footer>
+  </form>
+</dialog>
+
+<dialog id="net-dialog">
+  <form method="dialog" id="net-form">
+    <header><h3>Add VLAN network</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" placeholder="service-network"></label>
+      <label>VLAN ID <input name="vlan" type="number" min="1" max="4094" required placeholder="101"></label>
+    </div>
+    <p class="hint" style="padding:0 22px 18px">VMs on this network get the frames tagged with this VLAN on the node's LAN port, untagged. The switch port must carry the VLAN tagged (trunk).</p>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add</button></footer>
   </form>
 </dialog>
 
@@ -590,12 +613,13 @@
       <label>Name in ibHiCS <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
       <label>Node <select name="node" class="node-list-auto"></select></label>
       <label>Storage pool <select name="pool" class="pool-list" required></select></label>
-      <label>Network <select name="network"><option value="default">default (bridge br0, management LAN)</option></select></label>
+      <div class="wide import-nets" id="import-nets"></div>
       <label>vCPU <input name="vcpus" type="number" min="1"></label>
       <label>Memory (MB) <input name="memory_mb" type="number" min="128" step="128"></label>
       <label class="check"><input name="start" type="checkbox"> Power on when done</label>
     </div>
-    <p class="hint" style="padding:0 18px">Power the VM off at the source first so its disks don't change during the copy. Windows guests need the virtio-win drivers on the node.</p>
+    <p class="hint" style="padding:0 18px">Power the VM off at the source first so its disks don't change during the copy.</p>
+    <p class="edit-note win-note" id="import-win" hidden>Windows: in the VM at the source, run <code>powercfg /h off</code> as administrator, then shut it down fully (not Restart). With Fast Startup on, its disk is locked and the virtio drivers cannot be added.</p>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start import</button></footer>
   </form>
 </dialog>

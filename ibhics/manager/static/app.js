@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [] };
+const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Local", disk: "Local disk (thin)", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -168,7 +168,8 @@ function openDialog(id, context = null, prefill = {}) {
   dialogContext = context;
   dlg.showModal();
   // Pickers need the current pools and VMs even when the page did not load them.
-  const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms"].filter(Boolean);
+  const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms",
+    $(".net-list", form) && "networks"].filter(Boolean);
   if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
   if ($(".disk-list", form)) fillDisks(form);
 }
@@ -203,6 +204,10 @@ function fillSelects() {
     if (items.includes(was)) s.value = was;
   });
   keep(".target-list", state.targets.map((t) => t.name));
+  $$(".net-list").forEach((s) => {
+    const was = s.value || "default";
+    s.innerHTML = netOptions(was);
+  });
   keep(".source-list", state.sources.map((s) => s.name));
   $$("form").forEach(fillPools);
   $$(".vm-check-list").forEach((box) => {
@@ -252,6 +257,7 @@ const loaders = {
   vms: async () => { state.vms = await api("/vms"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
   pools: async () => { state.pools = await api("/pools"); },
+  networks: async () => { state.networks = await api("/networks"); },
   targets: async () => { state.targets = await api("/backup/targets"); },
   policies: async () => { state.policies = await api("/backup/policies"); },
   jobs: async () => { state.jobs = await api("/backup/jobs"); },
@@ -334,7 +340,7 @@ async function refresh(page, auto = false) {
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
-  if (page === "storage") { await load("pools", "vms"); renderPools(); }
+  if (page === "storage") { await load("pools", "vms", "networks"); renderPools(); renderNetworks(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
@@ -577,7 +583,7 @@ let editing = null;
 const BOOT_NAMES = { hd: "Hard disk", cdrom: "CD/DVD", network: "Network (PXE)" };
 
 async function openEdit(uuid) {
-  const [vm] = await Promise.all([api(`/vms/${uuid}`), load("pools")]);
+  const [vm] = await Promise.all([api(`/vms/${uuid}`), load("pools", "networks")]);
   editing = {
     vm,
     vcpus: vm.vcpus,
@@ -617,7 +623,6 @@ function renderEdit() {
     <svg><use href="#${it.icon}"/></svg><span>${it.label}</span><em>${it.value}</em></button></li>`).join("");
   const pools = state.pools.filter((p) => p.node === e.vm.node || !p.node);
   const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(p.name)}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
-  const nets = [...new Set(["default", ...state.vms.flatMap((v) => v.nics.map((n) => n.network)), ...e.nics.map((n) => n.network)])].filter(Boolean);
   const pane = $("#edit-pane");
   const s = e.selected;
   if (s === "cpu") {
@@ -635,7 +640,7 @@ function renderEdit() {
   } else if (s.startsWith("nic")) {
     const i = Number(s.slice(3)), n = e.nics[i];
     pane.innerHTML = `<h4>Network adapter ${i + 1}</h4>
-      <label>Network <select data-nic="${i}" data-field="network">${nets.map((x) => `<option ${x === n.network ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+      <label>Network <select data-nic="${i}" data-field="network">${netOptions(n.network)}</select></label>
       <label>Adapter type <select data-nic="${i}" data-field="model" ${n.mac ? "disabled" : ""}>${["virtio", "e1000e", "e1000", "rtl8139"].map((m) => `<option ${m === n.model ? "selected" : ""}>${m}</option>`).join("")}</select></label>
       <p class="hint">MAC address <span class="mono">${esc(n.mac || "assigned when saved")}</span></p>
       <button type="button" class="danger small" data-remove="nic" data-i="${i}">Remove this adapter</button>`;
@@ -747,6 +752,35 @@ handlers["migrate-dialog"] = async (f, ctx) => {
 };
 
 // ---------- storage ----------
+
+const netLabel = (n) => (n.vlan ? `${n.name} (VLAN ${n.vlan})` : n.name === "default" ? "default (LAN, untagged)" : n.name);
+function netOptions(selected) {
+  const nets = state.networks.length ? state.networks : [{ name: "default" }];
+  const names = nets.map((n) => n.name);
+  const extra = selected && !names.includes(selected) ? [{ name: selected }] : [];
+  return [...nets, ...extra].map((n) => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""}>${esc(netLabel(n))}</option>`).join("");
+}
+
+function renderNetworks() {
+  const admin = isAdmin();
+  $("#networks").innerHTML = state.networks.map((n) => {
+    const vms = state.vms.filter((v) => v.nics.some((x) => x.network === n.name)).length;
+    return `<tr><td><div class="name-cell">${avatar("i-nic")}<span class="vm-name">${esc(n.name)}</span></div></td>
+      <td>${n.vlan ?? `<span class="muted">untagged</span>`}</td><td class="mono">${esc(n.bridge)}</td>
+      <td>${esc(n.nodes.join(", "))}</td><td>${vms}</td>
+      <td><div class="actions">${admin && n.name !== "default" ? `<button class="small danger" data-net-del="${esc(n.name)}">Remove</button>` : ""}</div></td></tr>`;
+  }).join("") || empty(6, "No networks");
+}
+$("#networks").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-net-del]");
+  if (!btn || !confirm(`Remove network ${btn.dataset.netDel}?`)) return;
+  try { await del(`/networks/${enc(btn.dataset.netDel)}`); await refresh("storage"); } catch (err) { fail(err); }
+});
+handlers["net-dialog"] = async (f) => {
+  await post("/networks", { name: f.get("name"), vlan: Number(f.get("vlan")) });
+  toast(`Network ${f.get("name")} added on every compute node`);
+  await refresh("storage");
+};
 
 function renderPools() {
   const admin = isAdmin();
@@ -1231,6 +1265,9 @@ $("#page-migrate").addEventListener("click", async (e) => {
     const vm = sourceVMs[Number(imp.dataset.import)];
     if (vm.state === "running" && !confirm(`${vm.name} is running at the source. Its disks may change during the copy. Continue anyway?`)) return;
     openDialog("import-dialog", { source: $("#browse-source").value, vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
+    $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
+    renderImportNets(vm);
+    load("networks").then(() => renderImportNets(vm)).catch(() => {});
   }
   if (rm) {
     if (!confirm(`Remove source ${rm.dataset.sourceDel}?`)) return;
@@ -1254,10 +1291,27 @@ handlers["source-dialog"] = async (f) => {
   await renderSourceVMs();
 };
 
+// One row per source NIC: where it was at the source, and which ibHiCS network it joins.
+// A network named like the source port group is picked by itself.
+function renderImportNets(vm) {
+  const box = $("#import-nets");
+  const count = Math.max(vm.nics || 1, (vm.networks || []).length, 1);
+  const was = $$("select", box).map((s) => s.value);
+  const slug = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  box.innerHTML = `<span class="label">Network adapters</span>` + Array.from({ length: count }, (_, i) => {
+    const src = (vm.networks || [])[i] || "";
+    const match = state.networks.find((n) => slug(n.name) === slug(src) && src);
+    const pick = was[i] || match?.name || "default";
+    return `<div class="net-map"><span>Adapter ${i + 1}${src ? ` · at the source: <b>${esc(src)}</b>` : ""}</span>
+      <span class="arrow">→</span><select data-net-map="${i}">${netOptions(pick)}</select></div>`;
+  }).join("") + `<span class="vm-sub">Missing a VLAN? Add it under Storage → Networks first.</span>`;
+}
+
 handlers["import-dialog"] = async (f, ctx) => {
+  const networks = $$("#import-nets select").map((s) => s.value);
   const body = {
     source: ctx.source, vm: ctx.vm.ref, name: f.get("name"), node: f.get("node") || null,
-    pool: f.get("pool") || "default", network: f.get("network") || "default", start: f.get("start") === "on",
+    pool: f.get("pool") || "default", network: networks.length ? networks : "default", start: f.get("start") === "on",
   };
   if (f.get("vcpus")) body.vcpus = Number(f.get("vcpus"));
   if (f.get("memory_mb")) body.memory_mb = Number(f.get("memory_mb"));
