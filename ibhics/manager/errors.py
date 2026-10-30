@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ..backup import BackupNotFound, RepositoryBusy, TargetUnavailable
-from ..hypervisor import InvalidState, PoolNotFound, VMExists, VMNotFound
+from ..hypervisor import InvalidState, MigrationFailed, PoolNotFound, VMExists, VMNotFound
 
 
 def _handler(status: int, prefix: str = ""):
@@ -24,6 +24,7 @@ def install_driver_errors(app: FastAPI) -> None:
     app.add_exception_handler(RepositoryBusy, _handler(409))
     app.add_exception_handler(TargetUnavailable, _handler(502, "backup target unavailable: "))
     app.add_exception_handler(InvalidState, _handler(409))
+    app.add_exception_handler(MigrationFailed, _handler(502, "migration failed: "))
     # Validation the driver does beyond the request schema.
     app.add_exception_handler(ValueError, _handler(422))
 

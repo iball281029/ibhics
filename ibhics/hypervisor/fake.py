@@ -11,11 +11,13 @@ import uuid as uuidlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .base import (
     HostInfo,
     HypervisorDriver,
     InvalidState,
+    MigrationFailed,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
@@ -44,6 +46,8 @@ class FakeDriver(HypervisorDriver):
         # server with a test picture; tests can map a uuid to any (host, port) instead.
         self.consoles: dict[str, tuple[str, int]] = {}
         self.demo_console = demo_console
+        # Other fake nodes this one can migrate VMs to, keyed by the host in a libvirt URI.
+        self.peers: dict[str, FakeDriver] = {}
         self._lock = threading.Lock()
 
     def host_info(self) -> HostInfo:
@@ -121,6 +125,30 @@ class FakeDriver(HypervisorDriver):
                 if any(d.pool == name for d in vm.spec.disks):
                     raise InvalidState(f"VM {vm.spec.name!r} still has disks in pool {name!r}")
             del self._pools[name]
+
+    def migrate_vm(
+        self,
+        uuid: str,
+        dest_uri: str,
+        copy_storage: bool = False,
+        bandwidth_mib: int | None = None,
+    ) -> None:
+        dest = self.peers.get(urlparse(dest_uri).hostname or "")
+        if dest is None:
+            raise MigrationFailed(f"cannot connect to {dest_uri}")
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING and copy_storage:
+                raise InvalidState("only a running VM can have its disks copied")
+            with dest._lock:
+                for disk in vm.spec.disks:
+                    if disk.pool not in dest._pools:
+                        raise PoolNotFound(disk.pool)
+                if any(v.spec.name == vm.spec.name for v in dest._vms.values()):
+                    raise VMExists(f"VM named {vm.spec.name!r} already exists on the destination")
+                dest._vms[uuid] = self._vms.pop(uuid)
+                dest._disks[uuid] = self._disks.pop(uuid)
+            self.consoles.pop(uuid, None)
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         with self._lock:

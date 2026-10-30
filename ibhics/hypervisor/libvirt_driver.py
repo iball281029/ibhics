@@ -18,6 +18,7 @@ from .base import (
     HostInfo,
     HypervisorDriver,
     InvalidState,
+    MigrationFailed,
     NicSpec,
     PoolInfo,
     PoolNotFound,
@@ -211,6 +212,43 @@ class LibvirtDriver(HypervisorDriver):
             _undefine(self._conn.storagePoolLookupByName(iscsi_session_name(name)))
         except libvirt.libvirtError:
             pass
+
+    def migrate_vm(
+        self,
+        uuid: str,
+        dest_uri: str,
+        copy_storage: bool = False,
+        bandwidth_mib: int | None = None,
+    ) -> None:
+        dom = self._lookup(uuid)
+        # Peer-to-peer: this node's libvirtd connects to the destination's itself, over TLS
+        # or SSH as set up when the node joined. The destination keeps the definition and
+        # this node forgets it, so the VM is never defined on two nodes at once.
+        flags = (
+            libvirt.VIR_MIGRATE_PEER2PEER
+            | libvirt.VIR_MIGRATE_PERSIST_DEST
+            | libvirt.VIR_MIGRATE_UNDEFINE_SOURCE
+        )
+        if dom.isActive():
+            flags |= libvirt.VIR_MIGRATE_LIVE | libvirt.VIR_MIGRATE_AUTO_CONVERGE
+            if copy_storage:
+                # libvirt creates same-named volumes in the same-named pools on the other side.
+                flags |= libvirt.VIR_MIGRATE_NON_SHARED_DISK
+        elif copy_storage:
+            raise InvalidState("only a running VM can have its disks copied; start it first")
+        else:
+            flags |= libvirt.VIR_MIGRATE_OFFLINE
+        disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
+        volumes = [self._volume(d) for d in disks] if copy_storage else []
+        params = {}
+        if bandwidth_mib:
+            params[libvirt.VIR_MIGRATE_PARAM_BANDWIDTH] = bandwidth_mib
+        try:
+            dom.migrateToURI3(dest_uri, params, flags)
+        except libvirt.libvirtError as exc:
+            raise MigrationFailed(str(exc)) from None
+        for vol in volumes:  # the copies now live on the destination
+            vol.delete(0)
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         dom = self._lookup(uuid)

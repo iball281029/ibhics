@@ -15,6 +15,7 @@ from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
+from .migrations import MigrationManager
 from .schemas import (
     BackupOut,
     BackupRequest,
@@ -24,6 +25,8 @@ from .schemas import (
     HostOut,
     JobOut,
     MemberOut,
+    MigrateRequest,
+    MigrationOut,
     NodeJoin,
     PolicyIn,
     PolicyOut,
@@ -43,10 +46,19 @@ def create_app(
     heartbeat_interval: float = 0,
     backups: BackupManager | None = None,
     scheduler_interval: float = 0,
+    migrations: MigrationManager | None = None,
 ) -> FastAPI:
     if isinstance(cluster, HypervisorDriver):
         cluster = Cluster.standalone(socket.gethostname(), cluster)
     backups = backups or BackupManager(cluster)
+
+    def backing_up(vm_name: str) -> bool:
+        return any(
+            j.kind == "backup" and j.vm == vm_name and j.state in ("queued", "running")
+            for j in backups.jobs()
+        )
+
+    migrations = migrations or MigrationManager(cluster, busy=backing_up)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -76,6 +88,7 @@ def create_app(
     app = FastAPI(title="ibHiCS Manager", version=__version__, lifespan=lifespan)
     app.state.cluster = cluster
     app.state.backups = backups
+    app.state.migrations = migrations
     install_driver_errors(app)
     install_cluster_errors(app)
 
@@ -191,6 +204,28 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         member.driver.delete_vm(uuid)
+
+    # Live migration. Moving a VM changes where it runs, so it needs quorum like any change.
+
+    @api.post(
+        "/vms/{uuid}/migrate", response_model=MigrationOut, status_code=status.HTTP_202_ACCEPTED
+    )
+    def migrate_vm(uuid: str, body: MigrateRequest | None = None) -> MigrationOut:
+        body = body or MigrateRequest()
+        job = migrations.start(uuid, body.node, body.copy_storage, body.bandwidth_mib)
+        return MigrationOut(**job.__dict__)
+
+    @api.get("/migrations", response_model=list[MigrationOut])
+    def list_migrations() -> list[MigrationOut]:
+        return [MigrationOut(**job.__dict__) for job in migrations.jobs()]
+
+    @api.post(
+        "/nodes/{name}/evacuate",
+        response_model=list[MigrationOut],
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def evacuate_node(name: str) -> list[MigrationOut]:
+        return [MigrationOut(**job.__dict__) for job in migrations.evacuate(name)]
 
     # VM console: the browser's noVNC WebSocket is relayed to the VM's VNC display, on this
     # node directly or through the agent of the VM's node.

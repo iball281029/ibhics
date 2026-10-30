@@ -115,6 +115,35 @@ class StopRequest(BaseModel):
     force: bool = False
 
 
+class MigrateRequest(BaseModel):
+    node: str | None = Field(default=None, description="destination; omit to pick one")
+    copy_storage: bool | None = Field(
+        default=None,
+        description="copy disks that are not on shared storage; omit to decide automatically",
+    )
+    bandwidth_mib: int | None = Field(default=None, ge=1, description="limit in MiB/s")
+
+
+class MigrationOut(BaseModel):
+    id: str
+    vm: str
+    uuid: str
+    source: str
+    target: str | None
+    copy_storage: bool
+    live: bool
+    state: str
+    created: str
+    finished: str | None
+    error: str | None
+
+
+class AgentMigrate(BaseModel):
+    dest_uri: str = Field(pattern=r"^qemu\+(tls|ssh|tcp)://[^\s/]+/system$")
+    copy_storage: bool = False
+    bandwidth_mib: int | None = Field(default=None, ge=1)
+
+
 class NodeJoin(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     role: NodeRole

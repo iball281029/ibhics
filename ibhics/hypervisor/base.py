@@ -167,6 +167,10 @@ class InvalidState(RuntimeError):
     pass
 
 
+class MigrationFailed(RuntimeError):
+    pass
+
+
 class HypervisorDriver(abc.ABC):
     """Operations every node must support. The manager talks only to this interface."""
 
@@ -200,6 +204,21 @@ class HypervisorDriver(abc.ABC):
     @abc.abstractmethod
     def delete_pool(self, name: str) -> None:
         """Stop managing the pool. Data on it (images, LVM volumes) is left in place."""
+
+    def migrate_vm(
+        self,
+        uuid: str,
+        dest_uri: str,
+        copy_storage: bool = False,
+        bandwidth_mib: int | None = None,
+    ) -> None:
+        """Move the VM to the node whose libvirt daemon is at `dest_uri`.
+
+        A running VM keeps running (live migration); a stopped one is moved by definition
+        only, which needs shared storage. With `copy_storage` the disks are copied to the
+        same-named pool on the destination while the VM runs, then removed here.
+        """
+        raise NotImplementedError
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         """Host and TCP port of the running VM's VNC display, reachable from this node."""
