@@ -18,6 +18,9 @@ touch /tmp/empty-status
 mkdir -p /tmp/archives/partial
 apt-get install -y -q --download-only --no-install-recommends \
     -o Dir::State::status=/tmp/empty-status -o Dir::Cache::archives=/tmp/archives $PKGS
+# virt-v2v reads VMware disks through nbdkit plugins that are only recommended.
+apt-get install -y -q --download-only \
+    -o Dir::State::status=/tmp/empty-status -o Dir::Cache::archives=/tmp/archives virt-v2v
 
 mkdir -p "$OUT"
 mv /tmp/archives/*.deb "$OUT/"
