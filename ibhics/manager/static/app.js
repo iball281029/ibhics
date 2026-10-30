@@ -94,6 +94,20 @@ document.addEventListener("click", (e) => {
   const link = e.target.closest("[data-tab-link]");
   if (link) setTimeout(() => selectTab("system-tabs", link.dataset.tabLink), 0);
 });
+// Row menus sit inside scrolling tables, which would clip them: place the open menu on
+// the page itself, below the button, or above it when there is no room underneath.
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("more") || !d.open) return;
+  const menu = d.querySelector(".dropdown"), r = d.querySelector("summary").getBoundingClientRect();
+  menu.style.cssText = "position:fixed;visibility:hidden;top:0;left:0;right:auto";
+  const h = menu.offsetHeight, w = menu.offsetWidth;
+  const below = window.innerHeight - r.bottom - 8 >= h || r.top < h + 8;
+  menu.style.top = `${below ? r.bottom + 4 : r.top - h - 4}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
+  menu.style.visibility = "";
+}, true);
+window.addEventListener("scroll", () => $$("details.more[open]").forEach((d) => d.removeAttribute("open")), true);
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
   location.href = "/login.html";
