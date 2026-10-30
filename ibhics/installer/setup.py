@@ -43,6 +43,7 @@ class Config:
     dns: list[str] = field(default_factory=list)
     timezone: str = "Asia/Bangkok"
     token: str = ""
+    ssh_key: str = ""  # optional public key for root, besides the root password
 
     @property
     def ip(self) -> str:
@@ -58,6 +59,8 @@ class Config:
         check_hostname(self.hostname)
         check_cidr(self.address)
         check_ip(self.gateway)
+        if self.ssh_key:
+            check_ssh_key(self.ssh_key)
         if ipaddress.ip_address(self.gateway) not in ipaddress.ip_interface(self.address).network:
             raise ValueError("the gateway must be inside the node's subnet")
         for server in self.dns:
@@ -96,6 +99,18 @@ def check_token(value: str) -> str:
     if len(value) < 16:
         raise ValueError("the cluster token is at least 16 characters; copy it exactly")
     return value
+
+
+def check_ssh_key(value: str) -> str:
+    kind, _, rest = value.strip().partition(" ")
+    if not (kind.startswith(("ssh-", "ecdsa-", "sk-")) and rest.strip()):
+        raise ValueError("an SSH public key looks like 'ssh-ed25519 AAAA... name'")
+    return value
+
+
+def render_sshd() -> str:
+    # Debian only allows key logins for root; admins sign in with the password from setup.
+    return "# Written by ibhics-setup.\nPermitRootLogin yes\nPasswordAuthentication yes\n"
 
 
 def check_password(value: str) -> str:
@@ -226,6 +241,13 @@ def apply(
     sh("chpasswd", stdin=f"root:{root_password}\n")
     sh("systemctl", "restart", "networking")
 
+    step("SSH access for root")
+    write("/etc/ssh/sshd_config.d/10-ibhics.conf", render_sshd())
+    if cfg.ssh_key:
+        (root / "root/.ssh").mkdir(parents=True, exist_ok=True, mode=0o700)
+        write("/root/.ssh/authorized_keys", cfg.ssh_key.strip() + "\n", 0o600)
+    sh("systemctl", "restart", "ssh", check=False)  # picked up at boot if it is not running
+
     if cfg.runs_vms:
         step("VM network bridge and storage pool")
         write("/etc/ibhics/default-network.xml", render_bridge_network())
@@ -345,10 +367,13 @@ def ask(
     default: str = "",
     check: Callable[[str], object] | None = None,
     reader: Callable[[str], str] = input,
+    optional: bool = False,
 ) -> str:
     while True:
         hint = f" [{default}]" if default else ""
         value = reader(f"{prompt}{hint}: ").strip() or default
+        if not value and optional:
+            return ""
         if not value:
             print("  A value is needed.")
             continue
@@ -417,6 +442,7 @@ def read_answers(text: str, nics: Sequence[str]) -> tuple[Config, str, str | Non
         dns=values.get("DNS", values["GATEWAY"]).split(),
         timezone=values.get("TIMEZONE", "Asia/Bangkok"),
         token=secrets.token_urlsafe(24) if role == "manager" else need("TOKEN"),
+        ssh_key=values.get("SSH_KEY", ""),
     )
     if not cfg.interface:
         raise ValueError("answers file: no network interface found; set INTERFACE")
@@ -467,11 +493,16 @@ def main() -> int:
     else:
         token = ask("Cluster token (shown on the first node's console)", "", check_token)
     root_password = ask_password("Password for the console and SSH user 'root'")
+    ssh_key = ask(
+        "SSH public key for root (optional, press Enter to skip)",
+        check=check_ssh_key,
+        optional=True,
+    )
     admin_password = (
         ask_password("Password for the web console user 'admin'") if role == "manager" else None
     )
 
-    cfg = Config(role, hostname, interface, address, gateway, dns.split(), timezone, token)
+    cfg = Config(role, hostname, interface, address, gateway, dns.split(), timezone, token, ssh_key)
     try:
         cfg.validate()
     except ValueError as exc:

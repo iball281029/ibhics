@@ -101,6 +101,10 @@ def test_apply_manager(tmp_path):
     openssl = next(c for c in cmds if c[0] == "openssl")
     assert "subjectAltName=DNS:node1,IP:10.0.0.11" in openssl
     assert ["systemctl", "enable", "--now", "ibhics-manager.service"] in cmds
+    # Root can sign in over SSH with the password from setup (Debian allows keys only).
+    sshd = (tmp_path / "etc/ssh/sshd_config.d/10-ibhics.conf").read_text()
+    assert "PermitRootLogin yes" in sshd
+    assert not (tmp_path / "root/.ssh/authorized_keys").exists()
 
     users = json.loads((tmp_path / "var/lib/ibhics/users.json").read_text())["users"]
     assert users[0]["name"] == "admin" and users[0]["must_change_password"] is False
@@ -204,3 +208,14 @@ def test_answers_file():
         setup.read_answers(text.replace("manager", "compute"), ["ens3"])
     with pytest.raises(ValueError, match="KEY=value"):
         setup.read_answers("ROLE manager", ["ens3"])
+
+
+def test_ssh_key_for_root(tmp_path):
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample admin@laptop"
+    setup.apply(cfg(ssh_key=key), "root-pw-123", "admin-pw-123", root=tmp_path, run=Recorder())
+    keys = tmp_path / "root/.ssh/authorized_keys"
+    assert keys.read_text() == key + "\n" and keys.stat().st_mode & 0o077 == 0
+    with pytest.raises(ValueError, match="SSH public key"):
+        cfg(ssh_key="not-a-key").validate()
+    # The wizard question can be skipped with Enter.
+    assert setup.ask("key", check=setup.check_ssh_key, reader=lambda _p: "", optional=True) == ""
