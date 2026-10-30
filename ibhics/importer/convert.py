@@ -47,6 +47,12 @@ NO_RANGES = (
     "ranges). Remove the source and add it again with Transfer: SSH, after turning on SSH "
     "on the ESXi host."
 )
+WINDOWS_HIBERNATED = (
+    "Windows on this VM was hibernated or shut down with Fast Startup, so its disk cannot be "
+    "changed safely and the virtio drivers could not be added. In the VM on the source, run "
+    "'powercfg /h off' as administrator, then shut it down fully (Start > Power > Shut down, "
+    "not Restart), and import it again."
+)
 SSH_OFF = (
     "Cannot reach SSH on {host}. Check that a firewall lets this node reach port 22 of "
     "the ESXi host, or turn on SSH there (Host > Actions > Services > Enable Secure Shell)."
@@ -348,6 +354,8 @@ class V2VConverter:
             message = v2v_error(output_text, result.returncode)
             if "does not support 'range'" in output_text:
                 message = NO_RANGES
+            elif re.search(r"[Hh]ibernat|Fast Restart|Fast Startup", output_text):
+                message = WINDOWS_HIBERNATED
             raise ConversionFailed(message + (f" (full log: {log})" if log else ""))
         return read_output(out_dir, name)
 

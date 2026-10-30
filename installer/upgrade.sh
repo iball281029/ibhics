@@ -102,9 +102,9 @@ mv "$VENV" "$VENV.prev"
 mv "$VENV.new" "$VENV"
 install -m 0644 "$SRC"/systemd/*.service /etc/systemd/system/
 if [ -d "$SRC/virtio-win" ]; then
-    rm -rf /usr/share/virtio-win.new
-    cp -r "$SRC/virtio-win" /usr/share/virtio-win.new
-    rm -rf /usr/share/virtio-win && mv /usr/share/virtio-win.new /usr/share/virtio-win
+    # Added over what is there: a virtio-win.iso someone put in by hand stays.
+    mkdir -p /usr/share/virtio-win
+    cp -r "$SRC/virtio-win/." /usr/share/virtio-win/
 fi
 if [ -f "$SRC/guest-tools.iso" ]; then
     install -D -m 0644 "$SRC/guest-tools.iso" /usr/share/ibhics/guest-tools.iso

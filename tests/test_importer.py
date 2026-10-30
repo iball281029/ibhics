@@ -359,6 +359,15 @@ def test_v2v_inputs_and_failure(tmp_path):
     )
     assert run.cmds[1][:4] == ["virt-v2v", "-i", "disk", "/mnt/hv/dc01.vhdx"]
 
+    hibernated = (
+        "unable to mount the disk image for writing. This has probably happened because "
+        "Windows Hibernation or Fast Restart is being used in this guest."
+    )
+    with pytest.raises(ConversionFailed, match="powercfg /h off"):
+        V2VConverter(FakeV2V(fail=hibernated), log_dir=tmp_path).convert(
+            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "h"
+        )
+
     with pytest.raises(ConversionFailed, match="inspection could not detect the source guest"):
         V2VConverter(
             FakeV2V(fail="inspection could not detect the source guest"), log_dir=tmp_path
