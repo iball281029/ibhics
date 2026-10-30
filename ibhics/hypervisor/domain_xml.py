@@ -27,6 +27,8 @@ def build_volume_xml(vm_name: str, index: int, disk: DiskSpec) -> str:
     ET.SubElement(vol, "name").text = volume_name(vm_name, index, disk)
     ET.SubElement(vol, "capacity", unit="GiB").text = str(disk.size_gb)
     if disk.backend == "file":
+        # Thin: libvirt would otherwise preallocate qcow2 metadata for the full size.
+        ET.SubElement(vol, "allocation").text = "0"
         target = ET.SubElement(vol, "target")
         ET.SubElement(target, "format", type="qcow2")
     return ET.tostring(vol, encoding="unicode")

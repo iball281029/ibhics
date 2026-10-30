@@ -256,6 +256,7 @@ class FakeDriver(HypervisorDriver):
             PoolType.NFS: f"{spec.host}:{spec.export}",
             PoolType.ISCSI: f"{spec.host}:{spec.port} {spec.iqn} lun {spec.lun}",
             PoolType.LVM: spec.device or "",
+            PoolType.DISK: spec.device or "",
         }[spec.type]
         return PoolInfo(
             name=name,

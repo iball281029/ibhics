@@ -207,6 +207,9 @@ class LibvirtDriver(HypervisorDriver):
             # /dev/disk/by-id link would make the pool fail to start after vgcreate.
             # (/dev/mapper names are what pvs reports for multipath, so they stay.)
             spec = replace(spec, device=os.path.realpath(spec.device))
+        if spec.type == PoolType.DISK:
+            # The pool mounts its disk on every start, so it must not follow /dev/sdX letters.
+            spec = replace(spec, device=stable_device(spec.device))
         session = None
         try:
             if spec.type == PoolType.ISCSI:
@@ -221,7 +224,11 @@ class LibvirtDriver(HypervisorDriver):
             built = False
             try:
                 # dir/netfs: create the directory. logical: pvcreate + vgcreate (erases the device).
-                pool.build(0)
+                # fs: mkfs.xfs over whatever is on the disk, which the caller confirmed.
+                flags = (
+                    libvirt.VIR_STORAGE_POOL_BUILD_OVERWRITE if spec.type == PoolType.DISK else 0
+                )
+                pool.build(flags)
                 built = True
                 self._start(pool)
             except Exception:
@@ -255,7 +262,7 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             raise PoolNotFound(pool) from None
         root = ET.fromstring(target.XMLDesc(0))
-        if root.get("type") in ("dir", "netfs"):
+        if root.get("type") in ("dir", "netfs", "fs"):
             # Raw images are sparse, so this takes only the data actually copied.
             base = Path(root.findtext("target/path")) / ".ibhics-scratch"
             base.mkdir(parents=True, exist_ok=True)
@@ -481,6 +488,22 @@ class LibvirtDriver(HypervisorDriver):
             except (InvalidState, PoolNotFound, libvirt.libvirtError):
                 pass
         return VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
+
+
+def stable_device(device: str, by_id: str = "/dev/disk/by-id") -> str:
+    """A /dev/disk/by-id name for device, preferring the WWN; device itself if none."""
+    if device.startswith("/dev/disk/"):
+        return device
+    real = os.path.realpath(device)
+    try:
+        names = sorted(os.listdir(by_id), key=lambda n: (not n.startswith("wwn-"), n))
+    except OSError:
+        return device
+    for name in names:
+        link = os.path.join(by_id, name)
+        if "-part" not in name and os.path.realpath(link) == real:
+            return link
+    return device
 
 
 def filesystem_usage(data: dict) -> tuple[float | None, float | None]:

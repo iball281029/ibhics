@@ -52,10 +52,10 @@ class Pool:
     def setAutostart(self, value):
         self.autostart = bool(value)
 
-    def build(self, _flags):
+    def build(self, flags):
         if self.conn.fail_build:
             raise LibvirtError("vgcreate failed")
-        self.built = True
+        self.built = flags or True
 
     def undefine(self):
         del self.conn.pools[self.name()]
@@ -114,7 +114,11 @@ class Conn:
 
 @pytest.fixture
 def driver(monkeypatch):
-    monkeypatch.setattr(lv, "libvirt", types.SimpleNamespace(libvirtError=LibvirtError))
+    monkeypatch.setattr(
+        lv,
+        "libvirt",
+        types.SimpleNamespace(libvirtError=LibvirtError, VIR_STORAGE_POOL_BUILD_OVERWRITE=4),
+    )
     d = object.__new__(lv.LibvirtDriver)
     d._conn = Conn()
     return d
@@ -177,6 +181,29 @@ def test_lvm_pool_uses_the_real_device_and_cleans_up_a_failed_start(driver, monk
         driver.create_pool(spec)
     assert "raid2" not in driver._conn.pools
     assert commands == [["vgremove", "-f", "ibhics_raid2"], ["pvremove", "-ff", "-y", "/dev/sda"]]
+
+
+def test_thin_disk_pool_formats_xfs_and_keeps_the_stable_name(driver):
+    link = "/dev/disk/by-id/wwn-0x600"
+    driver.create_pool(PoolSpec(name="raid", type=PoolType.DISK, device=link, confirm_wipe=True))
+    pool = driver._conn.pools["raid"]
+    root = ET.fromstring(pool.xml)
+    assert root.get("type") == "fs" and root.find("source/format").get("type") == "xfs"
+    assert root.find("source/device").get("path") == link  # mounted by id, not /dev/sdX
+    assert root.findtext("target/path") == "/var/lib/ibhics/pools/raid"
+    assert pool.built == 4 and pool.active and pool.autostart  # mkfs over the old contents
+    info = next(p for p in driver.list_pools() if p.name == "raid")
+    assert (info.type, info.source) == (PoolType.DISK, link)
+
+
+def test_stable_device_prefers_wwn(tmp_path):
+    disk = tmp_path / "sdb"
+    disk.touch()
+    for name in ("scsi-3600", "wwn-0x600", "wwn-0x600-part1"):
+        (tmp_path / name).symlink_to(disk)
+    assert lv.stable_device(str(disk), str(tmp_path)) == str(tmp_path / "wwn-0x600")
+    assert lv.stable_device("/dev/disk/by-id/x", str(tmp_path)) == "/dev/disk/by-id/x"
+    assert lv.stable_device("/dev/sdz", str(tmp_path / "missing")) == "/dev/sdz"
 
 
 def test_duplicate_pool_rejected(driver):

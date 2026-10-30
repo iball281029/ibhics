@@ -83,9 +83,13 @@ class PoolType(StrEnum):
     NFS = "nfs"
     ISCSI = "iscsi"  # log in to a target, then LVM on the chosen LUN
     LVM = "lvm"  # LVM volume group on a block device: local disk or FC/multipath LUN
+    # A whole local disk formatted XFS, holding thin qcow2 images: disks take only the
+    # space the guest writes, and imports skip empty areas instead of writing zeros.
+    DISK = "disk"
 
 
 BLOCK_POOL_TYPES = (PoolType.ISCSI, PoolType.LVM)
+WIPE_POOL_TYPES = (*BLOCK_POOL_TYPES, PoolType.DISK)
 DEV_RE = re.compile(r"^/dev/[A-Za-z0-9_./:-]+$")
 IQN_RE = re.compile(r"^(iqn\.\d{4}-\d{2}\.[^\s]+|eui\.[0-9A-Fa-f]{16})$")
 HOST_RE = re.compile(r"^[A-Za-z0-9_.:\[\]-]+$")
@@ -127,10 +131,10 @@ class PoolSpec:
                 raise ValueError("iscsi pool needs a target IQN (iqn.YYYY-MM.... or eui....)")
             if self.lun < 0 or not 0 < self.port < 65536:
                 raise ValueError("invalid iSCSI LUN or port")
-        elif self.type == PoolType.LVM:
+        elif self.type in (PoolType.LVM, PoolType.DISK):
             if not self.device or not DEV_RE.match(self.device):
-                raise ValueError("lvm pool needs a block device path under /dev/")
-        if self.type in BLOCK_POOL_TYPES and not self.confirm_wipe:
+                raise ValueError(f"{self.type} pool needs a block device path under /dev/")
+        if self.type in WIPE_POOL_TYPES and not self.confirm_wipe:
             raise ValueError("this pool erases its device; set confirm_wipe to true")
 
 

@@ -30,6 +30,7 @@ IQN = "iqn.2004-04.com.example:storage.lun1"
             name="san", type=PoolType.ISCSI, host="10.0.0.60", iqn=IQN, lun=1, confirm_wipe=True
         ),
         PoolSpec(name="fc", type=PoolType.LVM, device="/dev/mapper/mpatha", confirm_wipe=True),
+        PoolSpec(name="raid", type=PoolType.DISK, device="/dev/disk/by-id/x", confirm_wipe=True),
     ],
 )
 def test_valid_pool_specs(spec):
@@ -48,6 +49,8 @@ def test_valid_pool_specs(spec):
         PoolSpec(name="fc", type=PoolType.LVM, device="/dev/mapper/mpatha"),  # no confirm_wipe
         PoolSpec(name="fc", type=PoolType.LVM, device="/etc/passwd", confirm_wipe=True),
         PoolSpec(name="fc", type=PoolType.LVM, device="/dev/sdb; rm -rf /", confirm_wipe=True),
+        PoolSpec(name="raid", type=PoolType.DISK, device="/dev/sdb"),  # no confirm_wipe
+        PoolSpec(name="raid", type=PoolType.DISK, confirm_wipe=True),  # no device
     ],
 )
 def test_invalid_pool_specs(spec):

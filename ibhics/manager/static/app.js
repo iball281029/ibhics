@@ -63,7 +63,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 const state = { me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
-const POOL_TYPES = { dir: "Local", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
+const POOL_TYPES = { dir: "Local", disk: "Local disk (thin)", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
@@ -632,7 +632,7 @@ $("#pools").addEventListener("click", async (e) => {
 async function fillDisks(form) {
   const sel = $(".disk-list", form);
   const node = form.elements.node.value;
-  if (!node || form.elements.type.value !== "lvm") return;
+  if (!node || !["disk", "lvm"].includes(form.elements.type.value)) return;
   sel.innerHTML = `<option value="">Looking for disks on ${esc(node)}...</option>`;
   let disks = [];
   try { disks = await api(`/nodes/${enc(node)}/disks`); } catch (err) { /* offered by hand below */ }
@@ -659,8 +659,9 @@ handlers["pool-dialog"] = async (f) => {
   if (type === "nfs" || type === "iscsi") body.host = f.get("host");
   if (type === "nfs") body.export = f.get("export");
   if (type === "iscsi") { body.iqn = f.get("iqn"); body.lun = Number(f.get("lun")); }
-  if (type === "lvm") body.device = f.get("device") === "other" ? f.get("device_path") : f.get("device");
-  if (type === "lvm" && !body.device) throw new Error("Pick a disk.");
+  const onDisk = type === "disk" || type === "lvm";
+  if (onDisk) body.device = f.get("device") === "other" ? f.get("device_path") : f.get("device");
+  if (onDisk && !body.device) throw new Error("Pick a disk.");
   await post(`/nodes/${enc(f.get("node"))}/pools`, body);
   toast(`Pool ${body.name} added`);
   await refresh("storage");

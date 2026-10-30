@@ -202,9 +202,9 @@ class PoolCreate(BaseModel):
     export: str | None = Field(default=None, description="nfs export path")
     iqn: str | None = None
     lun: int = Field(default=0, ge=0)
-    device: str | None = Field(default=None, description="lvm: e.g. /dev/mapper/mpatha")
+    device: str | None = Field(default=None, description="disk or lvm: e.g. /dev/disk/by-id/...")
     confirm_wipe: bool = Field(
-        default=False, description="required for iscsi and lvm: the device is erased"
+        default=False, description="required for iscsi, lvm and disk: the device is erased"
     )
 
     def to_spec(self) -> PoolSpec:
