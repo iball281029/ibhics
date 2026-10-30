@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -61,6 +62,43 @@ def v2v_error(output: str, returncode: int) -> str:
             return " ".join(message)
     useful = [ln for ln in lines if ln.strip() and "virt-v2v -v -x" not in ln]
     return useful[-1] if useful else f"virt-v2v exited {returncode}"
+
+
+# virt-v2v's stage lines ("[  12.3] Copying disk 1/2") and how far along each one is.
+STAGE_LINE = re.compile(r"^\[\s*[\d.]+\]\s+(?P<stage>.+)$")
+STAGES = [
+    ("Setting up the source", 2),
+    ("Opening the source", 5),
+    ("Inspecting the source", 10),
+    ("Checking for sufficient free disk space", 15),
+    ("Converting", 20),
+    ("Mapping filesystem data", 25),
+    ("Closing the overlay", 28),
+    ("Assigning disks", 29),
+    ("Checking if the guest needs BIOS or UEFI", 30),
+    ("Setting up the destination", 30),
+    ("Copying disk", 30),  # 30-95, split by disk
+    ("Creating output metadata", 96),
+    ("Finishing off", 98),
+]
+COPY_DISK = re.compile(r"Copying disk (\d+)/(\d+)")
+Progress = Callable[[str, int | None], None]
+
+
+def stage_progress(line: str) -> tuple[str, int] | None:
+    """(step, percent) from one line of virt-v2v output, or None for other lines."""
+    m = STAGE_LINE.match(line.strip())
+    if not m:
+        return None
+    stage = m["stage"].strip()
+    copy = COPY_DISK.search(stage)
+    if copy:
+        index, total = int(copy[1]), max(int(copy[2]), 1)
+        return stage, 30 + int(65 * (index - 1) / total)
+    for prefix, pct in STAGES:
+        if stage.startswith(prefix):
+            return stage, pct
+    return None
 
 
 def vmx_ssh_url(source: Source, vm: SourceVM) -> str:
@@ -166,12 +204,21 @@ class V2VConverter:
         self.log_dir = log_dir
         self.ssh = ssh or EsxiSSH(run)
 
-    def convert(self, source: Source, vm: SourceVM, name: str, out_dir: Path) -> Converted:
+    def convert(
+        self,
+        source: Source,
+        vm: SourceVM,
+        name: str,
+        out_dir: Path,
+        progress: Progress | None = None,
+    ) -> Converted:
+        progress = progress or (lambda step, pct: None)
         out_dir.mkdir(parents=True, exist_ok=True)
         output = ["-o", "local", "-os", str(out_dir), "-of", "raw", "-on", name]
         password_file = None
         try:
             if source.type == SourceType.VMWARE and source.transport == "ssh":
+                progress("Setting up SSH access to the ESXi host", 1)
                 self.ssh.ensure_access(source)
                 url = self.ssh.find_vmx(source, vmx_ssh_url(source, vm))
                 cmd = ["virt-v2v", "-i", "vmx", "-it", "ssh", url]
@@ -184,16 +231,15 @@ class V2VConverter:
                 cmd = ["virt-v2v", "-i", "ova", vm.ref]
             else:
                 cmd = ["virt-v2v", "-i", "disk", vm.ref]
-            result = self.run(
-                cmd + output,
-                capture_output=True,
-                text=True,
-                env={**os.environ, "LIBGUESTFS_BACKEND": "direct"},
-            )
+            env = {**os.environ, "LIBGUESTFS_BACKEND": "direct"}
+            if self.run is subprocess.run:
+                result, log = self._run_streaming(cmd + output, env, name, progress)
+            else:
+                result = self.run(cmd + output, capture_output=True, text=True, env=env)
+                log = self._keep_log(name, result)
         finally:
             if password_file:
                 os.unlink(password_file)
-        log = self._keep_log(name, result)
         if result.returncode != 0:
             output_text = result.stderr or result.stdout or ""
             message = v2v_error(output_text, result.returncode)
@@ -201,6 +247,33 @@ class V2VConverter:
                 message = NO_RANGES
             raise ConversionFailed(message + (f" (full log: {log})" if log else ""))
         return read_output(out_dir, name)
+
+    def _run_streaming(self, cmd, env, name: str, progress: Progress):
+        """Run virt-v2v writing its output to the log as it comes, so the web console can
+        show the current stage and the log while the copy runs."""
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            log = self.log_dir / f"{name}.log"
+            sink = open(log, "w")  # noqa: SIM115 - closed below
+        except OSError:
+            log, sink = None, None
+        lines = []
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
+        )
+        for line in proc.stdout:
+            lines.append(line)
+            if sink:
+                sink.write(line)
+                sink.flush()
+            found = stage_progress(line)
+            if found:
+                progress(*found)
+        proc.wait()
+        if sink:
+            sink.close()
+        out = "".join(lines)
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, out), log
 
     def _keep_log(self, name: str, result) -> Path | None:
         try:
@@ -231,7 +304,11 @@ def read_output(out_dir: Path, name: str) -> Converted:
 class FakeConverter:
     """For the fake driver: small images with a recognisable first sector."""
 
-    def convert(self, source: Source, vm: SourceVM, name: str, out_dir: Path) -> Converted:
+    def convert(
+        self, source: Source, vm: SourceVM, name: str, out_dir: Path, progress=None
+    ) -> Converted:
+        if progress:
+            progress("Copying disk 1/1", 30)
         out_dir.mkdir(parents=True, exist_ok=True)
         images = []
         for index in range(max(len(vm.disks_gb), 1)):

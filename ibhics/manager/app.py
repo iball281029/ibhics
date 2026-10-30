@@ -512,6 +512,10 @@ def create_app(
         )
         return ImportJobOut(**job.__dict__)
 
+    @api.get("/migrate/jobs/{job_id}/log")
+    def import_log(job_id: str) -> dict:
+        return {"log": imports.job_log(job_id)}
+
     @api.get("/migrate/jobs", response_model=list[ImportJobOut])
     def list_imports() -> list[ImportJobOut]:
         return [ImportJobOut(**job.__dict__) for job in imports.jobs()]

@@ -508,6 +508,8 @@ class ImportJobOut(BaseModel):
     finished: str | None
     result: str | None
     error: str | None
+    step: str = ""
+    percent: int | None = None
 
 
 class AgentImport(BaseModel):

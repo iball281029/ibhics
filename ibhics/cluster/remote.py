@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import httpx
 
 from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
@@ -225,6 +227,10 @@ class RemoteImport:
     def __init__(self, client: AgentClient) -> None:
         self._client = client
 
+    def log(self, name: str) -> str:
+        resp = self._client.request("GET", f"/imports/{name}/log")
+        return resp.json().get("log", "") if resp.status_code < 400 else ""
+
     def run(
         self,
         source,
@@ -235,6 +241,7 @@ class RemoteImport:
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
+        progress=None,
     ) -> VMInfo:
         body = {
             "source": source.to_dict(),
@@ -246,7 +253,23 @@ class RemoteImport:
             "memory_mb": memory_mb,
             "start": start,
         }
-        resp = self._client.request("POST", "/imports/run", json=body, timeout=None)
+        done = threading.Event()
+        if progress:
+            # The conversion is one long request; ask the node how far along it is meanwhile.
+            def poll() -> None:
+                while not done.wait(3):
+                    try:
+                        got = self._client.request("GET", "/imports/progress").json().get(name)
+                    except Exception:  # noqa: BLE001 - progress is best effort
+                        continue
+                    if got:
+                        progress(*got)
+
+            threading.Thread(target=poll, daemon=True).start()
+        try:
+            resp = self._client.request("POST", "/imports/run", json=body, timeout=None)
+        finally:
+            done.set()
         if resp.status_code < 400:
             return info_from_json(resp.json())
         detail = str(resp.json().get("detail", "")) if resp.content else ""

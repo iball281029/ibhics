@@ -32,6 +32,8 @@ class ImportJob:
     finished: str | None = None
     result: str | None = None  # the new VM's uuid
     error: str | None = None
+    step: str = ""  # what the conversion is doing now
+    percent: int | None = None
 
 
 class NotEnoughSpace(ValueError):
@@ -198,15 +200,27 @@ class ImportManager:
 
         def run() -> None:
             job.state = "running"
+
+            def progress(step: str, percent: int | None) -> None:
+                job.step, job.percent = step, percent
+
             try:
-                info = member.imports.run(source, vm, name, pool, network, vcpus, memory_mb, start)
-                job.result, job.state = info.uuid, "done"
+                info = member.imports.run(
+                    source, vm, name, pool, network, vcpus, memory_mb, start, progress=progress
+                )
+                job.result, job.state, job.step, job.percent = info.uuid, "done", "", 100
             except Exception as exc:  # recorded on the job; nobody else is waiting
                 job.error, job.state = f"{type(exc).__name__}: {exc}", "failed"
             job.finished = self._now()
 
         self._executor.submit(run)
         return job
+
+    def job_log(self, job_id: str) -> str:
+        job = next((j for j in self._jobs if j.id == job_id), None)
+        if job is None:
+            raise SourceNotFound(f"no import job {job_id}")
+        return self._cluster.member(job.node).imports.log(job.name)
 
     # Persistence: VMware passwords are kept, so the file is readable by root only.
 

@@ -21,6 +21,7 @@ class NodeImport:
             FakeConverter() if isinstance(driver, FakeDriver) else V2VConverter()
         )
         self._scratch = scratch_dir  # None: on the target pool (driver.scratch_space)
+        self.progress: dict[str, tuple[str, int | None]] = {}  # name -> (step, percent)
 
     def run(
         self,
@@ -32,6 +33,7 @@ class NodeImport:
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
+        progress=None,
     ) -> VMInfo:
         """Convert first, then create the VM, so nothing half-made exists during the copy.
         The converted images wait on the target pool, not on the system disk."""
@@ -40,20 +42,41 @@ class NodeImport:
             scratch = nullcontext(Path(self._scratch))
         else:
             scratch = self._driver.scratch_space(pool, sum(vm.disks_gb))
-        with scratch as base:
-            created = self._convert_and_create(
-                source, vm, name, pool, network, vcpus, memory_mb, base
-            )
+        report = progress or (lambda step, pct: None)
+        self.progress[name] = ("Preparing", 0)
+
+        def track(step: str, pct: int | None) -> None:
+            self.progress[name] = (step, pct)
+            report(step, pct)
+
+        try:
+            with scratch as base:
+                created = self._convert_and_create(
+                    source, vm, name, pool, network, vcpus, memory_mb, base, track
+                )
+        finally:
+            self.progress.pop(name, None)
         if start:
             self._driver.start_vm(created.uuid)
         return self._driver.get_vm(created.uuid)
 
+    def log(self, name: str, max_bytes: int = 65536) -> str:
+        """The end of virt-v2v's output for an import, while it runs and after."""
+        log_dir = getattr(self._converter, "log_dir", None)
+        path = Path(log_dir) / f"{name}.log" if log_dir else None
+        if not path or not path.is_file():
+            return ""
+        with open(path, "rb") as f:
+            f.seek(max(0, path.stat().st_size - max_bytes))
+            return f.read().decode(errors="replace")
+
     def _convert_and_create(
-        self, source, vm, name, pool, network, vcpus, memory_mb, base: Path
+        self, source, vm, name, pool, network, vcpus, memory_mb, base: Path, track
     ) -> VMInfo:
         work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=base))
         try:
-            converted = self._converter.convert(source, vm, name, work)
+            converted = self._converter.convert(source, vm, name, work, track)
+            track("Creating the VM", 96)
             spec = VMSpec(
                 name=name,
                 vcpus=vcpus or vm.vcpus,

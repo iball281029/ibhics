@@ -151,6 +151,14 @@ def create_agent_app(
 
         imports = imports or NodeImport(driver)
 
+        @api.get("/imports/progress")
+        def import_progress() -> dict:
+            return {name: list(p) for name, p in imports.progress.items()}
+
+        @api.get("/imports/{name}/log")
+        def import_log(name: str) -> dict:
+            return {"log": imports.log(name)}
+
         @api.post("/imports/run", response_model=VMOut)
         def run_import(body: AgentImport) -> VMOut:
             try:

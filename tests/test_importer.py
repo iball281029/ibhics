@@ -377,7 +377,7 @@ def test_node_import_converts_on_the_target_pool(tmp_path):
 
 def test_node_import_removes_vm_when_copy_fails(tmp_path):
     class Broken(FakeConverter):
-        def convert(self, source, vm, name, out_dir):
+        def convert(self, source, vm, name, out_dir, progress=None):
             done = super().convert(source, vm, name, out_dir)
             done.images[1].write_bytes(b"x" * (10 * 1024 * 1024))  # bigger than the fake disk
             return Converted(done.images, done.firmware)
@@ -615,3 +615,28 @@ def test_esxi_api_starts_ssh():
         "StartService",
     ]
     assert calls[-1][1] == "vmware_soap_session=abc"  # the session cookie is kept
+
+
+def test_virt_v2v_stages_become_progress():
+    from ibhics.importer.convert import stage_progress
+
+    assert stage_progress("[   0.0] Setting up the source: -i vmx ssh://root@esx") == (
+        "Setting up the source: -i vmx ssh://root@esx",
+        2,
+    )
+    assert stage_progress("[  48.2] Copying disk 2/2") == ("Copying disk 2/2", 62)
+    assert stage_progress("[ 900.1] Finishing off") == ("Finishing off", 98)
+    assert stage_progress("nbdkit: debug: something") is None
+
+
+def test_import_job_reports_progress_and_log(env):
+    client, imports, exports, node2, tmp_path = env
+    client.post(
+        "/api/v1/migrate/sources", json={"name": "nas", "type": "ova", "path": str(exports)}
+    )
+    [vm] = client.get("/api/v1/migrate/sources/nas/vms").json()
+    job = client.post(
+        "/api/v1/migrate/jobs", json={"source": "nas", "vm": vm["ref"], "node": "node1"}
+    ).json()
+    assert (job["state"], job["percent"]) == ("done", 100)
+    assert client.get(f"/api/v1/migrate/jobs/{job['id']}/log").json() == {"log": ""}
