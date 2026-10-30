@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from xml.sax.saxutils import quoteattr
+from xml.sax.saxutils import escape, quoteattr
 
 from .base import (
     DiskSpec,
@@ -161,9 +161,10 @@ class LibvirtDriver(HypervisorDriver):
         if dom.isActive():
             raise InvalidState("stop the VM before deleting it")
         root = ET.fromstring(dom.XMLDesc(0))
-        for source in root.findall("./devices/disk[@device='disk']/source[@volume]"):
-            pool = self._conn.storagePoolLookupByName(source.get("pool"))
-            pool.storageVolLookupByName(source.get("volume")).delete(0)
+        for disk in root.findall("./devices/disk[@device='disk']"):
+            pool, volume = disk_source(root, disk)
+            if volume:
+                self._conn.storagePoolLookupByName(pool).storageVolLookupByName(volume).delete(0)
         dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
 
     def list_pools(self) -> list[PoolInfo]:
@@ -298,7 +299,8 @@ class LibvirtDriver(HypervisorDriver):
         pool = self._pool(name)
         for dom in self._conn.listAllDomains():
             root = ET.fromstring(dom.XMLDesc(0))
-            if root.find(f"./devices/disk/source[@pool='{name}']") is not None:
+            disks = root.findall("./devices/disk[@device='disk']")
+            if any(disk_source(root, d)[0] == name for d in disks):
                 raise InvalidState(f"VM {dom.name()!r} still has disks in pool {name!r}")
         _undefine(pool)
         try:
@@ -331,17 +333,46 @@ class LibvirtDriver(HypervisorDriver):
             raise InvalidState("only a running VM can have its disks copied; start it first")
         else:
             flags |= libvirt.VIR_MIGRATE_OFFLINE
-        disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
+        root = ET.fromstring(dom.XMLDesc(0))
+        disks = root.findall("./devices/disk[@device='disk']")
         volumes = [self._volume(d) for d in disks] if copy_storage else []
         params = {}
         if bandwidth_mib:
             params[libvirt.VIR_MIGRATE_PARAM_BANDWIDTH] = bandwidth_mib
+        precreated = []
         try:
+            if copy_storage:
+                precreated = self._precreate_block_disks(dest_uri, root, disks, volumes)
             dom.migrateToURI3(dest_uri, params, flags)
         except libvirt.libvirtError as exc:
+            for vol in precreated:
+                try:
+                    vol.delete(0)
+                except libvirt.libvirtError:
+                    pass
             raise MigrationFailed(str(exc)) from None
         for vol in volumes:  # the copies now live on the destination
             vol.delete(0)
+
+    def _precreate_block_disks(self, dest_uri, root, disks, volumes) -> list:
+        """libvirt creates the destination copy of a volume disk itself, but not of a
+        block disk, so make those LVs on the destination first."""
+        block = [(d, v) for d, v in zip(disks, volumes, strict=True) if d.get("type") == "block"]
+        if not block:
+            return []
+        dest = libvirt.open(dest_uri)
+        created = []
+        try:
+            for disk, vol in block:
+                pool, name = disk_source(root, disk)
+                capacity = vol.info()[1]
+                xml = f"<volume><name>{escape(name)}</name><capacity>{capacity}</capacity></volume>"
+                created.append(dest.storagePoolLookupByName(pool).createXML(xml, 0))
+        except libvirt.libvirtError:
+            for vol in created:
+                vol.delete(0)
+            raise
+        return created
 
     def guest_info(self, uuid: str) -> GuestInfo:
         dom = self._lookup(uuid)
@@ -444,9 +475,14 @@ class LibvirtDriver(HypervisorDriver):
 
     def _volume(self, disk):
         source = disk.find("source")
-        if source is None or source.get("volume") is None:
-            raise InvalidState("only disks in ibHiCS storage pools can be backed up")
-        return self._pool(source.get("pool")).storageVolLookupByName(source.get("volume"))
+        if source is not None and source.get("volume"):
+            return self._pool(source.get("pool")).storageVolLookupByName(source.get("volume"))
+        if source is not None and source.get("dev"):
+            try:
+                return self._conn.storageVolLookupByPath(source.get("dev"))
+            except libvirt.libvirtError:
+                pass
+        raise InvalidState("only disks in ibHiCS storage pools can be backed up")
 
     def _disk_path(self, disk) -> str:
         return self._volume(disk).path()
@@ -544,6 +580,20 @@ def _lun_path(session, lun: int) -> str:
     raise ValueError(f"LUN {lun} not found on the iSCSI target")
 
 
+def disk_source(root, disk) -> tuple[str, str]:
+    """(pool, volume) of a domain disk: from <source pool volume>, or for a block disk
+    from the ibHiCS metadata kept beside it. Empty strings for disks outside any pool."""
+    source = disk.find("source")
+    if source is not None and source.get("volume"):
+        return source.get("pool", ""), source.get("volume")
+    target = disk.find("target")
+    dev = target.get("dev") if target is not None else None
+    for meta in root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk"):
+        if meta.get("dev") == dev:
+            return meta.get("pool", ""), meta.get("volume", "")
+    return "", ""
+
+
 def _spec_from_xml(xml: str) -> VMSpec:
     root = ET.fromstring(xml)
     memory = root.find("memory")
@@ -552,14 +602,13 @@ def _spec_from_xml(xml: str) -> VMSpec:
     memory_mb = amount if memory.get("unit") == "MiB" else amount // 1024
     disks = []
     for disk in root.findall("./devices/disk[@device='disk']"):
-        source = disk.find("source")
         driver = disk.find("driver")
         backend = "block" if driver is not None and driver.get("type") == "raw" else "file"
         disks.append(
             DiskSpec(
                 size_gb=0,  # capacity lives on the volume, not in the domain XML
                 backend=backend,
-                pool=source.get("pool", "") if source is not None else "",
+                pool=disk_source(root, disk)[0],
             )
         )
     nics = [

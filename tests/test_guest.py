@@ -18,7 +18,7 @@ def test_os_type_round_trips_through_domain_xml():
     assert "https://ibhics.org/xmlns/vm/1" in xml
     assert lv._spec_from_xml(xml).os_type == "Windows Server 2022"
     spec.os_type = ""
-    assert "metadata" not in build_domain_xml(spec)
+    assert lv._spec_from_xml(build_domain_xml(spec)).os_type == ""
 
 
 def test_fake_guest_agent_only_answers_when_running():

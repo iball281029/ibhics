@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -27,12 +27,16 @@ from .sources import Source, SourceType, SourceVM
 class Converted:
     images: list[Path]  # raw, in disk order; the first one boots
     firmware: Firmware
+    # The source's MAC addresses, in NIC order. Keeping them keeps DHCP reservations and
+    # guest network configs that match on MAC (netplan, NetworkManager) working.
+    macs: list[str] = field(default_factory=list)
 
 
 class ConversionFailed(RuntimeError):
     pass
 
 
+MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 LOG_DIR = Path("/var/log/ibhics/imports")
 # virt-v2v and nbdkit use root's default key. RSA: ESXi's sshd runs in FIPS mode and
 # refuses ed25519 keys.
@@ -358,15 +362,21 @@ def read_output(out_dir: Path, name: str) -> Converted:
     images = sorted(p for p in out_dir.glob(f"{name}-sd*") if p.suffix == "")
     if not images:
         raise ConversionFailed("virt-v2v produced no disks")
-    firmware = Firmware.BIOS
+    firmware, macs = Firmware.BIOS, []
     xml = out_dir / f"{name}.xml"
     if xml.exists():
-        os_el = ET.parse(xml).getroot().find("os")
+        root = ET.parse(xml).getroot()
+        os_el = root.find("os")
         if os_el is not None and (
             os_el.get("firmware") == "efi" or os_el.find("loader") is not None
         ):
             firmware = Firmware.UEFI
-    return Converted(images=images, firmware=firmware)
+        macs = [
+            mac.get("address", "").lower()
+            for mac in root.findall("devices/interface/mac")
+            if MAC_RE.match(mac.get("address", ""))
+        ]
+    return Converted(images=images, firmware=firmware, macs=macs)
 
 
 class FakeConverter:

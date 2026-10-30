@@ -214,7 +214,8 @@ class FakeV2V:
         (out / f"{name}-sda").write_bytes(b"boot")
         (out / f"{name}-sdb").write_bytes(b"data")
         loader = "<loader type='pflash'/>" if self.efi else ""
-        (out / f"{name}.xml").write_text(f"<domain><os>{loader}</os></domain>")
+        nic = "<devices><interface><mac address='00:50:56:AB:CD:EF'/></interface></devices>"
+        (out / f"{name}.xml").write_text(f"<domain><os>{loader}</os>{nic}</domain>")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
 
@@ -239,6 +240,24 @@ def test_v2v_from_vmware(tmp_path):
     assert not list(tmp_path.glob("v2v-*"))  # the password file is gone
     assert [p.name for p in out.images] == ["db-sda", "db-sdb"]
     assert out.firmware == Firmware.UEFI
+    assert out.macs == ["00:50:56:ab:cd:ef"]
+
+
+def test_node_import_keeps_mac_unless_source_still_runs():
+    class WithMac(FakeConverter):
+        def convert(self, source, vm, name, out_dir, progress=None):
+            done = super().convert(source, vm, name, out_dir)
+            return Converted(done.images, done.firmware, macs=["00:50:56:ab:cd:ef"])
+
+    driver = FakeDriver()
+    vm = SourceVM(ref="/x.ova", name="x", disks_gb=[1], nics=2)
+    info = NodeImport(driver, WithMac()).run(VMWARE, vm, "x")
+    assert info.spec.nics[0].mac == "00:50:56:ab:cd:ef"
+    assert len(info.spec.nics) == 2 and info.spec.nics[1].mac != info.spec.nics[0].mac
+
+    vm = SourceVM(ref="/y.ova", name="y", disks_gb=[1], nics=1, state="running")
+    info = NodeImport(driver, WithMac()).run(VMWARE, vm, "y")
+    assert info.spec.nics[0].mac != "00:50:56:ab:cd:ef"
 
 
 class FakeSSH:

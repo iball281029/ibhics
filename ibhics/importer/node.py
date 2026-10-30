@@ -86,7 +86,15 @@ class NodeImport:
                     DiskSpec(size_gb=max(1, -(-image.stat().st_size // GIB)), pool=pool)
                     for image in converted.images
                 ],
-                nics=[NicSpec(network=network) for _ in range(max(vm.nics, 1))],
+                nics=[
+                    NicSpec(network=network, mac=mac)
+                    for mac in _pad(
+                        # Two live NICs with one MAC break the LAN, so a VM still running
+                        # at the source gets new addresses.
+                        [] if vm.state == "running" else converted.macs,
+                        max(vm.nics, len(converted.macs), 1),
+                    )
+                ],
                 description=f"Imported from {source.name} ({vm.ref})",
                 os_type=vm.guest_os[:64],
             )
@@ -100,3 +108,8 @@ class NodeImport:
         finally:
             shutil.rmtree(work, ignore_errors=True)
         return created
+
+
+def _pad(macs: list[str], count: int) -> list[str | None]:
+    """One entry per NIC: the source's MAC where known, otherwise a new one."""
+    return [*macs, *[None] * (count - len(macs))][:count]

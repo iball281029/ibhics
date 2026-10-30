@@ -8,6 +8,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 from .base import DiskSpec, Firmware, VMSpec
+from .pool_xml import vg_name
 
 DISK_DEVS = "abcdefghijklmnopqrstuvwxyz"
 META_NS = "https://ibhics.org/xmlns/vm/1"  # ibHiCS's own facts about a VM, kept in its XML
@@ -55,8 +56,8 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         ET.SubElement(dom, "uuid").text = uuid
     if spec.description:
         ET.SubElement(dom, "description").text = spec.description
+    meta = ET.SubElement(ET.SubElement(dom, "metadata"), f"{{{META_NS}}}vm")
     if spec.os_type:
-        meta = ET.SubElement(ET.SubElement(dom, "metadata"), f"{{{META_NS}}}vm")
         ET.SubElement(meta, f"{{{META_NS}}}os").text = spec.os_type
     ET.SubElement(dom, "memory", unit="MiB").text = str(spec.memory_mb)
     ET.SubElement(dom, "vcpu", placement="static").text = str(spec.vcpus)
@@ -80,7 +81,14 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
 
     devices = ET.SubElement(dom, "devices")
     for index, disk in enumerate(spec.disks):
-        disk_el = ET.SubElement(devices, "disk", type="volume", device="disk")
+        volume = volume_name(spec.name, index, disk)
+        dev = f"vd{DISK_DEVS[index]}"
+        # Block disks name the LV itself: Debian's virt-aa-helper does not resolve
+        # <source pool volume> for logical pools, so AppArmor would deny QEMU the device.
+        # The metadata keeps which pool and volume the disk is.
+        block = disk.backend == "block"
+        disk_el = ET.SubElement(devices, "disk", type="block" if block else "volume", device="disk")
+        ET.SubElement(meta, f"{{{META_NS}}}disk", dev=dev, pool=disk.pool, volume=volume)
         ET.SubElement(
             disk_el,
             "driver",
@@ -89,8 +97,11 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
             cache="none",
             discard="unmap",
         )
-        ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume_name(spec.name, index, disk))
-        ET.SubElement(disk_el, "target", dev=f"vd{DISK_DEVS[index]}", bus=disk.bus)
+        if block:
+            ET.SubElement(disk_el, "source", dev=f"/dev/{vg_name(disk.pool)}/{volume}")
+        else:
+            ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume)
+        ET.SubElement(disk_el, "target", dev=dev, bus=disk.bus)
 
     # A CD drive is always there (empty without an ISO), so a disc such as the guest
     # tools can go in later, even while the VM runs.

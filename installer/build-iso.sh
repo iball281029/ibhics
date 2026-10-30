@@ -63,6 +63,10 @@ echo ">> Building ibHiCS $VERSION and collecting its dependencies for Python $TA
 PAYLOAD=$WORK/ibhics
 mkdir -p "$PAYLOAD/wheelhouse" "$PAYLOAD/systemd"
 python3 -m pip wheel --quiet --no-deps --wheel-dir "$PAYLOAD/wheelhouse" "$REPO"
+# The web console needs noVNC's pako, which a stray ignore rule once left out.
+python3 -m zipfile -l "$PAYLOAD"/wheelhouse/ibhics-*.whl \
+    | grep -q 'static/novnc/vendor/pako/lib/zlib/inflate.js' \
+    || { echo "!! the wheel is missing the web console's files" >&2; exit 1; }
 python3 -m pip download --quiet --dest "$PAYLOAD/wheelhouse" \
     --only-binary=:all: --implementation cp --python-version "$TARGET_PYTHON" \
     --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 \
