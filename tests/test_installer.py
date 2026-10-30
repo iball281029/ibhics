@@ -165,6 +165,8 @@ def test_installer_files_agree():
     assert "d-i netcfg/enable boolean false" in preseed
     assert "d-i apt-setup/use_mirror boolean false" in preseed
     assert "sh /opt/ibhics-installer/install-ibhics.sh" in preseed
+    # "!" makes the installer stop and ask for a root password, so a real hash is given.
+    assert "root-password-crypted password $6$" in preseed and "passwd -l root" in preseed
     packages = (INSTALLER / "packages.txt").read_text().split()
     for pkg in ("libvirt-daemon-system", "python3-libvirt", "open-iscsi", "openssh-server"):
         assert pkg in packages
