@@ -13,7 +13,7 @@ ISO=$(realpath "$1")
 WORK=${WORK:-$PWD/install-test}
 INSTALL_MINUTES=${INSTALL_MINUTES:-60}
 ADMIN_PASSWORD=Admin-pw-123
-API=https://127.0.0.1:8006/api/v1
+API=https://127.0.0.1:8888/api/v1
 
 rm -rf "$WORK" && mkdir -p "$WORK/shots"
 cd "$WORK"
@@ -52,9 +52,8 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
     wait $pid
 }
 
-echo ">> 1/4 Unattended install from the default menu entry"
-run_vm install "$INSTALL_MINUTES" -cdrom "$ISO" -boot d -no-reboot \
-    -nic user,model=virtio-net-pci
+echo ">> 1/4 Unattended install from the default menu entry, with no network at all"
+run_vm install "$INSTALL_MINUTES" -cdrom "$ISO" -boot d -no-reboot -nic none
 echo ">> Install finished (the installer rebooted, so QEMU exited)"
 
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
@@ -84,14 +83,14 @@ sudo qemu-nbd -d /dev/nbd0
 trap - EXIT
 
 echo ">> 3/4 First boot"
-run_vm firstboot 30 -boot c -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8006-:8006 &
+run_vm firstboot 30 -boot c -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8888-:8888 &
 VM=$!
 trap 'monitor quit 2>/dev/null || true' EXIT
 for _ in $(seq 60); do
     if curl -skf "$API/health" -o health.json; then break; fi
     sleep 10
 done
-cat health.json 2>/dev/null || { echo "!! the web console did not answer on :8006"; exit 1; }
+cat health.json 2>/dev/null || { echo "!! the web console did not answer on :8888"; exit 1; }
 echo
 
 echo ">> 4/4 Checks"

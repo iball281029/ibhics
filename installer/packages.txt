@@ -1,0 +1,38 @@
+# Debian 13 packages an ibHiCS node needs. The ISO build downloads these and everything
+# they depend on into a local repository on the ISO, so installing needs no network.
+# Virtualization
+qemu-system-x86
+qemu-utils
+libvirt-daemon-system
+libvirt-clients
+ovmf
+virt-v2v
+# ibHiCS runs on the system Python
+python3
+python3-venv
+python3-libvirt
+# Storage clients
+nfs-common
+cifs-utils
+open-iscsi
+lvm2
+multipath-tools
+xfsprogs
+# Network and system
+bridge-utils
+ifupdown
+dhcpcd-base
+chrony
+openssl
+curl
+ca-certificates
+openssh-server
+sudo
+# Tools for the console
+less
+nano
+bash-completion
+pciutils
+usbutils
+ethtool
+lsof

@@ -3,10 +3,12 @@
 #
 #   installer/build-iso.sh                      # downloads the current Debian 13 netinst
 #   installer/build-iso.sh --source debian.iso  # or use an ISO you already have
+#   installer/build-iso.sh --repo DIR           # reuse a package repo from build-repo.sh
 #
-# Needs: xorriso, python3 with pip, curl. The result keeps Debian's BIOS and UEFI boot
-# setup and adds the ibHiCS boot menu, the unattended-install answers and, so the
-# install needs no PyPI access, ibHiCS with all its Python dependencies as wheels.
+# Needs: xorriso, python3 with pip, curl, and docker (for the package repository). The
+# result keeps Debian's BIOS and UEFI boot setup and adds the ibHiCS boot menu, the
+# unattended-install answers, every Debian package a node needs (a local apt repository)
+# and ibHiCS with its Python dependencies as wheels, so installing needs no network.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -15,12 +17,14 @@ MIRROR=${DEBIAN_CD_MIRROR:-https://cdimage.debian.org/debian-cd/current/amd64/is
 TARGET_PYTHON=3.13  # Debian 13's python3: the wheels must match it
 SOURCE=""
 OUT=""
+DEBREPO=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --source) SOURCE=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        --repo) DEBREPO=$(realpath "$2"); shift 2 ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -60,7 +64,18 @@ python3 -m pip download --quiet --dest "$PAYLOAD/wheelhouse" \
     --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 \
     --platform manylinux2014_x86_64 \
     "$PAYLOAD"/wheelhouse/ibhics-*.whl
-cp "$HERE/preseed.cfg" "$HERE/install-ibhics.sh" "$PAYLOAD/"
+cp "$HERE/preseed.cfg" "$HERE/install-ibhics.sh" "$HERE/packages.txt" "$PAYLOAD/"
+
+if [ -z "$DEBREPO" ]; then
+    echo ">> Downloading the Debian packages a node needs (in a debian:trixie container)"
+    command -v docker >/dev/null || { echo "missing tool: docker (or pass --repo)" >&2; exit 1; }
+    DEBREPO=$WORK/repo
+    mkdir -p "$DEBREPO"
+    docker run --rm -v "$REPO:/src:ro" -v "$DEBREPO:/out" debian:trixie \
+        bash /src/installer/build-repo.sh /src /out
+fi
+[ -s "$DEBREPO/Packages.gz" ] || { echo "no Packages.gz in $DEBREPO" >&2; exit 1; }
+cp -r "$DEBREPO" "$PAYLOAD/repo"
 cp "$HERE"/systemd/*.service "$PAYLOAD/systemd/"
 echo "$VERSION" > "$PAYLOAD/VERSION"
 

@@ -75,7 +75,7 @@ def test_env_per_role():
 
 
 def test_console_banner_says_where_to_go():
-    assert "https://10.0.0.11:8006" in setup.render_issue(cfg())
+    assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
     assert "beta version 0.1" in issue
@@ -148,17 +148,20 @@ def test_installer_files_agree():
     for menu in ("boot/isolinux.cfg", "boot/grub.cfg"):
         assert "preseed/file=/cdrom/ibhics/preseed.cfg" in (INSTALLER / menu).read_text()
     assert "/cdrom/ibhics /target/opt/ibhics-installer" in preseed
-    # The "by hand" entry must be able to ask which network port to use.
-    assert "d-i netcfg/choose_interface" not in preseed
+    # The install needs no network: packages come from the repository on the ISO.
+    assert "d-i netcfg/enable boolean false" in preseed
+    assert "d-i apt-setup/use_mirror boolean false" in preseed
     assert "sh /opt/ibhics-installer/install-ibhics.sh" in preseed
-    for pkg in ("libvirt-daemon-system", "python3-libvirt", "open-iscsi", "bridge-utils"):
-        assert pkg in preseed
+    packages = (INSTALLER / "packages.txt").read_text().split()
+    for pkg in ("libvirt-daemon-system", "python3-libvirt", "open-iscsi", "openssh-server"):
+        assert pkg in packages
     install = (INSTALLER / "install-ibhics.sh").read_text()
+    assert "file:$SRC/repo" in install and "packages.txt" in install
     for unit in (INSTALLER / "systemd").glob("*.service"):
         assert "/opt/ibhics/venv/bin/" in unit.read_text()
     assert "systemctl enable ibhics-firstboot.service" in install
-    for script in ("install-ibhics.sh", "build-iso.sh"):
-        shell = "bash" if script.endswith("iso.sh") else "sh"
+    for script in ("install-ibhics.sh", "build-iso.sh", "build-repo.sh", "test-install.sh"):
+        shell = "sh" if script == "install-ibhics.sh" else "bash"
         subprocess.run([shell, "-n", str(INSTALLER / script)], check=True)
 
 

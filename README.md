@@ -29,18 +29,18 @@ IBHICS_ADMIN_PASSWORD=change-me-now python -m ibhics.manager --driver fake \
   --users-file ./.ibhics/users.json --audit-log ./.ibhics/audit.log
 ```
 
-เปิด http://127.0.0.1:8006 แล้ว sign in ด้วย `admin` / `change-me-now` (ระบบจะให้เปลี่ยนรหัสก่อน) เพื่อใช้ Web Console หรือ http://127.0.0.1:8006/docs เพื่อดู API
+เปิด http://127.0.0.1:8888 แล้ว sign in ด้วย `admin` / `change-me-now` (ระบบจะให้เปลี่ยนรหัสก่อน) เพื่อใช้ Web Console หรือ http://127.0.0.1:8888/docs เพื่อดู API
 
 ## ติดตั้งจาก ISO
 
 ISO ของ ibHiCS คือ Debian 13 ที่ติดตั้งอัตโนมัติ พร้อม KVM, libvirt, ตัว client ของ storage (NFS, SMB, iSCSI, multipath) และ ibHiCS เอง
 
-1. **ดาวน์โหลด ISO** จาก [Releases](https://github.com/iball281029/ibhics/releases) หรือจาก artifact `ibhics-installer-iso` ของ workflow "Installer ISO" ในแท็บ Actions หรือสร้างเองด้วย `installer/build-iso.sh` (ต้องมี `xorriso`)
+1. **ดาวน์โหลด ISO** จาก [Releases](https://github.com/iball281029/ibhics/releases) หรือจาก artifact `ibhics-installer-iso` ของ workflow "Installer ISO" ในแท็บ Actions หรือสร้างเองด้วย `installer/build-iso.sh` (ต้องมี `xorriso` และ `docker`)
 2. **เขียนลง USB** (`dd if=ibhics-0.1-beta-amd64.iso of=/dev/sdX bs=4M`, Rufus หรือ Ventoy) หรือเมานต์ผ่าน iDRAC, iLO หรือ XClarity แล้วบูต ใช้ได้ทั้ง BIOS และ UEFI
-3. **เลือก "Install ibHiCS"** เมนูนี้**ลบข้อมูลทั้งหมดในดิสก์ลูกแรก**โดยไม่ถาม แล้วติดตั้งเองจนจบ ถ้าต้องการเลือกดิสก์หรือตั้งค่าเครือข่ายเอง ให้เลือกเมนูที่สอง ระหว่างติดตั้งต้องมีอินเทอร์เน็ต (DHCP) เพื่อดึงแพ็กเกจของ Debian ส่วนตัว ibHiCS ติดตั้งจาก ISO
+3. **เลือก "Install ibHiCS"** เมนูนี้**ลบข้อมูลทั้งหมดในดิสก์ลูกแรก**โดยไม่ถาม แล้วติดตั้งเองจนจบ ถ้าต้องการเลือกดิสก์เอง ให้เลือกเมนูที่สอง **ไม่ต้องต่อเน็ตและไม่ต้องมี DHCP** เพราะแพ็กเกจทั้งหมดอยู่บน ISO ตัวติดตั้งไม่ถามเรื่อง network เลย
 4. **หลังรีบูต** หน้าจอ console จะถาม:
    - node นี้คืออะไร: node แรก (manager + compute), compute เพิ่มเติม หรือ witness
-   - ชื่อ node, IP/prefix, gateway และ DNS
+   - ชื่อ node, พอร์ตแลน (พอร์ตที่เสียบสายอยู่จะขึ้นก่อน), IP/prefix, gateway และ DNS (ถ้ามี DHCP จะเติมค่าแนะนำให้)
    - time zone, รหัสผ่าน root และ (เฉพาะ node แรก) รหัสผ่านผู้ใช้ `admin` ของหน้าเว็บ
    - token ของ cluster: node แรกจะสร้างให้และแสดงบนจอ node อื่นต้องกรอก token นี้
 
@@ -49,7 +49,7 @@ ISO ของ ibHiCS คือ Debian 13 ที่ติดตั้งอัต
    - storage pool `default` ที่ `/var/lib/ibhics`
    - ใบรับรอง HTTPS (self-signed)
    - เปิด service ของ ibHiCS
-5. **ใช้งาน**: เปิด `https://<IP ของ node แรก>:8006` แล้วเพิ่ม node อื่นที่เมนู Nodes ด้วย `http://<IP>:8007`
+5. **ใช้งาน**: เปิด `https://<IP ของ node แรก>:8888` แล้วเพิ่ม node อื่นที่เมนู Nodes ด้วย `http://<IP>:8007`
 
 ตั้งค่าใหม่ทีหลังได้ด้วย `ibhics-setup`
 
@@ -96,7 +96,7 @@ python -m ibhics.agent --role witness --name witness
 จากนั้นเพิ่ม node ในหน้า Web Console (ส่วน Nodes) หรือผ่าน API:
 
 ```bash
-curl -X POST http://node1:8006/api/v1/cluster/nodes -H 'content-type: application/json' \
+curl -X POST http://node1:8888/api/v1/cluster/nodes -H 'content-type: application/json' \
   -d '{"name": "node2", "role": "compute", "address": "http://10.0.0.12:8007"}'
 ```
 
@@ -116,7 +116,7 @@ curl -X POST http://node1:8006/api/v1/cluster/nodes -H 'content-type: applicatio
 `iscsi` และ `lvm` จะลบข้อมูลบน device จึงต้องส่ง `"confirm_wipe": true` ส่วน FC ต้องตั้งค่า multipath บนเครื่องให้เห็น device ก่อน ถ้าใช้ storage ร่วมกันหลาย node (เช่น NFS ตัวเดียวกัน) ให้เพิ่ม pool ชื่อเดียวกันในทุก node ที่ต้องเข้าถึง LVM บน LUN เดียวกันจากหลาย node พร้อมกันยังไม่รองรับในรอบนี้ (ต้องใช้ lvmlockd)
 
 ```bash
-curl -X POST http://node1:8006/api/v1/nodes/node1/pools -H 'content-type: application/json' \
+curl -X POST http://node1:8888/api/v1/nodes/node1/pools -H 'content-type: application/json' \
   -d '{"name": "nas01", "type": "nfs", "host": "10.0.0.50", "export": "/vol/vms"}'
 ```
 
@@ -143,9 +143,9 @@ backup ทำบน node ที่ VM อยู่ แล้วเก็บไ�
 - ตรวจ checksum ทุกก้อนตอน restore ค่าตั้งปลายทางพร้อมรหัสผ่านเก็บใน `/var/lib/ibhics/backup.json` (อ่านได้เฉพาะ root) และ API แสดงรหัสผ่านเป็น `********`
 
 ```bash
-curl -X POST http://node1:8006/api/v1/backup/targets -H 'content-type: application/json' \
+curl -X POST http://node1:8888/api/v1/backup/targets -H 'content-type: application/json' \
   -d '{"name": "nas", "type": "nfs", "host": "10.0.0.50", "export": "/backup"}'
-curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: application/json' \
+curl -X POST http://node1:8888/api/v1/backup/policies -H 'content-type: application/json' \
   -d '{"name": "nightly", "target": "nas", "at": "02:00", "keep_last": 14}'
 ```
 
@@ -187,9 +187,9 @@ VNC ของทุก VM ฟังเฉพาะ `127.0.0.1` ของ node �
 
 ```bash
 # script: sign in แล้วใช้ token
-TOKEN=$(curl -s localhost:8006/api/v1/auth/login -H 'Content-Type: application/json' \
+TOKEN=$(curl -s localhost:8888/api/v1/auth/login -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"..."}' | jq -r .token)
-curl -H "Authorization: Bearer $TOKEN" localhost:8006/api/v1/vms
+curl -H "Authorization: Bearer $TOKEN" localhost:8888/api/v1/vms
 ```
 
 ## Live migration
@@ -198,12 +198,12 @@ curl -H "Authorization: Bearer $TOKEN" localhost:8006/api/v1/vms
 
 ```bash
 # ย้ายไป node2 (ไม่ใส่ node = เลือก node ที่หน่วยความจำว่างมากที่สุดให้)
-curl -X POST localhost:8006/api/v1/vms/<uuid>/migrate -H 'Content-Type: application/json' \
+curl -X POST localhost:8888/api/v1/vms/<uuid>/migrate -H 'Content-Type: application/json' \
   -d '{"node": "node2", "bandwidth_mib": 500}'
-curl localhost:8006/api/v1/migrations          # ดูความคืบหน้า
+curl localhost:8888/api/v1/migrations          # ดูความคืบหน้า
 
 # ก่อนปิด node ไปซ่อม: ย้าย VM ทุกตัวออกจาก node2
-curl -X POST localhost:8006/api/v1/nodes/node2/evacuate
+curl -X POST localhost:8888/api/v1/nodes/node2/evacuate
 ```
 
 ก่อนย้าย manager ตรวจให้ ถ้าไม่ผ่านจะบอกเหตุผล:

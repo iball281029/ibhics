@@ -12,6 +12,7 @@ import getpass
 import ipaddress
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -27,7 +28,7 @@ ROLES = {
     "compute": "Additional compute node (join an existing cluster)",
     "witness": "Witness (quorum vote for a 2-node cluster, runs no VMs)",
 }
-MANAGER_PORT = 8006
+MANAGER_PORT = 8888
 AGENT_PORT = 8007
 BRIDGE = "br0"
 
@@ -291,8 +292,27 @@ def has_link(interface: str, sys_net: Path = Path("/sys/class/net")) -> bool:
         return False
 
 
-def current_address(interface: str) -> tuple[str, str]:
-    """The DHCP address and default gateway the installer got, as suggestions."""
+def current_address(interface: str, run: Runner = subprocess.run) -> tuple[str, str]:
+    """Address and gateway a DHCP server would give this port, as suggestions only: the
+    node always gets a static address. Blank when there is no DHCP server."""
+    if shutil.which("dhcpcd"):
+        try:
+            run(["ip", "link", "set", interface, "up"], check=False)
+            run(
+                ["dhcpcd", "--oneshot", "--ipv4only", "--timeout", "15", interface],
+                check=False,
+                capture_output=True,
+            )
+            return _read_address(interface)
+        except OSError:
+            return "", ""
+        finally:  # apply() configures the port itself; leave nothing behind
+            run(["dhcpcd", "--release", interface], check=False, capture_output=True)
+            run(["ip", "-4", "addr", "flush", "dev", interface], check=False)
+    return _read_address(interface)
+
+
+def _read_address(interface: str) -> tuple[str, str]:
     try:
         addr = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "dev", interface],
