@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from ..backup import BackupInfo, BackupTarget, TargetType
@@ -22,6 +24,7 @@ from ..hypervisor import (
     VMSpec,
     VMState,
 )
+from ..hypervisor.host import HostNetwork, IfaceConfig, SettingsEdit
 
 
 class DiskIn(BaseModel):
@@ -124,6 +127,42 @@ class NetworkIn(BaseModel):
 
     def to_spec(self) -> NetworkSpec:
         return NetworkSpec(name=self.name, vlan=self.vlan)
+
+
+class HostIfaceIn(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$")
+    kind: str = "ethernet"
+    method: str = "manual"
+    address: str = ""
+    gateway: str = ""
+    mtu: int | None = None
+    auto: bool = True
+    ports: list[str] = Field(default_factory=list)
+    bond_mode: str = ""
+    options: list[str] = Field(default_factory=list)
+
+
+class HostNetworkIn(BaseModel):
+    """The whole of the node's /etc/network/interfaces, as the Network page edits it."""
+
+    interfaces: list[HostIfaceIn]
+
+    def to_network(self) -> HostNetwork:
+        return HostNetwork([IfaceConfig(**i.model_dump()) for i in self.interfaces])
+
+
+class HostSettingsIn(BaseModel):
+    timezone: str | None = None
+    dns: list[str] | None = None
+    ntp: list[str] | None = None
+
+    def to_edit(self) -> SettingsEdit:
+        return SettingsEdit(**self.model_dump())
+
+
+class PowerIn(BaseModel):
+    action: Literal["reboot", "shutdown"]
+    force: bool = Field(default=False, description="even with VMs running on the node")
 
 
 class NetworkOut(BaseModel):

@@ -230,6 +230,13 @@ class FakeDriver(HypervisorDriver):
             if self._networks.pop(name, None) is None:
                 raise InvalidState(f"no network named {name!r}")
 
+    def host_system(self):
+        from .host import FakeHost
+
+        if getattr(self, "_host", None) is None:
+            self._host = FakeHost()
+        return self._host
+
     def list_local_disks(self):
         from .disks import LocalDisk
 
