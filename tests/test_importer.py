@@ -253,7 +253,8 @@ class FakeSSH:
         if cmd[0] == "ssh-keygen":
             key = Path(cmd[cmd.index("-f") + 1])
             key.write_text("private")
-            key.with_suffix(".pub").write_text("ssh-ed25519 AAAA root@node1")
+            assert cmd[cmd.index("-t") + 1] == "rsa"  # ESXi (FIPS mode) refuses ed25519
+            key.with_suffix(".pub").write_text("ssh-rsa AAAA root@node1")
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if not self.port_open:
             return subprocess.CompletedProcess(cmd, 255, "", "connect to host: Connection refused")
@@ -265,7 +266,7 @@ class FakeSSH:
             return subprocess.CompletedProcess(cmd, 0 if self.authorised else 255, "", "denied")
         askpass = kw["env"]["SSH_ASKPASS"]
         self.password_seen = subprocess.run([askpass], capture_output=True, text=True).stdout
-        assert "keys-root/authorized_keys" in cmd[-1] and "ssh-ed25519 AAAA" in cmd[-1]
+        assert "keys-root/authorized_keys" in cmd[-1] and "ssh-rsa AAAA" in cmd[-1]
         self.authorised = True
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -294,8 +295,25 @@ def test_v2v_over_ssh_sets_up_the_key_first(tmp_path):
     converter.convert(source, vm, "zabbix", tmp_path / "out2")
     assert len(ssh.cmds) == 2 and all("BatchMode=yes" in c for c in ssh.cmds)
 
-    closed = EsxiSSH(FakeSSH(port_open=False), key=tmp_path / "k/id")
-    with pytest.raises(ConversionFailed, match="Turn on SSH on the ESXi host"):
+    # SSH off on the ESXi host: ibHiCS turns it on through the ESXi API, then goes on.
+    off = FakeSSH(port_open=False)
+
+    class Api:
+        def __init__(self, source):
+            pass
+
+        def start_ssh(self):
+            off.port_open = True
+
+    EsxiSSH(off, key=tmp_path / "k2/id", api=Api).ensure_access(source)
+    assert off.authorised
+
+    class Refused(Api):
+        def start_ssh(self):
+            raise OSError("connection refused")
+
+    closed = EsxiSSH(FakeSSH(port_open=False), key=tmp_path / "k3/id", api=Refused)
+    with pytest.raises(ConversionFailed, match="turning it on through the API failed"):
         closed.ensure_access(source)
 
 
@@ -511,3 +529,53 @@ def test_import_refuses_vm_bigger_than_the_pool():
     with pytest.raises(NotEnoughSpace, match=r"needs 600 GB \(300 GB of disks plus room"):
         check_space(member, "local-raid", vm)
     check_space(member, "local-raid", SourceVM(ref="c", name="c", disks_gb=[200]))
+
+
+def test_esxi_api_starts_ssh():
+    from ibhics.importer.esxi_api import EsxiApi
+
+    def ok(body):
+        return (
+            f'<?xml version="1.0"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/'
+            f'soap/envelope/" xmlns="urn:vim25"><soapenv:Body>{body}</soapenv:Body>'
+            "</soapenv:Envelope>"
+        )
+
+    calls = []
+
+    def transport(body, cookie):
+        calls.append((body.split(">", 1)[0].lstrip("<"), cookie))
+        if body.startswith("<RetrieveServiceContent"):
+            return (
+                200,
+                ok(
+                    "<RetrieveServiceContentResponse><returnval><sessionManager "
+                    'type="SessionManager">ha-sessionmgr</sessionManager></returnval>'
+                    "</RetrieveServiceContentResponse>"
+                ),
+                None,
+            )
+        if body.startswith("<Login"):
+            assert "<password>pw</password>" in body
+            return 200, ok("<LoginResponse/>"), "vmware_soap_session=abc"
+        if body.startswith("<RetrieveProperties"):
+            return (
+                200,
+                ok(
+                    "<RetrievePropertiesResponse><returnval><propSet><val "
+                    'type="HostServiceSystem">serviceSystem</val></propSet></returnval>'
+                    "</RetrievePropertiesResponse>"
+                ),
+                cookie,
+            )
+        assert "<id>TSM-SSH</id>" in body and ">serviceSystem<" in body
+        return 200, ok("<StartServiceResponse/>"), cookie
+
+    EsxiApi(VMWARE, transport).start_ssh()
+    assert [c[0] for c in calls] == [
+        "RetrieveServiceContent",
+        "Login",
+        "RetrieveProperties",
+        "StartService",
+    ]
+    assert calls[-1][1] == "vmware_soap_session=abc"  # the session cookie is kept

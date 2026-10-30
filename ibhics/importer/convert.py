@@ -32,7 +32,9 @@ class ConversionFailed(RuntimeError):
 
 
 LOG_DIR = Path("/var/log/ibhics/imports")
-SSH_KEY = Path.home() / ".ssh" / "id_ed25519"  # virt-v2v and nbdkit use root's default key
+# virt-v2v and nbdkit use root's default key. RSA: ESXi's sshd runs in FIPS mode and
+# refuses ed25519 keys.
+SSH_KEY = Path.home() / ".ssh" / "id_rsa"
 DATASTORE_PATH = re.compile(r"^\[(?P<ds>[^\]]+)\]\s*(?P<path>.+)$")
 NO_RANGES = (
     "This ESXi host does not serve disks in the way the HTTPS transfer needs (no byte "
@@ -40,8 +42,8 @@ NO_RANGES = (
     "on the ESXi host."
 )
 SSH_OFF = (
-    "Cannot reach SSH on {host}. Turn on SSH on the ESXi host (Host > Actions > Services > "
-    "Enable Secure Shell), or add the source with Transfer: HTTPS."
+    "Cannot reach SSH on {host}. Check that a firewall lets this node reach port 22 of "
+    "the ESXi host, or turn on SSH there (Host > Actions > Services > Enable Secure Shell)."
 )
 
 
@@ -68,13 +70,29 @@ def vmx_ssh_url(source: Source, vm: SourceVM) -> str:
     return f"ssh://root@{source.host}/vmfs/volumes/{quote(m['ds'])}/{quote(m['path'])}"
 
 
+def _ssh_closed(stderr: str | None) -> bool:
+    err = stderr or ""
+    return "Connection refused" in err or "timed out" in err or "No route" in err
+
+
 class EsxiSSH:
     """Lets this node's root key into the ESXi host, using the source's password once, so
     virt-v2v can copy the disks over SSH without asking."""
 
-    def __init__(self, run=subprocess.run, key: Path = SSH_KEY) -> None:
+    def __init__(self, run=subprocess.run, key: Path = SSH_KEY, api=None) -> None:
         self.run = run
         self.key = key
+        self.api = api  # makes an EsxiApi for a source; tests pass a fake
+
+    def _start_ssh_service(self, source: Source) -> None:
+        from .esxi_api import EsxiApi, EsxiApiError
+
+        try:
+            (self.api or EsxiApi)(source).start_ssh()
+        except (EsxiApiError, OSError, ET.ParseError) as exc:
+            raise ConversionFailed(
+                SSH_OFF.format(host=source.host) + f" (turning it on through the API failed: {exc})"
+            ) from None
 
     def ensure_access(self, source: Source) -> None:
         if source.path:
@@ -83,9 +101,15 @@ class EsxiSSH:
             )
         if not self.key.exists():
             self.key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            self._check(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.key)])
-        if self._ssh(source, ["-o", "BatchMode=yes"], "true").returncode == 0:
+            self._check(
+                ["ssh-keygen", "-q", "-t", "rsa", "-b", "4096", "-N", "", "-f", str(self.key)]
+            )
+        probe = self._ssh(source, ["-o", "BatchMode=yes"], "true")
+        if probe.returncode == 0:
             return  # the key is already authorised
+        if _ssh_closed(probe.stderr):
+            # SSH is off on most ESXi hosts; turn it on with the same credentials.
+            self._start_ssh_service(source)
         public = self.key.with_suffix(".pub").read_text().strip()
         add = (
             f"grep -qxF '{public}' /etc/ssh/keys-root/authorized_keys 2>/dev/null || "
@@ -107,7 +131,7 @@ class EsxiSSH:
             )
         if result.returncode != 0:
             err = (result.stderr or "").strip()
-            if "Connection refused" in err or "timed out" in err or "No route" in err:
+            if _ssh_closed(err):
                 raise ConversionFailed(SSH_OFF.format(host=source.host))
             raise ConversionFailed(f"could not set up SSH access to {source.host}: {err}")
         if self._ssh(source, ["-o", "BatchMode=yes"], "true").returncode != 0:
