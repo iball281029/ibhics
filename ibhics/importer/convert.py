@@ -234,6 +234,39 @@ class HostSSH(EsxiSSH):
         raise ConversionFailed(f"Cannot reach SSH on {source.host} (port 22).")
 
 
+# Runs inside a converted Linux guest (virt-customize --run). The NIC's name changes on
+# KVM (ens192 on VMware becomes enp1s0), and configs written for the old name stop
+# working. This finds the names the guest's configs use and pins them to the new NICs'
+# MAC addresses with systemd .link files, so the old configs keep working unchanged.
+PIN_NIC_NAMES = r"""#!/bin/sh
+macs="%(macs)s"
+names=$( {
+  grep -hoE '^[[:space:]]+(en[[:alnum:]]+|eth[0-9]+):' /etc/netplan/*.yaml 2>/dev/null \
+    | tr -d ' :\t'
+  grep -hoE '^(auto|allow-hotplug|iface)[[:space:]]+(en[[:alnum:]]+|eth[0-9]+)' \
+    /etc/network/interfaces /etc/network/interfaces.d/* 2>/dev/null | awk '{print $2}'
+  ls /etc/sysconfig/network-scripts 2>/dev/null \
+    | sed -n 's/^ifcfg-\(en[[:alnum:]]*\|eth[0-9]*\)$/\1/p'
+  grep -hoE '^interface-name=(en[[:alnum:]]+|eth[0-9]+)' \
+    /etc/NetworkManager/system-connections/* 2>/dev/null | cut -d= -f2
+} | sort -uV )  # VMware's ens160, ens192, ens224... sort in NIC order
+[ -n "$names" ] || exit 0
+mkdir -p /etc/systemd/network
+for name in $names; do
+  mac=${macs%%%% *}
+  [ -n "$mac" ] || break
+  link="/etc/systemd/network/10-ibhics-$name.link"
+  printf '# Written by ibHiCS Migrate: keeps the name this NIC had before.\n' > "$link"
+  printf '[Match]\nMACAddress=%%s\n\n[Link]\nName=%%s\n' "$mac" "$name" >> "$link"
+  case "$macs" in *" "*) macs=${macs#* } ;; *) macs="" ;; esac
+done
+# The rename happens in early boot too, so rebuild the initramfs where that is cheap.
+command -v update-initramfs >/dev/null && update-initramfs -u >/dev/null 2>&1
+command -v dracut >/dev/null && dracut -f --regenerate-all >/dev/null 2>&1
+exit 0
+"""
+
+
 class V2VConverter:
     def __init__(
         self,
@@ -246,6 +279,30 @@ class V2VConverter:
         self.log_dir = log_dir
         self.ssh = ssh or EsxiSSH(run)
         self.host_ssh = host_ssh or HostSSH(run)
+
+    def keep_nic_names(self, images: list[Path], macs: list[str]) -> str:
+        """Pin the guest's old NIC names to macs. Best effort: returns a note for the log
+        (Windows guests and guests without such configs are left as they are)."""
+        macs = [m for m in macs if m and MAC_RE.match(m)]
+        if not macs:
+            return "no MAC addresses to pin NIC names to"
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as script:
+            script.write(PIN_NIC_NAMES % {"macs": " ".join(macs)})
+        try:
+            cmd = ["virt-customize", "--no-network"]
+            for image in images:
+                cmd += ["-a", str(image), "--format", "raw"]
+            done = self.run(
+                [*cmd, "--run", script.name],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "LIBGUESTFS_BACKEND": "direct"},
+            )
+        finally:
+            os.unlink(script.name)
+        if done.returncode:
+            return "could not keep NIC names: " + (done.stderr or done.stdout).strip()[-300:]
+        return "kept the guest's NIC names"
 
     def convert(
         self,

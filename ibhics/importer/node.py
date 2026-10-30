@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import tempfile
 from contextlib import nullcontext
@@ -10,6 +11,8 @@ from pathlib import Path
 from ..hypervisor import DiskSpec, HypervisorDriver, NicSpec, VMInfo, VMSpec
 from .convert import FakeConverter, V2VConverter
 from .sources import GIB, Source, SourceVM
+
+log = logging.getLogger(__name__)
 
 
 class NodeImport:
@@ -100,6 +103,11 @@ class NodeImport:
             )
             created = self._driver.create_vm(spec)
             try:
+                keep = getattr(self._converter, "keep_nic_names", None)
+                if keep and "windows" not in vm.guest_os.lower():
+                    track("Keeping the guest's network names", 97)
+                    note = keep(converted.images, [nic.mac for nic in created.spec.nics])
+                    log.info("import %s: %s", name, note)
                 for index, image in enumerate(converted.images):
                     self._driver.import_disk(created.uuid, index, image)
             except Exception:

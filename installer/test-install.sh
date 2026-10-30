@@ -87,6 +87,7 @@ test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not insta
 test -f mnt/usr/share/virtio-win/viostor/2k19/amd64/viostor.sys \
     || { echo "!! virtio-win drivers are missing: Windows imports would fail"; exit 1; }
 test -s mnt/usr/share/ibhics/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
+test -x mnt/usr/bin/virt-customize || { echo "!! virt-customize (guestfs-tools) is missing"; exit 1; }
 # virt-v2v copies VMware disks with nbdkit's ssh plugin (and its curl plugin for HTTPS).
 for plugin in ssh curl; do
     ls mnt/usr/lib/*/nbdkit/plugins/nbdkit-$plugin-plugin.so >/dev/null 2>&1 \

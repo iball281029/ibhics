@@ -659,3 +659,36 @@ def test_import_job_reports_progress_and_log(env):
     ).json()
     assert (job["state"], job["percent"]) == ("done", 100)
     assert client.get(f"/api/v1/migrate/jobs/{job['id']}/log").json() == {"log": ""}
+
+
+def test_keep_nic_names_runs_the_pin_script_in_the_guest(tmp_path):
+    seen = {}
+
+    def run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["script"] = Path(cmd[cmd.index("--run") + 1]).read_text()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    images = [tmp_path / "x-sda", tmp_path / "x-sdb"]
+    note = V2VConverter(run, log_dir=tmp_path).keep_nic_names(images, ["52:54:00:aa:bb:01", None])
+    assert note == "kept the guest's NIC names"
+    assert seen["cmd"][:2] == ["virt-customize", "--no-network"]
+    assert seen["cmd"].count("-a") == 2
+    assert 'macs="52:54:00:aa:bb:01"' in seen["script"]
+    assert '[Link]\\nName=%s\\n\' "$mac" "$name"' in seen["script"]
+    assert not Path(seen["cmd"][seen["cmd"].index("--run") + 1]).exists()  # cleaned up
+
+
+def test_node_import_pins_nic_names_with_the_new_macs():
+    calls = []
+
+    class Pinning(FakeConverter):
+        def keep_nic_names(self, images, macs):
+            calls.append(macs)
+            return "kept"
+
+    driver = FakeDriver()
+    NodeImport(driver, Pinning()).run(VMWARE, SourceVM(ref="/l", name="l", nics=1), "l")
+    win = SourceVM(ref="/w", name="w", nics=1, guest_os="Microsoft Windows Server 2019")
+    NodeImport(driver, Pinning()).run(VMWARE, win, "w")
+    assert len(calls) == 1 and calls[0][0]  # Linux only, with the MAC libvirt assigned

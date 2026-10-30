@@ -7,6 +7,7 @@ libvirt-daemon-system
 libvirt-clients
 ovmf
 virt-v2v
+guestfs-tools
 # ibHiCS runs on the system Python
 python3
 python3-venv
