@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket, status
 from fastapi.staticfiles import StaticFiles
 
-from .. import __version__, console
+from .. import RELEASE_NAME, __version__, console
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
 from ..hypervisor.serialize import guest_to_json
@@ -192,7 +192,12 @@ def create_app(
 
     @public.get("/health")
     def health() -> dict:
-        return {"status": "ok", "version": __version__, "auth": auth is not None}
+        return {
+            "status": "ok",
+            "version": __version__,
+            "release": RELEASE_NAME,
+            "auth": auth is not None,
+        }
 
     # Sign-in. Browsers get an HttpOnly, SameSite=Strict cookie, which other sites can
     # neither read nor make the browser send; scripts use the returned bearer token.

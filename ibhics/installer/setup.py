@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import __version__
+from .. import RELEASE_NAME
 
 PRODUCT = "ibHiCS Hyper-Converged Infrastructure"
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -170,7 +170,7 @@ def render_issue(cfg: Config) -> str:
             f"    name {cfg.hostname}, address http://{cfg.ip}:{AGENT_PORT}"
         )
     return (
-        f"{bar}\n  {PRODUCT} beta version {_short_version()}\n"
+        f"{bar}\n  {RELEASE_NAME}\n"
         f"  Node {cfg.hostname} ({cfg.role}) at {cfg.ip}\n\n{where}\n{bar}\n\n"
     )
 
@@ -181,10 +181,6 @@ def render_bridge_network() -> str:
         "<network><name>default</name><forward mode='bridge'/>"
         f"<bridge name='{BRIDGE}'/></network>\n"
     )
-
-
-def _short_version() -> str:
-    return ".".join(__version__.split(".")[:2])
 
 
 # Applying
@@ -352,7 +348,7 @@ def choose(prompt: str, options: Sequence[tuple[str, str]], reader=input) -> str
 
 
 def main() -> int:
-    print(f"\n  Welcome to {PRODUCT} beta version {_short_version()}\n")
+    print(f"\n  Welcome to {RELEASE_NAME}\n")
     print("  This sets up the node. You can run it again later with: ibhics-setup\n")
     role = choose("What is this node?", list(ROLES.items()))
     hostname = ask("Node name", "node1" if role == "manager" else "", check_hostname)

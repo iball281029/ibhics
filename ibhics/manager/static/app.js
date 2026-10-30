@@ -904,7 +904,7 @@ async function renderSystem() {
   const health = await api("/health");
   const c = state.cluster;
   const rows = [
-    ["Product", "ibHiCS Hyper-Converged Infrastructure"],
+    ["Release", health.release || "ibHiCS Hyper-Converged Infrastructure"],
     ["Version", health.version],
     ["Deployment", `${TOPOLOGY[c.topology] || c.topology} (${c.members.length} member${c.members.length === 1 ? "" : "s"})`],
     ["High availability", c.ha_capable ? "Yes" : "No: add a second compute node and a witness"],
