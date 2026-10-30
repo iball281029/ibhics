@@ -368,6 +368,12 @@ def test_v2v_inputs_and_failure(tmp_path):
             VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "h"
         )
 
+    with pytest.raises(ConversionFailed, match="Upgrade the node from the ibHiCS ISO"):
+        V2VConverter(
+            FakeV2V(fail="One of rhsrvany.exe or pvvxsvc.exe is missing in /usr/share/virt-tools"),
+            log_dir=tmp_path,
+        ).convert(VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "s")
+
     with pytest.raises(ConversionFailed, match="inspection could not detect the source guest"):
         V2VConverter(
             FakeV2V(fail="inspection could not detect the source guest"), log_dir=tmp_path

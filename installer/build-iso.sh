@@ -100,6 +100,26 @@ if [ -z "$NO_VIRTIO_WIN" ]; then
     cp "$HERE/guest-tools/install.sh" "$WORK/tools/linux/install.sh"
     cp "$HERE/guest-tools/README.txt" "$WORK/tools/README.txt"
     xorriso -as mkisofs -quiet -J -R -V IBHICS_TOOLS -o "$PAYLOAD/guest-tools.iso" "$WORK/tools"
+
+    # virt-v2v sets up a converted Windows guest at its first boot with rhsrvany.exe and
+    # pnp_wait.exe, from Fedora's mingw32-srvany (GPL). Debian does not package them.
+    echo ">> Adding rhsrvany.exe and pnp_wait.exe for Windows conversions"
+    url=${SRVANY_URL:-}
+    for rel in 43 42 41; do
+        [ -n "$url" ] && break
+        base="https://dl.fedoraproject.org/pub/fedora/linux/releases/$rel/Everything/x86_64/os/Packages/m/"
+        rpm=$(curl -fsL "$base" | grep -o 'mingw32-srvany-[0-9][^"]*\.noarch\.rpm' | head -1 || true)
+        [ -n "$rpm" ] && url="$base$rpm"
+    done
+    [ -n "$url" ] || { echo "could not find mingw32-srvany on the Fedora mirror" >&2; exit 1; }
+    curl -fL --retry 3 -o "$WORK/srvany.rpm" "$url"
+    mkdir -p "$WORK/srvany" "$PAYLOAD/virt-tools"
+    bsdtar -xf "$WORK/srvany.rpm" -C "$WORK/srvany"
+    for exe in rhsrvany.exe pnp_wait.exe; do
+        found=$(find "$WORK/srvany" -name "$exe" | head -1)
+        [ -n "$found" ] || { echo "$exe is not in $url" >&2; exit 1; }
+        cp "$found" "$PAYLOAD/virt-tools/$exe"
+    done
 fi
 cp "$HERE"/systemd/*.service "$PAYLOAD/systemd/"
 echo "$VERSION" > "$PAYLOAD/VERSION"

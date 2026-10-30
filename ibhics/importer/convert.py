@@ -53,6 +53,10 @@ WINDOWS_HIBERNATED = (
     "'powercfg /h off' as administrator, then shut it down fully (Start > Power > Shut down, "
     "not Restart), and import it again."
 )
+NO_SRVANY = (
+    "virt-v2v needs rhsrvany.exe and pnp_wait.exe in /usr/share/virt-tools to convert Windows "
+    "guests, and this node has none. Upgrade the node from the ibHiCS ISO, which puts them there."
+)
 SSH_OFF = (
     "Cannot reach SSH on {host}. Check that a firewall lets this node reach port 22 of "
     "the ESXi host, or turn on SSH there (Host > Actions > Services > Enable Secure Shell)."
@@ -354,6 +358,8 @@ class V2VConverter:
             message = v2v_error(output_text, result.returncode)
             if "does not support 'range'" in output_text:
                 message = NO_RANGES
+            elif re.search(r"rhsrvany\.exe|pvvxsvc\.exe|pnp_wait\.exe", output_text):
+                message = NO_SRVANY
             elif re.search(r"[Hh]ibernat|Fast Restart|Fast Startup", output_text):
                 message = WINDOWS_HIBERNATED
             raise ConversionFailed(message + (f" (full log: {log})" if log else ""))

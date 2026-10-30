@@ -119,6 +119,10 @@ fi
 if [ -f "$SRC/guest-tools.iso" ]; then
     install -D -m 0644 "$SRC/guest-tools.iso" /usr/share/ibhics/guest-tools.iso
 fi
+if [ -d "$SRC/virt-tools" ]; then
+    # Where virt-v2v looks for its Windows first-boot helpers.
+    install -D -m 0644 -t /usr/share/virt-tools "$SRC"/virt-tools/*
+fi
 for tool in ibhics-manager ibhics-agent ibhics-setup; do
     ln -sf "$VENV/bin/$tool" "/usr/local/sbin/$tool"
 done
