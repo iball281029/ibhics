@@ -149,6 +149,10 @@ curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: applicat
   -d '{"name": "nightly", "target": "nas", "at": "02:00", "keep_last": 14}'
 ```
 
+## Web console
+
+หน้าเว็บ (ภาษาอังกฤษ) มีเมนูแถบซ้ายแบบ UniFi: Dashboard, Virtual Machines, Storage, Nodes, Backup, Migrate และด้านล่างเป็น Activity, API reference, Settings มีทั้งธีมสว่างและมืด หน้า Dashboard แสดงสถานะรวมของ cluster, ภาพรวม node → storage → VM → backup และการใช้ CPU, หน่วยความจำ และ storage ปุ่มที่แก้ไขระบบจะแสดงตามสิทธิ์ของผู้ใช้ (viewer, operator, admin)
+
 ## Console ของ VM
 
 กดปุ่ม **Console** ที่ VM ที่เปิดอยู่ จะเปิดหน้าจอของ VM ในเบราว์เซอร์ (noVNC) มีปุ่ม Ctrl+Alt+Del, วางข้อความ (พิมพ์ข้อความจาก clipboard ลงใน VM) และเต็มจอ
