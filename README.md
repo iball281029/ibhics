@@ -153,6 +153,14 @@ curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: applicat
 
 หน้าเว็บ (ภาษาอังกฤษ) มีเมนูแถบซ้ายแบบ UniFi: Dashboard, Virtual Machines, Storage, Nodes, Backup, Migrate และด้านล่างเป็น Activity, API reference, Settings มีทั้งธีมสว่างและมืด หน้า Dashboard แสดงสถานะรวมของ cluster, ภาพรวม node → storage → VM → backup และการใช้ CPU, หน่วยความจำ และ storage ปุ่มที่แก้ไขระบบจะแสดงตามสิทธิ์ของผู้ใช้ (viewer, operator, admin)
 
+### Inventory ของ VM
+
+หน้า Virtual Machines แสดงระบบปฏิบัติการ, IP address และ hostname ของแต่ละ VM ค้นหาได้ด้วยชื่อ, OS, hostname หรือ IP กดชื่อ VM หรือปุ่ม **Summary** เพื่อเปิดหน้ารายละเอียด (`#vm/<uuid>`) ซึ่งมีแท็บ Summary, Hardware, Backups (restore point ของ VM นี้จากทุก target) และ Activity
+
+- **Operating system**: ป้ายที่ผู้ดูแลกรอกตอนสร้าง VM (เก็บใน `<metadata>` ของ domain XML) VM ที่ import ผ่าน Migrate จะได้ค่าจาก VMware/OVF ให้อัตโนมัติ
+- **ข้อมูลจาก guest**: ถ้าติดตั้ง `qemu-guest-agent` ใน VM (Linux: แพ็กเกจ `qemu-guest-agent`, Windows: VirtIO guest tools) ibHiCS จะอ่านชื่อและเวอร์ชัน OS, kernel, hostname และ IP ของทุก interface มาแสดงเอง ถ้าไม่มี agent จะแสดง IP จาก DHCP lease ของ libvirt เท่าที่มี
+- API: `GET /api/v1/vms/guests` (ทุก VM ที่เปิดอยู่) และ `GET /api/v1/vms/{uuid}/guest`
+
 ## Console ของ VM
 
 กดปุ่ม **Console** ที่ VM ที่เปิดอยู่ จะเปิดหน้าจอของ VM ในเบราว์เซอร์ (noVNC) มีปุ่ม Ctrl+Alt+Del, วางข้อความ (พิมพ์ข้อความจาก clipboard ลงใน VM) และเต็มจอ

@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { me: null, cluster: null, hosts: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [] };
+const state = { me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Local", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -107,12 +107,19 @@ async function loadMe() {
 // ---------- navigation ----------
 
 const PAGES = ["home", "compute", "storage", "nodes", "backup", "migrate", "activity", "system"];
-const currentPage = () => (PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : "home");
+const currentPage = () => {
+  const hash = location.hash.slice(1);
+  if (hash.startsWith("vm/")) return "vm";
+  return PAGES.includes(hash) ? hash : "home";
+};
+const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 
 function show() {
   const page = currentPage();
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === page));
+  const section = page === "vm" ? "compute" : page;
+  $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
+  if (page === "vm") selectTab("vm-tabs", "vm-summary");
   refresh(page).catch(fail);
 }
 window.addEventListener("hashchange", show);
@@ -207,6 +214,7 @@ async function loadCluster() {
 }
 const loaders = {
   vms: async () => { state.vms = await api("/vms"); },
+  guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
   pools: async () => { state.pools = await api("/pools"); },
   targets: async () => { state.targets = await api("/backup/targets"); },
   policies: async () => { state.policies = await api("/backup/policies"); },
@@ -221,7 +229,8 @@ const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
 async function refresh(page) {
   await loadCluster();
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
-  if (page === "compute") { await load("vms", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
+  if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
+  if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms"); renderPools(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -333,36 +342,51 @@ function renderHome() {
 
 // ---------- compute ----------
 
+// What the guest says about itself wins over the label the admin typed in.
+const osName = (vm, g) => (g?.agent && g.os_name) || vm.os_type || "";
+const osKind = (name) => (/windows/i.test(name) ? "Windows" : name ? "Linux" : "");
+const ipList = (g) => g?.ips || [];
+
+function vmMenu(vm, { summary = false } = {}) {
+  if (!canOperate()) return summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : "";
+  const multi = computeMembers().length > 1;
+  return `
+    ${summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : ""}
+    ${vm.state === "running"
+      ? `<button class="small" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button>`
+      : `<button class="small" data-vm="start" data-id="${vm.uuid}">Power on</button>`}
+    <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
+      ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
+        <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
+      ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
+      <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
+      ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
+    </div></details>`;
+}
+
 function renderVMs() {
   const q = $("#vm-search").value.trim().toLowerCase();
   const f = $("#vm-filter").value;
-  const vms = state.vms.filter((v) => (!q || v.name.toLowerCase().includes(q)) && (!f || v.state === f));
+  const haystack = (v) => [v.name, osName(v, state.guests[v.uuid]), state.guests[v.uuid]?.hostname, ...ipList(state.guests[v.uuid])].join(" ").toLowerCase();
+  const vms = state.vms.filter((v) => (!q || haystack(v).includes(q)) && (!f || v.state === f));
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#vm-count").textContent = `${state.vms.length} total · ${running} running`;
-  const op = canOperate();
-  const multi = computeMembers().length > 1;
-  $("#vms").innerHTML = vms.length ? vms.map((vm) => `
-    <tr>
-      <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip" title="${esc(vm.description)}">${esc(vm.description || vm.uuid.slice(0, 8))}</span></div></div></td>
+  $("#vms").innerHTML = vms.length ? vms.map((vm) => {
+    const g = state.guests[vm.uuid], os = osName(vm, g), ips = ipList(g);
+    return `<tr>
+      <td><div class="name-cell">${avatar("i-compute")}<div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vm-sub clip" title="${esc(vm.description)}">${esc(vm.description || vm.uuid.slice(0, 8))}</span></div></div></td>
       <td><span class="badge ${esc(vm.state)}">${esc(vm.state)}</span></td>
+      <td>${os ? `<span class="os ${osKind(os).toLowerCase()}">${esc(os)}</span>` : `<span class="muted">Not set</span>`}
+        <span class="vm-sub">${g?.agent ? "Guest agent running" : vm.state === "running" ? "No guest agent" : ""}</span></td>
+      <td>${ips.length ? `<span class="mono">${esc(ips[0])}</span>${ips.length > 1 ? ` <span class="muted" title="${esc(ips.join(", "))}">+${ips.length - 1}</span>` : ""}` : `<span class="muted">–</span>`}
+        <span class="vm-sub">${esc(g?.hostname || "")}</span></td>
       <td>${esc(vm.node || "")}</td>
       <td>${vm.vcpus}</td>
       <td>${gbText(vm.memory_mb)}</td>
       <td>${vm.disks.map((d) => `${d.size_gb} GB <span class="vm-sub" style="display:inline">${esc(d.pool)}</span>`).join("<br>")}</td>
-      <td>${esc(vm.firmware.toUpperCase())}</td>
-      <td><div class="actions">${!op ? "" : `
-        ${vm.state === "running"
-          ? `<button class="small" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button>`
-          : `<button class="small" data-vm="start" data-id="${vm.uuid}">Power on</button>`}
-        <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
-          ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
-            <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
-          ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
-          <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
-          ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
-        </div></details>`}
-      </div></td>
-    </tr>`).join("") : empty(8, state.vms.length ? "No VMs match" : "No virtual machines yet. Create one, or bring VMs over with Migrate.");
+      <td><div class="actions">${vmMenu(vm, { summary: true })}</div></td>
+    </tr>`;
+  }).join("") : empty(9, state.vms.length ? "No VMs match" : "No virtual machines yet. Create one, or bring VMs over with Migrate.");
 }
 $("#vm-search").addEventListener("input", renderVMs);
 $("#vm-filter").addEventListener("change", renderVMs);
@@ -377,7 +401,7 @@ function renderMoves() {
     <td class="vm-sub" style="display:table-cell">${esc(m.error || "")}</td></tr>`).join("");
 }
 
-$("#vms").addEventListener("click", async (e) => {
+async function vmAction(e) {
   const btn = e.target.closest("button[data-vm]");
   if (!btn) return;
   btn.closest("details")?.removeAttribute("open");
@@ -405,10 +429,13 @@ $("#vms").addEventListener("click", async (e) => {
       if (!confirm(`Delete ${name} and all its disks?`)) return;
       await del(`/vms/${id}`);
       toast(`${name} deleted`);
+      if (currentPage() === "vm") { location.hash = "compute"; return; }
     }
-    await refresh("compute");
+    await refresh(currentPage());
   } catch (err) { fail(err); }
-});
+}
+$("#vms").addEventListener("click", vmAction);
+$("#vm-actions").addEventListener("click", vmAction);
 
 handlers["vm-dialog"] = async (f) => {
   const body = {
@@ -416,6 +443,7 @@ handlers["vm-dialog"] = async (f) => {
     vcpus: Number(f.get("vcpus")),
     memory_mb: Number(f.get("memory_mb")),
     firmware: f.get("firmware"),
+    os_type: f.get("os_type").trim(),
     disks: [{ size_gb: Number(f.get("disk_gb")), pool: f.get("pool") || "default" }],
     nics: [{ network: f.get("network") || "default" }],
     node: f.get("node") || null,
@@ -528,6 +556,122 @@ handlers["node-dialog"] = async (f) => {
   toast(`${f.get("name")} joined the cluster`);
   await refresh("nodes");
 };
+
+// ---------- one VM ----------
+
+async function renderVMDetail() {
+  const uuid = vmFromHash();
+  const vm = state.vms.find((v) => v.uuid === uuid);
+  if (!vm) {
+    $("#vm-title").textContent = "VM not found";
+    $("#vm-crumb").textContent = uuid;
+    $("#vm-subtitle").textContent = "It may have been deleted, or moved and renamed.";
+    ["#vm-actions", "#vm-stats", "#vm-general", "#vm-guest", "#vm-net", "#vm-hw", "#vm-backups", "#vm-feed"].forEach((id) => { $(id).innerHTML = ""; });
+    return;
+  }
+  let g = null;
+  if (vm.state === "running") g = await api(`/vms/${uuid}/guest`).catch(() => null);
+  const os = osName(vm, g), ips = ipList(g);
+  const host = state.hosts[vm.node];
+  const diskTotal = vm.disks.reduce((sum, d) => sum + d.size_gb, 0);
+
+  $("#vm-crumb").textContent = vm.name;
+  $("#vm-title").innerHTML = `${esc(vm.name)} <span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`;
+  $("#vm-subtitle").textContent = [os || "Operating system not set", vm.node && `on ${vm.node}`, ips[0]].filter(Boolean).join(" · ");
+  $("#vm-actions").innerHTML = vmMenu(vm);
+
+  const stat = (label, value, note = "") => `<div class="stat"><span>${esc(label)}</span><b>${value}</b><em>${note}</em></div>`;
+  $("#vm-stats").innerHTML = [
+    stat("vCPU", vm.vcpus, host ? `of ${host.cpus} cores on ${esc(vm.node)}` : ""),
+    stat("Memory", gbText(vm.memory_mb), host ? `of ${gbText(host.memory_mb)}` : ""),
+    stat("Disk", `${diskTotal} GB`, `${vm.disks.length} disk${vm.disks.length === 1 ? "" : "s"}`),
+    stat("Network", `${vm.nics.length} adapter${vm.nics.length === 1 ? "" : "s"}`, esc(ips.join(", ") || "No address reported")),
+  ].join("");
+
+  const kv = (rows) => rows.filter((r) => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("");
+  const dash = `<span class="muted">–</span>`;
+  $("#vm-general").innerHTML = kv([
+    ["Name", esc(vm.name)],
+    ["Status", `<span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`],
+    ["Node", esc(vm.node || "–")],
+    ["Operating system", vm.os_type ? esc(vm.os_type) : `<span class="muted">Not set</span>`],
+    ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
+    ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
+    ["Description", vm.description ? esc(vm.description) : dash],
+    ["UUID", `<span class="mono">${esc(vm.uuid)}</span>`],
+  ]);
+
+  const agentText = g?.agent
+    ? `<span class="dot ok"></span> Running`
+    : vm.state === "running"
+      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Install qemu-guest-agent in the guest to see its OS, hostname and IP addresses.</span>`
+      : `<span class="dot"></span> VM is powered off`;
+  $("#vm-guest").innerHTML = kv([
+    ["Guest agent", agentText],
+    ["Reported OS", g?.os_name ? esc(g.os_name) : dash],
+    ["Version", g?.os_version ? esc(g.os_version) : dash],
+    ["Kernel", g?.kernel ? `<span class="mono">${esc(g.kernel)}</span>` : dash],
+    ["Hostname", g?.hostname ? esc(g.hostname) : dash],
+    ["IP addresses", ips.length ? ips.map((ip) => `<span class="mono">${esc(ip)}</span>`).join("<br>") : dash],
+  ]);
+
+  const ifaces = g?.interfaces || [];
+  const byMac = (mac) => ifaces.find((i) => mac && i.mac.toLowerCase() === mac.toLowerCase());
+  $("#vm-net").innerHTML = vm.nics.length ? vm.nics.map((n, i) => {
+    const iface = byMac(n.mac) || ifaces[i];
+    return `<tr><td><span class="vm-name">Adapter ${i + 1}</span><span class="vm-sub">${esc(iface?.name || n.model)}</span></td>
+      <td>${esc(n.network)}</td><td class="mono">${esc(n.mac || iface?.mac || "assigned at power on")}</td>
+      <td>${iface?.ips.length ? iface.ips.map((ip) => `<span class="mono">${esc(ip)}</span>`).join("<br>") : dash}</td></tr>`;
+  }).join("") : empty(4, "No network adapters");
+
+  const hw = [
+    ["i-compute", "Processor", `${vm.vcpus} vCPU`, host ? `Host has ${host.cpus} cores` : ""],
+    ["i-server", "Memory", gbText(vm.memory_mb), `${vm.memory_mb} MB`],
+    ...vm.disks.map((d, i) => ["i-disk", `Hard disk ${i + 1}`, `${d.size_gb} GB`, `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
+    ...vm.nics.map((n, i) => ["i-migrate", `Network adapter ${i + 1}`, esc(n.network), `${esc(n.model)} · <span class="mono">${esc(n.mac || "auto")}</span>`]),
+    ["i-disk", "CD/DVD drive", vm.iso ? "ISO attached" : "Empty", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : ""],
+    ["i-system", "Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS", "Guest agent channel enabled"],
+  ];
+  $("#vm-hw").innerHTML = hw.map(([icon, dev, conf, det]) => `<tr>
+    <td><div class="name-cell">${avatar(icon)}<span class="vm-name">${esc(dev)}</span></div></td>
+    <td>${conf}</td><td class="muted">${det}</td></tr>`).join("");
+
+  const mine = activities().filter((a) => a.what === vm.name);
+  $("#vm-feed").innerHTML = mine.length ? mine.slice(0, 50).map((a) => `<li>
+    ${avatar(a.icon)}
+    <div><b>${esc(a.kind)}</b> <span class="vm-sub">${esc(a.where)}${a.error ? ` · ${esc(a.error)}` : ""}</span></div>
+    <span class="badge ${esc(a.state)}">${JOB_STATE[a.state] || esc(a.state)}</span>
+    <span class="when">${esc(ago(a.created))}</span></li>`).join("") : `<li class="hint">No backups, restores or migrations for this VM yet.</li>`;
+
+  await renderVMBackups(vm);
+}
+
+async function renderVMBackups(vm) {
+  const tbody = $("#vm-backups");
+  if (!state.targets.length) { tbody.innerHTML = empty(6, "Add a backup target first (Backup → Targets)"); return; }
+  const lists = await Promise.all(state.targets.map((t) =>
+    api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
+  const points = lists.flat().filter((b) => b.vm_name === vm.name).sort((a, b) => b.created.localeCompare(a.created));
+  const op = canOperate();
+  tbody.innerHTML = points.length ? points.map((b) => `<tr>
+    <td>${esc(when(b.created))}</td><td>${esc(b.target)}</td><td>${esc(b.node || "shared")}</td>
+    <td>${size(b.size_bytes)}</td><td>${size(b.stored_bytes)}</td>
+    <td><div class="actions">${op ? `<button class="small" data-restore="${esc(b.id)}" data-target="${esc(b.target)}" data-node="${esc(b.node || "")}">Restore</button>` : ""}</div></td>
+  </tr>`).join("") : empty(6, "No restore points for this VM yet");
+}
+
+$("#vm-backups").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-restore]");
+  if (!btn) return;
+  const d = btn.dataset, vm = state.vms.find((v) => v.uuid === vmFromHash());
+  openDialog("restore-dialog", { target: d.target, id: d.restore, sourceNode: d.node }, { name: `${vm?.name || "vm"}-restore` });
+});
+$("#vm-backup-now").addEventListener("click", () => {
+  const vm = state.vms.find((v) => v.uuid === vmFromHash());
+  if (!vm) return;
+  if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
+  openDialog("backup-dialog", { id: vm.uuid, name: vm.name });
+});
 
 // ---------- backup ----------
 
@@ -657,8 +801,8 @@ handlers["policy-dialog"] = async (f) => {
 handlers["restore-dialog"] = async (f, ctx) => {
   const body = { name: f.get("name") || null, node: f.get("node") || null, pool: f.get("pool") || null, source_node: ctx.sourceNode || null };
   await post(`/backup/targets/${enc(ctx.target)}/backups/${enc(ctx.id)}/restore`, body);
-  toast(`Restoring ${body.name}. Progress is under Jobs.`);
-  await refresh("backup");
+  toast(`Restoring ${body.name}. Progress is under Backup → Jobs.`);
+  await refresh(currentPage());
 };
 
 // ---------- migrate ----------

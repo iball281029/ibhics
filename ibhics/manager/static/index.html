@@ -128,7 +128,7 @@
           <button class="primary operator-only" data-open="vm-dialog">+ Create VM</button>
         </div>
         <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>Name</th><th>Status</th><th>Node</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Status</th><th>Operating system</th><th>IP address</th><th>Node</th><th>vCPU</th><th>Memory</th><th>Disks</th><th></th></tr></thead>
           <tbody id="vms"></tbody>
         </table></div>
       </div>
@@ -138,6 +138,51 @@
           <thead><tr><th>VM</th><th>From</th><th>To</th><th>Type</th><th>Started</th><th>Status</th><th>Details</th></tr></thead>
           <tbody id="moves"></tbody>
         </table></div>
+      </div>
+    </section>
+
+    <section class="page" id="page-vm">
+      <div class="crumb"><a href="#compute">Virtual Machines</a><svg><use href="#i-chev"/></svg><span id="vm-crumb"></span></div>
+      <div class="sheet">
+        <div class="vm-head">
+          <span class="avatar big"><svg><use href="#i-compute"/></svg></span>
+          <div class="vm-title"><h1 id="vm-title"></h1><div class="vm-sub" id="vm-subtitle"></div></div>
+          <span class="spacer"></span>
+          <div class="actions operator-only" id="vm-actions"></div>
+        </div>
+        <div class="stats" id="vm-stats"></div>
+        <div class="tabs" id="vm-tabs">
+          <button data-tab="vm-summary" class="active">Summary</button>
+          <button data-tab="vm-hardware">Hardware</button>
+          <button data-tab="vm-backups">Backups</button>
+          <button data-tab="vm-activity">Activity</button>
+        </div>
+        <div class="subpage active" id="tab-vm-summary">
+          <div class="cards">
+            <div class="card"><h3>General</h3><dl class="kv" id="vm-general"></dl></div>
+            <div class="card"><h3>Guest operating system</h3><dl class="kv" id="vm-guest"></dl></div>
+          </div>
+          <div class="card wide"><h3>Network</h3><div class="table-wrap"><table>
+            <thead><tr><th>Adapter</th><th>Network</th><th>MAC address</th><th>IP addresses</th></tr></thead>
+            <tbody id="vm-net"></tbody>
+          </table></div></div>
+        </div>
+        <div class="subpage" id="tab-vm-hardware">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Device</th><th>Configuration</th><th>Details</th></tr></thead>
+            <tbody id="vm-hw"></tbody>
+          </table></div>
+        </div>
+        <div class="subpage" id="tab-vm-backups">
+          <div class="toolbar"><span class="hint">Restore points of this VM on every backup target</span><span class="spacer"></span><button class="primary operator-only" id="vm-backup-now">Back up now</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Created</th><th>Target</th><th>Kept on</th><th>VM size</th><th>Stored</th><th></th></tr></thead>
+            <tbody id="vm-backups"></tbody>
+          </table></div>
+        </div>
+        <div class="subpage" id="tab-vm-activity">
+          <ul class="feed section" id="vm-feed"></ul>
+        </div>
       </div>
     </section>
 
@@ -312,12 +357,18 @@
       <label>Disk (GB) <input name="disk_gb" type="number" min="1" value="40"></label>
       <label>Storage pool <input name="pool" value="default" list="pool-names"></label>
       <label>Firmware <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select></label>
+      <label>Operating system <input name="os_type" maxlength="64" list="os-names" placeholder="Ubuntu 24.04 LTS"></label>
       <label>Network <input name="network" value="default"></label>
       <label>ISO (optional) <input name="iso" placeholder="/var/lib/ibhics/iso/debian.iso"></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create</button></footer>
   </form>
 </dialog>
+<datalist id="os-names">
+  <option value="Windows Server 2025"><option value="Windows Server 2022"><option value="Windows Server 2019"><option value="Windows 11">
+  <option value="Ubuntu 24.04 LTS"><option value="Ubuntu 22.04 LTS"><option value="Debian 13"><option value="Red Hat Enterprise Linux 9">
+  <option value="Rocky Linux 9"><option value="AlmaLinux 9"><option value="Oracle Linux 9"><option value="SUSE Linux Enterprise 15">
+</datalist>
 <datalist id="pool-names"></datalist>
 
 <dialog id="pool-dialog">
