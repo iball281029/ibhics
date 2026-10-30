@@ -411,7 +411,12 @@ def env(tmp_path):
     agents.add("http://witness:8007", "witness", NodeRole.WITNESS)
     cluster = Cluster(token=TOKEN, client_factory=agents.client, clock=Clock())
     cluster.add_local("node1", FakeDriver(memory_mb=65536))
-    imports = ImportManager(cluster, state_path=tmp_path / "migrate.json", executor=Inline())
+    imports = ImportManager(
+        cluster,
+        state_path=tmp_path / "migrate.json",
+        executor=Inline(),
+        upload_dir=tmp_path / "uploads",
+    )
     client = TestClient(create_app(cluster, imports=imports))
     join(client, "node2", "compute", "http://node2:8007")
     join(client, "witness", "witness", "http://witness:8007")
@@ -448,13 +453,44 @@ def test_import_through_api(env):
     assert missing.status_code == 404
 
 
+def test_upload_a_file_and_import_it(env):
+    client, imports, exports, node2, tmp_path = env
+    ova = (exports / "web-01.ova").read_bytes()
+    resp = client.put("/api/v1/migrate/uploads/web-01.ova", content=ova)
+    assert resp.status_code == 200 and resp.json()["size_bytes"] == len(ova)
+    assert client.get("/api/v1/migrate/uploads").json() == [
+        {"name": "web-01.ova", "size_bytes": len(ova)}
+    ]
+    for bad in ("..%2Fx.ova", "notes.txt", ".hidden.ova"):
+        assert client.put(f"/api/v1/migrate/uploads/{bad}", content=b"x").status_code in (
+            404,
+            405,
+            422,
+        )
+
+    [vm] = client.get("/api/v1/migrate/sources/uploads/vms").json()
+    # Uploaded files are on the manager's disk, so node1 converts them.
+    assert (
+        client.post(
+            "/api/v1/migrate/jobs", json={"source": "uploads", "vm": vm["ref"], "node": "node2"}
+        ).status_code
+        == 422
+    )
+    job = client.post("/api/v1/migrate/jobs", json={"source": "uploads", "vm": vm["ref"]}).json()
+    assert job["node"] == "node1" and job["state"] == "done", job
+    assert client.delete("/api/v1/migrate/sources/uploads").status_code == 422
+    assert client.delete("/api/v1/migrate/uploads/web-01.ova").status_code == 204
+    assert client.get("/api/v1/migrate/uploads").json() == []
+
+
 def test_vmware_source_keeps_password_private(env):
     client, imports, _, _, tmp_path = env
     body = {"name": "esx", "type": "vmware", "host": "10.0.0.50", "username": "root"}
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 422
     body["password"] = "VMware1!"
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 201
-    [listed] = client.get("/api/v1/migrate/sources").json()
+    uploads, listed = client.get("/api/v1/migrate/sources").json()
+    assert uploads["name"] == "uploads"  # built in, always first
     assert listed["settings"]["password"] == "********"
     state = tmp_path / "migrate.json"
     assert state.stat().st_mode & 0o077 == 0

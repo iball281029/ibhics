@@ -269,14 +269,17 @@
         </div>
         <div class="subpage active" id="tab-import">
           <div class="steps">
-            <div class="step"><b>1</b><span>Add a source: ESXi, vCenter or a folder of OVA or disk files</span></div>
+            <div class="step"><b>1</b><span>Add a source (ESXi, vCenter, a folder of exports) or upload OVA / disk files from any platform</span></div>
             <div class="step"><b>2</b><span>Pick a VM and power it off at the source</span></div>
             <div class="step"><b>3</b><span>Import: disks are converted, drivers fixed, the VM is created</span></div>
           </div>
           <div class="toolbar">
             <label style="display:flex;align-items:center;gap:8px">Source <select id="browse-source" class="source-list" style="width:auto"></select></label>
-            <span class="spacer"></span><button id="refresh-source">Refresh</button>
+            <span class="spacer"></span>
+            <label class="btn operator-only" title="OVA, VMDK, VHD/VHDX (Hyper-V), QCOW2 or raw: exports from any platform">Upload files<input type="file" id="upload-files" multiple accept=".ova,.vmdk,.vhdx,.vhd,.qcow2,.img,.raw" hidden></label>
+            <button id="refresh-source">Refresh</button>
           </div>
+          <div id="uploads-progress"></div>
           <div class="table-wrap"><table>
             <thead><tr><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
             <tbody id="source-vms"></tbody>

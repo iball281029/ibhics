@@ -461,6 +461,11 @@ class SourceIn(BaseModel):
         return Source(**{**self.model_dump(), "type": SourceType(self.type)})
 
 
+class UploadOut(BaseModel):
+    name: str
+    size_bytes: int
+
+
 class SourceOut(BaseModel):
     name: str
     type: str

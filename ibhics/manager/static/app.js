@@ -65,7 +65,7 @@ const state = { me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: 
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Local", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
-const SOURCE_TYPES = { vmware: "VMware", ova: "OVA folder", disk: "Disk images" };
+const SOURCE_TYPES = { vmware: "VMware", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
@@ -870,13 +870,14 @@ function renderSources() {
   const admin = isAdmin();
   $("#sources").innerHTML = state.sources.length ? state.sources.map((s) => {
     const st = s.settings;
-    const where = s.type === "vmware" ? `${st.host}${st.path ? ` / ${st.path}` : ""}` : st.path;
+    const where = s.type === "vmware" ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
+      : s.type === "upload" ? "Files uploaded with Import VMs → Upload files" : st.path;
     return `<tr>
       <td><div class="name-cell">${avatar("i-migrate")}<span class="vm-name">${esc(s.name)}</span></div></td>
       <td><span class="badge info plain">${esc(SOURCE_TYPES[s.type] || s.type)}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(where)}</td>
       <td>${esc(st.username || "–")}</td>
-      <td><div class="actions">${admin ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
+      <td><div class="actions">${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
     </tr>`;
   }).join("") : empty(5, "No sources yet. Add an ESXi host, a vCenter or a folder of exports.");
 }
@@ -908,10 +909,57 @@ async function renderSourceVMs() {
     <td>${esc(vm.guest_os || "–")}${vm.notes ? `<span class="vm-sub clip" title="${esc(vm.notes)}">${esc(vm.notes)}</span>` : ""}</td>
     <td><div class="actions">${!op ? "" : vm.state === "running"
       ? `<button class="small" disabled title="Power the VM off at the source first">Import</button>`
-      : `<button class="small primary" data-import="${i}">Import</button>`}</div></td>
+      : `<button class="small primary" data-import="${i}">Import</button>`}${op && sourceVMsFor === "uploads"
+      ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
   </tr>`).join("") : empty(8, "No VMs found on this source");
 }
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
+
+// Uploads stream straight to the node's disk; big exports take a while, so each file
+// shows its own progress bar.
+function uploadFile(file, row) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", `/api/v1/migrate/uploads/${enc(file.name)}`);
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.floor((e.loaded / e.total) * 100);
+      $(".bar i", row).style.width = `${pct}%`;
+      $(".pct", row).textContent = `${pct}% of ${gbText(file.size / 1048576)}`;
+    };
+    xhr.onload = () => {
+      if (xhr.status < 300) return resolve();
+      let detail = xhr.statusText;
+      try { detail = JSON.parse(xhr.responseText).detail || detail; } catch { /* keep statusText */ }
+      reject(new Error(typeof detail === "string" ? detail : JSON.stringify(detail)));
+    };
+    xhr.onerror = () => reject(new Error("the upload was interrupted"));
+    xhr.send(file);
+  });
+}
+$("#upload-files").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  const box = $("#uploads-progress");
+  for (const file of files) {
+    const row = document.createElement("div");
+    row.className = "upload-row";
+    row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
+    box.append(row);
+    try {
+      await uploadFile(file, row);
+      $(".pct", row).textContent = "Uploaded";
+      setTimeout(() => row.remove(), 5000);
+    } catch (err) {
+      row.classList.add("failed");
+      $(".pct", row).textContent = err.message;
+    }
+  }
+  await load("sources");
+  fillSelects();
+  $("#browse-source").value = "uploads";
+  renderSourceVMs();
+});
 $("#refresh-source").addEventListener("click", () => renderSourceVMs());
 
 function renderImports() {
@@ -925,6 +973,11 @@ function renderImports() {
 $("#page-migrate").addEventListener("click", async (e) => {
   const imp = e.target.closest("button[data-import]");
   const rm = e.target.closest("button[data-source-del]");
+  const upDel = e.target.closest("button[data-upload-del]");
+  if (upDel) {
+    if (!confirm(`Delete the uploaded file ${upDel.dataset.uploadDel}?`)) return;
+    try { await del(`/migrate/uploads/${enc(upDel.dataset.uploadDel)}`); renderSourceVMs(); } catch (err) { fail(err); }
+  }
   if (imp) {
     const vm = sourceVMs[Number(imp.dataset.import)];
     if (vm.state === "running" && !confirm(`${vm.name} is running at the source. Its disks may change during the copy. Continue anyway?`)) return;

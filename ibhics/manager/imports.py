@@ -17,6 +17,7 @@ from ..cluster import Cluster
 from ..hypervisor import VMExists
 from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
+from ..importer.sources import IMAGE_SUFFIXES
 
 
 @dataclass
@@ -61,6 +62,21 @@ def check_space(member, pool: str, vm: SourceVM) -> None:
     )
 
 
+UPLOAD_DIR = Path("/var/lib/ibhics/uploads")
+UPLOADS = "uploads"
+UPLOAD_SUFFIXES = (".ova", *IMAGE_SUFFIXES)
+
+
+def upload_path(folder: Path, filename: str) -> Path:
+    """Where an uploaded file goes; refuses names that could leave the folder."""
+    name = Path(filename).name
+    if name != filename or name.startswith(".") or not name:
+        raise ValueError("file name must not contain a path")
+    if Path(name).suffix.lower() not in UPLOAD_SUFFIXES:
+        raise ValueError(f"upload an OVA or a disk image ({', '.join(UPLOAD_SUFFIXES)})")
+    return folder / name
+
+
 class ImportManager:
     def __init__(
         self,
@@ -69,8 +85,10 @@ class ImportManager:
         discover: Callable[[Source], list[SourceVM]] = list_vms,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         executor: Executor | None = None,
+        upload_dir: Path = UPLOAD_DIR,
     ) -> None:
         self._cluster = cluster
+        self.upload_dir = Path(upload_dir)
         self._state_path = state_path
         self._discover = discover
         self._clock = clock
@@ -83,11 +101,18 @@ class ImportManager:
 
     # Sources
 
+    @property
+    def uploads_source(self) -> Source:
+        return Source(UPLOADS, SourceType.UPLOAD, path=str(self.upload_dir))
+
     def sources(self) -> list[Source]:
         with self._lock:
-            return list(self._sources.values())
+            return [self.uploads_source, *self._sources.values()]
 
     def source(self, name: str) -> Source:
+        if name == UPLOADS:
+            self.upload_dir.mkdir(parents=True, exist_ok=True)
+            return self.uploads_source
         with self._lock:
             try:
                 return self._sources[name]
@@ -96,14 +121,18 @@ class ImportManager:
 
     def add_source(self, source: Source) -> Source:
         source.validate()
+        if source.type == SourceType.UPLOAD:
+            raise ValueError("uploaded files have their own built-in source")
         with self._lock:
-            if source.name in self._sources:
+            if source.name in self._sources or source.name == UPLOADS:
                 raise VMExists(f"a migrate source named {source.name!r} already exists")
             self._sources[source.name] = source
             self._save()
         return source
 
     def remove_source(self, name: str) -> None:
+        if name == UPLOADS:
+            raise ValueError("the uploads source is built in; delete the files instead")
         with self._lock:
             self.source(name)
             del self._sources[name]
@@ -143,11 +172,19 @@ class ImportManager:
             taken |= {j.name for j in self._jobs if j.state in ("queued", "running")}
             if name in taken:
                 raise VMExists(f"a VM named {name!r} already exists; choose another name")
-            member = (
-                self._cluster.member(node)
-                if node
-                else self._cluster.pick_node(memory_mb or vm.memory_mb)
-            )
+            if source.type == SourceType.UPLOAD:
+                # Uploaded files are on the manager's own disk, so it converts them.
+                member = next((m for m in self._cluster.compute_members() if m.local), None)
+                if member is None or (node and node != member.name):
+                    raise ValueError(
+                        "uploaded files are imported on the node that runs the web console"
+                    )
+            else:
+                member = (
+                    self._cluster.member(node)
+                    if node
+                    else self._cluster.pick_node(memory_mb or vm.memory_mb)
+                )
             check_space(member, pool, vm)
             job = ImportJob(
                 id=str(next(self._ids)),

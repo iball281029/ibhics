@@ -180,7 +180,7 @@ class V2VConverter:
                 with os.fdopen(fd, "w") as f:  # mkstemp makes it readable by us only
                     f.write(source.password or "")
                 cmd = ["virt-v2v", "-ic", source.libvirt_uri, "-ip", password_file, vm.ref]
-            elif source.type == SourceType.OVA:
+            elif source.type == SourceType.OVA or vm.ref.lower().endswith(".ova"):
                 cmd = ["virt-v2v", "-i", "ova", vm.ref]
             else:
                 cmd = ["virt-v2v", "-i", "disk", vm.ref]

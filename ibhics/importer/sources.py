@@ -38,6 +38,7 @@ class SourceType(StrEnum):
     VMWARE = "vmware"
     OVA = "ova"
     DISK = "disk"
+    UPLOAD = "upload"  # files uploaded through the web console, on the manager's node
 
 
 class SourceNotFound(LookupError):
@@ -192,6 +193,16 @@ def list_vms(
         raise SourceUnavailable(f"{folder} is not a folder on this node; is the share mounted?")
     if source.type == SourceType.OVA:
         return [parse_ova(p) for p in sorted(folder.glob("*.ova"))]
+    if source.type == SourceType.UPLOAD:
+        found = []
+        for p in sorted(folder.iterdir()):
+            if not p.is_file() or p.name.startswith("."):
+                continue  # .partial: an upload still on its way
+            if p.suffix.lower() == ".ova":
+                found.append(parse_ova(p))
+            elif p.suffix.lower() in IMAGE_SUFFIXES:
+                found.append(describe_image(p, run))
+        return found
     return [
         describe_image(p, run)
         for p in sorted(folder.iterdir())

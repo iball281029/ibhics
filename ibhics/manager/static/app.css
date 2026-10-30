@@ -291,3 +291,9 @@ fieldset.vm-checks legend { padding: 0 4px; color: var(--muted); font-size: 12px
 .vm-check-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 12px; max-height: 180px; overflow-y: auto; }
 .vm-check-list .muted { color: var(--muted); font-size: 12px; }
 label.wide { grid-column: 1 / -1; }
+
+#uploads-progress { display: grid; gap: 6px; margin: 0 26px 10px; }
+.upload-row { display: grid; grid-template-columns: minmax(120px, 260px) 1fr auto; gap: 12px; align-items: center; font-size: 13px; }
+.upload-row .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.upload-row .bar i { display: block; height: 100%; width: 0; background: var(--accent, #0a84ff); transition: width .3s; }
+.upload-row.failed .pct { color: var(--bad, #e5484d); }

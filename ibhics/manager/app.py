@@ -15,10 +15,11 @@ from .. import RELEASE_NAME, __version__, console
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
 from ..hypervisor.serialize import guest_to_json
+from ..importer import SourceNotFound
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
-from .imports import ImportManager
+from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
 from .schemas import (
     AuditOut,
@@ -49,6 +50,7 @@ from .schemas import (
     SourceOut,
     SourceVMOut,
     StopRequest,
+    UploadOut,
     UserIn,
     UserOut,
     UserUpdate,
@@ -454,6 +456,42 @@ def create_app(
     def remove_source(name: str) -> None:
         cluster.require_quorum()
         imports.remove_source(name)
+
+    # Files uploaded from the browser (OVA, VMDK, VHD/VHDX, QCOW2, raw): for VMs from any
+    # platform that can export them. They appear under the built-in "uploads" source.
+
+    @api.get("/migrate/uploads", response_model=list[UploadOut])
+    def list_uploads() -> list[UploadOut]:
+        folder = imports.upload_dir
+        files = sorted(folder.iterdir()) if folder.is_dir() else []
+        return [
+            UploadOut(name=p.name, size_bytes=p.stat().st_size)
+            for p in files
+            if p.is_file() and not p.name.startswith(".")
+        ]
+
+    @api.put("/migrate/uploads/{filename}", response_model=UploadOut)
+    async def upload(filename: str, request: Request) -> UploadOut:
+        target = upload_path(imports.upload_dir, filename)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(f".{target.name}.partial")
+        size = 0
+        try:
+            with open(partial, "wb") as f:
+                async for chunk in request.stream():
+                    await asyncio.to_thread(f.write, chunk)
+                    size += len(chunk)
+            partial.replace(target)
+        finally:
+            partial.unlink(missing_ok=True)
+        return UploadOut(name=target.name, size_bytes=size)
+
+    @api.delete("/migrate/uploads/{filename}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_upload(filename: str) -> None:
+        target = upload_path(imports.upload_dir, filename)
+        if not target.is_file():
+            raise SourceNotFound(f"uploads: no file {filename!r}")
+        target.unlink()
 
     @api.get("/migrate/sources/{name}/vms", response_model=list[SourceVMOut])
     def source_vms(name: str) -> list[SourceVMOut]:
