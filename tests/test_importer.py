@@ -339,3 +339,18 @@ def test_unreachable_folder_is_reported(env):
     client.post("/api/v1/migrate/sources", json={"name": "gone", "type": "disk", "path": "/nope"})
     resp = client.get("/api/v1/migrate/sources/gone/vms")
     assert resp.status_code == 502 and "mounted" in resp.json()["detail"]
+
+
+def test_unreachable_vmware_host_fails_fast():
+    import socket
+    import time
+
+    from ibhics.importer.sources import SourceUnavailable, check_reachable
+
+    with socket.socket() as srv:  # a port that is bound but never accepts: refused at once
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+    start = time.monotonic()
+    with pytest.raises(SourceUnavailable, match=f"cannot reach 127.0.0.1 on port {port}"):
+        check_reachable("127.0.0.1", port, timeout=2)
+    assert time.monotonic() - start < 3

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import subprocess
 import tarfile
 import xml.etree.ElementTree as ET
@@ -113,7 +114,20 @@ class SourceVM:
 Opener = Callable[[Source], object]  # returns a libvirt connection
 
 
+def check_reachable(host: str, port: int = 443, timeout: float = 5.0) -> None:
+    """Fail fast with a clear message: libvirt waits minutes on an unreachable host."""
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+    except OSError as exc:
+        reason = "timed out" if isinstance(exc, TimeoutError) else exc.strerror or str(exc)
+        raise SourceUnavailable(
+            f"cannot reach {host} on port {port} ({reason}). Check that this node can route "
+            f"to it and that no firewall blocks HTTPS between them."
+        ) from None
+
+
 def open_vmware(source: Source):
+    check_reachable(source.host)
     try:
         import libvirt
     except ImportError:
@@ -123,11 +137,13 @@ def open_vmware(source: Source):
         for cred in creds:
             if cred[0] == libvirt.VIR_CRED_AUTHNAME:
                 cred[4] = source.username
-            elif cred[0] == libvirt.VIR_CRED_PASSPHRASE:
+            elif cred[0] in (libvirt.VIR_CRED_PASSPHRASE, libvirt.VIR_CRED_NOECHOPROMPT):
                 cred[4] = source.password
         return 0
 
-    auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_PASSPHRASE], credentials, None]
+    # The ESX driver asks for the password as a no-echo prompt on some libvirt versions.
+    kinds = [libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_PASSPHRASE, libvirt.VIR_CRED_NOECHOPROMPT]
+    auth = [kinds, credentials, None]
     try:
         return libvirt.openAuth(source.libvirt_uri, auth, 0)
     except libvirt.libvirtError as exc:
