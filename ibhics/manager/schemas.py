@@ -466,6 +466,7 @@ class SourceVMOut(BaseModel):
     nics: int
     state: str
     guest_os: str
+    notes: str = ""
 
 
 class ImportRequest(BaseModel):

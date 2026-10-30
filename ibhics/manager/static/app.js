@@ -226,7 +226,7 @@ const loaders = {
 };
 const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
 
-async function refresh(page) {
+async function refresh(page, auto = false) {
   await loadCluster();
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
@@ -234,7 +234,7 @@ async function refresh(page) {
   if (page === "storage") { await load("pools", "vms"); renderPools(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
-  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); await renderSourceVMs(); }
+  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "activity") { await load("jobs", "moves", "imports"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();
@@ -823,14 +823,19 @@ function renderSources() {
 }
 
 let sourceVMs = [];
+let sourceVMsFor = null;  // the source the list above was read from
 async function renderSourceVMs() {
   const name = $("#browse-source").value || state.sources[0]?.name;
   const tbody = $("#source-vms");
   if (!name) { tbody.innerHTML = empty(8, "Add a source first (Sources tab)"); return; }
+  // Reading ESXi or vCenter takes seconds, so the 10 s auto-refresh leaves this list
+  // alone; it reloads only on Refresh or when another source is picked.
   tbody.innerHTML = empty(8, "Reading the source…");
   try {
     sourceVMs = await api(`/migrate/sources/${enc(name)}/vms`);
+    sourceVMsFor = name;
   } catch (err) {
+    sourceVMsFor = null;
     tbody.innerHTML = empty(8, err.message);
     return;
   }
@@ -841,8 +846,10 @@ async function renderSourceVMs() {
     <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td>
     <td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
     <td>${esc(vm.firmware.toUpperCase())}</td>
-    <td class="vm-sub" style="display:table-cell">${esc(vm.guest_os || "")}</td>
-    <td><div class="actions">${op ? `<button class="small primary" data-import="${i}">Import</button>` : ""}</div></td>
+    <td>${esc(vm.guest_os || "–")}${vm.notes ? `<span class="vm-sub clip" title="${esc(vm.notes)}">${esc(vm.notes)}</span>` : ""}</td>
+    <td><div class="actions">${!op ? "" : vm.state === "running"
+      ? `<button class="small" disabled title="Power the VM off at the source first">Import</button>`
+      : `<button class="small primary" data-import="${i}">Import</button>`}</div></td>
   </tr>`).join("") : empty(8, "No VMs found on this source");
 }
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
@@ -988,5 +995,5 @@ $("#password-form").addEventListener("submit", async (e) => {
 
 loadMe().then(show).catch(fail);
 setInterval(() => {
-  if (!document.querySelector("dialog[open]") && !document.hidden) refresh(currentPage()).catch(() => {});
+  if (!document.querySelector("dialog[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);

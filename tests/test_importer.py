@@ -115,6 +115,15 @@ def test_parse_vmware_xml():
     assert vm.nics == 1
 
 
+def test_vmware_guest_os_names():
+    from ibhics.importer.sources import guest_os_name
+
+    assert guest_os_name("ubuntu-64") == "Ubuntu Linux (64-bit)"
+    assert guest_os_name("rhel9_64Guest") == "Red Hat Enterprise Linux 9 (64-bit)"
+    assert guest_os_name("windows9-64") == "Windows 10 (64-bit)"
+    assert guest_os_name("someNewOs") == "someNewOs"
+
+
 def test_parse_ovf_and_ova(tmp_path):
     vm = parse_ovf(OVF)
     assert (vm.name, vm.vcpus, vm.memory_mb, vm.nics) == ("web-01", 2, 4096, 2)
@@ -145,9 +154,27 @@ def test_list_vmware_vms():
         def close(self):
             Conn.closed = True
 
-    vms = list_vms(VMWARE, opener=lambda _s: Conn())
+    files = {
+        "/folder/win2019-db/win2019-db.vmdk": 'RW 83886080 VMFS "win2019-db-flat.vmdk"',
+        "/folder/win2019-db/win2019-db_1.vmdk": 'RW 2097152 VMFS "x-flat.vmdk"\nRW 1 VMFS',
+        "/folder/win2019-db/win2019-db.vmx": 'displayName = "x"\nguestOS = "windows2019srv-64"',
+    }
+    urls = []
+
+    def fetch(_source, url):
+        urls.append(url)
+        path = url.split("//", 1)[1].split("/", 1)[1].split("?")[0]
+        if "/" + path not in files:
+            raise OSError("404")
+        return files["/" + path]
+
+    vms = list_vms(VMWARE, opener=lambda _s: Conn(), fetch=fetch)
     assert [(v.name, v.state) for v in vms] == [("app", "stopped"), ("win2019-db", "running")]
     assert Conn.closed
+    db = vms[1]
+    assert db.disks_gb == [40, 2] and db.guest_os == "Windows Server 2019 (64-bit)"
+    assert "dcPath=ha-datacenter&dsName=ds1" in urls[0]
+    assert vms[0].disks_gb == [0, 0] and vms[0].guest_os == ""  # files missing: blanks
 
 
 def test_list_disk_images(tmp_path):
