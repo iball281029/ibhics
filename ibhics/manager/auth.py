@@ -275,9 +275,11 @@ class Auth:
             ok = verify_password(password, user.password_hash if user else _DUMMY_HASH)
             if not (ok and user and user.enabled):
                 recent.append(now)
+                self._forget_old_failures(now)
                 raise AuthError("wrong username or password")
             self._failures.pop(name, None)
             user.last_login = self._stamp()
+            self._drop_expired_sessions(now)
             session = Session(secrets.token_urlsafe(32), name, now, now)
             self._sessions[session.token] = session
             self._save()
@@ -295,15 +297,28 @@ class Auth:
             session = self._sessions.get(token)
             if session is None:
                 raise AuthError("sign in first")
-            expired = (
-                now - session.last_used > self.idle_timeout or now - session.created > self._max_age
-            )
+            expired = self._expired(session, now)
             user = self._users.get(session.user)
             if expired or user is None or not user.enabled:
                 del self._sessions[token]
                 raise AuthError("your session has ended; sign in again")
             session.last_used = now
             return user
+
+    def _expired(self, session: Session, now: float) -> bool:
+        return now - session.last_used > self.idle_timeout or now - session.created > self._max_age
+
+    def _drop_expired_sessions(self, now: float) -> None:
+        for token in [t for t, s in self._sessions.items() if self._expired(s, now)]:
+            del self._sessions[token]
+
+    def _forget_old_failures(self, now: float) -> None:
+        # Guesses at made-up usernames must not grow this without bound.
+        if len(self._failures) > 1000:
+            for name in [
+                n for n, ts in self._failures.items() if not ts or now - ts[-1] >= self._lockout
+            ]:
+                del self._failures[name]
 
     def _end_sessions(self, name: str) -> None:
         for token in [t for t, s in self._sessions.items() if s.user == name]:
