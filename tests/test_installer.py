@@ -146,6 +146,8 @@ def test_installer_files_agree():
     for menu in ("boot/isolinux.cfg", "boot/grub.cfg"):
         assert "preseed/file=/cdrom/ibhics/preseed.cfg" in (INSTALLER / menu).read_text()
     assert "/cdrom/ibhics /target/opt/ibhics-installer" in preseed
+    # The "by hand" entry must be able to ask which network port to use.
+    assert "d-i netcfg/choose_interface" not in preseed
     assert "sh /opt/ibhics-installer/install-ibhics.sh" in preseed
     for pkg in ("libvirt-daemon-system", "python3-libvirt", "open-iscsi", "bridge-utils"):
         assert pkg in preseed
