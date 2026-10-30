@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 from ..hypervisor import DiskSpec, HypervisorDriver, NicSpec, VMInfo, VMSpec
 from .convert import FakeConverter, V2VConverter
 from .sources import GIB, Source, SourceVM
-
-SCRATCH_DIR = "/var/lib/ibhics/scratch"
 
 
 class NodeImport:
@@ -21,9 +20,7 @@ class NodeImport:
         self._converter = converter or (
             FakeConverter() if isinstance(driver, FakeDriver) else V2VConverter()
         )
-        self._scratch = scratch_dir or (
-            tempfile.gettempdir() if isinstance(driver, FakeDriver) else SCRATCH_DIR
-        )
+        self._scratch = scratch_dir  # None: on the target pool (driver.scratch_space)
 
     def run(
         self,
@@ -36,9 +33,25 @@ class NodeImport:
         memory_mb: int | None = None,
         start: bool = False,
     ) -> VMInfo:
-        """Convert first, then create the VM, so nothing half-made exists during the copy."""
-        Path(self._scratch).mkdir(parents=True, exist_ok=True)
-        work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=self._scratch))
+        """Convert first, then create the VM, so nothing half-made exists during the copy.
+        The converted images wait on the target pool, not on the system disk."""
+        if self._scratch:
+            Path(self._scratch).mkdir(parents=True, exist_ok=True)
+            scratch = nullcontext(Path(self._scratch))
+        else:
+            scratch = self._driver.scratch_space(pool, sum(vm.disks_gb))
+        with scratch as base:
+            created = self._convert_and_create(
+                source, vm, name, pool, network, vcpus, memory_mb, base
+            )
+        if start:
+            self._driver.start_vm(created.uuid)
+        return self._driver.get_vm(created.uuid)
+
+    def _convert_and_create(
+        self, source, vm, name, pool, network, vcpus, memory_mb, base: Path
+    ) -> VMInfo:
+        work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=base))
         try:
             converted = self._converter.convert(source, vm, name, work)
             spec = VMSpec(
@@ -63,6 +76,4 @@ class NodeImport:
                 raise
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        if start:
-            self._driver.start_vm(created.uuid)
-        return self._driver.get_vm(created.uuid)
+        return created

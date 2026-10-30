@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import abc
 import re
-from contextlib import AbstractContextManager
+import shutil
+import tempfile
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -251,6 +254,17 @@ class HypervisorDriver(abc.ABC):
         same-named pool on the destination while the VM runs, then removed here.
         """
         raise NotImplementedError
+
+    @contextmanager
+    def scratch_space(self, pool: str, size_gb: int) -> Iterator[Path]:
+        """A temporary directory with room for size_gb of disk images, on storage pool
+        `pool` where the driver can do that, so a large import does not fill the system
+        disk. Removed afterwards."""
+        path = Path(tempfile.mkdtemp(prefix="ibhics-scratch-"))
+        try:
+            yield path
+        finally:
+            shutil.rmtree(path, ignore_errors=True)
 
     def guest_info(self, uuid: str) -> GuestInfo:
         """OS, hostname and addresses as the running guest reports them."""

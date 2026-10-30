@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
 import time
+import uuid as uuidlib
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
@@ -179,6 +182,11 @@ class LibvirtDriver(HypervisorDriver):
         if spec.name in self._pool_names() or iscsi_session_name(spec.name) in self._pool_names():
             raise InvalidState(f"a pool named {spec.name!r} already exists")
 
+        if spec.type == PoolType.LVM and spec.device.startswith("/dev/disk/"):
+            # libvirt finds the volume group by the device name pvs reports (/dev/sda), so a
+            # /dev/disk/by-id link would make the pool fail to start after vgcreate.
+            # (/dev/mapper names are what pvs reports for multipath, so they stay.)
+            spec = replace(spec, device=os.path.realpath(spec.device))
         session = None
         try:
             if spec.type == PoolType.ISCSI:
@@ -190,18 +198,69 @@ class LibvirtDriver(HypervisorDriver):
             else:
                 xml = build_pool_xml(spec)
             pool = self._conn.storagePoolDefineXML(xml)
+            built = False
             try:
                 # dir/netfs: create the directory. logical: pvcreate + vgcreate (erases the device).
                 pool.build(0)
+                built = True
                 self._start(pool)
             except Exception:
+                root = ET.fromstring(pool.XMLDesc(0))
                 _undefine(pool)
+                if built and root.get("type") == "logical":
+                    # Do not leave a volume group behind that blocks the next try.
+                    vg = root.findtext("source/name")
+                    device = root.find("source/device").get("path")
+                    for cmd in (["vgremove", "-f", vg], ["pvremove", "-ff", "-y", device]):
+                        try:
+                            self.run(cmd)
+                        except RuntimeError:
+                            pass
                 raise
         except Exception:
             if session is not None:
                 _undefine(session)
             raise
         return next(p for p in self.list_pools() if p.name == spec.name)
+
+    @contextmanager
+    def scratch_space(self, pool: str, size_gb: int) -> Iterator[Path]:
+        try:
+            target = self._conn.storagePoolLookupByName(pool)
+        except libvirt.libvirtError:
+            raise PoolNotFound(pool) from None
+        root = ET.fromstring(target.XMLDesc(0))
+        if root.get("type") in ("dir", "netfs"):
+            # Raw images are sparse, so this takes only the data actually copied.
+            base = Path(root.findtext("target/path")) / ".ibhics-scratch"
+            base.mkdir(parents=True, exist_ok=True)
+            path = Path(tempfile.mkdtemp(dir=base))
+            try:
+                yield path
+            finally:
+                shutil.rmtree(path, ignore_errors=True)
+            return
+        if root.get("type") != "logical" or size_gb <= 0:
+            with super().scratch_space(pool, size_gb) as path:
+                yield path
+            return
+        # LVM pool: a temporary logical volume with a filesystem, removed afterwards.
+        name = f"ibhics-scratch-{uuidlib.uuid4().hex[:8]}"
+        vol = target.createXML(
+            f"<volume><name>{name}</name><capacity unit='GiB'>{size_gb + 1}</capacity></volume>", 0
+        )
+        Path(self.scratch_dir).mkdir(parents=True, exist_ok=True)
+        mount = Path(tempfile.mkdtemp(prefix=f"{pool}-", dir=self.scratch_dir))
+        try:
+            self.run(["mkfs.xfs", "-q", vol.path()])
+            self.run(["mount", vol.path(), str(mount)])
+            try:
+                yield mount
+            finally:
+                self.run(["umount", str(mount)])
+        finally:
+            mount.rmdir()
+            vol.delete(0)
 
     def delete_pool(self, name: str) -> None:
         pool = self._pool(name)

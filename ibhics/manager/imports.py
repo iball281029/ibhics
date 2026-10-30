@@ -15,6 +15,7 @@ from pathlib import Path
 
 from ..cluster import Cluster
 from ..hypervisor import VMExists
+from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
 
 
@@ -37,16 +38,24 @@ class NotEnoughSpace(ValueError):
 
 
 def check_space(member, pool: str, vm: SourceVM) -> None:
-    """Refuse an import that cannot fit: the VM's disks may grow to their full size.
+    """Refuse an import that cannot fit: the VM's disks may grow to their full size, and
+    the converted images wait on the same pool first. On an LVM pool that waiting room is a
+    logical volume of the full size; on a directory pool the images are sparse.
     Sizes the source does not report (0) are not counted."""
-    needed = sum(vm.disks_gb)
-    if not needed:
+    disks = sum(vm.disks_gb)
+    if not disks:
         return
     info = next((p for p in member.driver.list_pools() if p.name == pool), None)
-    if info is None or info.available_gb >= needed:
+    if info is None:
         return
+    needed = disks * 2 if info.type in BLOCK_POOL_TYPES else disks
+    if info.available_gb >= needed:
+        return
+    room = f"{disks} GB of disks"
+    if needed > disks:
+        room = f"{needed} GB ({room} plus room to convert them)"
     raise NotEnoughSpace(
-        f"{vm.name} has {needed} GB of disks, but storage pool {pool!r} on {member.name} has "
+        f"{vm.name} needs {room}, but storage pool {pool!r} on {member.name} has "
         f"only {info.available_gb:.0f} GB free. Pick a larger pool (for example an NFS or "
         f"iSCSI pool under Storage) or free up space."
     )

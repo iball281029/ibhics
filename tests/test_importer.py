@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from test_cluster import TOKEN, Agents, Clock, join
 
 from ibhics.cluster import Cluster, NodeRole
-from ibhics.hypervisor import Firmware
+from ibhics.hypervisor import Firmware, PoolType
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.importer import (
     ConversionFailed,
@@ -273,6 +273,20 @@ def test_node_import_creates_vm_after_conversion(tmp_path):
     assert list(tmp_path.iterdir()) == []  # scratch cleaned
 
 
+def test_node_import_converts_on_the_target_pool(tmp_path):
+    used = []
+
+    class Driver(FakeDriver):
+        def scratch_space(self, pool, size_gb):
+            used.append((pool, size_gb))
+            return super().scratch_space(pool, size_gb)
+
+    driver = Driver()
+    vm = SourceVM(ref="/x.ova", name="x", disks_gb=[1, 2])
+    NodeImport(driver, FakeConverter()).run(VMWARE, vm, "x", pool="default")
+    assert used == [("default", 3)]
+
+
 def test_node_import_removes_vm_when_copy_fails(tmp_path):
     class Broken(FakeConverter):
         def convert(self, source, vm, name, out_dir):
@@ -411,12 +425,19 @@ def test_import_refuses_vm_bigger_than_the_pool():
 
     from ibhics.manager.imports import NotEnoughSpace, check_space
 
-    pool = SimpleNamespace(name="default", available_gb=186.4)
-    member = SimpleNamespace(name="node1", driver=SimpleNamespace(list_pools=lambda: [pool]))
+    pools = [
+        SimpleNamespace(name="default", type=PoolType.DIR, available_gb=186.4),
+        SimpleNamespace(name="local-raid", type=PoolType.LVM, available_gb=500.0),
+    ]
+    member = SimpleNamespace(name="node1", driver=SimpleNamespace(list_pools=lambda: pools))
     vm = SourceVM(ref="Zabbix", name="Zabbix", disks_gb=[300])
     with pytest.raises(
-        NotEnoughSpace, match="300 GB of disks, but storage pool 'default' on node1 has only 186 GB"
+        NotEnoughSpace, match="needs 300 GB of disks, but storage pool 'default' on node1 has only"
     ):
         check_space(member, "default", vm)
     check_space(member, "default", SourceVM(ref="a", name="a", disks_gb=[100, 50]))
     check_space(member, "default", SourceVM(ref="b", name="b", disks_gb=[0]))  # unknown size
+    # On LVM the converted images first wait in a logical volume of the full size.
+    with pytest.raises(NotEnoughSpace, match=r"needs 600 GB \(300 GB of disks plus room"):
+        check_space(member, "local-raid", vm)
+    check_space(member, "local-raid", SourceVM(ref="c", name="c", disks_gb=[200]))

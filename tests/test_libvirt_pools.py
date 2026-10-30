@@ -42,6 +42,8 @@ class Pool:
         return self.active
 
     def create(self, _flags):
+        if self.conn.fail_start:
+            raise LibvirtError("cannot find any matching source devices")
         self.active = True
 
     def destroy(self):
@@ -87,6 +89,7 @@ class Conn:
         self.pools = {}
         self.domains = []
         self.fail_build = False
+        self.fail_start = False
         self.luns = []
 
     def storagePoolDefineXML(self, xml):
@@ -155,6 +158,25 @@ def test_failed_vgcreate_leaves_nothing_defined(driver):
     with pytest.raises(LibvirtError):
         driver.create_pool(spec)
     assert driver._conn.pools == {}
+
+
+def test_lvm_pool_uses_the_real_device_and_cleans_up_a_failed_start(driver, monkeypatch):
+    link = "/dev/disk/by-id/wwn-0x600"
+    monkeypatch.setattr(lv.os.path, "realpath", {link: "/dev/sda"}.get)
+    commands = []
+    driver.run = commands.append
+
+    driver.create_pool(PoolSpec(name="raid", type=PoolType.LVM, device=link, confirm_wipe=True))
+    # libvirt matches the device pvs reports, so a /dev/disk/by-id link would not start.
+    pool = ET.fromstring(driver._conn.pools["raid"].xml)
+    assert pool.find("source/device").get("path") == "/dev/sda"
+
+    driver._conn.fail_start = True
+    spec = PoolSpec(name="raid2", type=PoolType.LVM, device=link, confirm_wipe=True)
+    with pytest.raises(LibvirtError):
+        driver.create_pool(spec)
+    assert "raid2" not in driver._conn.pools
+    assert commands == [["vgremove", "-f", "ibhics_raid2"], ["pvremove", "-ff", "-y", "/dev/sda"]]
 
 
 def test_duplicate_pool_rejected(driver):
