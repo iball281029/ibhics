@@ -5,13 +5,15 @@
 #
 #   installer/test-install.sh dist/ibhics-0.1-beta-amd64.iso
 #
-# Needs qemu-system-x86, qemu-utils, lvm2, curl, python3 and sudo (for qemu-nbd). Uses KVM
-# when /dev/kvm is usable. Screenshots of the VM's screen go to $WORK/shots.
+# Needs qemu-system-x86, qemu-utils, lvm2, curl, python3 and sudo (for qemu-nbd), and
+# tesseract-ocr to print the screen of a stuck install. Uses KVM when /dev/kvm is usable.
+# Screenshots of the VM's screen go to $WORK/shots.
 set -euo pipefail
 
 ISO=$(realpath "$1")
 WORK=${WORK:-$PWD/install-test}
 INSTALL_MINUTES=${INSTALL_MINUTES:-60}
+STALL_MINUTES=${STALL_MINUTES:-12}
 ADMIN_PASSWORD=Admin-pw-123
 API=https://127.0.0.1:8888/api/v1
 
@@ -33,18 +35,34 @@ s.close()
 EOF
 }
 
+screen_text() {  # print what a screenshot says, when tesseract is installed
+    [ -s "$1" ] && command -v tesseract >/dev/null || return 0
+    echo "----- text on the screen ($1):"
+    tesseract "$1" - 2>/dev/null || true
+    echo "-----"
+}
+
 run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QEMU exits
     local name=$1 minutes=$2
     shift 2
     qemu-system-x86_64 "${ACCEL[@]}" -m 4096 -smp 2 -display none \
         -drive file=disk.qcow2,if=virtio -monitor unix:mon.sock,server,nowait "$@" &
-    local pid=$! i=0
+    local pid=$! i=0 shot last="" same=0
     while kill -0 $pid 2>/dev/null; do
         sleep 60
         i=$((i + 1))
-        monitor "screendump shots/$name-$(printf %03d $i).ppm" 2>/dev/null || true
-        if [ $i -ge "$minutes" ]; then
-            echo "!! $name did not finish within $minutes minutes"
+        shot=shots/$name-$(printf %03d $i).ppm
+        monitor "screendump $shot" 2>/dev/null || true
+        # A screen that has not changed for STALL_MINUTES means the installer waits for input.
+        if [ -s "$shot" ] && [ "$(md5sum <"$shot")" = "$last" ]; then
+            same=$((same + 1))
+        else
+            same=0
+            [ -s "$shot" ] && last=$(md5sum <"$shot")
+        fi
+        if [ $i -ge "$minutes" ] || [ $same -ge "$STALL_MINUTES" ]; then
+            echo "!! $name did not finish: $i minutes, screen unchanged for $same"
+            screen_text "$shot"
             kill $pid
             return 1
         fi
