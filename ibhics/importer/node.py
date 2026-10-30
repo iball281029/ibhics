@@ -52,6 +52,7 @@ class NodeImport:
                 ],
                 nics=[NicSpec(network=network) for _ in range(max(vm.nics, 1))],
                 description=f"Imported from {source.name} ({vm.ref})",
+                os_type=vm.guest_os[:64],
             )
             created = self._driver.create_vm(spec)
             try:

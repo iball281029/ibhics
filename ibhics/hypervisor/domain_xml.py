@@ -10,6 +10,10 @@ import xml.etree.ElementTree as ET
 from .base import DiskSpec, Firmware, VMSpec
 
 DISK_DEVS = "abcdefghijklmnopqrstuvwxyz"
+META_NS = "https://ibhics.org/xmlns/vm/1"  # ibHiCS's own facts about a VM, kept in its XML
+
+
+ET.register_namespace("ibhics", META_NS)
 
 
 def volume_name(vm_name: str, index: int, disk: DiskSpec) -> str:
@@ -39,6 +43,9 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         ET.SubElement(dom, "uuid").text = uuid
     if spec.description:
         ET.SubElement(dom, "description").text = spec.description
+    if spec.os_type:
+        meta = ET.SubElement(ET.SubElement(dom, "metadata"), f"{{{META_NS}}}vm")
+        ET.SubElement(meta, f"{{{META_NS}}}os").text = spec.os_type
     ET.SubElement(dom, "memory", unit="MiB").text = str(spec.memory_mb)
     ET.SubElement(dom, "vcpu", placement="static").text = str(spec.vcpus)
 

@@ -14,6 +14,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .base import (
+    GuestInfo,
+    GuestInterface,
     HostInfo,
     HypervisorDriver,
     InvalidState,
@@ -77,6 +79,9 @@ class FakeDriver(HypervisorDriver):
                     raise PoolNotFound(disk.pool)
                 disk.backend = self._pools[disk.pool][0].disk_backend
             vm = VMInfo(uuid=str(uuidlib.uuid4()), spec=spec, state=VMState.STOPPED)
+            for index, nic in enumerate(spec.nics):  # libvirt picks a MAC like this
+                a, b = uuidlib.UUID(vm.uuid).bytes[:2]
+                nic.mac = nic.mac or f"52:54:00:{a:02x}:{b:02x}:{index:02x}"
             self._vms[vm.uuid] = vm
             self._disks[vm.uuid] = [bytearray(d.size_gb * FAKE_BYTES_PER_GB) for d in spec.disks]
             return copy.deepcopy(vm)
@@ -149,6 +154,31 @@ class FakeDriver(HypervisorDriver):
                 dest._vms[uuid] = self._vms.pop(uuid)
                 dest._disks[uuid] = self._disks.pop(uuid)
             self.consoles.pop(uuid, None)
+
+    def guest_info(self, uuid: str) -> GuestInfo:
+        """A pretend guest agent: running VMs answer, as if qemu-guest-agent were installed."""
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                return GuestInfo()
+            spec = vm.spec
+        windows = "windows" in spec.os_type.lower() or spec.name.lower().startswith("win")
+        seed = sum(spec.name.encode())
+        return GuestInfo(
+            agent=True,
+            os_name=spec.os_type or ("Windows Server 2022" if windows else "Ubuntu 24.04 LTS"),
+            os_version="10.0.20348" if windows else "24.04",
+            kernel="" if windows else "6.8.0-45-generic",
+            hostname=spec.name.upper() if windows else spec.name,
+            interfaces=[
+                GuestInterface(
+                    name=f"Ethernet{i}" if windows else f"ens{3 + i}",
+                    mac=nic.mac or "",
+                    ips=[f"10.0.{10 + i}.{20 + seed % 200}/24"],
+                )
+                for i, nic in enumerate(spec.nics)
+            ],
+        )
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         with self._lock:

@@ -12,6 +12,7 @@ from ..backup import BackupTarget, NodeBackup
 from ..cluster.remote import TOKEN_HEADER
 from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
+from ..hypervisor.serialize import guest_to_json
 from ..importer import NodeImport, Source, SourceVM
 from ..manager.errors import install_driver_errors
 from ..manager.schemas import (
@@ -70,6 +71,14 @@ def create_agent_app(
         @api.post("/vms", response_model=VMOut, status_code=status.HTTP_201_CREATED)
         def create_vm(body: VMCreate) -> VMOut:
             return VMOut.from_info(driver.create_vm(body.to_spec()))
+
+        @api.get("/guests")
+        def guests() -> dict:
+            return {uuid: guest_to_json(g) for uuid, g in driver.list_guest_info().items()}
+
+        @api.get("/vms/{uuid}/guest")
+        def guest(uuid: str) -> dict:
+            return guest_to_json(driver.guest_info(uuid))
 
         @api.get("/vms/{uuid}", response_model=VMOut)
         def get_vm(uuid: str) -> VMOut:

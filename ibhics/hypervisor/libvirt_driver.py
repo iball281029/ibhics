@@ -15,6 +15,8 @@ from xml.sax.saxutils import quoteattr
 from .base import (
     DiskSpec,
     Firmware,
+    GuestInfo,
+    GuestInterface,
     HostInfo,
     HypervisorDriver,
     InvalidState,
@@ -30,7 +32,7 @@ from .base import (
     VMSpec,
     VMState,
 )
-from .domain_xml import build_domain_xml, build_volume_xml
+from .domain_xml import META_NS, build_domain_xml, build_volume_xml
 from .pool_xml import (
     build_iscsi_session_xml,
     build_lvm_pool_xml,
@@ -250,6 +252,42 @@ class LibvirtDriver(HypervisorDriver):
         for vol in volumes:  # the copies now live on the destination
             vol.delete(0)
 
+    def guest_info(self, uuid: str) -> GuestInfo:
+        dom = self._lookup(uuid)
+        if not dom.isActive():
+            return GuestInfo()
+        info = GuestInfo()
+        try:
+            data = dom.guestInfo(
+                libvirt.VIR_DOMAIN_GUEST_INFO_OS | libvirt.VIR_DOMAIN_GUEST_INFO_HOSTNAME, 0
+            )
+            info.agent = True
+            info.os_name = data.get("os.pretty-name") or data.get("os.name", "")
+            info.os_version = data.get("os.version", "")
+            info.kernel = data.get("os.kernel-release", "")
+            info.hostname = data.get("hostname", "")
+        except libvirt.libvirtError:
+            pass  # no agent in the guest, or it isn't running yet
+        sources = [libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT] if info.agent else []
+        sources.append(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
+        for source in sources:
+            try:
+                ifaces = dom.interfaceAddresses(source, 0)
+            except libvirt.libvirtError:
+                continue
+            info.interfaces = [
+                GuestInterface(
+                    name=name,
+                    mac=data.get("hwaddr") or "",
+                    ips=[f"{a['addr']}/{a['prefix']}" for a in data.get("addrs") or []],
+                )
+                for name, data in ifaces.items()
+                if name != "lo"
+            ]
+            if info.interfaces:
+                break
+        return info
+
     def console_address(self, uuid: str) -> tuple[str, int]:
         dom = self._lookup(uuid)
         if not dom.isActive():
@@ -412,4 +450,5 @@ def _spec_from_xml(xml: str) -> VMSpec:
         nics=nics,
         iso=cdrom.get("file") if cdrom is not None else None,
         description=root.findtext("description", ""),
+        os_type=root.findtext(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}os", ""),
     )

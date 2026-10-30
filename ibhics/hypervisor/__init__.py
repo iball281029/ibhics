@@ -1,6 +1,8 @@
 from .base import (
     DiskSpec,
     Firmware,
+    GuestInfo,
+    GuestInterface,
     HostInfo,
     HypervisorDriver,
     InvalidState,
@@ -33,6 +35,8 @@ def load_driver(name: str, libvirt_uri: str = "qemu:///system") -> HypervisorDri
 __all__ = [
     "DiskSpec",
     "Firmware",
+    "GuestInfo",
+    "GuestInterface",
     "HostInfo",
     "HypervisorDriver",
     "InvalidState",

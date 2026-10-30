@@ -6,6 +6,7 @@ import httpx
 
 from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
 from ..hypervisor import (
+    GuestInfo,
     HostInfo,
     HypervisorDriver,
     InvalidState,
@@ -18,7 +19,7 @@ from ..hypervisor import (
     VMNotFound,
     VMSpec,
 )
-from ..hypervisor.serialize import info_from_json, spec_to_json
+from ..hypervisor.serialize import guest_from_json, info_from_json, spec_to_json
 
 TOKEN_HEADER = "X-Ibhics-Token"
 
@@ -121,6 +122,15 @@ class RemoteDriver(HypervisorDriver):
         if resp.status_code == 422:
             raise ValueError(detail)
         self._ok(resp, uuid)
+
+    def guest_info(self, uuid: str) -> GuestInfo:
+        return guest_from_json(
+            self._ok(self._client.request("GET", f"/vms/{uuid}/guest"), uuid).json()
+        )
+
+    def list_guest_info(self) -> dict[str, GuestInfo]:
+        data = self._ok(self._client.request("GET", "/guests")).json()
+        return {uuid: guest_from_json(g) for uuid, g in data.items()}
 
     def list_pools(self) -> list[PoolInfo]:
         return [_pool_info(p) for p in self._ok(self._client.request("GET", "/pools")).json()]

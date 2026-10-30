@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__, console
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
+from ..hypervisor.serialize import guest_to_json
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
@@ -25,6 +26,7 @@ from .schemas import (
     BackupTargetIn,
     BackupTargetOut,
     ClusterOut,
+    GuestOut,
     HostOut,
     ImportJobOut,
     ImportRequest,
@@ -358,6 +360,25 @@ def create_app(
             raise VMExists(f"VM named {body.name!r} already exists in the cluster")
         member = cluster.member(body.node) if body.node else cluster.pick_node(body.memory_mb)
         return VMOut.from_info(member.driver.create_vm(body.to_spec()), member.name)
+
+    # Inventory: what the guests report about themselves (qemu-guest-agent).
+
+    @api.get("/vms/guests", response_model=list[GuestOut])
+    def vm_guests() -> list[GuestOut]:
+        result = []
+        for member in cluster.compute_members():
+            try:
+                guests = member.driver.list_guest_info()
+            except NodeUnavailable as exc:
+                member.last_error = str(exc)
+                continue
+            result.extend(GuestOut(uuid=uuid, **guest_to_json(g)) for uuid, g in guests.items())
+        return result
+
+    @api.get("/vms/{uuid}/guest", response_model=GuestOut)
+    def vm_guest(uuid: str) -> GuestOut:
+        member, _ = cluster.find_vm(uuid)
+        return GuestOut(uuid=uuid, **guest_to_json(member.driver.guest_info(uuid)))
 
     @api.get("/vms/{uuid}", response_model=VMOut)
     def get_vm(uuid: str) -> VMOut:

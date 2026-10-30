@@ -53,6 +53,7 @@ class VMCreate(BaseModel):
     nics: list[NicIn] = Field(default_factory=lambda: [NicIn()])
     iso: str | None = None
     description: str = Field(default="", max_length=1024)
+    os_type: str = Field(default="", max_length=64)
     # Manager only: which compute node to place the VM on. Empty picks automatically.
     node: str | None = None
 
@@ -66,6 +67,7 @@ class VMCreate(BaseModel):
             nics=[NicSpec(**n.model_dump()) for n in self.nics],
             iso=self.iso,
             description=self.description,
+            os_type=self.os_type,
         )
 
 
@@ -80,6 +82,7 @@ class VMOut(BaseModel):
     nics: list[NicOut]
     iso: str | None
     description: str
+    os_type: str = ""
     node: str | None = None
 
     @classmethod
@@ -97,7 +100,25 @@ class VMOut(BaseModel):
             nics=[NicOut(network=n.network, model=n.model, mac=n.mac) for n in spec.nics],
             iso=spec.iso,
             description=spec.description,
+            os_type=spec.os_type,
         )
+
+
+class GuestInterfaceOut(BaseModel):
+    name: str
+    mac: str
+    ips: list[str]
+
+
+class GuestOut(BaseModel):
+    uuid: str = ""
+    agent: bool
+    os_name: str
+    os_version: str
+    kernel: str
+    hostname: str
+    interfaces: list[GuestInterfaceOut]
+    ips: list[str]
 
 
 class HostOut(BaseModel):

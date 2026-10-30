@@ -52,8 +52,11 @@ class VMSpec:
     nics: list[NicSpec] = field(default_factory=list)
     iso: str | None = None
     description: str = ""
+    os_type: str = ""  # what the admin says the guest runs, e.g. "Windows Server 2022"
 
     def validate(self) -> None:
+        if len(self.os_type) > 64:
+            raise ValueError("os_type is at most 64 characters")
         if not NAME_RE.match(self.name):
             raise ValueError(
                 "name must start with a letter or digit and use only letters, digits, '_', '.', '-'"
@@ -148,6 +151,35 @@ class VMInfo:
 
 
 @dataclass
+class GuestInterface:
+    name: str
+    mac: str
+    ips: list[str] = field(default_factory=list)  # with prefix, e.g. 10.0.0.21/24
+
+
+@dataclass
+class GuestInfo:
+    """What the guest itself reports through qemu-guest-agent. Without an agent only
+    `agent=False` (and, for NAT networks, DHCP lease addresses) is known."""
+
+    agent: bool = False
+    os_name: str = ""  # pretty name, e.g. "Ubuntu 24.04.1 LTS"
+    os_version: str = ""
+    kernel: str = ""
+    hostname: str = ""
+    interfaces: list[GuestInterface] = field(default_factory=list)
+
+    @property
+    def ips(self) -> list[str]:
+        return [
+            ip.split("/")[0]
+            for i in self.interfaces
+            for ip in i.ips
+            if not ip.startswith(("127.", "::1", "fe80"))
+        ]
+
+
+@dataclass
 class HostInfo:
     hostname: str
     cpus: int
@@ -219,6 +251,21 @@ class HypervisorDriver(abc.ABC):
         same-named pool on the destination while the VM runs, then removed here.
         """
         raise NotImplementedError
+
+    def guest_info(self, uuid: str) -> GuestInfo:
+        """OS, hostname and addresses as the running guest reports them."""
+        return GuestInfo()
+
+    def list_guest_info(self) -> dict[str, GuestInfo]:
+        """guest_info for every running VM on this node, keyed by uuid."""
+        result = {}
+        for vm in self.list_vms():
+            if vm.state == VMState.RUNNING:
+                try:
+                    result[vm.uuid] = self.guest_info(vm.uuid)
+                except (VMNotFound, InvalidState):
+                    continue
+        return result
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         """Host and TCP port of the running VM's VNC display, reachable from this node."""
