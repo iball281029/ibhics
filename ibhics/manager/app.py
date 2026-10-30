@@ -30,7 +30,9 @@ from .schemas import (
     CdromRequest,
     ClusterOut,
     GuestOut,
+    HostNetworkIn,
     HostOut,
+    HostSettingsIn,
     ImportJobOut,
     ImportRequest,
     JobOut,
@@ -48,6 +50,7 @@ from .schemas import (
     PolicyOut,
     PoolCreate,
     PoolOut,
+    PowerIn,
     RestoreRequest,
     SourceIn,
     SourceOut,
@@ -74,6 +77,11 @@ ADMIN_ROUTES = {
     ("POST", f"{API}/nodes/{{name}}/pools"),
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("POST", f"{API}/nodes/{{name}}/evacuate"),
+    ("PUT", f"{API}/nodes/{{name}}/network"),
+    ("POST", f"{API}/nodes/{{name}}/network/confirm"),
+    ("POST", f"{API}/nodes/{{name}}/network/undo"),
+    ("PUT", f"{API}/nodes/{{name}}/settings"),
+    ("POST", f"{API}/nodes/{{name}}/power"),
     ("POST", f"{API}/backup/targets"),
     ("DELETE", f"{API}/backup/targets/{{name}}"),
     ("DELETE", f"{API}/backup/targets/{{name}}/backups/{{backup_id}}"),
@@ -340,6 +348,63 @@ def create_app(
     def node_disks(name: str) -> list[LocalDiskOut]:
         """Whole disks on the node that a new LVM pool could use."""
         return [LocalDiskOut(**asdict(d)) for d in cluster.member(name).driver.list_local_disks()]
+
+    # The node itself: Nodes > node > Summary, Network and Settings.
+
+    def host_of(name: str):
+        return cluster.member(name).driver.host_system()
+
+    @api.get("/nodes/{name}/summary")
+    def node_summary(name: str) -> dict:
+        return asdict(host_of(name).summary())
+
+    @api.get("/nodes/{name}/nics")
+    def node_nics(name: str) -> list[dict]:
+        return [asdict(n) for n in host_of(name).nics()]
+
+    @api.get("/nodes/{name}/network")
+    def node_network(name: str) -> dict:
+        return asdict(host_of(name).network())
+
+    @api.put("/nodes/{name}/network")
+    def apply_node_network(name: str, body: HostNetworkIn) -> dict:
+        """Applies at once; put back by itself unless confirmed within two minutes."""
+        return asdict(host_of(name).apply_network(body.to_network(), name))
+
+    @api.get("/nodes/{name}/network/state")
+    def node_network_state(name: str) -> dict:
+        return asdict(host_of(name).network_state())
+
+    @api.post("/nodes/{name}/network/confirm")
+    def confirm_node_network(name: str) -> dict:
+        return asdict(host_of(name).confirm_network())
+
+    @api.post("/nodes/{name}/network/undo")
+    def undo_node_network(name: str) -> dict:
+        return asdict(host_of(name).undo_network())
+
+    @api.get("/nodes/{name}/settings")
+    def node_settings(name: str) -> dict:
+        return asdict(host_of(name).settings())
+
+    @api.put("/nodes/{name}/settings")
+    def update_node_settings(name: str, body: HostSettingsIn) -> dict:
+        return asdict(host_of(name).update_settings(body.to_edit()))
+
+    @api.get("/nodes/{name}/timezones")
+    def node_timezones(name: str) -> list[str]:
+        return host_of(name).timezones()
+
+    @api.post("/nodes/{name}/power", status_code=status.HTTP_202_ACCEPTED)
+    def node_power(name: str, body: PowerIn) -> None:
+        member = cluster.member(name)
+        running = [vm.spec.name for vm in member.driver.list_vms() if vm.state != VMState.STOPPED]
+        if running and not body.force:
+            raise InvalidState(
+                f"{len(running)} VM(s) still run on {name} ({', '.join(running[:3])}): "
+                "shut them down or move them first"
+            )
+        member.driver.host_system().power(body.action)
 
     # VM networks: the LAN (default) and VLANs on it, the same on every compute node so
     # VMs can move between them.

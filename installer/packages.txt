@@ -21,6 +21,7 @@ multipath-tools
 xfsprogs
 # Network and system
 bridge-utils
+ifenslave
 ifupdown
 dhcpcd-base
 chrony

@@ -26,7 +26,9 @@ from ..manager.schemas import (
     AgentRestore,
     BackupOut,
     CdromRequest,
+    HostNetworkIn,
     HostOut,
+    HostSettingsIn,
     NetworkIn,
     PoolCreate,
     PoolOut,
@@ -75,6 +77,52 @@ def create_agent_app(
         @api.post("/vms", response_model=VMOut, status_code=status.HTTP_201_CREATED)
         def create_vm(body: VMCreate) -> VMOut:
             return VMOut.from_info(driver.create_vm(body.to_spec()))
+
+        # The node itself: Nodes > node > Summary, Network, Settings.
+
+        @api.get("/host/summary")
+        def host_summary() -> dict:
+            return asdict(driver.host_system().summary())
+
+        @api.get("/host/nics")
+        def host_nics() -> list[dict]:
+            return [asdict(n) for n in driver.host_system().nics()]
+
+        @api.get("/host/network")
+        def host_network() -> dict:
+            return asdict(driver.host_system().network())
+
+        @api.put("/host/network")
+        def apply_host_network(body: HostNetworkIn) -> dict:
+            return asdict(driver.host_system().apply_network(body.to_network(), name))
+
+        @api.get("/host/network/state")
+        def host_network_state() -> dict:
+            return asdict(driver.host_system().network_state())
+
+        @api.post("/host/network/confirm")
+        def confirm_host_network() -> dict:
+            return asdict(driver.host_system().confirm_network())
+
+        @api.post("/host/network/undo")
+        def undo_host_network() -> dict:
+            return asdict(driver.host_system().undo_network())
+
+        @api.get("/host/settings")
+        def host_settings() -> dict:
+            return asdict(driver.host_system().settings())
+
+        @api.put("/host/settings")
+        def update_host_settings(body: HostSettingsIn) -> dict:
+            return asdict(driver.host_system().update_settings(body.to_edit()))
+
+        @api.get("/host/timezones")
+        def host_timezones() -> list[str]:
+            return driver.host_system().timezones()
+
+        @api.post("/host/power/{action}", status_code=status.HTTP_202_ACCEPTED)
+        def host_power(action: str) -> None:
+            driver.host_system().power(action)
 
         @api.get("/disks")
         def disks() -> list[dict]:

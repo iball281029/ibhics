@@ -459,6 +459,36 @@ class LibvirtDriver(HypervisorDriver):
             pass
         Path(vlan_iface_file(vlan)).unlink(missing_ok=True)
 
+    def host_system(self):
+        from .host import LinuxHost
+
+        if getattr(self, "_host", None) is None:
+            self._host = LinuxHost(reattach=self.reattach_ports)
+        return self._host
+
+    def reattach_ports(self) -> None:
+        """Puts running VMs' network ports back on their bridges. Taking a bridge down and
+        up again (a change on the node's Network page) leaves them off it."""
+        bridges = {}
+        for net in self._conn.listAllNetworks():
+            try:
+                bridges[net.name()] = net.bridgeName()
+            except libvirt.libvirtError:
+                pass
+        for dom in self._conn.listAllDomains(libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE):
+            root = ET.fromstring(dom.XMLDesc(0))
+            for iface in root.findall("./devices/interface"):
+                source, target = iface.find("source"), iface.find("target")
+                if source is None or target is None or not target.get("dev"):
+                    continue
+                bridge = source.get("bridge") or bridges.get(source.get("network", ""))
+                if not bridge:
+                    continue
+                try:
+                    self.run(["ip", "link", "set", target.get("dev"), "master", bridge])
+                except RuntimeError:
+                    pass  # the bridge is not back (yet); the next change tries again
+
     def list_local_disks(self):
         from .disks import list_local_disks
 

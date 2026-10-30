@@ -24,6 +24,7 @@ from ..hypervisor import (
     VMInfo,
     VMNotFound,
     VMSpec,
+    host,
 )
 from ..hypervisor.serialize import edit_to_json, guest_from_json, info_from_json, spec_to_json
 
@@ -155,6 +156,9 @@ class RemoteDriver(HypervisorDriver):
 
     def delete_network(self, name: str) -> None:
         self._ok(self._client.request("DELETE", f"/networks/{name}"))
+
+    def host_system(self) -> RemoteHost:
+        return RemoteHost(self._client)
 
     def list_local_disks(self):
         from ..hypervisor.disks import LocalDisk
@@ -306,3 +310,54 @@ class RemoteImport:
 
             raise ConversionFailed(detail.removeprefix("conversion failed: "))
         raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code} {detail}")
+
+
+class RemoteHost:
+    """A remote node's host.HostSystem, through its agent."""
+
+    def __init__(self, client: AgentClient) -> None:
+        self._client = client
+
+    def _call(self, method: str, path: str, **kwargs):
+        resp = self._client.request(method, f"/host{path}", **kwargs)
+        if resp.status_code == 409:
+            raise InvalidState(resp.json().get("detail", "invalid state"))
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        if resp.status_code >= 400:
+            raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code}")
+        return resp.json() if resp.content else None
+
+    def summary(self) -> host.NodeSummary:
+        return host.NodeSummary(**self._call("GET", "/summary"))
+
+    def nics(self) -> list[host.HostNic]:
+        return [host.HostNic(**n) for n in self._call("GET", "/nics")]
+
+    def network(self) -> host.HostNetwork:
+        data = self._call("GET", "/network")
+        return host.HostNetwork([host.IfaceConfig(**i) for i in data["interfaces"]])
+
+    def apply_network(self, net: host.HostNetwork, node: str = "") -> host.NetworkState:
+        return host.NetworkState(**self._call("PUT", "/network", json=asdict(net)))
+
+    def network_state(self) -> host.NetworkState:
+        return host.NetworkState(**self._call("GET", "/network/state"))
+
+    def confirm_network(self) -> host.NetworkState:
+        return host.NetworkState(**self._call("POST", "/network/confirm"))
+
+    def undo_network(self) -> host.NetworkState:
+        return host.NetworkState(**self._call("POST", "/network/undo"))
+
+    def settings(self) -> host.HostSettings:
+        return host.HostSettings(**self._call("GET", "/settings"))
+
+    def update_settings(self, edit: host.SettingsEdit) -> host.HostSettings:
+        return host.HostSettings(**self._call("PUT", "/settings", json=asdict(edit)))
+
+    def timezones(self) -> list[str]:
+        return self._call("GET", "/timezones")
+
+    def power(self, action: str) -> None:
+        self._call("POST", f"/power/{action}")

@@ -386,6 +386,10 @@ class HypervisorDriver(abc.ABC):
         """Whole disks on this node that could become an LVM pool (disks.LocalDisk)."""
         return []
 
+    def host_system(self):
+        """The node itself: its summary, network ports and settings (host.HostSystem)."""
+        raise NotImplementedError
+
     @contextmanager
     def scratch_space(self, pool: str, size_gb: int) -> Iterator[Path]:
         """A temporary directory with room for size_gb of disk images, on storage pool
