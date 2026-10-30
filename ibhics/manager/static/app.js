@@ -476,7 +476,7 @@ function vmMenu(vm, { summary = false } = {}) {
   if (!canOperate()) return summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : "";
   const multi = computeMembers().length > 1;
   return `
-    ${summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : ""}
+    ${summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : `<button class="small" data-vm="edit" data-id="${vm.uuid}">Settings</button>`}
     ${vm.state === "running"
       ? `<button class="small" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button>`
       : `<button class="small" data-vm="start" data-id="${vm.uuid}">Power on</button>`}
@@ -484,6 +484,7 @@ function vmMenu(vm, { summary = false } = {}) {
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
+      ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
@@ -537,6 +538,7 @@ async function vmAction(e) {
     window.open(`console.html?${new URLSearchParams({ vm: id, name })}`, `console-${id}`, "width=1100,height=760");
     return;
   }
+  if (act === "edit") { openEdit(id).catch(fail); return; }
   if (act === "backup") {
     if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
     openDialog("backup-dialog", { id, name });
@@ -568,6 +570,148 @@ async function vmAction(e) {
 }
 $("#vms").addEventListener("click", vmAction);
 $("#vm-actions").addEventListener("click", vmAction);
+
+// ---------- edit VM ----------
+// A list of the VM's parts on the left, the selected part's settings on the right.
+let editing = null;
+const BOOT_NAMES = { hd: "Hard disk", cdrom: "CD/DVD", network: "Network (PXE)" };
+
+async function openEdit(uuid) {
+  const [vm] = await Promise.all([api(`/vms/${uuid}`), load("pools")]);
+  editing = {
+    vm,
+    vcpus: vm.vcpus,
+    memory_mb: vm.memory_mb,
+    disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool })),
+    nics: vm.nics.map((n) => ({ mac: n.mac, network: n.network, model: n.model || "virtio" })),
+    iso: vm.iso || "",
+    boot: vm.boot || ["hd"],
+    removedDisks: 0,
+    selected: "cpu",
+  };
+  openDialog("edit-dialog", { uuid }, { os_type: vm.os_type, description: vm.description });
+  $("#edit-form").elements.autostart.checked = vm.autostart;
+  $("#edit-title").textContent = `Edit virtual machine (${vm.name})`;
+  $("#edit-firmware").textContent = vm.firmware === "uefi" ? "UEFI" : "BIOS";
+  const note = $("#edit-note");
+  note.hidden = vm.state !== "running";
+  note.textContent = "This VM is running. Disks, network adapters and the CD change now; processor, memory and boot order apply after it is shut down and powered on again.";
+  selectTab("edit-tabs", "edit-hw");
+  renderEdit();
+}
+
+function editItems() {
+  const e = editing;
+  return [
+    { key: "cpu", icon: "i-cpu", label: "Processor", value: `${e.vcpus} vCPU` },
+    { key: "mem", icon: "i-mem", label: "Memory", value: gbText(e.memory_mb) },
+    ...e.disks.map((d, i) => ({ key: `disk${i}`, icon: "i-hdd", label: `Hard disk ${i + 1}`, value: `${d.size_gb} GB${d.index == null ? " · new" : ""}` })),
+    ...e.nics.map((n, i) => ({ key: `nic${i}`, icon: "i-nic", label: `Network adapter ${i + 1}`, value: `${esc(n.network)}${n.mac ? "" : " · new"}` })),
+    { key: "cd", icon: "i-cd", label: "CD/DVD drive", value: e.iso ? esc(e.iso.split("/").pop()) : "Empty" },
+  ];
+}
+
+function renderEdit() {
+  const e = editing;
+  $("#edit-items").innerHTML = editItems().map((it) => `<li><button type="button" data-item="${it.key}" class="${it.key === e.selected ? "active" : ""}">
+    <svg><use href="#${it.icon}"/></svg><span>${it.label}</span><em>${it.value}</em></button></li>`).join("");
+  const pools = state.pools.filter((p) => p.node === e.vm.node || !p.node);
+  const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(p.name)}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
+  const nets = [...new Set(["default", ...state.vms.flatMap((v) => v.nics.map((n) => n.network)), ...e.nics.map((n) => n.network)])].filter(Boolean);
+  const pane = $("#edit-pane");
+  const s = e.selected;
+  if (s === "cpu") {
+    pane.innerHTML = `<h4>Processor</h4><label>vCPU <input type="number" min="1" max="256" value="${e.vcpus}" data-set="vcpus"></label>
+      <p class="hint">Host CPU model is passed through (host-model), so the VM can still live-migrate between nodes.</p>`;
+  } else if (s === "mem") {
+    pane.innerHTML = `<h4>Memory</h4><label>Memory (GB) <input type="number" min="0.25" step="0.25" value="${e.memory_mb / 1024}" data-set="memory_gb"></label>`;
+  } else if (s.startsWith("disk")) {
+    const i = Number(s.slice(4)), d = e.disks[i];
+    pane.innerHTML = `<h4>Hard disk ${i + 1}</h4>
+      <label>Size (GB) <input type="number" min="${d.min || 1}" value="${d.size_gb}" data-disk="${i}" data-field="size_gb"></label>
+      ${d.index == null ? `<label>Storage pool <select data-disk="${i}" data-field="pool">${poolOpts(d.pool)}</select></label>`
+        : `<p class="hint">Pool ${esc(d.pool)}. A disk can grow but not shrink; grow the partition inside the guest afterwards.</p>`}
+      ${e.disks.length > 1 ? `<button type="button" class="danger small" data-remove="disk" data-i="${i}">Remove this disk</button>` : ""}`;
+  } else if (s.startsWith("nic")) {
+    const i = Number(s.slice(3)), n = e.nics[i];
+    pane.innerHTML = `<h4>Network adapter ${i + 1}</h4>
+      <label>Network <select data-nic="${i}" data-field="network">${nets.map((x) => `<option ${x === n.network ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+      <label>Adapter type <select data-nic="${i}" data-field="model" ${n.mac ? "disabled" : ""}>${["virtio", "e1000e", "e1000", "rtl8139"].map((m) => `<option ${m === n.model ? "selected" : ""}>${m}</option>`).join("")}</select></label>
+      <p class="hint">MAC address <span class="mono">${esc(n.mac || "assigned when saved")}</span></p>
+      <button type="button" class="danger small" data-remove="nic" data-i="${i}">Remove this adapter</button>`;
+  } else {
+    pane.innerHTML = `<h4>CD/DVD drive</h4><label>ISO file on the node <input value="${esc(e.iso)}" placeholder="/var/lib/ibhics/iso/debian.iso" data-set="iso"></label>
+      <div class="row-btns"><button type="button" class="small" data-iso="tools">Guest tools CD</button><button type="button" class="small" data-iso="">Empty the drive</button></div>`;
+  }
+  const boot = $("#edit-boot");
+  boot.innerHTML = [0, 1, 2].map((slot) => `<label class="boot-slot"><b>${slot + 1}</b><select data-boot="${slot}">
+    ${slot ? `<option value="">None</option>` : ""}${Object.entries(BOOT_NAMES).map(([k, v]) => `<option value="${k}" ${e.boot[slot] === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>`).join("");
+}
+
+{
+  const form = $("#edit-form");
+  form.addEventListener("click", (ev) => {
+    const item = ev.target.closest("[data-item]");
+    if (item) { editing.selected = item.dataset.item; renderEdit(); return; }
+    const add = ev.target.closest("[data-add]");
+    if (add) {
+      add.closest("details").removeAttribute("open");
+      if (add.dataset.add === "disk") {
+        editing.disks.push({ index: null, size_gb: 20, pool: editing.vm.disks[0]?.pool || "default" });
+        editing.selected = `disk${editing.disks.length - 1}`;
+      } else {
+        editing.nics.push({ mac: null, network: editing.nics[0]?.network || "default", model: "virtio" });
+        editing.selected = `nic${editing.nics.length - 1}`;
+      }
+      renderEdit();
+      return;
+    }
+    const rm = ev.target.closest("[data-remove]");
+    if (rm) {
+      const list = rm.dataset.remove === "disk" ? editing.disks : editing.nics;
+      const [gone] = list.splice(Number(rm.dataset.i), 1);
+      if (rm.dataset.remove === "disk" && gone.index != null) editing.removedDisks += 1;
+      editing.selected = "cpu";
+      renderEdit();
+      return;
+    }
+    const iso = ev.target.closest("[data-iso]");
+    if (iso) { editing.iso = iso.dataset.iso === "tools" ? "/usr/share/ibhics/guest-tools.iso" : ""; renderEdit(); }
+  });
+  form.addEventListener("change", (ev) => {
+    const t = ev.target, e = editing;
+    if (!e) return;
+    if (t.dataset.set === "vcpus") e.vcpus = Number(t.value);
+    if (t.dataset.set === "memory_gb") e.memory_mb = Math.round(Number(t.value) * 1024);
+    if (t.dataset.set === "iso") e.iso = t.value.trim();
+    if (t.dataset.disk) e.disks[Number(t.dataset.disk)][t.dataset.field] = t.dataset.field === "size_gb" ? Number(t.value) : t.value;
+    if (t.dataset.nic) e.nics[Number(t.dataset.nic)][t.dataset.field] = t.value;
+    if (t.dataset.boot) {
+      e.boot = $$("#edit-boot select").map((sel) => sel.value).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+    }
+    if (!t.dataset.boot && t.name !== "autostart" && t.name !== "os_type" && t.name !== "description") renderEdit();
+  });
+}
+
+handlers["edit-dialog"] = async (f, { uuid }) => {
+  const e = editing;
+  let deleteDisks = false;
+  if (e.removedDisks) {
+    deleteDisks = confirm(`Also delete the data of the ${e.removedDisks} removed disk(s)?\n\nOK deletes it for good. Cancel only detaches the disk and keeps its data in the pool.`);
+  }
+  const body = {
+    os_type: f.get("os_type"), description: f.get("description"),
+    vcpus: e.vcpus, memory_mb: e.memory_mb, boot: e.boot.length ? e.boot : ["hd"],
+    autostart: f.get("autostart") === "on",
+    disks: e.disks.map((d) => (d.index == null ? { size_gb: d.size_gb, pool: d.pool } : { index: d.index, size_gb: d.size_gb })),
+    nics: e.nics.map((n) => (n.mac ? { mac: n.mac, network: n.network, model: n.model } : { network: n.network, model: n.model })),
+    delete_removed_disks: deleteDisks,
+  };
+  const vm = await patch(`/vms/${uuid}`, body);
+  if ((e.iso || null) !== (e.vm.iso || null)) await post(`/vms/${uuid}/cdrom`, { iso: e.iso || null });
+  toast(vm.restart_needed ? `${vm.name} saved. Shut it down and power it on to apply the processor, memory and boot order.` : `${vm.name} saved`);
+  await refresh(currentPage());
+};
 
 handlers["vm-dialog"] = async (f) => {
   const body = {
@@ -734,7 +878,8 @@ async function renderVMDetail() {
   const usage = diskUsage(vm, g);
 
   $("#vm-crumb").textContent = vm.name;
-  $("#vm-title").innerHTML = `${esc(vm.name)} <span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`;
+  $("#vm-title").innerHTML = `${esc(vm.name)} <span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`
+    + (vm.restart_needed ? ` <span class="badge" title="Shut down and power on to apply the saved processor, memory or boot order">restart needed</span>` : "");
   $("#vm-subtitle").textContent = [os || "Operating system not set", vm.node && `on ${vm.node}`, ips[0]].filter(Boolean).join(" · ");
   $("#vm-actions").innerHTML = vmMenu(vm);
 

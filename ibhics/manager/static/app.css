@@ -316,3 +316,39 @@ label.wide { grid-column: 1 / -1; }
 .spinner { width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 pre.log { margin: 0; padding: 14px 18px; max-height: 60vh; min-width: min(900px, 90vw); overflow: auto; background: #0f141b; color: #d5dbe5; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+
+/* Edit VM: parts on the left, the selected part's settings on the right. */
+dialog.wide-dialog { width: min(860px, calc(100vw - 32px)); }
+.edit-top { padding-bottom: 6px; }
+.edit-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--brand-soft); color: var(--text); font-size: 13px; }
+#edit-dialog .tabs { margin-top: 8px; padding: 0 22px; }
+#edit-dialog .subpage { display: none; } #edit-dialog .subpage.active { display: block; }
+.hw-edit { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; min-height: 340px; }
+.hw-list { border-right: 1px solid var(--line); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.hw-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.hw-list li button { display: grid; grid-template-columns: 20px 1fr; column-gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.hw-list li button svg { grid-row: span 2; width: 20px; height: 20px; color: var(--muted); align-self: center; }
+.hw-list li button span { font-weight: 500; }
+.hw-list li button em { font-style: normal; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hw-list li button:hover { background: var(--hover); }
+.hw-list li button.active { background: var(--brand-soft); } .hw-list li button.active svg { color: var(--brand); }
+.add-hw { position: relative; margin-top: auto; } .add-hw summary { list-style: none; color: var(--brand); cursor: pointer; padding: 6px 10px; }
+.add-hw .dropdown { left: 0; right: auto; top: auto; bottom: calc(100% + 4px); }
+.hw-pane { padding: 18px 22px; display: grid; align-content: start; gap: 14px; }
+.hw-pane h4 { margin: 0; font-size: 15px; font-weight: 600; }
+.hw-pane label { display: grid; gap: 6px; max-width: 320px; }
+.hw-pane .hint { padding: 0; margin: 0; }
+.hw-pane .danger { justify-self: start; }
+.row-btns { display: flex; gap: 8px; }
+.opts { display: grid; gap: 18px; min-height: 340px; align-content: start; }
+.opt-row { display: grid; grid-template-columns: 170px 1fr; align-items: center; gap: 12px; }
+.opt-row > span { color: var(--muted); }
+.opt-row .check { display: flex; align-items: center; gap: 8px; }
+.boot-order { display: flex; flex-wrap: wrap; gap: 10px; }
+.boot-slot { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.boot-slot b { display: grid; place-items: center; width: 30px; align-self: stretch; background: var(--brand); color: #fff; font-weight: 600; }
+.boot-slot select { border: 0; border-radius: 0; min-width: 150px; }
+@media (max-width: 640px) {
+  .hw-edit { grid-template-columns: 1fr; } .hw-list { border-right: 0; border-bottom: 1px solid var(--line); }
+  .opt-row { grid-template-columns: 1fr; }
+}
