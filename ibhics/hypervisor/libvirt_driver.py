@@ -24,6 +24,8 @@ from .base import (
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NetworkInfo,
+    NetworkSpec,
     NicSpec,
     PoolInfo,
     PoolNotFound,
@@ -46,6 +48,7 @@ from .domain_xml import (
     nic_element,
     volume_name,
 )
+from .net_xml import build_network_xml, render_vlan_iface, vlan_bridge, vlan_iface_file, vlan_of
 from .pool_xml import (
     build_iscsi_session_xml,
     build_lvm_pool_xml,
@@ -400,6 +403,62 @@ class LibvirtDriver(HypervisorDriver):
             raise
         return next(p for p in self.list_pools() if p.name == spec.name)
 
+    def list_networks(self) -> list[NetworkInfo]:
+        nets = []
+        for net in self._conn.listAllNetworks():
+            bridge = ET.fromstring(net.XMLDesc(0)).find("bridge")
+            name = bridge.get("name", "") if bridge is not None else ""
+            nets.append(
+                NetworkInfo(net.name(), name, vlan=vlan_of(name), active=bool(net.isActive()))
+            )
+        return sorted(nets, key=lambda n: (n.vlan or 0, n.name))
+
+    def create_network(self, spec: NetworkSpec) -> NetworkInfo:
+        spec.validate()
+        for net in self.list_networks():
+            if net.name == spec.name:
+                raise InvalidState(f"a network named {spec.name!r} already exists")
+            if net.vlan == spec.vlan:
+                raise InvalidState(f"VLAN {spec.vlan} already has network {net.name!r}")
+        bridge = vlan_bridge(spec.vlan)
+        path = Path(vlan_iface_file(spec.vlan))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(render_vlan_iface(spec.vlan))
+        try:
+            self.run(["ifup", bridge])
+            net = self._conn.networkDefineXML(build_network_xml(spec.name, bridge))
+            net.setAutostart(1)
+            net.create()
+        except Exception:
+            self._drop_vlan(spec.vlan)
+            raise
+        return NetworkInfo(spec.name, bridge, vlan=spec.vlan)
+
+    def delete_network(self, name: str) -> None:
+        if name == "default":
+            raise InvalidState("the default network is the LAN itself and stays")
+        for dom in self._conn.listAllDomains():
+            root = ET.fromstring(dom.XMLDesc(0))
+            if root.find(f"./devices/interface/source[@network='{name}']") is not None:
+                raise InvalidState(f"VM {dom.name()!r} is still on network {name!r}")
+        try:
+            net = self._conn.networkLookupByName(name)
+        except libvirt.libvirtError:
+            raise InvalidState(f"no network named {name!r}") from None
+        vlan = vlan_of(ET.fromstring(net.XMLDesc(0)).find("bridge").get("name", ""))
+        if net.isActive():
+            net.destroy()
+        net.undefine()
+        if vlan is not None:
+            self._drop_vlan(vlan)
+
+    def _drop_vlan(self, vlan: int) -> None:
+        try:
+            self.run(["ifdown", vlan_bridge(vlan)])
+        except RuntimeError:
+            pass
+        Path(vlan_iface_file(vlan)).unlink(missing_ok=True)
+
     def list_local_disks(self):
         from .disks import list_local_disks
 
@@ -667,7 +726,10 @@ class LibvirtDriver(HypervisorDriver):
             spec.disks, ET.fromstring(xml).findall("./devices/disk[@device='disk']"), strict=True
         ):
             try:
-                _type, capacity, allocation = self._volume(el).info()
+                vol = self._volume(el)
+                _type, capacity, allocation = vol.info()
+                if not disk.pool:  # a hand-written <disk type='block'>: find its pool
+                    disk.pool = vol.storagePoolLookupByVolume().name()
             except (InvalidState, PoolNotFound, libvirt.libvirtError):
                 # Not in a pool we know (a hand-written disk): ask QEMU/libvirt directly.
                 source = el.find("source")

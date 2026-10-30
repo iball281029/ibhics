@@ -117,6 +117,9 @@ class SourceVM:
     firmware: Firmware = Firmware.BIOS
     disks_gb: list[int] = field(default_factory=list)  # 0 where the size is not known yet
     nics: int = 1
+    # The network each NIC is on at the source (port group, bridge), so the import can map
+    # it to an ibHiCS network. Empty where the source doesn't say.
+    networks: list[str] = field(default_factory=list)
     state: str = ""
     guest_os: str = ""
     notes: str = ""  # vmware: the VM's annotation
@@ -222,6 +225,16 @@ def list_vms(
     ]
 
 
+def interface_networks(root) -> list[str]:
+    """The network or bridge each <interface> of a libvirt domain is on."""
+    names = []
+    for iface in root.findall("./devices/interface"):
+        source = iface.find("source")
+        attrs = source.attrib if source is not None else {}
+        names.append(attrs.get("network") or attrs.get("bridge") or attrs.get("portgroup") or "")
+    return names
+
+
 def parse_vmware_xml(xml: str) -> SourceVM:
     """A VM as libvirt's ESX driver describes it."""
     root = ET.fromstring(xml)
@@ -239,6 +252,7 @@ def parse_vmware_xml(xml: str) -> SourceVM:
         firmware=Firmware.UEFI if efi else Firmware.BIOS,
         disks_gb=[0] * len(disks),  # the ESX driver doesn't report sizes
         nics=len(root.findall("./devices/interface")),
+        networks=interface_networks(root),
         notes=(root.findtext("description", "") or "").strip(),
     )
 
@@ -358,7 +372,7 @@ def parse_ovf(text: str) -> SourceVM:
     ovf = f"{{{OVF_NS['ovf']}}}"
     system = root.find(".//ovf:VirtualSystem", OVF_NS)
     name = system.findtext("ovf:Name", None, OVF_NS) or system.get(f"{ovf}id")
-    vcpus, memory_mb, nics = 1, 1024, 0
+    vcpus, memory_mb, nics, networks = 1, 1024, 0, []
     for item in system.findall(".//ovf:VirtualHardwareSection/ovf:Item", OVF_NS):
         kind = item.findtext("rasd:ResourceType", "", OVF_NS)
         quantity = item.findtext("rasd:VirtualQuantity", "0", OVF_NS)
@@ -369,6 +383,7 @@ def parse_ovf(text: str) -> SourceVM:
             memory_mb = int(quantity) * UNITS.get(unit.strip(), 1024**2) // 1024**2
         elif kind == "10":
             nics += 1
+            networks.append(item.findtext("rasd:Connection", "", OVF_NS).strip())
     disks = []
     for disk in root.findall(".//ovf:DiskSection/ovf:Disk", OVF_NS):
         unit = disk.get(f"{ovf}capacityAllocationUnits", "byte")
@@ -388,6 +403,7 @@ def parse_ovf(text: str) -> SourceVM:
         firmware=firmware,
         disks_gb=disks,
         nics=max(nics, 1),
+        networks=networks,
         guest_os=guest,
     )
 

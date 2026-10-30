@@ -11,6 +11,7 @@ from ..hypervisor import (
     DiskSpec,
     Firmware,
     HostInfo,
+    NetworkSpec,
     NicEdit,
     NicSpec,
     PoolInfo,
@@ -115,6 +116,21 @@ class VMOut(BaseModel):
             autostart=spec.autostart,
             restart_needed=info.restart_needed,
         )
+
+
+class NetworkIn(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    vlan: int = Field(ge=1, le=4094)
+
+    def to_spec(self) -> NetworkSpec:
+        return NetworkSpec(name=self.name, vlan=self.vlan)
+
+
+class NetworkOut(BaseModel):
+    name: str
+    bridge: str
+    vlan: int | None = None
+    nodes: list[str] = Field(default_factory=list, description="compute nodes that have it")
 
 
 class DiskEditIn(BaseModel):
@@ -534,6 +550,7 @@ class SourceVMOut(BaseModel):
     firmware: str
     disks_gb: list[int]
     nics: int
+    networks: list[str] = []
     state: str
     guest_os: str
     notes: str = ""
@@ -545,7 +562,9 @@ class ImportRequest(BaseModel):
     name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     node: str | None = None
     pool: str = "default"
-    network: str = "default"
+    network: str | list[str] = Field(
+        default="default", description="one network, or one per source NIC"
+    )
     vcpus: int | None = Field(default=None, ge=1, le=256)
     memory_mb: int | None = Field(default=None, ge=128)
     start: bool = False
@@ -571,7 +590,9 @@ class AgentImport(BaseModel):
     vm: dict
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     pool: str = "default"
-    network: str = "default"
+    network: str | list[str] = Field(
+        default="default", description="one network, or one per source NIC"
+    )
     vcpus: int | None = None
     memory_mb: int | None = None
     start: bool = False

@@ -22,6 +22,8 @@ from .base import (
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NetworkInfo,
+    NetworkSpec,
     NicSpec,
     PoolInfo,
     PoolNotFound,
@@ -197,6 +199,36 @@ class FakeDriver(HypervisorDriver):
                 dest._vms[uuid] = self._vms.pop(uuid)
                 dest._disks[uuid] = self._disks.pop(uuid)
             self.consoles.pop(uuid, None)
+
+    def list_networks(self) -> list[NetworkInfo]:
+        with self._lock:
+            nets = getattr(self, "_networks", None)
+            if nets is None:
+                nets = self._networks = {"default": NetworkInfo("default", "br0")}
+            return sorted(copy.deepcopy(list(nets.values())), key=lambda n: (n.vlan or 0, n.name))
+
+    def create_network(self, spec: NetworkSpec) -> NetworkInfo:
+        spec.validate()
+        for net in self.list_networks():
+            if net.name == spec.name:
+                raise InvalidState(f"a network named {spec.name!r} already exists")
+            if net.vlan == spec.vlan:
+                raise InvalidState(f"VLAN {spec.vlan} already has network {net.name!r}")
+        with self._lock:
+            info = NetworkInfo(spec.name, f"ibr{spec.vlan}", vlan=spec.vlan)
+            self._networks[spec.name] = info
+            return copy.deepcopy(info)
+
+    def delete_network(self, name: str) -> None:
+        if name == "default":
+            raise InvalidState("the default network is the LAN itself and stays")
+        self.list_networks()
+        with self._lock:
+            for vm in self._vms.values():
+                if any(n.network == name for n in vm.spec.nics):
+                    raise InvalidState(f"VM {vm.spec.name!r} is still on network {name!r}")
+            if self._networks.pop(name, None) is None:
+                raise InvalidState(f"no network named {name!r}")
 
     def list_local_disks(self):
         from .disks import LocalDisk

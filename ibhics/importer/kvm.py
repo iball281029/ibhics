@@ -13,7 +13,7 @@ import shlex
 import xml.etree.ElementTree as ET
 
 from ..hypervisor.base import Firmware
-from .sources import GIB, Source, SourceVM
+from .sources import GIB, Source, SourceVM, interface_networks
 
 # Proxmox disk keys in `qm config` (the CD-ROM and EFI vars are not disks to copy).
 QM_DISK = re.compile(r"^(scsi|virtio|sata|ide)\d+$")
@@ -45,6 +45,9 @@ def parse_qm_config(vmid: str, text: str) -> tuple[SourceVM, list[str]]:
         firmware=Firmware.UEFI if conf.get("bios") == "ovmf" else Firmware.BIOS,
         disks_gb=sizes,
         nics=sum(1 for k in conf if re.match(r"^net\d+$", k)) or 1,
+        networks=[
+            _qm_network(conf[k]) for k in sorted(conf, key=_net_index) if re.match(r"^net\d+$", k)
+        ],
         guest_os=QM_OSTYPE.get(conf.get("ostype", ""), ""),
         notes=conf.get("description", "").replace("%0A", " ").strip()[:200],
     )
@@ -83,6 +86,7 @@ def parse_libvirt_domain(xml: str) -> tuple[SourceVM, list[str]]:
         firmware=Firmware.UEFI if efi else Firmware.BIOS,
         disks_gb=[0] * len(paths),
         nics=len(root.findall("./devices/interface")) or 1,
+        networks=interface_networks(root),
     )
     return vm, [p for p in paths if p]
 
@@ -150,3 +154,14 @@ def libvirt_xml(vm: SourceVM, disks: list[tuple[str, str]]) -> str:
         ET.SubElement(disk, "source", file=path)
         ET.SubElement(disk, "target", dev=f"sd{chr(ord('a') + index)}", bus="scsi")
     return ET.tostring(dom, encoding="unicode")
+
+
+def _net_index(key: str) -> int:
+    return int(key[3:]) if key[3:].isdigit() else 0
+
+
+def _qm_network(value: str) -> str:
+    """'virtio=BC:24:11:..,bridge=vmbr0,tag=100' -> 'vmbr0 VLAN 100'."""
+    opts = dict(part.split("=", 1) for part in value.split(",") if "=" in part)
+    bridge = opts.get("bridge", "")
+    return f"{bridge} VLAN {opts['tag']}" if opts.get("tag") else bridge

@@ -175,6 +175,29 @@ class VMInfo:
 
 
 @dataclass
+class NetworkInfo:
+    name: str
+    bridge: str  # the Linux bridge VMs are plugged into
+    vlan: int | None = None  # 802.1Q tag on the uplink; None: untagged (the LAN itself)
+    active: bool = True
+
+
+@dataclass
+class NetworkSpec:
+    """A VM network on a VLAN of the node's LAN bridge (br0): VMs on it see the frames
+    tagged `vlan` on the switch port, untagged."""
+
+    name: str
+    vlan: int
+
+    def validate(self) -> None:
+        if not NAME_RE.match(self.name):
+            raise ValueError("network name must use only letters, digits, '_', '.', '-'")
+        if not 1 <= self.vlan <= 4094:
+            raise ValueError("VLAN ID must be 1 to 4094")
+
+
+@dataclass
 class DiskEdit:
     """One disk in a VM edit: index of an existing disk (to keep or grow), or None for a
     new disk of size_gb in pool."""
@@ -347,6 +370,16 @@ class HypervisorDriver(abc.ABC):
     def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
         """Change a VM's settings. On a running VM disks and NICs change at once; CPU,
         memory and boot order are saved for its next start (restart_needed)."""
+        raise NotImplementedError
+
+    def list_networks(self) -> list[NetworkInfo]:
+        """The networks VMs on this node can be plugged into."""
+        return [NetworkInfo(name="default", bridge="br0")]
+
+    def create_network(self, spec: NetworkSpec) -> NetworkInfo:
+        raise NotImplementedError
+
+    def delete_network(self, name: str) -> None:
         raise NotImplementedError
 
     def list_local_disks(self) -> list:

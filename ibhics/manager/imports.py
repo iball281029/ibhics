@@ -158,7 +158,7 @@ class ImportManager:
         name: str | None = None,
         node: str | None = None,
         pool: str = "default",
-        network: str = "default",
+        network: str | list[str] = "default",
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,

@@ -69,22 +69,32 @@ echo "ibHiCS is back to $OLD"
 EOF
 chmod +x "$BACKUP/rollback.sh"
 
-say "Installing the Debian packages $NEW needs (from the ISO)"
-LIST=$(mktemp)
-echo "deb [trusted=yes] file:$SRC/repo ./" > "$LIST"
-APT="-o Dir::Etc::sourcelist=$LIST -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0"
-# shellcheck disable=SC2086
-apt-get $APT update -qq
 # Only what is missing: packages already there stay at their version, so libvirt and
 # QEMU are not restarted under running VMs.
 missing=$(grep -v '^[[:space:]]*#' "$SRC/packages.txt" | while read -r pkg; do
     [ -n "$pkg" ] && ! dpkg -s "$pkg" >/dev/null 2>&1 && echo "$pkg"
 done || true)
 if [ -n "$missing" ]; then
+    say "Installing the Debian packages $NEW needs:" $missing
+    LIST=$(mktemp)
+    if [ -s "$SRC/repo/Packages.gz" ] || [ -s "$SRC/repo/Packages" ]; then
+        echo "deb [trusted=yes] file:$SRC/repo ./" > "$LIST"   # from the ISO, offline
+        APT="-o Dir::Etc::sourcelist=$LIST -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0"
+    else
+        echo "   (no package repository beside this script: using the node's apt sources)"
+        APT=""
+    fi
     # shellcheck disable=SC2086
-    apt-get $APT install -y --no-install-recommends $missing
+    if ! { apt-get $APT update -qq && apt-get $APT install -y --no-install-recommends $missing; }
+    then
+        [ -n "$APT" ] || die "could not install: $missing"
+        echo "   (not all of them are on the ISO; trying the node's apt sources)"
+        # shellcheck disable=SC2086
+        apt-get update -qq && apt-get install -y --no-install-recommends $missing \
+            || die "could not install: $missing"
+    fi
+    rm -f "$LIST"
 fi
-rm -f "$LIST"
 
 say "Installing ibHiCS $NEW beside the running version"
 rm -rf "$VENV.new"

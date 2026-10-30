@@ -40,6 +40,8 @@ from .schemas import (
     MemberOut,
     MigrateRequest,
     MigrationOut,
+    NetworkIn,
+    NetworkOut,
     NodeJoin,
     PasswordChange,
     PolicyIn,
@@ -83,6 +85,8 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
     ("POST", f"{API}/migrate/sources"),
+    ("POST", f"{API}/networks"),
+    ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
@@ -336,6 +340,44 @@ def create_app(
     def node_disks(name: str) -> list[LocalDiskOut]:
         """Whole disks on the node that a new LVM pool could use."""
         return [LocalDiskOut(**asdict(d)) for d in cluster.member(name).driver.list_local_disks()]
+
+    # VM networks: the LAN (default) and VLANs on it, the same on every compute node so
+    # VMs can move between them.
+
+    @api.get("/networks", response_model=list[NetworkOut])
+    def list_networks() -> list[NetworkOut]:
+        found: dict[str, NetworkOut] = {}
+        for member in cluster.compute_members():
+            for net in member.driver.list_networks():
+                out = found.setdefault(net.name, NetworkOut(**asdict(net)))
+                out.nodes.append(member.name)
+        return sorted(found.values(), key=lambda n: (n.vlan or 0, n.name))
+
+    @api.post("/networks", response_model=NetworkOut, status_code=status.HTTP_201_CREATED)
+    def create_network(body: NetworkIn) -> NetworkOut:
+        cluster.require_quorum()
+        done = []
+        try:
+            for member in cluster.compute_members():
+                member.driver.create_network(body.to_spec())
+                done.append(member)
+        except Exception:
+            for member in done:  # all nodes or none, so VMs never land where it is missing
+                try:
+                    member.driver.delete_network(body.name)
+                except Exception:
+                    pass
+            raise
+        return NetworkOut(
+            name=body.name, bridge=f"ibr{body.vlan}", vlan=body.vlan, nodes=[m.name for m in done]
+        )
+
+    @api.delete("/networks/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_network(name: str) -> None:
+        cluster.require_quorum()
+        for member in cluster.compute_members():
+            if any(n.name == name for n in member.driver.list_networks()):
+                member.driver.delete_network(name)
 
     # Storage pools live on each node. Shared storage (NFS, a shared LUN) is added
     # to every node that should reach it, under the same pool name.

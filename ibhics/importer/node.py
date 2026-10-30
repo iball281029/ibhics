@@ -32,7 +32,7 @@ class NodeImport:
         vm: SourceVM,
         name: str,
         pool: str = "default",
-        network: str = "default",
+        network: str | list[str] = "default",
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
@@ -90,12 +90,14 @@ class NodeImport:
                     for image in converted.images
                 ],
                 nics=[
-                    NicSpec(network=network, mac=mac)
-                    for mac in _pad(
-                        # Two live NICs with one MAC break the LAN, so a VM still running
-                        # at the source gets new addresses.
-                        [] if vm.state == "running" else converted.macs,
-                        max(vm.nics, len(converted.macs), 1),
+                    NicSpec(network=_network_for(network, i), mac=mac)
+                    for i, mac in enumerate(
+                        _pad(
+                            # Two live NICs with one MAC break the LAN, so a VM still running
+                            # at the source gets new addresses.
+                            [] if vm.state == "running" else converted.macs,
+                            max(vm.nics, len(converted.macs), 1),
+                        )
                     )
                 ],
                 description=f"Imported from {source.name} ({vm.ref})",
@@ -121,3 +123,10 @@ class NodeImport:
 def _pad(macs: list[str], count: int) -> list[str | None]:
     """One entry per NIC: the source's MAC where known, otherwise a new one."""
     return [*macs, *[None] * (count - len(macs))][:count]
+
+
+def _network_for(network: str | list[str], index: int) -> str:
+    """The network for NIC index: one for all, or one per source NIC (the last repeats)."""
+    if isinstance(network, str):
+        return network
+    return (network[index] if index < len(network) else network[-1]) if network else "default"

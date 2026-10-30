@@ -27,6 +27,7 @@ from ..manager.schemas import (
     BackupOut,
     CdromRequest,
     HostOut,
+    NetworkIn,
     PoolCreate,
     PoolOut,
     StopRequest,
@@ -78,6 +79,18 @@ def create_agent_app(
         @api.get("/disks")
         def disks() -> list[dict]:
             return [asdict(d) for d in driver.list_local_disks()]
+
+        @api.get("/networks")
+        def networks() -> list[dict]:
+            return [asdict(n) for n in driver.list_networks()]
+
+        @api.post("/networks", status_code=status.HTTP_201_CREATED)
+        def create_network(body: NetworkIn) -> dict:
+            return asdict(driver.create_network(body.to_spec()))
+
+        @api.delete("/networks/{name}", status_code=status.HTTP_204_NO_CONTENT)
+        def delete_network(name: str) -> None:
+            driver.delete_network(name)
 
         @api.get("/guests")
         def guests() -> dict:

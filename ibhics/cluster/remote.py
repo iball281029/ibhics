@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import asdict
 
 import httpx
 
@@ -13,6 +14,8 @@ from ..hypervisor import (
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NetworkInfo,
+    NetworkSpec,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
@@ -143,6 +146,16 @@ class RemoteDriver(HypervisorDriver):
         data = self._ok(self._client.request("GET", "/guests")).json()
         return {uuid: guest_from_json(g) for uuid, g in data.items()}
 
+    def list_networks(self) -> list[NetworkInfo]:
+        return [NetworkInfo(**n) for n in self._ok(self._client.request("GET", "/networks")).json()]
+
+    def create_network(self, spec: NetworkSpec) -> NetworkInfo:
+        resp = self._client.request("POST", "/networks", json=asdict(spec))
+        return NetworkInfo(**self._ok(resp).json())
+
+    def delete_network(self, name: str) -> None:
+        self._ok(self._client.request("DELETE", f"/networks/{name}"))
+
     def list_local_disks(self):
         from ..hypervisor.disks import LocalDisk
 
@@ -246,7 +259,7 @@ class RemoteImport:
         vm,
         name: str,
         pool: str = "default",
-        network: str = "default",
+        network: str | list[str] = "default",
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
