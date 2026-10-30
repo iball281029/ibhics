@@ -31,6 +31,33 @@ IBHICS_ADMIN_PASSWORD=change-me-now python -m ibhics.manager --driver fake \
 
 เปิด http://127.0.0.1:8006 แล้ว sign in ด้วย `admin` / `change-me-now` (ระบบจะให้เปลี่ยนรหัสก่อน) เพื่อใช้ Web Console หรือ http://127.0.0.1:8006/docs เพื่อดู API
 
+## ติดตั้งจาก ISO
+
+ISO ของ ibHiCS คือ Debian 13 ที่ติดตั้งอัตโนมัติ พร้อม KVM, libvirt, ตัว client ของ storage (NFS, SMB, iSCSI, multipath) และ ibHiCS เอง
+
+1. **ดาวน์โหลด ISO** จาก [Releases](https://github.com/iball281029/ibhics/releases) หรือจาก artifact `ibhics-installer-iso` ของ workflow "Installer ISO" ในแท็บ Actions หรือสร้างเองด้วย `installer/build-iso.sh` (ต้องมี `xorriso`)
+2. **เขียนลง USB** (`dd if=ibhics-0.1-beta-amd64.iso of=/dev/sdX bs=4M`, Rufus หรือ Ventoy) หรือเมานต์ผ่าน iDRAC, iLO หรือ XClarity แล้วบูต ใช้ได้ทั้ง BIOS และ UEFI
+3. **เลือก "Install ibHiCS"** เมนูนี้**ลบข้อมูลทั้งหมดในดิสก์ลูกแรก**โดยไม่ถาม แล้วติดตั้งเองจนจบ ถ้าต้องการเลือกดิสก์หรือตั้งค่าเครือข่ายเอง ให้เลือกเมนูที่สอง ระหว่างติดตั้งต้องมีอินเทอร์เน็ต (DHCP) เพื่อดึงแพ็กเกจของ Debian ส่วนตัว ibHiCS ติดตั้งจาก ISO
+4. **หลังรีบูต** หน้าจอ console จะถาม:
+   - node นี้คืออะไร: node แรก (manager + compute), compute เพิ่มเติม หรือ witness
+   - ชื่อ node, IP/prefix, gateway และ DNS
+   - time zone, รหัสผ่าน root และ (เฉพาะ node แรก) รหัสผ่านผู้ใช้ `admin` ของหน้าเว็บ
+   - token ของ cluster: node แรกจะสร้างให้และแสดงบนจอ node อื่นต้องกรอก token นี้
+
+   จากนั้นระบบตั้งค่าให้ทั้งหมด:
+   - bridge `br0` ให้ VM อยู่ใน LAN เดียวกับ node
+   - storage pool `default` ที่ `/var/lib/ibhics`
+   - ใบรับรอง HTTPS (self-signed)
+   - เปิด service ของ ibHiCS
+5. **ใช้งาน**: เปิด `https://<IP ของ node แรก>:8006` แล้วเพิ่ม node อื่นที่เมนู Nodes ด้วย `http://<IP>:8007`
+
+ตั้งค่าใหม่ทีหลังได้ด้วย `ibhics-setup`
+
+**ข้อจำกัดของรุ่น beta**:
+- agent คุยกับ manager ผ่าน HTTP ในวง management (มี token ยืนยันตัวตน แต่ยังไม่เข้ารหัส)
+- live migration ต้องตั้ง libvirt TLS หรือ SSH key ระหว่าง node เอง ดูหัวข้อ Live migration
+- ยังไม่ได้ทดสอบบูตบนเครื่องจริงทุกรุ่น
+
 ## ใช้งานกับ KVM จริง
 
 บนเครื่อง Debian 12/13 ที่เปิด VT-x/AMD-V:
