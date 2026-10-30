@@ -235,6 +235,69 @@
       </div>
     </section>
 
+    <section class="page" id="page-node">
+      <div class="crumb"><a href="#nodes">Nodes</a><svg><use href="#i-chev"/></svg><span id="node-crumb"></span></div>
+      <div class="sheet">
+        <div class="vm-head">
+          <span class="avatar big"><svg><use href="#i-nodes"/></svg></span>
+          <div class="vm-title"><h1 id="node-title"></h1><div class="vm-sub" id="node-subtitle"></div></div>
+          <span class="spacer"></span>
+          <div class="actions admin-only" id="node-actions"></div>
+        </div>
+        <div class="stats" id="node-stats"></div>
+        <div class="tabs" id="node-tabs">
+          <button data-tab="node-summary" class="active">Summary</button>
+          <button data-tab="node-network">Network</button>
+          <button data-tab="node-settings">Settings</button>
+        </div>
+        <div class="subpage active" id="tab-node-summary">
+          <div class="cards">
+            <div class="card"><h3>Hardware</h3><dl class="kv" id="node-hw"></dl></div>
+            <div class="card"><h3>System</h3><dl class="kv" id="node-sys"></dl></div>
+          </div>
+          <div class="card wide"><h3>Network ports</h3><div class="table-wrap"><table>
+            <thead><tr><th>Port</th><th>Link</th><th>Speed</th><th>Used by</th><th>IP address</th></tr></thead>
+            <tbody id="node-ports"></tbody>
+          </table></div></div>
+          <div class="card wide"><h3>Storage pools</h3><div class="table-wrap"><table>
+            <thead><tr><th>Pool</th><th>Type</th><th>Used</th><th>Free</th></tr></thead>
+            <tbody id="node-pools"></tbody>
+          </table></div></div>
+        </div>
+        <div class="subpage" id="tab-node-network">
+          <div id="node-net-banner"></div>
+          <div class="toolbar"><span class="hint grow">Ports, bonds and bridges of this node. A change applies at once and is put back by itself after two minutes unless you confirm it, so a mistake cannot cut the node off for good.</span>
+            <div class="actions admin-only"><button data-iface-new="bond">+ Bond</button><button data-iface-new="bridge">+ Bridge</button></div></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Interface</th><th>Type</th><th>Status</th><th>Speed</th><th>IP settings</th><th>Ports / part of</th><th>MTU</th><th></th></tr></thead>
+            <tbody id="node-ifaces"></tbody>
+          </table></div>
+        </div>
+        <div class="subpage" id="tab-node-settings">
+          <form id="node-settings-form" class="settings-form">
+            <div class="cards">
+              <div class="card"><h3>Name and time</h3><div class="body form-grid one">
+                <label>Hostname <input name="hostname" readonly title="The cluster knows the node by this name"></label>
+                <label>Time zone <select name="timezone" id="node-tz"></select></label>
+                <label>NTP servers <input name="ntp" placeholder="0.debian.pool.ntp.org, 10.0.0.1"></label>
+                <p class="hint" id="node-time"></p>
+              </div></div>
+              <div class="card"><h3>DNS</h3><div class="body form-grid one">
+                <label>DNS servers <input name="dns" placeholder="8.8.8.8, 1.1.1.1"></label>
+                <p class="hint">Separate servers with commas. The node uses them for updates, NTP names and migrate sources given by name.</p>
+              </div></div>
+            </div>
+            <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" type="submit">Save settings</button></div>
+          </form>
+          <div class="card wide admin-only"><h3>Power</h3><div class="body power-row">
+            <p class="hint">Shut down or move the VMs on this node first. With VMs still running you are asked again before anything happens.</p>
+            <span class="spacer"></span>
+            <button data-node-power="reboot">Reboot</button><button class="danger" data-node-power="shutdown">Shut down</button>
+          </div></div>
+        </div>
+      </div>
+    </section>
+
     <section class="page" id="page-backup">
       <div class="sheet">
         <div class="page-head"><h1>Backup</h1><span class="sub">Incremental, deduplicated backups to local disk, NAS, SAN, USB or S3</span></div>
@@ -462,6 +525,38 @@
       <label class="check" data-for="iscsi lvm disk"><input name="confirm_wipe" type="checkbox"> I understand all data on the device will be erased</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add pool</button></footer>
+  </form>
+</dialog>
+
+<dialog id="iface-dialog">
+  <form method="dialog" id="iface-form">
+    <header><h3 id="iface-title">Interface</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label data-kind="bond bridge">Name <input name="name" required pattern="(bond[0-9]{1,2})|(br[a-z0-9]{0,8})"></label>
+      <label data-kind="bond">Bond mode
+        <select name="bond_mode">
+          <option value="active-backup">Active-backup (any switch)</option>
+          <option value="802.3ad">LACP 802.3ad (switch ports in a LAG)</option>
+          <option value="balance-alb">Adaptive load balancing (any switch)</option>
+          <option value="balance-tlb">Transmit load balancing (any switch)</option>
+          <option value="balance-xor">Balance XOR (static LAG)</option>
+        </select>
+      </label>
+      <fieldset class="vm-checks" data-kind="bond bridge"><legend>Ports</legend><div class="vm-check-list" id="iface-ports"></div></fieldset>
+      <label>IP setting
+        <select name="method" data-switch>
+          <option value="manual">No address</option><option value="static">Static</option><option value="dhcp">DHCP</option>
+        </select>
+      </label>
+      <label>MTU
+        <select name="mtu"><option value="">Default (1500)</option><option value="1500">1500</option><option value="9000">9000 (jumbo frames)</option></select>
+      </label>
+      <label data-for="static">Address with prefix <input name="address" placeholder="10.0.0.11/24"></label>
+      <label data-for="static">Gateway (blank = none) <input name="gateway" placeholder="none"></label>
+      <label class="check wide"><input name="auto" type="checkbox" checked> Bring up at boot</label>
+      <p class="hint wide" id="iface-note"></p>
+    </div>
+    <footer><button class="danger" type="button" id="iface-delete">Delete</button><span class="spacer"></span><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Apply</button></footer>
   </form>
 </dialog>
 

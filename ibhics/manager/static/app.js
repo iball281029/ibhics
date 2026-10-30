@@ -126,6 +126,7 @@ const PAGES = ["home", "compute", "storage", "nodes", "backup", "migrate", "acti
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
+  if (hash.startsWith("node/")) return "node";
   return PAGES.includes(hash) ? hash : "home";
 };
 const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
@@ -133,9 +134,10 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 function show() {
   const page = currentPage();
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  const section = page === "vm" ? "compute" : page;
+  const section = { vm: "compute", node: "nodes" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
+  if (page === "node") selectTab("node-tabs", "node-summary");
   refresh(page).catch(fail);
 }
 window.addEventListener("hashchange", show);
@@ -356,6 +358,7 @@ async function refresh(page, auto = false) {
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "networks"); renderPools(); renderNetworks(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
+  if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "activity") { await load("jobs", "moves", "imports"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
@@ -868,11 +871,12 @@ function renderNodes() {
     const h = state.hosts[m.name];
     const vms = state.vms.filter((v) => v.node === m.name).length;
     const buttons = [
+      m.role === "compute" ? `<a class="btn small" href="#node/${enc(m.name)}">Summary</a>` : "",
       admin && m.role === "compute" && vms && computeMembers().length > 1 ? `<button class="small" data-evacuate="${esc(m.name)}">Evacuate</button>` : "",
       admin && !m.local ? `<button class="small danger" data-node="${esc(m.name)}">Remove</button>` : "",
     ].join("");
     return `<tr>
-      <td><div class="name-cell">${avatar("i-nodes")}<div><span class="vm-name">${esc(m.name)}</span>${m.local ? '<span class="vm-sub">runs the manager</span>' : ""}</div></div></td>
+      <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(m.name)}</a>` : `<span class="vm-name">${esc(m.name)}</span>`}${m.local ? '<span class="vm-sub">runs the manager</span>' : ""}</div></div></td>
       <td>${esc(m.role)}</td>
       <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
       <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span></td>
@@ -906,6 +910,302 @@ handlers["node-dialog"] = async (f) => {
   toast(`${f.get("name")} joined the cluster`);
   await refresh("nodes");
 };
+
+// ---------- one node: Summary, Network, Settings ----------
+
+const nodeFromHash = () => decodeURIComponent(location.hash.slice(6));
+const node = { name: "", summary: null, nics: [], net: null, netState: null, settings: null, timezones: [], moved: "" };
+let netTick = null;
+
+const uptimeText = (s) => {
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`;
+};
+const speedText = (mbps) => (mbps == null ? "–" : mbps >= 1000 ? `${mbps / 1000} Gb/s` : `${mbps} Mb/s`);
+const KIND = { ethernet: "Ethernet", bond: "Bond", bridge: "Bridge" };
+const ifaceOf = (name) => node.net?.interfaces.find((i) => i.name === name);
+const ownerOf = (name) => node.net?.interfaces.find((i) => i.ports.includes(name));
+// Every port on the node plus whatever the config names, ports first, then bonds, bridges.
+function ifaceNames() {
+  const names = new Set([...node.nics.map((n) => n.name), ...(node.net?.interfaces || []).map((i) => i.name)]);
+  const kind = (n) => ifaceOf(n)?.kind || node.nics.find((x) => x.name === n)?.kind || "ethernet";
+  const order = { ethernet: 0, bond: 1, bridge: 2 };
+  return [...names].sort((a, b) => order[kind(a)] - order[kind(b)] || a.localeCompare(b, undefined, { numeric: true }));
+}
+
+async function renderNodeDetail(auto = false) {
+  const name = nodeFromHash();
+  const m = state.cluster.members.find((x) => x.name === name);
+  $("#node-crumb").textContent = name;
+  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-ifaces", "#node-net-banner"].forEach((id) => { $(id).innerHTML = ""; });
+  if (!m || m.role !== "compute") {
+    $("#node-title").textContent = m ? name : "Node not found";
+    $("#node-subtitle").textContent = m ? "A witness only votes for quorum; it has no host details to show." : "It may have been removed from the cluster.";
+    clear();
+    return;
+  }
+  const base = `/nodes/${enc(name)}`;
+  const fresh = !auto || node.name !== name;
+  const [summary, nics, net, netState] = await Promise.all([
+    api(`${base}/summary`), api(`${base}/nics`), api(`${base}/network`), api(`${base}/network/state`),
+  ]);
+  Object.assign(node, { name, summary, nics, net, netState });
+  if (fresh) {
+    const [settings, timezones] = await Promise.all([api(`${base}/settings`), api(`${base}/timezones`)]);
+    Object.assign(node, { settings, timezones, moved: "" });
+    fillNodeSettings();
+  }
+  const s = summary;
+  $("#node-title").innerHTML = `${esc(name)} <span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>`;
+  $("#node-subtitle").textContent = [[s.vendor, s.model].filter(Boolean).join(" "), m.local ? "runs the manager" : m.address, `ibHiCS ${s.version}`].filter(Boolean).join(" · ");
+
+  const vms = state.vms.filter((v) => v.node === name);
+  const stat = (label, value, note = "") => `<div class="stat"><span>${esc(label)}</span><b>${value}</b><em>${note}</em></div>`;
+  const bar = (used, total) => usageBar({ used, total, from: "of this node" });
+  $("#node-stats").innerHTML = [
+    stat("CPU", `${s.cpu_percent}%`, `${bar(s.cpu_percent, 100)}${s.threads} threads · load ${s.load.map((l) => l.toFixed(2)).join(" ")}`),
+    stat("Memory", `${gbText(s.memory_used_mb)} <small>/ ${gbText(s.memory_mb)}</small>`, `${bar(s.memory_used_mb, s.memory_mb)}Used by VMs and the system`),
+    stat("Virtual machines", `${vms.filter((v) => v.state === "running").length} <small>running of ${vms.length}</small>`,
+      `${vms.reduce((n, v) => n + (v.state === "running" ? v.vcpus : 0), 0)} vCPU in use`),
+    stat("Uptime", uptimeText(s.uptime_s), `Since ${new Date(Date.now() - s.uptime_s * 1000).toLocaleString()}`),
+  ].join("");
+
+  const kv = (rows) => rows.filter((r) => r).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v || '<span class="muted">–</span>'}</dd>`).join("");
+  $("#node-hw").innerHTML = kv([
+    ["Manufacturer", esc(s.vendor)],
+    ["Model", esc(s.model)],
+    ["Serial number", s.serial ? `<span class="mono">${esc(s.serial)}</span>` : ""],
+    ["BIOS", esc(s.bios)],
+    ["Processor", esc(s.cpu_model)],
+    ["Sockets / cores / threads", `${s.sockets} / ${s.cores} / ${s.threads}`],
+    ["Virtualization", s.virtualization ? `<span class="dot ok"></span> ${esc(s.virtualization)}` : `<span class="dot bad"></span> Not available`],
+    ["Memory", gbText(s.memory_mb)],
+  ]);
+  const mgmt = nics.flatMap((n) => n.addresses.map((a) => [n.name, a]));
+  $("#node-sys").innerHTML = kv([
+    ["Hostname", esc(s.hostname)],
+    ["Role", m.local ? "Compute, runs the manager" : esc(m.role)],
+    ["Management address", mgmt.map(([n, a]) => `<span class="mono">${esc(a)}</span> <span class="muted">${esc(n)}</span>`).join("<br>")],
+    ["ibHiCS", esc(s.version)],
+    ["Operating system", esc(s.os)],
+    ["Kernel", `<span class="mono">${esc(s.kernel)}</span>`],
+    ["Time zone", esc(s.timezone)],
+    ["Uptime", uptimeText(s.uptime_s)],
+  ]);
+
+  const used = (n) => n.master ? `Part of ${esc(n.master)}` : ifaceOf(n.name)?.method !== "manual" && ifaceOf(n.name) ? "Own address" : '<span class="muted">Not used</span>';
+  const ports = nics.filter((n) => n.kind === "ethernet");
+  $("#node-ports").innerHTML = ports.length ? ports.map((n) => `<tr>
+    <td><span class="vm-name">${esc(n.name)}</span><span class="vm-sub clip" title="${esc(n.model)}">${esc(n.model || n.driver || n.mac)}</span></td>
+    <td>${n.link ? '<span class="dot ok"></span> Connected' : '<span class="dot"></span> No link'}</td>
+    <td>${speedText(n.speed_mbps)}</td><td>${used(n)}</td>
+    <td>${n.addresses.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>") || '<span class="muted">–</span>'}</td></tr>`).join("") : empty(5, "No network ports found");
+  const pools = state.pools.filter((p) => p.node === name);
+  $("#node-pools").innerHTML = pools.length ? pools.map((p) => `<tr>
+    <td><span class="vm-name">${esc(p.name)}</span></td><td>${esc(p.type)}</td>
+    <td>${num(p.allocation_gb)} GB / ${num(p.capacity_gb)} GB ${usageBar({ used: p.allocation_gb, total: p.capacity_gb || 1, from: "of the pool" })}</td>
+    <td>${num(p.available_gb ?? p.capacity_gb - p.allocation_gb)} GB</td></tr>`).join("") : empty(4, "No storage pools");
+
+  renderIfaces();
+}
+
+function renderIfaces() {
+  const admin = isAdmin();
+  $("#node-ifaces").innerHTML = ifaceNames().map((name) => {
+    const cfg = ifaceOf(name), nic = node.nics.find((n) => n.name === name);
+    const kind = cfg?.kind || nic?.kind || "ethernet";
+    const owner = ownerOf(name);
+    const status = !nic ? '<span class="dot warn"></span> Not running' : nic.link ? '<span class="dot ok"></span> Connected' : nic.up ? '<span class="dot warn"></span> No link' : '<span class="dot"></span> Down';
+    const live = nic?.addresses || [];
+    const ip = !cfg || cfg.method === "manual" ? '<span class="muted">No address</span>'
+      : cfg.method === "dhcp" ? `DHCP${live.length ? `<span class="vm-sub mono">${live.map(esc).join(", ")}</span>` : ""}`
+        : `<span class="mono">${esc(cfg.address)}</span>${cfg.gateway ? `<span class="vm-sub">gateway <span class="mono">${esc(cfg.gateway)}</span></span>` : ""}`;
+    const rel = cfg?.ports.length ? cfg.ports.map(esc).join(", ") : owner ? `Part of ${esc(owner.name)}` : kind === "ethernet" ? '<span class="muted">Not used</span>' : '<span class="muted">No ports</span>';
+    const note = name === "br0" ? "VM LAN and management" : kind === "bond" ? esc(cfg?.bond_mode || "") : esc(nic?.model || "");
+    return `<tr>
+      <td><div class="name-cell">${avatar("i-nic")}<div><span class="vm-name">${esc(name)}</span><span class="vm-sub clip" title="${note}">${note || esc(nic?.mac || "")}</span></div></div></td>
+      <td>${KIND[kind]}</td><td>${status}</td><td>${speedText(nic?.speed_mbps)}</td><td>${ip}</td><td>${rel}</td>
+      <td>${cfg?.mtu || nic?.mtu || 1500}</td>
+      <td><div class="actions">${admin ? `<button class="small" data-iface="${esc(name)}">Edit</button>` : ""}</div></td></tr>`;
+  }).join("");
+  renderNetBanner();
+}
+
+function renderNetBanner() {
+  const st = node.netState || {};
+  clearInterval(netTick);
+  if (!st.pending) {
+    const show = st.message && !["confirmed", "nothing changed"].includes(st.message);
+    $("#node-net-banner").innerHTML = show ? `<div class="net-banner info">${esc(st.message)}</div>` : "";
+    return;
+  }
+  let left = st.seconds_left;
+  const draw = () => {
+    $("#node-net-banner").innerHTML = `<div class="net-banner warn">
+      <div><b>Network change applied.</b> Check that everything still works, then confirm. Without confirming it is put back in <b>${left} s</b>.
+      ${node.moved ? `<br>This page uses an address the change removed: open <a href="${esc(node.moved)}">${esc(node.moved)}</a> and confirm there.` : ""}</div>
+      <span class="spacer"></span><button data-net="undo">Undo now</button><button class="primary" data-net="confirm">Keep this change</button></div>`;
+  };
+  draw();
+  netTick = setInterval(async () => {
+    left -= 1;
+    if (left > 0) { if (currentPage() === "node") draw(); return; }
+    clearInterval(netTick);
+    try { node.netState = await api(`/nodes/${enc(node.name)}/network/state`); } catch { /* node may be away */ }
+    if (currentPage() === "node") refresh("node").catch(() => {});
+  }, 1000);
+}
+
+$("#node-net-banner").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-net]");
+  if (!b) return;
+  try {
+    node.netState = await post(`/nodes/${enc(node.name)}/network/${b.dataset.net}`);
+    toast(b.dataset.net === "confirm" ? "Network change kept" : "Network change put back");
+    node.moved = "";
+    await refresh("node");
+  } catch (err) { fail(err); }
+});
+
+async function applyNetwork(interfaces, what) {
+  const before = node.net.interfaces.filter((i) => i.method === "static").map((i) => i.address.split("/")[0]);
+  const after = interfaces.filter((i) => i.method === "static").map((i) => i.address.split("/")[0]);
+  const host = location.hostname;
+  node.moved = before.includes(host) && !after.includes(host) && after.length
+    ? `${location.protocol}//${after[0]}${location.port ? `:${location.port}` : ""}/#node/${enc(node.name)}` : "";
+  node.netState = await api(`/nodes/${enc(node.name)}/network`, { method: "PUT", body: JSON.stringify({ interfaces }) });
+  toast(node.netState.pending ? `${what}: confirm within ${node.netState.seconds_left} s` : node.netState.message || what);
+  await refresh("node");
+}
+
+let ifaceCtx = null;
+function openIface(name, kind) {
+  const isNew = !name;
+  const cfg = name ? ifaceOf(name) : null;
+  kind = cfg?.kind || kind || node.nics.find((n) => n.name === name)?.kind || "ethernet";
+  if (isNew) {
+    const taken = new Set(ifaceNames());
+    const prefix = kind === "bond" ? "bond" : "br";
+    let i = kind === "bond" ? 0 : 1;
+    while (taken.has(`${prefix}${i}`)) i += 1;
+    name = `${prefix}${i}`;
+  }
+  ifaceCtx = { name, kind, isNew };
+  const form = $("#iface-form");
+  form.reset();
+  $("#iface-title").textContent = isNew ? `Add ${kind}` : `${KIND[kind]} ${name}`;
+  $$("[data-kind]", form).forEach((el) => { el.style.display = el.dataset.kind.split(" ").includes(kind) ? "" : "none"; });
+  form.elements.name.value = name;
+  form.elements.name.readOnly = !isNew;
+  form.elements.method.value = cfg?.method || "manual";
+  form.elements.address.value = cfg?.address || "";
+  form.elements.gateway.value = cfg?.gateway || "";
+  const mtu = String(cfg?.mtu || "");
+  if (mtu && ![...form.elements.mtu.options].some((o) => o.value === mtu)) form.elements.mtu.add(new Option(mtu, mtu));
+  form.elements.mtu.value = mtu;
+  form.elements.auto.checked = cfg ? cfg.auto : true;
+  form.elements.bond_mode.value = cfg?.bond_mode || "active-backup";
+  // Ports this one may use: free ones, its own, and for a bridge also bonds.
+  const own = cfg?.ports || [];
+  const free = ifaceNames().filter((n) => {
+    const k = ifaceOf(n)?.kind || node.nics.find((x) => x.name === n)?.kind || "ethernet";
+    const owner = ownerOf(n);
+    return n !== name && (k === "ethernet" || (kind === "bridge" && k === "bond")) && (!owner || owner.name === name);
+  });
+  $("#iface-ports").innerHTML = free.length ? free.map((n) => {
+    const nic = node.nics.find((x) => x.name === n);
+    return `<label class="check"><input type="checkbox" name="ports" value="${esc(n)}"${own.includes(n) ? " checked" : ""}> ${esc(n)} <span class="muted">${nic ? (nic.link ? speedText(nic.speed_mbps) : "no link") : ""}</span></label>`;
+  }).join("") : `<p class="hint">No free ports.</p>`;
+  const owner = ownerOf(name);
+  $("#iface-note").textContent = name === "br0"
+    ? "br0 carries the node's management address, the default VM network and the VLAN networks. Its port is the uplink to your switch."
+    : owner ? `${name} is a port of ${owner.name}, so it has no address of its own. Edit ${owner.name} to change that.`
+      : kind === "bridge" ? "A bridge lets VMs reach the network through its ports, for example a second LAN or a storage network."
+        : kind === "bond" ? "A bond joins ports into one link for redundancy or speed. Put it on a bridge to use it for VMs." : "";
+  $("#iface-delete").hidden = isNew || kind === "ethernet" || name === "br0";
+  syncSwitch(form);
+  $("#iface-dialog").showModal();
+}
+
+document.addEventListener("click", (e) => {
+  const edit = e.target.closest("button[data-iface]");
+  const add = e.target.closest("button[data-iface-new]");
+  if (edit) openIface(edit.dataset.iface);
+  if (add) openIface(null, add.dataset.ifaceNew);
+});
+
+handlers["iface-dialog"] = async (f) => {
+  const { kind, isNew } = ifaceCtx;
+  const name = f.get("name");
+  const interfaces = structuredClone(node.net.interfaces);
+  const old = interfaces.find((i) => i.name === ifaceCtx.name);
+  const cfg = old || { name, kind, method: "manual", address: "", gateway: "", mtu: null, auto: true, ports: [], bond_mode: "", options: [] };
+  if (!old) interfaces.push(cfg);
+  Object.assign(cfg, {
+    name, kind, method: f.get("method"), auto: f.get("auto") === "on",
+    address: f.get("method") === "static" ? f.get("address").trim() : "",
+    gateway: f.get("method") === "static" ? f.get("gateway").trim() : "",
+    mtu: f.get("mtu") ? Number(f.get("mtu")) : null,
+  });
+  if (kind !== "ethernet") {
+    cfg.ports = f.getAll("ports");
+    if (kind === "bond") cfg.bond_mode = f.get("bond_mode");
+    if (!cfg.ports.length && kind === "bond") throw new Error("Pick at least one port for the bond.");
+    for (const p of cfg.ports) {  // ports carry no address of their own
+      if (!interfaces.some((i) => i.name === p)) interfaces.push({ name: p, kind: "ethernet", method: "manual", address: "", gateway: "", mtu: null, auto: false, ports: [], bond_mode: "", options: [] });
+    }
+  }
+  await applyNetwork(interfaces, isNew ? `${name} added` : `${name} changed`);
+};
+
+$("#iface-delete").addEventListener("click", async () => {
+  const { name } = ifaceCtx;
+  if (!confirm(`Delete ${name}? Its ports become free.`)) return;
+  try {
+    await applyNetwork(node.net.interfaces.filter((i) => i.name !== name), `${name} deleted`);
+    $("#iface-dialog").close();
+  } catch (err) { fail(err); }
+});
+
+function fillNodeSettings() {
+  const s = node.settings, form = $("#node-settings-form");
+  form.elements.hostname.value = s.hostname;
+  $("#node-tz").innerHTML = node.timezones.map((z) => `<option${z === s.timezone ? " selected" : ""}>${esc(z)}</option>`).join("");
+  form.elements.ntp.value = s.ntp.join(", ");
+  form.elements.dns.value = s.dns.join(", ");
+  const sync = s.ntp_synced == null ? "" : s.ntp_synced ? " · clock in sync with NTP" : " · clock not in sync with NTP yet";
+  $("#node-time").textContent = `Node time: ${new Date(s.time).toLocaleString()}${sync}`;
+  $$("input, select", form).forEach((el) => { if (el.name !== "hostname") el.disabled = !isAdmin(); });
+}
+
+$("#node-settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const list = (v) => v.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+  try {
+    node.settings = await api(`/nodes/${enc(node.name)}/settings`, {
+      method: "PUT", body: JSON.stringify({ timezone: f.get("timezone"), ntp: list(f.get("ntp")), dns: list(f.get("dns")) }),
+    });
+    fillNodeSettings();
+    toast("Settings saved");
+  } catch (err) { fail(err); }
+});
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-node-power]");
+  if (!b) return;
+  const action = b.dataset.nodePower, word = action === "reboot" ? "Reboot" : "Shut down";
+  if (!confirm(`${word} ${node.name}?`)) return;
+  try {
+    try {
+      await post(`/nodes/${enc(node.name)}/power`, { action });
+    } catch (err) {
+      if (!/still run/.test(err.message) || !confirm(`${err.message}.\n\n${word} anyway? Those VMs are cut off as if their power failed.`)) throw err;
+      await post(`/nodes/${enc(node.name)}/power`, { action, force: true });
+    }
+    toast(`${node.name}: ${action === "reboot" ? "rebooting" : "shutting down"} in a few seconds`);
+  } catch (err) { fail(err); }
+});
 
 // ---------- one VM ----------
 
