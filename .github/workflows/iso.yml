@@ -56,3 +56,35 @@ jobs:
         with:
           prerelease: true
           files: dist/ibhics-*
+
+  install-test:
+    # Installs the ISO end to end in QEMU and checks the web console of the new node.
+    needs: iso
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ibhics-installer-iso
+          path: dist
+      - name: Let QEMU use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils lvm2
+      - run: installer/test-install.sh dist/ibhics-*-amd64.iso
+      - name: Screenshots of the VM
+        if: always()
+        run: |
+          sudo apt-get install -y imagemagick >/dev/null
+          for f in install-test/shots/*.ppm; do [ -e "$f" ] && convert "$f" "${f%.ppm}.png" && rm "$f"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-test-screens
+          path: install-test/shots/
+          retention-days: 14
+

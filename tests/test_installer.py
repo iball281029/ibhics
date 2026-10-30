@@ -158,3 +158,29 @@ def test_installer_files_agree():
     for script in ("install-ibhics.sh", "build-iso.sh"):
         shell = "bash" if script.endswith("iso.sh") else "sh"
         subprocess.run([shell, "-n", str(INSTALLER / script)], check=True)
+
+
+def test_answers_file():
+    text = """
+    # unattended install
+    ROLE=manager
+    HOSTNAME=node1
+    ADDRESS=10.0.2.15/24
+    GATEWAY=10.0.2.2
+    DNS=10.0.2.3
+    ROOT_PASSWORD=Root-pw-123
+    ADMIN_PASSWORD=Admin-pw-123
+    """
+    cfg, root_pw, admin_pw = setup.read_answers(text, ["ens3"])
+    assert (cfg.role, cfg.interface, cfg.address, cfg.dns) == (
+        "manager",
+        "ens3",
+        "10.0.2.15/24",
+        ["10.0.2.3"],
+    )
+    assert len(cfg.token) >= 24 and (root_pw, admin_pw) == ("Root-pw-123", "Admin-pw-123")
+    cfg.validate()
+    with pytest.raises(ValueError, match="TOKEN"):
+        setup.read_answers(text.replace("manager", "compute"), ["ens3"])
+    with pytest.raises(ValueError, match="KEY=value"):
+        setup.read_answers("ROLE manager", ["ens3"])

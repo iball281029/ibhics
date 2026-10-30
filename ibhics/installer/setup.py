@@ -347,7 +347,60 @@ def choose(prompt: str, options: Sequence[tuple[str, str]], reader=input) -> str
     return keys[int(ask("Choose", "1", check, reader)) - 1]
 
 
+ANSWERS = Path("/etc/ibhics/answers.conf")
+
+
+def read_answers(text: str, nics: Sequence[str]) -> tuple[Config, str, str | None]:
+    """Settings from an answers file (KEY=value lines) for unattended installs and tests.
+    It holds passwords, so main() deletes it once it is read."""
+    values = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            key, sep, value = line.partition("=")
+            if not sep:
+                raise ValueError(f"answers file: expected KEY=value, got {line!r}")
+            values[key.strip().upper()] = value.strip()
+
+    def need(key: str) -> str:
+        if not values.get(key):
+            raise ValueError(f"answers file: {key} is missing")
+        return values[key]
+
+    role = need("ROLE")
+    cfg = Config(
+        role=role,
+        hostname=need("HOSTNAME"),
+        interface=values.get("INTERFACE") or (nics[0] if nics else ""),
+        address=need("ADDRESS"),
+        gateway=need("GATEWAY"),
+        dns=values.get("DNS", values["GATEWAY"]).split(),
+        timezone=values.get("TIMEZONE", "Asia/Bangkok"),
+        token=secrets.token_urlsafe(24) if role == "manager" else need("TOKEN"),
+    )
+    if not cfg.interface:
+        raise ValueError("answers file: no network interface found; set INTERFACE")
+    admin = need("ADMIN_PASSWORD") if role == "manager" else None
+    return cfg, need("ROOT_PASSWORD"), admin
+
+
+def unattended(path: Path) -> int:
+    try:
+        cfg, root_password, admin_password = read_answers(path.read_text(), detect_interfaces())
+        cfg.validate()
+    except ValueError as exc:
+        print(f"\n  {exc}\n")
+        return 1
+    finally:
+        path.unlink(missing_ok=True)
+    apply(cfg, root_password, admin_password)
+    print("\n" + render_issue(cfg))
+    return 0
+
+
 def main() -> int:
+    if ANSWERS.exists():
+        return unattended(ANSWERS)
     print(f"\n  Welcome to {RELEASE_NAME}\n")
     print("  This sets up the node. You can run it again later with: ibhics-setup\n")
     role = choose("What is this node?", list(ROLES.items()))
