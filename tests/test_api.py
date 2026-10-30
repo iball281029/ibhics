@@ -34,7 +34,9 @@ def test_standalone_cluster(client):
 def test_console_served(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "ibHiCS Console" in resp.text
+    assert "<title>ibHiCS</title>" in resp.text
+    for asset in ("app.js", "app.css", "login.html", "logo.svg"):
+        assert client.get(f"/{asset}").status_code == 200
 
 
 def test_vm_lifecycle(client):
