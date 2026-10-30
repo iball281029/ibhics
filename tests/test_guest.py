@@ -114,3 +114,17 @@ def test_inventory_api():
     single = client.get(f"/api/v1/vms/{vm['uuid']}/guest").json()
     assert single["ips"] == guest["ips"]
     assert client.get("/api/v1/vms/nope/guest").status_code == 404
+
+
+def test_node_disks_through_the_manager():
+    from fastapi.testclient import TestClient
+
+    from ibhics.cluster import Cluster
+    from ibhics.hypervisor.fake import FakeDriver
+    from ibhics.manager import create_app
+
+    cluster = Cluster()
+    cluster.add_local("node1", FakeDriver())
+    disks = TestClient(create_app(cluster)).get("/api/v1/nodes/node1/disks").json()
+    assert disks[0]["path"] == "/dev/sdb" and disks[0]["empty"]
+    assert disks[1]["contents"] == "3 partitions (vmfs)"

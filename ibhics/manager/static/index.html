@@ -378,8 +378,8 @@
       <label>Name <input name="name" required placeholder="nas01"></label>
       <label>Type
         <select name="type" data-switch>
-          <option value="dir">Local directory</option><option value="nfs">NFS</option>
-          <option value="iscsi">iSCSI (LVM on a LUN)</option><option value="lvm">FC / local disk (LVM)</option>
+          <option value="lvm">Local disk or FC LUN (LVM)</option><option value="dir">Local directory</option>
+          <option value="nfs">NFS</option><option value="iscsi">iSCSI (LVM on a LUN)</option>
         </select>
       </label>
       <label data-for="dir">Path (blank = default) <input name="path" placeholder="/var/lib/ibhics/pools/..."></label>
@@ -387,7 +387,8 @@
       <label data-for="nfs">Export <input name="export" placeholder="/vol/vms"></label>
       <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:lun1"></label>
       <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
-      <label data-for="lvm">Device <input name="device" placeholder="/dev/mapper/mpatha"></label>
+      <label data-for="lvm" class="wide">Disk <select name="device" class="disk-list"></select></label>
+      <label data-for="lvm" class="wide disk-path" hidden>Device path <input name="device_path" placeholder="/dev/mapper/mpatha"></label>
       <label class="check" data-for="iscsi lvm"><input name="confirm_wipe" type="checkbox"> I understand all data on the device will be erased</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add pool</button></footer>

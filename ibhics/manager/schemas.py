@@ -205,6 +205,16 @@ class PoolCreate(BaseModel):
         return PoolSpec(**self.model_dump())
 
 
+class LocalDiskOut(BaseModel):
+    path: str
+    size_gb: float
+    model: str
+    serial: str
+    transport: str
+    empty: bool
+    contents: str
+
+
 class PoolOut(BaseModel):
     name: str
     type: PoolType

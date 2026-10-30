@@ -155,6 +155,14 @@ class FakeDriver(HypervisorDriver):
                 dest._disks[uuid] = self._disks.pop(uuid)
             self.consoles.pop(uuid, None)
 
+    def list_local_disks(self):
+        from .disks import LocalDisk
+
+        return [
+            LocalDisk("/dev/sdb", 12509.0, "RAID 930-8i", "6000d31000f0", "sas"),
+            LocalDisk("/dev/sdc", 894.3, "MZ7L3960", "S6KN", "sata", False, "3 partitions (vmfs)"),
+        ]
+
     def guest_info(self, uuid: str) -> GuestInfo:
         """A pretend guest agent: running VMs answer, as if qemu-guest-agent were installed."""
         with self._lock:

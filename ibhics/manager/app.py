@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import socket
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket, status
@@ -31,6 +32,7 @@ from .schemas import (
     ImportJobOut,
     ImportRequest,
     JobOut,
+    LocalDiskOut,
     LoginOut,
     LoginRequest,
     MemberOut,
@@ -324,6 +326,11 @@ def create_app(
     @api.get("/nodes/{name}/host", response_model=HostOut)
     def node_host(name: str) -> HostOut:
         return HostOut.from_info(cluster.member(name).driver.host_info())
+
+    @api.get("/nodes/{name}/disks", response_model=list[LocalDiskOut])
+    def node_disks(name: str) -> list[LocalDiskOut]:
+        """Whole disks on the node that a new LVM pool could use."""
+        return [LocalDiskOut(**asdict(d)) for d in cluster.member(name).driver.list_local_disks()]
 
     # Storage pools live on each node. Shared storage (NFS, a shared LUN) is added
     # to every node that should reach it, under the same pool name.

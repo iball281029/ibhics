@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, status
 
@@ -71,6 +72,10 @@ def create_agent_app(
         @api.post("/vms", response_model=VMOut, status_code=status.HTTP_201_CREATED)
         def create_vm(body: VMCreate) -> VMOut:
             return VMOut.from_info(driver.create_vm(body.to_spec()))
+
+        @api.get("/disks")
+        def disks() -> list[dict]:
+            return [asdict(d) for d in driver.list_local_disks()]
 
         @api.get("/guests")
         def guests() -> dict:

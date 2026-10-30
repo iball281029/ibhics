@@ -132,6 +132,11 @@ class RemoteDriver(HypervisorDriver):
         data = self._ok(self._client.request("GET", "/guests")).json()
         return {uuid: guest_from_json(g) for uuid, g in data.items()}
 
+    def list_local_disks(self):
+        from ..hypervisor.disks import LocalDisk
+
+        return [LocalDisk(**d) for d in self._ok(self._client.request("GET", "/disks")).json()]
+
     def list_pools(self) -> list[PoolInfo]:
         return [_pool_info(p) for p in self._ok(self._client.request("GET", "/pools")).json()]
 

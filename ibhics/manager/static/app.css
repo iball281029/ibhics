@@ -290,3 +290,4 @@ fieldset.vm-checks { grid-column: 1 / -1; border: 1px solid var(--line); border-
 fieldset.vm-checks legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
 .vm-check-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px 12px; max-height: 180px; overflow-y: auto; }
 .vm-check-list .muted { color: var(--muted); font-size: 12px; }
+label.wide { grid-column: 1 / -1; }

@@ -168,6 +168,7 @@ function openDialog(id, context = null, prefill = {}) {
   // Pickers need the current pools and VMs even when the page did not load them.
   const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms"].filter(Boolean);
   if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
+  if ($(".disk-list", form)) fillDisks(form);
 }
 
 $$("dialog").forEach((dlg) => {
@@ -529,6 +530,30 @@ $("#pools").addEventListener("click", async (e) => {
   } catch (err) { fail(err); }
 });
 
+// The disk picker lists the node's unused whole disks, so nobody has to find /dev/sdX.
+async function fillDisks(form) {
+  const sel = $(".disk-list", form);
+  const node = form.elements.node.value;
+  if (!node || form.elements.type.value !== "lvm") return;
+  sel.innerHTML = `<option value="">Looking for disks on ${esc(node)}...</option>`;
+  let disks = [];
+  try { disks = await api(`/nodes/${enc(node)}/disks`); } catch (err) { /* offered by hand below */ }
+  const label = (d) => [d.path, `${Math.round(d.size_gb).toLocaleString()} GB`, d.model, d.transport.toUpperCase(),
+    d.empty ? "empty" : `has data: ${d.contents}`].filter(Boolean).join(" · ");
+  sel.innerHTML = (disks.length ? disks.map((d) => `<option value="${esc(d.path)}">${esc(label(d))}</option>`).join("")
+    : `<option value="">No unused disk found on ${esc(node)}</option>`) + `<option value="other">Other device path...</option>`;
+  syncDiskPath(form);
+}
+function syncDiskPath(form) {
+  $(".disk-path", form).hidden = form.elements.device.value !== "other";
+}
+{
+  const form = $("#pool-form");
+  form.elements.node.addEventListener("change", () => fillDisks(form));
+  form.elements.type.addEventListener("change", () => fillDisks(form));
+  form.elements.device.addEventListener("change", () => syncDiskPath(form));
+}
+
 handlers["pool-dialog"] = async (f) => {
   const type = f.get("type");
   const body = { name: f.get("name"), type, confirm_wipe: f.get("confirm_wipe") === "on" };
@@ -536,7 +561,8 @@ handlers["pool-dialog"] = async (f) => {
   if (type === "nfs" || type === "iscsi") body.host = f.get("host");
   if (type === "nfs") body.export = f.get("export");
   if (type === "iscsi") { body.iqn = f.get("iqn"); body.lun = Number(f.get("lun")); }
-  if (type === "lvm") body.device = f.get("device");
+  if (type === "lvm") body.device = f.get("device") === "other" ? f.get("device_path") : f.get("device");
+  if (type === "lvm" && !body.device) throw new Error("Pick a disk.");
   await post(`/nodes/${enc(f.get("node"))}/pools`, body);
   toast(`Pool ${body.name} added`);
   await refresh("storage");

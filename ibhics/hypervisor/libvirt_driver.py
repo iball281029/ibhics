@@ -223,6 +223,11 @@ class LibvirtDriver(HypervisorDriver):
             raise
         return next(p for p in self.list_pools() if p.name == spec.name)
 
+    def list_local_disks(self):
+        from .disks import list_local_disks
+
+        return list_local_disks()
+
     @contextmanager
     def scratch_space(self, pool: str, size_gb: int) -> Iterator[Path]:
         try:
