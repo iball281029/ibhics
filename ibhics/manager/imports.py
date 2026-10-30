@@ -32,6 +32,26 @@ class ImportJob:
     error: str | None = None
 
 
+class NotEnoughSpace(ValueError):
+    pass
+
+
+def check_space(member, pool: str, vm: SourceVM) -> None:
+    """Refuse an import that cannot fit: the VM's disks may grow to their full size.
+    Sizes the source does not report (0) are not counted."""
+    needed = sum(vm.disks_gb)
+    if not needed:
+        return
+    info = next((p for p in member.driver.list_pools() if p.name == pool), None)
+    if info is None or info.available_gb >= needed:
+        return
+    raise NotEnoughSpace(
+        f"{vm.name} has {needed} GB of disks, but storage pool {pool!r} on {member.name} has "
+        f"only {info.available_gb:.0f} GB free. Pick a larger pool (for example an NFS or "
+        f"iSCSI pool under Storage) or free up space."
+    )
+
+
 class ImportManager:
     def __init__(
         self,
@@ -119,6 +139,7 @@ class ImportManager:
                 if node
                 else self._cluster.pick_node(memory_mb or vm.memory_mb)
             )
+            check_space(member, pool, vm)
             job = ImportJob(
                 id=str(next(self._ids)),
                 source=source_name,

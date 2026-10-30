@@ -404,3 +404,19 @@ complete output:
     )
     assert v2v_error("something broke\n  virt-v2v -v -x [...]\n", 1) == "something broke"
     assert v2v_error("", 3) == "virt-v2v exited 3"
+
+
+def test_import_refuses_vm_bigger_than_the_pool():
+    from types import SimpleNamespace
+
+    from ibhics.manager.imports import NotEnoughSpace, check_space
+
+    pool = SimpleNamespace(name="default", available_gb=186.4)
+    member = SimpleNamespace(name="node1", driver=SimpleNamespace(list_pools=lambda: [pool]))
+    vm = SourceVM(ref="Zabbix", name="Zabbix", disks_gb=[300])
+    with pytest.raises(
+        NotEnoughSpace, match="300 GB of disks, but storage pool 'default' on node1 has only 186 GB"
+    ):
+        check_space(member, "default", vm)
+    check_space(member, "default", SourceVM(ref="a", name="a", disks_gb=[100, 50]))
+    check_space(member, "default", SourceVM(ref="b", name="b", disks_gb=[0]))  # unknown size
