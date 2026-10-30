@@ -213,6 +213,35 @@ curl -X POST localhost:8006/api/v1/nodes/node2/evacuate
 
 ชื่อ host ของ node ปลายทางมาจาก address ของ agent ส่วน node ที่รัน manager ใช้ `--migration-host` (ค่าเริ่มต้นคือ FQDN ของเครื่อง) ตอนนี้ VM ใช้ CPU model มาตรฐานของ QEMU จึงย้ายข้าม node ที่ใช้ CPU ต่างรุ่นกันได้
 
+## ibHiCS Migrate (ย้าย VM เข้ามาจากระบบอื่น)
+
+นำ VM จากระบบเดิมเข้ามาใน ibHiCS โดยไม่ต้องติดตั้ง agent ในเครื่องต้นทาง ใช้ [virt-v2v](https://libguestfs.org/virt-v2v.1.html) แปลงดิสก์และปรับระบบปฏิบัติการใน VM ให้บูตบน KVM ได้ ได้แก่ ติดตั้ง driver virtio ถอด VMware Tools หรือ Hyper-V integration services และแก้ boot loader
+
+| แหล่ง (`type`) | ใช้กับ | ต้องกรอก |
+| --- | --- | --- |
+| `vmware` | ESXi หรือ vCenter | `host`, `username`, `password`, และ `path` เมื่อผ่าน vCenter (เช่น `DC1/host/Cluster1/esx1.local`) |
+| `ova` | ไฟล์ OVA ที่ export จาก VMware, VirtualBox ฯลฯ | `path` ของโฟลเดอร์ |
+| `disk` | ไฟล์ดิสก์ VMDK, VHDX/VHD (Hyper-V), QCOW2, RAW (1 ไฟล์ = 1 VM) | `path` ของโฟลเดอร์ |
+
+โฟลเดอร์ต้องเป็น path ที่ node เห็น เช่น NFS หรือ SMB share ที่เมานต์ไว้ที่ path เดียวกันทุก node
+
+```bash
+# 1. เพิ่มแหล่ง (admin)
+curl -X POST .../api/v1/migrate/sources -d '{"name":"esx1","type":"vmware","host":"10.0.0.50","username":"root","password":"..."}'
+# 2. ดู VM ที่อยู่บนแหล่งนั้น
+curl .../api/v1/migrate/sources/esx1/vms
+# 3. สั่งย้าย (ปิด VM ต้นทางก่อนเพื่อให้ข้อมูลตรงกัน)
+curl -X POST .../api/v1/migrate/jobs -d '{"source":"esx1","vm":"win2019-db","pool":"default","start":true}'
+curl .../api/v1/migrate/jobs     # ความคืบหน้า
+```
+
+ระบบจะแปลงดิสก์ให้เสร็จก่อน แล้วจึงสร้าง VM ใน ibHiCS โดยใช้จำนวน CPU, RAM, firmware (BIOS/UEFI) และจำนวน NIC ตามต้นทาง (เปลี่ยนได้ด้วย `vcpus`, `memory_mb`, `name`) ถ้าล้มเหลวจะไม่มี VM ค้างอยู่ รหัสผ่านของแหล่งเก็บใน `/var/lib/ibhics/migrate.json` (อ่านได้เฉพาะ root) และ API แสดงเป็น `********`
+
+**ข้อควรรู้**:
+- Windows ต้องมี driver virtio-win บน node (`/usr/share/virtio-win`) ซึ่ง Debian ไม่มีให้ ต้องดาวน์โหลดจาก Fedora
+- ระหว่างย้ายต้นทางควรปิดอยู่ ยังไม่รองรับการซิงก์ขณะเปิดแบบ Nutanix Move (warm migration)
+- ยังไม่รองรับเครื่อง physical (P2V) และ Sangfor HCI โดยตรง ให้ export เป็น OVA หรือดิสก์ก่อน
+
 ## REST API
 
 | Method | Path | ทำอะไร |
@@ -225,6 +254,9 @@ curl -X POST localhost:8006/api/v1/nodes/node2/evacuate
 | GET/POST | `/api/v1/users` | ผู้ใช้ (admin) |
 | PATCH/DELETE | `/api/v1/users/{name}` | เปลี่ยน role, ปิดบัญชี, ตั้งรหัสใหม่, ลบ (admin) |
 | GET | `/api/v1/audit` | audit log (admin) |
+| GET/POST | `/api/v1/migrate/sources` | แหล่งของ ibHiCS Migrate (เพิ่ม/ลบ: admin) |
+| GET | `/api/v1/migrate/sources/{name}/vms` | VM ที่อยู่บนแหล่ง |
+| GET/POST | `/api/v1/migrate/jobs` | สั่งย้าย VM เข้ามา และดูสถานะ |
 | GET | `/api/v1/cluster` | รูปแบบ cluster, quorum, สมาชิก |
 | POST | `/api/v1/cluster/nodes` | เพิ่ม node (compute หรือ witness) |
 | DELETE | `/api/v1/cluster/nodes/{name}` | นำ node ออก |

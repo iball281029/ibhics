@@ -15,6 +15,7 @@ from ..hypervisor import load_driver
 from .app import create_app
 from .auth import Auth
 from .backups import BackupManager
+from .imports import ImportManager
 from .migrations import TRANSPORTS, MigrationManager
 
 
@@ -71,6 +72,12 @@ def main() -> None:
         default=Path(os.environ.get("IBHICS_AUDIT_LOG", "/var/log/ibhics/audit.log")),
         help="append-only record of every change and sign-in",
     )
+    parser.add_argument(
+        "--migrate-state-file",
+        type=Path,
+        default=Path(os.environ.get("IBHICS_MIGRATE_STATE_FILE", "/var/lib/ibhics/migrate.json")),
+        help="where ibHiCS Migrate sources (with their credentials) are saved",
+    )
     parser.add_argument("--tls-cert", default=os.environ.get("IBHICS_TLS_CERT"), help="HTTPS")
     parser.add_argument("--tls-key", default=os.environ.get("IBHICS_TLS_KEY"))
     parser.add_argument("--heartbeat", type=float, default=5.0, help="seconds between checks")
@@ -111,6 +118,9 @@ def main() -> None:
         ),
     )
 
+    imports = ImportManager(cluster, state_path=args.migrate_state_file)
+    imports.load()
+
     app = create_app(
         cluster,
         heartbeat_interval=args.heartbeat,
@@ -118,6 +128,7 @@ def main() -> None:
         scheduler_interval=30,
         migrations=migrations,
         auth=auth,
+        imports=imports,
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")

@@ -409,3 +409,75 @@ class AuditOut(BaseModel):
     target: str
     result: int
     address: str
+
+
+# ibHiCS Migrate
+
+
+class SourceIn(BaseModel):
+    name: str
+    type: str = Field(pattern=r"^(vmware|ova|disk)$")
+    host: str | None = None
+    username: str | None = None
+    password: str | None = Field(default=None, max_length=256)
+    path: str | None = None
+    verify_tls: bool = False
+
+    def to_source(self):
+        from ..importer import Source, SourceType
+
+        return Source(**{**self.model_dump(), "type": SourceType(self.type)})
+
+
+class SourceOut(BaseModel):
+    name: str
+    type: str
+    settings: dict  # password masked
+
+
+class SourceVMOut(BaseModel):
+    ref: str
+    name: str
+    vcpus: int
+    memory_mb: int
+    firmware: str
+    disks_gb: list[int]
+    nics: int
+    state: str
+    guest_os: str
+
+
+class ImportRequest(BaseModel):
+    source: str
+    vm: str = Field(description="the ref from GET /migrate/sources/{name}/vms")
+    name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    node: str | None = None
+    pool: str = "default"
+    network: str = "default"
+    vcpus: int | None = Field(default=None, ge=1, le=256)
+    memory_mb: int | None = Field(default=None, ge=128)
+    start: bool = False
+
+
+class ImportJobOut(BaseModel):
+    id: str
+    source: str
+    vm: str
+    name: str
+    node: str
+    state: str
+    created: str
+    finished: str | None
+    result: str | None
+    error: str | None
+
+
+class AgentImport(BaseModel):
+    source: dict
+    vm: dict
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    pool: str = "default"
+    network: str = "default"
+    vcpus: int | None = None
+    memory_mb: int | None = None
+    start: bool = False

@@ -202,3 +202,47 @@ class RemoteBackup:
         if resp.status_code == 502:
             raise TargetUnavailable(detail.removeprefix("backup target unavailable: "))
         raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code} {detail}")
+
+
+class RemoteImport:
+    """NodeImport on another node, through its agent. Conversions take long: no timeout."""
+
+    def __init__(self, client: AgentClient) -> None:
+        self._client = client
+
+    def run(
+        self,
+        source,
+        vm,
+        name: str,
+        pool: str = "default",
+        network: str = "default",
+        vcpus: int | None = None,
+        memory_mb: int | None = None,
+        start: bool = False,
+    ) -> VMInfo:
+        body = {
+            "source": source.to_dict(),
+            "vm": vm.to_dict(),
+            "name": name,
+            "pool": pool,
+            "network": network,
+            "vcpus": vcpus,
+            "memory_mb": memory_mb,
+            "start": start,
+        }
+        resp = self._client.request("POST", "/imports/run", json=body, timeout=None)
+        if resp.status_code < 400:
+            return info_from_json(resp.json())
+        detail = str(resp.json().get("detail", "")) if resp.content else ""
+        if resp.status_code == 404 and detail.startswith("storage pool not found: "):
+            raise PoolNotFound(detail.removeprefix("storage pool not found: "))
+        if resp.status_code == 409:
+            raise (VMExists if "already exists" in detail else InvalidState)(detail)
+        if resp.status_code == 422:
+            raise ValueError(detail)
+        if resp.status_code == 502:
+            from ..importer import ConversionFailed
+
+            raise ConversionFailed(detail.removeprefix("conversion failed: "))
+        raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code} {detail}")

@@ -16,7 +16,8 @@ from pathlib import Path
 
 from ..backup import NodeBackup
 from ..hypervisor import HypervisorDriver, VMInfo, VMNotFound
-from .remote import AgentClient, NodeUnavailable, RemoteBackup, RemoteDriver
+from ..importer import NodeImport
+from .remote import AgentClient, NodeUnavailable, RemoteBackup, RemoteDriver, RemoteImport
 from .topology import NodeRole, Topology, classify, has_quorum
 
 
@@ -36,6 +37,7 @@ class Member:
     driver: HypervisorDriver | None = None
     client: AgentClient | None = None
     backups: NodeBackup | RemoteBackup | None = None  # runs backup jobs on this node
+    imports: NodeImport | RemoteImport | None = None  # converts VMs brought in by Migrate
     last_seen: float | None = None
     last_error: str | None = None
 
@@ -73,7 +75,11 @@ class Cluster:
     # Membership
 
     def add_local(
-        self, name: str, driver: HypervisorDriver, backups: NodeBackup | None = None
+        self,
+        name: str,
+        driver: HypervisorDriver,
+        backups: NodeBackup | None = None,
+        imports: NodeImport | None = None,
     ) -> Member:
         with self._lock:
             self._ensure_free(name)
@@ -83,6 +89,7 @@ class Cluster:
                 address=None,
                 driver=driver,
                 backups=backups or NodeBackup(driver),
+                imports=imports or NodeImport(driver),
             )
             self._members[name] = member
             return member
@@ -113,6 +120,7 @@ class Cluster:
                 client=client,
                 driver=RemoteDriver(client) if role == NodeRole.COMPUTE else None,
                 backups=RemoteBackup(client) if role == NodeRole.COMPUTE else None,
+                imports=RemoteImport(client) if role == NodeRole.COMPUTE else None,
                 last_seen=self._clock(),
             )
             self._members[name] = member
@@ -146,6 +154,7 @@ class Cluster:
                     client=client,
                     driver=RemoteDriver(client) if role == NodeRole.COMPUTE else None,
                     backups=RemoteBackup(client) if role == NodeRole.COMPUTE else None,
+                    imports=RemoteImport(client) if role == NodeRole.COMPUTE else None,
                 )
 
     # Health and quorum

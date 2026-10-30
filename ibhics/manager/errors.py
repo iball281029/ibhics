@@ -25,6 +25,12 @@ def install_driver_errors(app: FastAPI) -> None:
     app.add_exception_handler(TargetUnavailable, _handler(502, "backup target unavailable: "))
     app.add_exception_handler(InvalidState, _handler(409))
     app.add_exception_handler(MigrationFailed, _handler(502, "migration failed: "))
+
+    from ..importer import ConversionFailed, SourceNotFound, SourceUnavailable
+
+    app.add_exception_handler(ConversionFailed, _handler(502, "conversion failed: "))
+    app.add_exception_handler(SourceUnavailable, _handler(502, "source unavailable: "))
+    app.add_exception_handler(SourceNotFound, _handler(404, "migrate source not found: "))
     # Validation the driver does beyond the request schema.
     app.add_exception_handler(ValueError, _handler(422))
 
