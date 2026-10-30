@@ -16,12 +16,13 @@ from ..hypervisor import (
     PoolInfo,
     PoolNotFound,
     PoolSpec,
+    VMEdit,
     VMExists,
     VMInfo,
     VMNotFound,
     VMSpec,
 )
-from ..hypervisor.serialize import guest_from_json, info_from_json, spec_to_json
+from ..hypervisor.serialize import edit_to_json, guest_from_json, info_from_json, spec_to_json
 
 TOKEN_HEADER = "X-Ibhics-Token"
 
@@ -97,6 +98,10 @@ class RemoteDriver(HypervisorDriver):
 
     def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
         resp = self._client.request("POST", f"/vms/{uuid}/cdrom", json={"iso": iso})
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
+        resp = self._client.request("PATCH", f"/vms/{uuid}", json=edit_to_json(edit))
         return info_from_json(self._ok(resp, uuid).json())
 
     def start_vm(self, uuid: str) -> VMInfo:

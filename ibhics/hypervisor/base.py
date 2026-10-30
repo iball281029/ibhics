@@ -15,6 +15,9 @@ from pathlib import Path
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
 
 
+BOOT_DEVICES = ("hd", "cdrom", "network")
+
+
 class VMState(StrEnum):
     RUNNING = "running"
     STOPPED = "stopped"
@@ -59,6 +62,10 @@ class VMSpec:
     iso: str | None = None
     description: str = ""
     os_type: str = ""  # what the admin says the guest runs, e.g. "Windows Server 2022"
+    # Boot devices in order: "hd", "cdrom", "network". None: the CD first when an ISO is
+    # set at creation, then the disk.
+    boot: list[str] | None = None
+    autostart: bool = False  # start with the node
 
     def validate(self) -> None:
         if len(self.os_type) > 64:
@@ -71,6 +78,11 @@ class VMSpec:
             raise ValueError("vcpus must be at least 1")
         if self.memory_mb < 128:
             raise ValueError("memory_mb must be at least 128")
+        if self.boot is not None:
+            if not self.boot or any(b not in BOOT_DEVICES for b in self.boot):
+                raise ValueError(f"boot devices must be from {', '.join(BOOT_DEVICES)}")
+            if len(set(self.boot)) != len(self.boot):
+                raise ValueError("each boot device can appear once")
         for disk in self.disks:
             if disk.size_gb < 1:
                 raise ValueError("disk size_gb must be at least 1")
@@ -158,6 +170,69 @@ class VMInfo:
     uuid: str
     spec: VMSpec
     state: VMState
+    # Running with settings saved that only apply after the next power off and on.
+    restart_needed: bool = False
+
+
+@dataclass
+class DiskEdit:
+    """One disk in a VM edit: index of an existing disk (to keep or grow), or None for a
+    new disk of size_gb in pool."""
+
+    size_gb: int
+    index: int | None = None
+    pool: str = "default"
+
+
+@dataclass
+class NicEdit:
+    """One NIC in a VM edit: mac of an existing NIC (to keep or move), or None for new."""
+
+    network: str = "default"
+    mac: str | None = None
+    model: str = "virtio"
+
+
+@dataclass
+class VMEdit:
+    """A VM's new settings. Fields left None stay as they are. disks and nics, when given,
+    are the whole new list: existing entries left out are removed."""
+
+    description: str | None = None
+    os_type: str | None = None
+    vcpus: int | None = None
+    memory_mb: int | None = None
+    boot: list[str] | None = None
+    autostart: bool | None = None
+    disks: list[DiskEdit] | None = None
+    nics: list[NicEdit] | None = None
+    # Removing a disk detaches it; this also deletes its volume and data.
+    delete_removed_disks: bool = False
+
+    def apply_to(self, spec: VMSpec) -> VMSpec:
+        """The VMSpec this edit asks for, validated; disks and NICs are checked apart."""
+        new = VMSpec(**{**spec.__dict__})
+        for name in ("description", "os_type", "vcpus", "memory_mb", "boot", "autostart"):
+            if getattr(self, name) is not None:
+                setattr(new, name, getattr(self, name))
+        new.validate()
+        if self.disks is not None:
+            seen = [d.index for d in self.disks if d.index is not None]
+            if len(set(seen)) != len(seen) or any(not 0 <= i < len(spec.disks) for i in seen):
+                raise ValueError("unknown or repeated disk index")
+            for d in self.disks:
+                if d.size_gb < 1:
+                    raise ValueError("disk size_gb must be at least 1")
+                if d.index is not None and d.size_gb < spec.disks[d.index].size_gb:
+                    raise ValueError(f"disk {d.index + 1} cannot shrink, only grow")
+            if not self.disks:
+                raise ValueError("a VM needs at least one disk")
+        if self.nics is not None:
+            macs = [n.mac for n in self.nics if n.mac]
+            known = {n.mac for n in spec.nics}
+            if len(set(macs)) != len(macs) or not set(macs) <= known:
+                raise ValueError("unknown or repeated NIC")
+        return new
 
 
 @dataclass
@@ -267,6 +342,11 @@ class HypervisorDriver(abc.ABC):
 
     def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
         """Put an ISO in the VM's CD drive, or empty it with None; works while it runs."""
+        raise NotImplementedError
+
+    def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
+        """Change a VM's settings. On a running VM disks and NICs change at once; CPU,
+        memory and boot order are saved for its next start (restart_needed)."""
         raise NotImplementedError
 
     def list_local_disks(self) -> list:

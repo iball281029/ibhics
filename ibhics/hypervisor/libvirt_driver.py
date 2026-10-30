@@ -29,13 +29,23 @@ from .base import (
     PoolNotFound,
     PoolSpec,
     PoolType,
+    VMEdit,
     VMExists,
     VMInfo,
     VMNotFound,
     VMSpec,
     VMState,
 )
-from .domain_xml import META_NS, build_domain_xml, build_volume_xml, cdrom_element
+from .domain_xml import (
+    DISK_DEVS,
+    META_NS,
+    build_domain_xml,
+    build_volume_xml,
+    cdrom_element,
+    disk_element,
+    nic_element,
+    volume_name,
+)
 from .pool_xml import (
     build_iscsi_session_xml,
     build_lvm_pool_xml,
@@ -109,7 +119,7 @@ class LibvirtDriver(HypervisorDriver):
         try:
             for index, disk in enumerate(spec.disks):
                 pool = self._pool(disk.pool)
-                disk.backend = "file" if _pool_kind(pool) in ("dir", "netfs") else "block"
+                disk.backend = _backend(pool)
                 created.append(pool.createXML(build_volume_xml(spec.name, index, disk), 0))
             dom = self._conn.defineXML(build_domain_xml(spec))
         except Exception:
@@ -137,6 +147,145 @@ class LibvirtDriver(HypervisorDriver):
             root.find("devices").append(new)
             self._conn.defineXML(ET.tostring(root, encoding="unicode"))
         return self._info(self._lookup(uuid))
+
+    def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
+        dom = self._lookup(uuid)
+        current = self._info(dom)
+        new = edit.apply_to(current.spec)
+        running = dom.isActive()
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        name = root.findtext("name")
+
+        description = root.find("description")
+        if new.description:
+            if description is None:
+                description = ET.Element("description")
+                root.insert(1, description)
+            description.text = new.description
+        elif description is not None:
+            root.remove(description)
+        meta = root.find(f"metadata/{{{META_NS}}}vm")
+        if meta is None:
+            metadata = root.find("metadata")
+            if metadata is None:
+                metadata = ET.SubElement(root, "metadata")
+            meta = ET.SubElement(metadata, f"{{{META_NS}}}vm")
+        os_label = meta.find(f"{{{META_NS}}}os")
+        if os_label is None:
+            os_label = ET.SubElement(meta, f"{{{META_NS}}}os")
+        os_label.text = new.os_type
+        root.find("vcpu").text = str(new.vcpus)
+        for tag in ("memory", "currentMemory"):
+            el = root.find(tag)
+            if el is not None:
+                el.set("unit", "KiB")
+                el.text = str(new.memory_mb * 1024)
+        if edit.boot is not None:
+            os_el = root.find("os")
+            for boot in os_el.findall("boot"):
+                os_el.remove(boot)
+            for dev in new.boot:
+                ET.SubElement(os_el, "boot", dev=dev)
+
+        devices = root.find("devices")
+        attach, detach, update, resize, removed, created = [], [], [], [], [], []
+        try:
+            if edit.disks is not None:
+                self._edit_disks(root, meta, name, current, edit, attach, detach, resize, created)
+                removed = [(el, pool, vol) for el, pool, vol in detach if edit.delete_removed_disks]
+                detach = [el for el, _pool, _vol in detach]
+            if edit.nics is not None:
+                self._edit_nics(devices, edit, attach, detach, update)
+            self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        except Exception:
+            for vol in created:
+                vol.delete(0)
+            raise
+
+        for vol, dev, size in resize:
+            if running:
+                dom.blockResize(dev, size, libvirt.VIR_DOMAIN_BLOCK_RESIZE_BYTES)
+            else:
+                vol.resize(size, 0)
+        busy = set()
+        if running:
+            live = libvirt.VIR_DOMAIN_AFFECT_LIVE
+            for el in detach:
+                try:
+                    dom.detachDeviceFlags(ET.tostring(el, encoding="unicode"), live)
+                except libvirt.libvirtError:
+                    busy.add(id(el))  # the guest holds it; gone after the next restart
+            for el in attach:
+                dom.attachDeviceFlags(ET.tostring(el, encoding="unicode"), live)
+            for el in update:
+                dom.updateDeviceFlags(ET.tostring(el, encoding="unicode"), live)
+        for el, pool, volume in removed:
+            if volume and id(el) not in busy:
+                self._pool(pool).storageVolLookupByName(volume).delete(0)
+        if edit.autostart is not None:
+            dom.setAutostart(int(edit.autostart))
+        return self._info(self._lookup(uuid))
+
+    def _edit_disks(self, root, meta, name, current, edit, attach, detach, resize, created):
+        devices = root.find("devices")
+        disks = devices.findall("disk[@device='disk']")
+        keep = {d.index for d in edit.disks if d.index is not None}
+        for index, el in enumerate(disks):
+            if index in keep:
+                continue
+            detach.append((el, *disk_source(root, el)))  # before its metadata goes
+            devices.remove(el)
+        for d in edit.disks:
+            if d.index is not None and d.size_gb > current.spec.disks[d.index].size_gb:
+                el = disks[d.index]
+                resize.append((self._volume(el), el.find("target").get("dev"), d.size_gb * GIB))
+        # Metadata for removed disks goes; that for kept ones stays.
+        gone = {el.find("target").get("dev") for el, _pool, _vol in detach}
+        for entry in meta.findall(f"{{{META_NS}}}disk"):
+            if entry.get("dev") in gone:
+                meta.remove(entry)
+        used = {t.get("dev") for t in devices.findall("disk/target")}
+        for d in (d for d in edit.disks if d.index is None):
+            pool = self._pool(d.pool)
+            disk = DiskSpec(size_gb=d.size_gb, pool=d.pool, backend=_backend(pool))
+            n = 0
+            while True:  # a volume name nobody uses yet, also not a detached disk's
+                try:
+                    pool.storageVolLookupByName(volume_name(name, n, disk))
+                except libvirt.libvirtError:
+                    break
+                n += 1
+            dev = next(f"vd{c}" for c in DISK_DEVS if f"vd{c}" not in used)
+            used.add(dev)
+            created.append(pool.createXML(build_volume_xml(name, n, disk), 0))
+            el = disk_element(disk, volume_name(name, n, disk), dev)
+            devices.append(el)
+            ET.SubElement(
+                meta, f"{{{META_NS}}}disk", dev=dev, pool=d.pool, volume=volume_name(name, n, disk)
+            )
+            attach.append(el)
+
+    @staticmethod
+    def _edit_nics(devices, edit, attach, detach, update):
+        wanted = {n.mac: n for n in edit.nics if n.mac}
+        for el in devices.findall("interface"):
+            mac = el.find("mac").get("address") if el.find("mac") is not None else None
+            nic = wanted.get(mac)
+            if nic is None:
+                devices.remove(el)
+                detach.append(el)
+                continue
+            source = el.find("source")
+            if el.get("type") != "network" or source.get("network") != nic.network:
+                el.set("type", "network")
+                source.attrib.clear()
+                source.set("network", nic.network)
+                update.append(el)
+        for nic in (n for n in edit.nics if not n.mac):
+            # Our own MAC, so the saved and the live NIC are the same one.
+            el = nic_element(NicSpec(network=nic.network, model=nic.model, mac=_random_mac()))
+            devices.append(el)
+            attach.append(el)
 
     def start_vm(self, uuid: str) -> VMInfo:
         dom = self._lookup(uuid)
@@ -529,7 +678,15 @@ class LibvirtDriver(HypervisorDriver):
                     continue
             disk.size_gb = -(-capacity // GIB)
             disk.used_gb = round(allocation / GIB, 1)
-        return VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
+        info = VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
+        try:
+            spec.autostart = bool(dom.autostart())
+            if info.state == VMState.RUNNING:
+                saved = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+                info.restart_needed = _restart_key(saved) != _restart_key(ET.fromstring(xml))
+        except libvirt.libvirtError:
+            pass
+        return info
 
 
 def stable_device(device: str, by_id: str = "/dev/disk/by-id") -> str:
@@ -569,6 +726,23 @@ def filesystem_usage(data: dict) -> tuple[float | None, float | None]:
 
 def _pool_kind(pool) -> str:
     return ET.fromstring(pool.XMLDesc(0)).get("type", "")
+
+
+def _backend(pool) -> str:
+    return "file" if _pool_kind(pool) in ("dir", "netfs", "fs") else "block"
+
+
+def _random_mac() -> str:
+    return "52:54:00:" + ":".join(f"{b:02x}" for b in os.urandom(3))
+
+
+def _restart_key(root) -> tuple:
+    memory = root.find("memory")
+    return (
+        root.findtext("vcpu"),
+        memory.text if memory is not None else None,
+        [b.get("dev") for b in root.findall("os/boot")],
+    )
 
 
 def _undefine(pool) -> None:
@@ -644,4 +818,5 @@ def _spec_from_xml(xml: str) -> VMSpec:
         iso=cdrom.get("file") if cdrom is not None else None,
         description=root.findtext("description", ""),
         os_type=root.findtext(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}os", ""),
+        boot=[b.get("dev") for b in root.findall("os/boot")] or None,
     )

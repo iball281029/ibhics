@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 import socket
 import tempfile
@@ -14,16 +15,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .base import (
+    DiskSpec,
     GuestInfo,
     GuestInterface,
     HostInfo,
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NicSpec,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
     PoolType,
+    VMEdit,
     VMExists,
     VMInfo,
     VMNotFound,
@@ -92,6 +96,38 @@ class FakeDriver(HypervisorDriver):
             vm.spec.iso = iso
             return copy.deepcopy(vm)
 
+    def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            new = edit.apply_to(vm.spec)
+            running = vm.state == VMState.RUNNING
+            if running and _restart_key(new) != _restart_key(vm.spec):
+                vm.restart_needed = True
+            if edit.disks is not None:
+                disks, data = [], []
+                for d in edit.disks:
+                    if d.index is not None:
+                        disk = copy.deepcopy(vm.spec.disks[d.index])
+                        blob = self._disks[uuid][d.index]
+                        blob.extend(bytes((d.size_gb - disk.size_gb) * FAKE_BYTES_PER_GB))
+                        disk.size_gb = d.size_gb
+                    else:
+                        if d.pool not in self._pools:
+                            raise PoolNotFound(d.pool)
+                        backend = self._pools[d.pool][0].disk_backend
+                        disk = DiskSpec(size_gb=d.size_gb, pool=d.pool, backend=backend)
+                        blob = bytearray(d.size_gb * FAKE_BYTES_PER_GB)
+                    disks.append(disk)
+                    data.append(blob)
+                new.disks, self._disks[uuid] = disks, data
+            if edit.nics is not None:
+                new.nics = [
+                    NicSpec(network=n.network, model=n.model, mac=n.mac or _random_mac())
+                    for n in edit.nics
+                ]
+            vm.spec = new
+            return copy.deepcopy(vm)
+
     def start_vm(self, uuid: str) -> VMInfo:
         with self._lock:
             vm = self._get(uuid)
@@ -106,6 +142,7 @@ class FakeDriver(HypervisorDriver):
             if vm.state == VMState.STOPPED:
                 raise InvalidState("VM is already stopped")
             vm.state = VMState.STOPPED
+            vm.restart_needed = False
             return copy.deepcopy(vm)
 
     def delete_vm(self, uuid: str) -> None:
@@ -273,3 +310,11 @@ class FakeDriver(HypervisorDriver):
             return self._vms[uuid]
         except KeyError:
             raise VMNotFound(uuid) from None
+
+
+def _random_mac() -> str:
+    return "52:54:00:" + ":".join(f"{b:02x}" for b in os.urandom(3))
+
+
+def _restart_key(spec: VMSpec) -> tuple:
+    return (spec.vcpus, spec.memory_mb, spec.boot)

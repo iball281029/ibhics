@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from .base import DiskSpec, Firmware, GuestInfo, GuestInterface, NicSpec, VMInfo, VMSpec
+from dataclasses import asdict
+
+from .base import (
+    DiskEdit,
+    DiskSpec,
+    Firmware,
+    GuestInfo,
+    GuestInterface,
+    NicEdit,
+    NicSpec,
+    VMEdit,
+    VMInfo,
+    VMSpec,
+)
 
 
 def spec_from_json(data: dict) -> VMSpec:
@@ -16,11 +29,31 @@ def spec_from_json(data: dict) -> VMSpec:
         iso=data.get("iso"),
         description=data.get("description", ""),
         os_type=data.get("os_type", ""),
+        boot=data.get("boot"),
+        autostart=data.get("autostart", False),
     )
 
 
 def info_from_json(data: dict) -> VMInfo:
-    return VMInfo(uuid=data["uuid"], spec=spec_from_json(data), state=data["state"])
+    return VMInfo(
+        uuid=data["uuid"],
+        spec=spec_from_json(data),
+        state=data["state"],
+        restart_needed=data.get("restart_needed", False),
+    )
+
+
+def edit_to_json(edit: VMEdit) -> dict:
+    return asdict(edit)
+
+
+def edit_from_json(data: dict) -> VMEdit:
+    data = dict(data)
+    if data.get("disks") is not None:
+        data["disks"] = [DiskEdit(**d) for d in data["disks"]]
+    if data.get("nics") is not None:
+        data["nics"] = [NicEdit(**n) for n in data["nics"]]
+    return VMEdit(**data)
 
 
 def spec_to_json(spec: VMSpec) -> dict:
@@ -37,6 +70,8 @@ def spec_to_json(spec: VMSpec) -> dict:
         "iso": spec.iso,
         "description": spec.description,
         "os_type": spec.os_type,
+        "boot": spec.boot,
+        "autostart": spec.autostart,
     }
 
 

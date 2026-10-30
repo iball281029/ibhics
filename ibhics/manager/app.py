@@ -56,6 +56,7 @@ from .schemas import (
     UserOut,
     UserUpdate,
     VMCreate,
+    VMEditIn,
     VMOut,
 )
 
@@ -406,6 +407,13 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         return VMOut.from_info(member.driver.insert_cdrom(uuid, body.iso), member.name)
+
+    @api.patch("/vms/{uuid}", response_model=VMOut)
+    def update_vm(uuid: str, body: VMEditIn) -> VMOut:
+        """Change CPU, memory, disks, NICs, boot order and options."""
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
 
     @api.post("/vms/{uuid}/guest-tools", response_model=VMOut)
     def insert_guest_tools(uuid: str) -> VMOut:

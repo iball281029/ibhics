@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from .base import DiskSpec, Firmware, VMSpec
+from .base import DiskSpec, Firmware, NicSpec, VMSpec
 from .pool_xml import vg_name
 
 DISK_DEVS = "abcdefghijklmnopqrstuvwxyz"
@@ -45,6 +45,37 @@ def cdrom_element(iso: str | None) -> ET.Element:
     return cdrom
 
 
+def disk_element(disk: DiskSpec, volume: str, dev: str) -> ET.Element:
+    # Block disks name the LV itself: Debian's virt-aa-helper does not resolve
+    # <source pool volume> for logical pools, so AppArmor would deny QEMU the device.
+    # The domain metadata keeps which pool and volume the disk is.
+    block = disk.backend == "block"
+    disk_el = ET.Element("disk", type="block" if block else "volume", device="disk")
+    ET.SubElement(
+        disk_el,
+        "driver",
+        name="qemu",
+        type="raw" if block else "qcow2",
+        cache="none",
+        discard="unmap",
+    )
+    if block:
+        ET.SubElement(disk_el, "source", dev=f"/dev/{vg_name(disk.pool)}/{volume}")
+    else:
+        ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume)
+    ET.SubElement(disk_el, "target", dev=dev, bus=disk.bus)
+    return disk_el
+
+
+def nic_element(nic: NicSpec) -> ET.Element:
+    iface = ET.Element("interface", type="network")
+    if nic.mac:
+        ET.SubElement(iface, "mac", address=nic.mac)
+    ET.SubElement(iface, "source", network=nic.network)
+    ET.SubElement(iface, "model", type=nic.model or "virtio")
+    return iface
+
+
 def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     spec.validate()
     if len(spec.disks) > len(DISK_DEVS):
@@ -65,9 +96,8 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     os_attrs = {"firmware": "efi"} if spec.firmware == Firmware.UEFI else {}
     os_el = ET.SubElement(dom, "os", **os_attrs)
     ET.SubElement(os_el, "type", arch="x86_64", machine="q35").text = "hvm"
-    if spec.iso:
-        ET.SubElement(os_el, "boot", dev="cdrom")
-    ET.SubElement(os_el, "boot", dev="hd")
+    for dev in spec.boot or (["cdrom", "hd"] if spec.iso else ["hd"]):
+        ET.SubElement(os_el, "boot", dev=dev)
 
     features = ET.SubElement(dom, "features")
     ET.SubElement(features, "acpi")
@@ -83,36 +113,15 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     for index, disk in enumerate(spec.disks):
         volume = volume_name(spec.name, index, disk)
         dev = f"vd{DISK_DEVS[index]}"
-        # Block disks name the LV itself: Debian's virt-aa-helper does not resolve
-        # <source pool volume> for logical pools, so AppArmor would deny QEMU the device.
-        # The metadata keeps which pool and volume the disk is.
-        block = disk.backend == "block"
-        disk_el = ET.SubElement(devices, "disk", type="block" if block else "volume", device="disk")
+        devices.append(disk_element(disk, volume, dev))
         ET.SubElement(meta, f"{{{META_NS}}}disk", dev=dev, pool=disk.pool, volume=volume)
-        ET.SubElement(
-            disk_el,
-            "driver",
-            name="qemu",
-            type="raw" if disk.backend == "block" else "qcow2",
-            cache="none",
-            discard="unmap",
-        )
-        if block:
-            ET.SubElement(disk_el, "source", dev=f"/dev/{vg_name(disk.pool)}/{volume}")
-        else:
-            ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume)
-        ET.SubElement(disk_el, "target", dev=dev, bus=disk.bus)
 
     # A CD drive is always there (empty without an ISO), so a disc such as the guest
     # tools can go in later, even while the VM runs.
     devices.append(cdrom_element(spec.iso))
 
     for nic in spec.nics:
-        iface = ET.SubElement(devices, "interface", type="network")
-        if nic.mac:
-            ET.SubElement(iface, "mac", address=nic.mac)
-        ET.SubElement(iface, "source", network=nic.network)
-        ET.SubElement(iface, "model", type=nic.model)
+        devices.append(nic_element(nic))
 
     # The console is reached through the manager's noVNC proxy, never directly.
     ET.SubElement(devices, "graphics", type="vnc", autoport="yes", listen="127.0.0.1")

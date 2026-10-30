@@ -7,13 +7,16 @@ from pydantic import BaseModel, Field
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
 from ..hypervisor import (
+    DiskEdit,
     DiskSpec,
     Firmware,
     HostInfo,
+    NicEdit,
     NicSpec,
     PoolInfo,
     PoolSpec,
     PoolType,
+    VMEdit,
     VMInfo,
     VMSpec,
     VMState,
@@ -84,6 +87,9 @@ class VMOut(BaseModel):
     iso: str | None
     description: str
     os_type: str = ""
+    boot: list[str] | None = None
+    autostart: bool = False
+    restart_needed: bool = False
     node: str | None = None
 
     @classmethod
@@ -105,7 +111,45 @@ class VMOut(BaseModel):
             iso=spec.iso,
             description=spec.description,
             os_type=spec.os_type,
+            boot=spec.boot,
+            autostart=spec.autostart,
+            restart_needed=info.restart_needed,
         )
+
+
+class DiskEditIn(BaseModel):
+    size_gb: int = Field(ge=1)
+    index: int | None = Field(default=None, ge=0, description="existing disk; empty = new")
+    pool: str = "default"
+
+
+class NicEditIn(BaseModel):
+    network: str = "default"
+    mac: str | None = Field(default=None, description="existing NIC; empty = new")
+    model: str = Field(default="virtio", pattern=r"^(virtio|e1000e|e1000|rtl8139)$")
+
+
+class VMEditIn(BaseModel):
+    """New settings for a VM. Fields left out stay as they are; disks and nics, when
+    given, are the whole list (existing ones left out are removed)."""
+
+    description: str | None = Field(default=None, max_length=1024)
+    os_type: str | None = Field(default=None, max_length=64)
+    vcpus: int | None = Field(default=None, ge=1, le=256)
+    memory_mb: int | None = Field(default=None, ge=128)
+    boot: list[str] | None = None
+    autostart: bool | None = None
+    disks: list[DiskEditIn] | None = Field(default=None, max_length=26)
+    nics: list[NicEditIn] | None = Field(default=None, max_length=16)
+    delete_removed_disks: bool = False
+
+    def to_edit(self) -> VMEdit:
+        data = self.model_dump()
+        if self.disks is not None:
+            data["disks"] = [DiskEdit(**d) for d in data["disks"]]
+        if self.nics is not None:
+            data["nics"] = [NicEdit(**n) for n in data["nics"]]
+        return VMEdit(**data)
 
 
 class GuestInterfaceOut(BaseModel):

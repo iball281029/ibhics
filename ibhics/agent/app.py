@@ -31,6 +31,7 @@ from ..manager.schemas import (
     PoolOut,
     StopRequest,
     VMCreate,
+    VMEditIn,
     VMOut,
 )
 
@@ -93,6 +94,10 @@ def create_agent_app(
         @api.post("/vms/{uuid}/cdrom", response_model=VMOut)
         def insert_cdrom(uuid: str, body: CdromRequest) -> VMOut:
             return VMOut.from_info(driver.insert_cdrom(uuid, body.iso))
+
+        @api.patch("/vms/{uuid}", response_model=VMOut)
+        def update_vm(uuid: str, body: VMEditIn) -> VMOut:
+            return VMOut.from_info(driver.update_vm(uuid, body.to_edit()))
 
         @api.post("/vms/{uuid}/start", response_model=VMOut)
         def start_vm(uuid: str) -> VMOut:

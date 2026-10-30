@@ -1,4 +1,5 @@
 from .base import (
+    DiskEdit,
     DiskSpec,
     Firmware,
     GuestInfo,
@@ -7,11 +8,13 @@ from .base import (
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NicEdit,
     NicSpec,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
     PoolType,
+    VMEdit,
     VMExists,
     VMInfo,
     VMNotFound,
@@ -33,6 +36,7 @@ def load_driver(name: str, libvirt_uri: str = "qemu:///system") -> HypervisorDri
 
 
 __all__ = [
+    "DiskEdit",
     "DiskSpec",
     "Firmware",
     "GuestInfo",
@@ -41,6 +45,7 @@ __all__ = [
     "HypervisorDriver",
     "InvalidState",
     "MigrationFailed",
+    "NicEdit",
     "NicSpec",
     "PoolInfo",
     "PoolNotFound",
@@ -49,6 +54,7 @@ __all__ = [
     "VMExists",
     "VMInfo",
     "VMNotFound",
+    "VMEdit",
     "VMSpec",
     "VMState",
     "load_driver",
