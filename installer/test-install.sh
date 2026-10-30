@@ -84,6 +84,11 @@ sudo vgchange -q -ay ibhics
 mkdir -p mnt
 sudo mount /dev/ibhics/root mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
+# virt-v2v copies VMware disks with nbdkit's ssh plugin (and its curl plugin for HTTPS).
+for plugin in ssh curl; do
+    ls mnt/usr/lib/*/nbdkit/plugins/nbdkit-$plugin-plugin.so >/dev/null 2>&1 \
+        || { echo "!! nbdkit $plugin plugin is missing: VMware imports would fail"; exit 1; }
+done
 sudo tee mnt/etc/ibhics/answers.conf >/dev/null <<EOF
 ROLE=manager
 HOSTNAME=node1

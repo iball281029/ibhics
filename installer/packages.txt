@@ -7,9 +7,6 @@ libvirt-daemon-system
 libvirt-clients
 ovmf
 virt-v2v
-# virt-v2v reads VMware disks over SSH from ESXi (-it ssh) or over ESXi's HTTPS.
-nbdkit-plugin-libssh
-nbdkit-plugin-curl
 # ibHiCS runs on the system Python
 python3
 python3-venv
