@@ -462,7 +462,15 @@ def create_app(
         """The guest tools CD (virtio drivers and guest agent) in the VM's drive."""
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
-        return VMOut.from_info(member.driver.insert_cdrom(uuid, GUEST_TOOLS_ISO), member.name)
+        try:
+            return VMOut.from_info(member.driver.insert_cdrom(uuid, GUEST_TOOLS_ISO), member.name)
+        except ValueError as exc:
+            if "is not on node" not in str(exc):
+                raise
+            raise InvalidState(
+                f"the guest tools CD is missing on {member.name}: run the upgrade from the "
+                "ibHiCS ISO on that node again, which puts it in place"
+            ) from None
 
     @api.post("/vms/{uuid}/start", response_model=VMOut)
     def start_vm(uuid: str) -> VMOut:

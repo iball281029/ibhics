@@ -957,7 +957,7 @@ async function renderVMDetail() {
   const agentText = g?.agent
     ? `<span class="dot ok"></span> Running`
     : vm.state === "running"
-      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Use ⋯ → Insert guest tools CD and run it in the guest to see its OS, hostname and IP addresses. Imported VMs get it automatically.</span>`
+      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Use ⋯ → Insert guest tools CD and run it in the guest to see its OS, hostname and IP addresses. Windows VMs imported with ibHiCS 0.2 or later get it automatically; on Linux, run linux/install.sh from the CD.</span>`
       : `<span class="dot"></span> VM is powered off`;
   $("#vm-guest").innerHTML = kv([
     ["Guest agent", agentText],
