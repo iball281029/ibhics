@@ -30,8 +30,9 @@ class Recorder:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, cmd, check=True, input=None, text=True):
+    def __call__(self, cmd, check=True, input=None, text=True, capture_output=False):
         self.calls.append((cmd, input))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
 
 @pytest.mark.parametrize(
@@ -106,6 +107,18 @@ def test_apply_manager(tmp_path):
     auth = Auth(state_path=tmp_path / "var/lib/ibhics/users.json")
     auth.load()
     assert auth.login("admin", "admin-pw-123").user == "admin"
+
+
+def test_apply_reports_failures_but_not_expected_ones(tmp_path):
+    class Failing(Recorder):
+        def __call__(self, cmd, **kwargs):
+            super().__call__(cmd, **kwargs)
+            fails = cmd[:2] in (["virsh", "net-destroy"], ["virsh", "net-start"])
+            return subprocess.CompletedProcess(cmd, int(fails), "", "network is not active")
+
+    # net-destroy fails on every fresh node and is ignored; net-start failing is real.
+    with pytest.raises(RuntimeError, match="virsh net-start default failed: network is not"):
+        setup.apply(cfg(), "root-pw-123", "admin-pw-123", root=tmp_path, run=Failing())
 
 
 def test_apply_witness_skips_libvirt(tmp_path):

@@ -206,8 +206,16 @@ def apply(
         target.chmod(mode)
 
     def sh(*cmd: str, check: bool = True, stdin: str | None = None) -> None:
-        run(list(cmd), check=check, input=stdin, text=True)
+        # Quiet: the console shows our progress lines, and a command's output only if it
+        # fails and that failure matters.
+        result = run(list(cmd), check=False, input=stdin, text=True, capture_output=True)
+        if check and result is not None and result.returncode != 0:
+            raise RuntimeError(f"{' '.join(cmd[:3])} failed: {(result.stderr or '').strip()}")
 
+    def step(text: str) -> None:
+        print(f"  {text}...", flush=True)
+
+    step("Network and system settings")
     write("/etc/hostname", cfg.hostname + "\n")
     write("/etc/hosts", render_hosts(cfg))
     write("/etc/network/interfaces", render_interfaces(cfg))
@@ -219,6 +227,7 @@ def apply(
     sh("systemctl", "restart", "networking")
 
     if cfg.runs_vms:
+        step("VM network bridge and storage pool")
         write("/etc/ibhics/default-network.xml", render_bridge_network())
         sh("virsh", "net-destroy", "default", check=False)
         sh("virsh", "net-undefine", "default", check=False)
@@ -238,6 +247,7 @@ def apply(
         sh("virsh", "pool-start", "default", check=False)
 
     if cfg.role == "manager":
+        step("HTTPS certificate and web console user")
         tls = root / "etc/ibhics/tls"
         tls.mkdir(parents=True, exist_ok=True)
         sh(
@@ -268,6 +278,7 @@ def apply(
     else:
         service = "ibhics-agent.service"
 
+    step("Starting ibHiCS")
     write("/etc/ibhics/configured", f"{cfg.role}\n")
     sh("systemctl", "enable", "--now", service)
     sh("systemctl", "disable", "ibhics-firstboot.service", check=False)
@@ -422,7 +433,11 @@ def unattended(path: Path) -> int:
         return 1
     finally:
         path.unlink(missing_ok=True)
-    apply(cfg, root_password, admin_password)
+    try:
+        apply(cfg, root_password, admin_password)
+    except RuntimeError as exc:
+        print(f"\n  Setup did not finish: {exc}\n  Fix it and run ibhics-setup again.\n")
+        return 1
     print("\n" + render_issue(cfg))
     return 0
 
@@ -465,7 +480,11 @@ def main() -> int:
     print(f"\n  {ROLES[role]}\n  {hostname} at {address} via {gateway} on {interface}\n")
     if ask("Apply these settings? (yes/no)", "yes").lower() not in ("y", "yes"):
         return 1
-    apply(cfg, root_password, admin_password)
+    try:
+        apply(cfg, root_password, admin_password)
+    except RuntimeError as exc:
+        print(f"\n  Setup did not finish: {exc}\n  Fix it and run ibhics-setup again.\n")
+        return 1
     print("\n" + render_issue(cfg))
     if role == "manager":
         print(
