@@ -86,6 +86,12 @@ class FakeDriver(HypervisorDriver):
             self._disks[vm.uuid] = [bytearray(d.size_gb * FAKE_BYTES_PER_GB) for d in spec.disks]
             return copy.deepcopy(vm)
 
+    def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            vm.spec.iso = iso
+            return copy.deepcopy(vm)
+
     def start_vm(self, uuid: str) -> VMInfo:
         with self._lock:
             vm = self._get(uuid)

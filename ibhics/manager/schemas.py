@@ -461,6 +461,10 @@ class SourceIn(BaseModel):
         return Source(**{**self.model_dump(), "type": SourceType(self.type)})
 
 
+class CdromRequest(BaseModel):
+    iso: str | None = Field(default=None, pattern=r"^/.+\.iso$")
+
+
 class UploadOut(BaseModel):
     name: str
     size_bytes: int

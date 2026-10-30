@@ -25,6 +25,7 @@ from ..manager.schemas import (
     AgentPrune,
     AgentRestore,
     BackupOut,
+    CdromRequest,
     HostOut,
     PoolCreate,
     PoolOut,
@@ -88,6 +89,10 @@ def create_agent_app(
         @api.get("/vms/{uuid}", response_model=VMOut)
         def get_vm(uuid: str) -> VMOut:
             return VMOut.from_info(driver.get_vm(uuid))
+
+        @api.post("/vms/{uuid}/cdrom", response_model=VMOut)
+        def insert_cdrom(uuid: str, body: CdromRequest) -> VMOut:
+            return VMOut.from_info(driver.insert_cdrom(uuid, body.iso))
 
         @api.post("/vms/{uuid}/start", response_model=VMOut)
         def start_vm(uuid: str) -> VMOut:

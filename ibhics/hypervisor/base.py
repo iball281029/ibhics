@@ -255,6 +255,10 @@ class HypervisorDriver(abc.ABC):
         """
         raise NotImplementedError
 
+    def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
+        """Put an ISO in the VM's CD drive, or empty it with None; works while it runs."""
+        raise NotImplementedError
+
     def list_local_disks(self) -> list:
         """Whole disks on this node that could become an LVM pool (disks.LocalDisk)."""
         return []

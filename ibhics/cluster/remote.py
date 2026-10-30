@@ -95,6 +95,10 @@ class RemoteDriver(HypervisorDriver):
             raise PoolNotFound(detail.removeprefix("storage pool not found: "))
         return info_from_json(self._ok(resp).json())
 
+    def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/cdrom", json={"iso": iso})
+        return info_from_json(self._ok(resp, uuid).json())
+
     def start_vm(self, uuid: str) -> VMInfo:
         return info_from_json(
             self._ok(self._client.request("POST", f"/vms/{uuid}/start"), uuid).json()

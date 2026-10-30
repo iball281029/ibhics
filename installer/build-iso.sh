@@ -4,6 +4,7 @@
 #   installer/build-iso.sh                      # downloads the current Debian 13 netinst
 #   installer/build-iso.sh --source debian.iso  # or use an ISO you already have
 #   installer/build-iso.sh --repo DIR           # reuse a package repo from build-repo.sh
+#   installer/build-iso.sh --no-virtio-win      # leave out the Windows virtio drivers
 #
 # Needs: xorriso, python3 with pip, curl, and docker (for the package repository). The
 # result keeps Debian's BIOS and UEFI boot setup and adds the ibHiCS boot menu, the
@@ -15,6 +16,8 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$HERE")
 MIRROR=${DEBIAN_CD_MIRROR:-https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}
 TARGET_PYTHON=3.13  # Debian 13's python3: the wheels must match it
+VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso}
+NO_VIRTIO_WIN=""
 SOURCE=""
 OUT=""
 DEBREPO=""
@@ -24,7 +27,8 @@ while [ $# -gt 0 ]; do
         --source) SOURCE=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
         --repo) DEBREPO=$(realpath "$2"); shift 2 ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        --no-virtio-win) NO_VIRTIO_WIN=1; shift ;;
+        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -76,6 +80,23 @@ if [ -z "$DEBREPO" ]; then
 fi
 [ -s "$DEBREPO/Packages.gz" ] || { echo "no Packages.gz in $DEBREPO" >&2; exit 1; }
 cp -r "$DEBREPO" "$PAYLOAD/repo"
+
+# Windows guests need the virtio drivers when virt-v2v converts them. Debian does not
+# package them, so the drivers for current 64-bit Windows come from the virtio-win ISO.
+if [ -z "$NO_VIRTIO_WIN" ]; then
+    echo ">> Adding the virtio-win drivers for Windows guests"
+    curl -fL --retry 3 -o "$WORK/virtio-win.iso" "$VIRTIO_WIN_URL"
+    mkdir -p "$WORK/virtio-all"
+    xorriso -osirrox on -indev "$WORK/virtio-win.iso" -extract / "$WORK/virtio-all" >/dev/null 2>&1
+    chmod -R u+w "$WORK/virtio-all"
+    python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-all" "$PAYLOAD/virtio-win"
+    # The guest tools CD that "Install guest tools" puts in a VM's drive.
+    mkdir -p "$WORK/tools/linux"
+    cp -r "$PAYLOAD/virtio-win/." "$WORK/tools/"
+    cp "$HERE/guest-tools/install.sh" "$WORK/tools/linux/install.sh"
+    cp "$HERE/guest-tools/README.txt" "$WORK/tools/README.txt"
+    xorriso -as mkisofs -quiet -J -R -V IBHICS_TOOLS -o "$PAYLOAD/guest-tools.iso" "$WORK/tools"
+fi
 cp "$HERE"/systemd/*.service "$PAYLOAD/systemd/"
 echo "$VERSION" > "$PAYLOAD/VERSION"
 

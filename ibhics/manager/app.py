@@ -27,6 +27,7 @@ from .schemas import (
     BackupRequest,
     BackupTargetIn,
     BackupTargetOut,
+    CdromRequest,
     ClusterOut,
     GuestOut,
     HostOut,
@@ -61,6 +62,7 @@ from .schemas import (
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "ibhics_session"
 API = "/api/v1"
+GUEST_TOOLS_ISO = "/usr/share/ibhics/guest-tools.iso"
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
@@ -398,6 +400,19 @@ def create_app(
     def get_vm(uuid: str) -> VMOut:
         member, vm = cluster.find_vm(uuid)
         return VMOut.from_info(vm, member.name)
+
+    @api.post("/vms/{uuid}/cdrom", response_model=VMOut)
+    def insert_cdrom(uuid: str, body: CdromRequest) -> VMOut:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(member.driver.insert_cdrom(uuid, body.iso), member.name)
+
+    @api.post("/vms/{uuid}/guest-tools", response_model=VMOut)
+    def insert_guest_tools(uuid: str) -> VMOut:
+        """The guest tools CD (virtio drivers and guest agent) in the VM's drive."""
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(member.driver.insert_cdrom(uuid, GUEST_TOOLS_ISO), member.name)
 
     @api.post("/vms/{uuid}/start", response_model=VMOut)
     def start_vm(uuid: str) -> VMOut:

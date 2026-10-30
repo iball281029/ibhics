@@ -32,6 +32,16 @@ def build_volume_xml(vm_name: str, index: int, disk: DiskSpec) -> str:
     return ET.tostring(vol, encoding="unicode")
 
 
+def cdrom_element(iso: str | None) -> ET.Element:
+    cdrom = ET.Element("disk", type="file", device="cdrom")
+    ET.SubElement(cdrom, "driver", name="qemu", type="raw")
+    if iso:
+        ET.SubElement(cdrom, "source", file=iso)
+    ET.SubElement(cdrom, "target", dev="sda", bus="sata")
+    ET.SubElement(cdrom, "readonly")
+    return cdrom
+
+
 def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     spec.validate()
     if len(spec.disks) > len(DISK_DEVS):
@@ -80,12 +90,9 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume_name(spec.name, index, disk))
         ET.SubElement(disk_el, "target", dev=f"vd{DISK_DEVS[index]}", bus=disk.bus)
 
-    if spec.iso:
-        cdrom = ET.SubElement(devices, "disk", type="file", device="cdrom")
-        ET.SubElement(cdrom, "driver", name="qemu", type="raw")
-        ET.SubElement(cdrom, "source", file=spec.iso)
-        ET.SubElement(cdrom, "target", dev="sda", bus="sata")
-        ET.SubElement(cdrom, "readonly")
+    # A CD drive is always there (empty without an ISO), so a disc such as the guest
+    # tools can go in later, even while the VM runs.
+    devices.append(cdrom_element(spec.iso))
 
     for nic in spec.nics:
         iface = ET.SubElement(devices, "interface", type="network")

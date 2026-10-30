@@ -128,3 +128,25 @@ def test_node_disks_through_the_manager():
     disks = TestClient(create_app(cluster)).get("/api/v1/nodes/node1/disks").json()
     assert disks[0]["path"] == "/dev/sdb" and disks[0]["empty"]
     assert disks[1]["contents"] == "3 partitions (vmfs)"
+
+
+def test_guest_tools_cd():
+    from fastapi.testclient import TestClient
+
+    from ibhics.cluster import Cluster
+    from ibhics.hypervisor.domain_xml import build_domain_xml
+    from ibhics.hypervisor.fake import FakeDriver
+    from ibhics.manager import create_app
+
+    # Every VM gets a CD drive, empty unless an ISO is given.
+    xml = build_domain_xml(VMSpec(name="a", disks=[DiskSpec(size_gb=1)]))
+    assert 'device="cdrom"' in xml and "<source file" not in xml
+
+    cluster = Cluster()
+    cluster.add_local("node1", FakeDriver())
+    client = TestClient(create_app(cluster))
+    vm = client.post("/api/v1/vms", json={"name": "w", "disks": [{"size_gb": 1}]}).json()
+    got = client.post(f"/api/v1/vms/{vm['uuid']}/guest-tools").json()
+    assert got["iso"] == "/usr/share/ibhics/guest-tools.iso"
+    assert client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": None}).json()["iso"] is None
+    assert client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": "x"}).status_code == 422

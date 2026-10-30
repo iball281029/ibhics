@@ -463,6 +463,8 @@ function vmMenu(vm, { summary = false } = {}) {
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
+      <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
+      ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
       ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
     </div></details>`;
 }
@@ -528,6 +530,11 @@ async function vmAction(e) {
     if (act === "start") await post(`/vms/${id}/start`);
     if (act === "stop") await post(`/vms/${id}/stop`);
     if (act === "poweroff") await post(`/vms/${id}/stop`, { force: true });
+    if (act === "tools") {
+      await post(`/vms/${id}/guest-tools`);
+      toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
+    }
+    if (act === "eject") await post(`/vms/${id}/cdrom`, { iso: null });
     if (act === "delete") {
       if (!confirm(`Delete ${name} and all its disks?`)) return;
       await del(`/vms/${id}`);
@@ -732,7 +739,7 @@ async function renderVMDetail() {
   const agentText = g?.agent
     ? `<span class="dot ok"></span> Running`
     : vm.state === "running"
-      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Install qemu-guest-agent in the guest to see its OS, hostname and IP addresses.</span>`
+      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Use ⋯ → Insert guest tools CD and run it in the guest to see its OS, hostname and IP addresses. Imported VMs get it automatically.</span>`
       : `<span class="dot"></span> VM is powered off`;
   $("#vm-guest").innerHTML = kv([
     ["Guest agent", agentText],

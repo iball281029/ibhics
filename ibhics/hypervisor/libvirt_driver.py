@@ -35,7 +35,7 @@ from .base import (
     VMSpec,
     VMState,
 )
-from .domain_xml import META_NS, build_domain_xml, build_volume_xml
+from .domain_xml import META_NS, build_domain_xml, build_volume_xml, cdrom_element
 from .pool_xml import (
     build_iscsi_session_xml,
     build_lvm_pool_xml,
@@ -117,6 +117,26 @@ class LibvirtDriver(HypervisorDriver):
                 vol.delete(0)
             raise
         return self._info(dom)
+
+    def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
+        if iso and not Path(iso).is_file():
+            raise ValueError(f"{iso} is not on node")
+        dom = self._lookup(uuid)
+        root = ET.fromstring(dom.XMLDesc(0))
+        drive = root.find("./devices/disk[@device='cdrom']")
+        new = cdrom_element(iso)
+        if drive is not None:
+            new.find("target").attrib.update(drive.find("target").attrib)
+            flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+            if dom.isActive():
+                flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+            dom.updateDeviceFlags(ET.tostring(new, encoding="unicode"), flags)
+        elif dom.isActive():
+            raise InvalidState("this VM has no CD drive; shut it down once to add one")
+        else:  # VMs from before every VM had a drive
+            root.find("devices").append(new)
+            self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        return self._info(self._lookup(uuid))
 
     def start_vm(self, uuid: str) -> VMInfo:
         dom = self._lookup(uuid)
