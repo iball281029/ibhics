@@ -349,3 +349,63 @@ class AgentPrune(BaseModel):
     target: dict
     vm_name: str
     keep_last: int = Field(ge=1)
+
+
+# Sign-in and users
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=256)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(max_length=256)
+    new_password: str = Field(max_length=256)
+
+
+class UserOut(BaseModel):
+    name: str
+    role: str
+    enabled: bool
+    must_change_password: bool
+    created: str
+    last_login: str | None
+
+    @classmethod
+    def from_user(cls, user) -> UserOut:
+        return cls(
+            name=user.name,
+            role=str(user.role),
+            enabled=user.enabled,
+            must_change_password=user.must_change_password,
+            created=user.created,
+            last_login=user.last_login,
+        )
+
+
+class LoginOut(BaseModel):
+    token: str  # for scripts: send as "Authorization: Bearer <token>"; browsers use the cookie
+    idle_timeout: int
+    user: UserOut
+
+
+class UserIn(BaseModel):
+    name: str = Field(max_length=32)
+    role: str = Field(pattern=r"^(viewer|operator|admin)$")
+    password: str = Field(max_length=256)
+
+
+class UserUpdate(BaseModel):
+    role: str | None = Field(default=None, pattern=r"^(viewer|operator|admin)$")
+    enabled: bool | None = None
+    password: str | None = Field(default=None, max_length=256)
+
+
+class AuditOut(BaseModel):
+    time: str
+    user: str
+    action: str
+    target: str
+    result: int
+    address: str

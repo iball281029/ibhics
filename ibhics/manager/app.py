@@ -7,16 +7,18 @@ import contextlib
 import socket
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, WebSocket, status
+from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket, status
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__, console
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
+from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
 from .migrations import MigrationManager
 from .schemas import (
+    AuditOut,
     BackupOut,
     BackupRequest,
     BackupTargetIn,
@@ -24,21 +26,65 @@ from .schemas import (
     ClusterOut,
     HostOut,
     JobOut,
+    LoginOut,
+    LoginRequest,
     MemberOut,
     MigrateRequest,
     MigrationOut,
     NodeJoin,
+    PasswordChange,
     PolicyIn,
     PolicyOut,
     PoolCreate,
     PoolOut,
     RestoreRequest,
     StopRequest,
+    UserIn,
+    UserOut,
+    UserUpdate,
     VMCreate,
     VMOut,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+SESSION_COOKIE = "ibhics_session"
+API = "/api/v1"
+
+# Viewers may read everything and operators may change VMs; these need an admin.
+ADMIN_ROUTES = {
+    ("POST", f"{API}/cluster/nodes"),
+    ("DELETE", f"{API}/cluster/nodes/{{name}}"),
+    ("POST", f"{API}/nodes/{{name}}/pools"),
+    ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}"),
+    ("POST", f"{API}/nodes/{{name}}/evacuate"),
+    ("POST", f"{API}/backup/targets"),
+    ("DELETE", f"{API}/backup/targets/{{name}}"),
+    ("DELETE", f"{API}/backup/targets/{{name}}/backups/{{backup_id}}"),
+    ("POST", f"{API}/backup/policies"),
+    ("DELETE", f"{API}/backup/policies/{{name}}"),
+    ("GET", f"{API}/users"),
+    ("POST", f"{API}/users"),
+    ("PATCH", f"{API}/users/{{name}}"),
+    ("DELETE", f"{API}/users/{{name}}"),
+    ("GET", f"{API}/audit"),
+}
+# Open to any signed-in user, even one who still has to replace their initial password.
+SELF_ROUTES = {f"{API}/auth/me", f"{API}/auth/logout", f"{API}/auth/password"}
+
+
+def required_role(method: str, route: str) -> Role:
+    if (method, route) in ADMIN_ROUTES:
+        return Role.ADMIN
+    if method in ("GET", "HEAD") or route in SELF_ROUTES:
+        return Role.VIEWER
+    return Role.OPERATOR
+
+
+def session_token(headers, cookies) -> str | None:
+    scheme, _, token = headers.get("authorization", "").partition(" ")
+    if scheme.lower() == "bearer" and token:
+        return token
+    return cookies.get(SESSION_COOKIE)
 
 
 def create_app(
@@ -47,7 +93,10 @@ def create_app(
     backups: BackupManager | None = None,
     scheduler_interval: float = 0,
     migrations: MigrationManager | None = None,
+    auth: Auth | None = None,
 ) -> FastAPI:
+    """Without `auth` every request is allowed: for tests and embedding only. The
+    ibhics-manager command always passes one."""
     if isinstance(cluster, HypervisorDriver):
         cluster = Cluster.standalone(socket.gethostname(), cluster)
     backups = backups or BackupManager(cluster)
@@ -89,14 +138,132 @@ def create_app(
     app.state.cluster = cluster
     app.state.backups = backups
     app.state.migrations = migrations
+    app.state.auth = auth
     install_driver_errors(app)
     install_cluster_errors(app)
 
-    api = APIRouter(prefix="/api/v1")
+    def guard(request: Request) -> User | None:
+        if auth is None:
+            return None
+        user = auth.authenticate(session_token(request.headers, request.cookies))
+        request.state.user = user
+        route = request.scope["route"].path
+        if user.must_change_password and route not in SELF_ROUTES:
+            raise Forbidden("change your initial password first")
+        needed = required_role(request.method, route)
+        if user.role.rank < needed.rank:
+            raise Forbidden(f"this needs the {needed} role; you are {user.role}")
+        return user
 
-    @api.get("/health")
+    @app.middleware("http")
+    async def audit(request: Request, call_next):
+        response = await call_next(request)
+        if (
+            auth is not None
+            and request.method not in ("GET", "HEAD", "OPTIONS")
+            and request.url.path.startswith(API)
+            and request.url.path != f"{API}/auth/login"  # recorded by the login route
+        ):
+            user = getattr(request.state, "user", None)
+            auth.record(
+                user.name if user else "-",
+                request.method,
+                request.url.path,
+                response.status_code,
+                request.client.host if request.client else "",
+            )
+        return response
+
+    public = APIRouter(prefix=API)
+    api = APIRouter(prefix=API, dependencies=[Depends(guard)])
+
+    @public.get("/health")
     def health() -> dict:
-        return {"status": "ok", "version": __version__}
+        return {"status": "ok", "version": __version__, "auth": auth is not None}
+
+    # Sign-in. Browsers get an HttpOnly, SameSite=Strict cookie, which other sites can
+    # neither read nor make the browser send; scripts use the returned bearer token.
+
+    @public.post("/auth/login", response_model=LoginOut)
+    def login(body: LoginRequest, request: Request, response: Response) -> LoginOut:
+        if auth is None:
+            raise AuthError("sign-in is not enabled on this manager")
+        address = request.client.host if request.client else ""
+        try:
+            session = auth.login(body.username, body.password)
+        except AuthError:
+            auth.record(body.username, "LOGIN", "failed", 401, address)
+            raise
+        auth.record(body.username, "LOGIN", "ok", 200, address)
+        response.set_cookie(
+            SESSION_COOKIE,
+            session.token,
+            httponly=True,
+            samesite="strict",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+        user = auth.user(session.user)
+        return LoginOut(
+            token=session.token,
+            idle_timeout=int(auth.idle_timeout),
+            user=UserOut.from_user(user),
+        )
+
+    @api.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+    def logout(request: Request, response: Response) -> None:
+        if auth is not None:
+            auth.logout(session_token(request.headers, request.cookies) or "")
+        response.delete_cookie(SESSION_COOKIE, path="/")
+
+    @api.get("/auth/me", response_model=UserOut | None)
+    def me(request: Request) -> UserOut | None:
+        user = getattr(request.state, "user", None)
+        return UserOut.from_user(user) if user else None
+
+    @api.post("/auth/password", status_code=status.HTTP_204_NO_CONTENT)
+    def change_password(body: PasswordChange, request: Request) -> None:
+        if auth is None:
+            raise AuthError("sign-in is not enabled on this manager")
+        auth.change_password(request.state.user.name, body.current_password, body.new_password)
+
+    # Users and the audit log (admins only, see ADMIN_ROUTES)
+
+    def users() -> Auth:
+        if auth is None:
+            raise AuthError("sign-in is not enabled on this manager")
+        return auth
+
+    def acting(request: Request) -> str | None:
+        user = getattr(request.state, "user", None)
+        return user.name if user else None
+
+    @api.get("/users", response_model=list[UserOut])
+    def list_users() -> list[UserOut]:
+        return [UserOut.from_user(u) for u in users().users()]
+
+    @api.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+    def add_user(body: UserIn) -> UserOut:
+        return UserOut.from_user(users().add_user(body.name, Role(body.role), body.password))
+
+    @api.patch("/users/{name}", response_model=UserOut)
+    def update_user(name: str, body: UserUpdate, request: Request) -> UserOut:
+        user = users().update_user(
+            name,
+            role=Role(body.role) if body.role else None,
+            enabled=body.enabled,
+            password=body.password,
+            acting=acting(request),
+        )
+        return UserOut.from_user(user)
+
+    @api.delete("/users/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_user(name: str, request: Request) -> None:
+        users().delete_user(name, acting=acting(request))
+
+    @api.get("/audit", response_model=list[AuditOut])
+    def audit_log(limit: int = 200) -> list[AuditOut]:
+        return [AuditOut(**e.__dict__) for e in users().audit(min(max(limit, 1), 1000))]
 
     # Cluster
 
@@ -233,6 +400,21 @@ def create_app(
     @app.websocket("/api/v1/vms/{uuid}/console")
     async def vm_console(ws: WebSocket, uuid: str) -> None:
         await console.accept(ws)
+        if auth is not None:
+            # Cookies ride along on WebSocket handshakes from any page, so also insist the
+            # page that opened it is our own.
+            origin = ws.headers.get("origin")
+            if origin and origin.split("://", 1)[-1] != ws.headers.get("host"):
+                await console.refuse(ws, "console opened from another site")
+                return
+            try:
+                user = auth.authenticate(session_token(ws.headers, ws.cookies))
+            except AuthError as exc:
+                await console.refuse(ws, str(exc))
+                return
+            if user.must_change_password or user.role.rank < Role.OPERATOR.rank:
+                await console.refuse(ws, "the console needs the operator role")
+                return
         try:
             member, vm = await asyncio.to_thread(cluster.find_vm, uuid)
         except VMNotFound:
@@ -325,6 +507,7 @@ def create_app(
     def run_policy(name: str) -> list[JobOut]:
         return [JobOut(**job.__dict__) for job in backups.run_policy(name)]
 
+    app.include_router(public)
     app.include_router(api)
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="console")
     return app

@@ -13,6 +13,7 @@ from ..backup import NodeBackup
 from ..cluster import Cluster
 from ..hypervisor import load_driver
 from .app import create_app
+from .auth import Auth
 from .backups import BackupManager
 from .migrations import TRANSPORTS, MigrationManager
 
@@ -58,6 +59,18 @@ def main() -> None:
         default=os.environ.get("IBHICS_MIGRATION_HOST"),
         help="name other nodes use to reach this node's libvirtd (default: its FQDN)",
     )
+    parser.add_argument(
+        "--users-file",
+        type=Path,
+        default=Path(os.environ.get("IBHICS_USERS_FILE", "/var/lib/ibhics/users.json")),
+        help="where console users and password hashes are saved",
+    )
+    parser.add_argument(
+        "--audit-log",
+        type=Path,
+        default=Path(os.environ.get("IBHICS_AUDIT_LOG", "/var/log/ibhics/audit.log")),
+        help="append-only record of every change and sign-in",
+    )
     parser.add_argument("--heartbeat", type=float, default=5.0, help="seconds between checks")
     args = parser.parse_args()
 
@@ -75,6 +88,17 @@ def main() -> None:
     backups = BackupManager(cluster, state_path=args.backup_state_file)
     backups.load()
 
+    auth = Auth(state_path=args.users_file, audit_path=args.audit_log)
+    auth.load()
+    generated = auth.bootstrap(os.environ.get("IBHICS_ADMIN_PASSWORD"))
+    if generated:
+        # Kept out of the service log. The admin must replace it at first sign-in.
+        secret = args.users_file.with_name("initial-admin-password")
+        fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(generated + "\n")
+        print(f"Created user 'admin'; its initial password is in {secret}", flush=True)
+
     migrations = MigrationManager(
         cluster,
         transport=args.migration_transport,
@@ -91,6 +115,7 @@ def main() -> None:
         backups=backups,
         scheduler_interval=30,
         migrations=migrations,
+        auth=auth,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
