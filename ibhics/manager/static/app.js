@@ -449,6 +449,28 @@ function renderHome() {
 const osName = (vm, g) => (g?.agent && g.os_name) || vm.os_type || "";
 const osKind = (name) => (/windows/i.test(name) ? "Windows" : name ? "Linux" : "");
 const ipList = (g) => g?.ips || [];
+const num = (gb) => (gb >= 100 ? Math.round(gb) : Math.round(gb * 10) / 10).toLocaleString();
+
+// Space really in use. The guest's own filesystems are the truth when its agent runs;
+// otherwise the pool's allocation, which only tells us anything for thin disks.
+function diskUsage(vm, g) {
+  const total = vm.disks.reduce((sum, d) => sum + d.size_gb, 0);
+  if (g?.agent && g.fs_used_gb != null) return { used: g.fs_used_gb, total, from: "inside the guest" };
+  const thin = vm.disks.filter((d) => d.used_gb != null && d.used_gb < d.size_gb);
+  if (thin.length === vm.disks.length && thin.length) {
+    return { used: thin.reduce((sum, d) => sum + d.used_gb, 0), total, from: "allocated in the pool" };
+  }
+  return { used: null, total, from: "" };
+}
+function diskCell(vm, g) {
+  const u = diskUsage(vm, g), pools = [...new Set(vm.disks.map((d) => d.pool))].join(", ");
+  if (u.used == null) return `${num(u.total)} GB<span class="vm-sub">${esc(pools)}</span>`;
+  return `${num(u.used)} <span class="muted">/ ${num(u.total)} GB</span>${usageBar(u)}<span class="vm-sub">${esc(pools)}</span>`;
+}
+const usageBar = (u) => {
+  const pct = Math.min(100, Math.round((u.used / u.total) * 100));
+  return `<div class="bar${pct > 90 ? " bad" : pct > 75 ? " warn" : ""}" title="${pct}% used, ${esc(u.from)}"><i style="width:${pct}%"></i></div>`;
+};
 
 function vmMenu(vm, { summary = false } = {}) {
   if (!canOperate()) return summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : "";
@@ -488,7 +510,7 @@ function renderVMs() {
       <td>${esc(vm.node || "")}</td>
       <td>${vm.vcpus}</td>
       <td>${gbText(vm.memory_mb)}</td>
-      <td>${vm.disks.map((d) => `${d.size_gb} GB <span class="vm-sub" style="display:inline">${esc(d.pool)}</span>`).join("<br>")}</td>
+      <td class="disk-cell">${diskCell(vm, g)}</td>
       <td><div class="actions">${vmMenu(vm, { summary: true })}</div></td>
     </tr>`;
   }).join("") : empty(9, state.vms.length ? "No VMs match" : "No virtual machines yet. Create one, or bring VMs over with Migrate.");
@@ -708,7 +730,7 @@ async function renderVMDetail() {
   if (vm.state === "running") g = await api(`/vms/${uuid}/guest`).catch(() => null);
   const os = osName(vm, g), ips = ipList(g);
   const host = state.hosts[vm.node];
-  const diskTotal = vm.disks.reduce((sum, d) => sum + d.size_gb, 0);
+  const usage = diskUsage(vm, g);
 
   $("#vm-crumb").textContent = vm.name;
   $("#vm-title").innerHTML = `${esc(vm.name)} <span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`;
@@ -719,7 +741,9 @@ async function renderVMDetail() {
   $("#vm-stats").innerHTML = [
     stat("vCPU", vm.vcpus, host ? `of ${host.cpus} cores on ${esc(vm.node)}` : ""),
     stat("Memory", gbText(vm.memory_mb), host ? `of ${gbText(host.memory_mb)}` : ""),
-    stat("Disk", `${diskTotal} GB`, `${vm.disks.length} disk${vm.disks.length === 1 ? "" : "s"}`),
+    stat("Disk", usage.used != null ? `${num(usage.used)} GB <small>/ ${num(usage.total)} GB</small>` : `${num(usage.total)} GB`,
+      usage.used != null ? `${usageBar(usage)}Used, ${esc(usage.from)}`
+        : `${vm.disks.length} disk${vm.disks.length === 1 ? "" : "s"}${vm.state === "running" ? " · install guest tools to see usage" : ""}`),
     stat("Network", `${vm.nics.length} adapter${vm.nics.length === 1 ? "" : "s"}`, esc(ips.join(", ") || "No address reported")),
   ].join("");
 
@@ -762,7 +786,9 @@ async function renderVMDetail() {
   const hw = [
     ["i-compute", "Processor", `${vm.vcpus} vCPU`, host ? `Host has ${host.cpus} cores` : ""],
     ["i-server", "Memory", gbText(vm.memory_mb), `${vm.memory_mb} MB`],
-    ...vm.disks.map((d, i) => ["i-disk", `Hard disk ${i + 1}`, `${d.size_gb} GB`, `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
+    ...vm.disks.map((d, i) => ["i-disk", `Hard disk ${i + 1}`,
+      d.used_gb != null && d.used_gb < d.size_gb ? `${num(d.used_gb)} GB / ${d.size_gb} GB` : `${d.size_gb} GB`,
+      `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
     ...vm.nics.map((n, i) => ["i-migrate", `Network adapter ${i + 1}`, esc(n.network), `${esc(n.model)} · <span class="mono">${esc(n.mac || "auto")}</span>`]),
     ["i-disk", "CD/DVD drive", vm.iso ? "ISO attached" : "Empty", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : ""],
     ["i-system", "Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS", "Guest agent channel enabled"],

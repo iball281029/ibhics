@@ -44,7 +44,7 @@ def test_vm_lifecycle(client):
     assert resp.status_code == 201
     vm = resp.json()
     assert vm["state"] == "stopped"
-    assert vm["disks"] == [{"size_gb": 40, "backend": "file", "pool": "default"}]
+    assert vm["disks"] == [{"size_gb": 40, "backend": "file", "pool": "default", "used_gb": None}]
 
     assert client.post(f"/api/v1/vms/{vm['uuid']}/start").json()["state"] == "running"
     # Running VMs must be stopped before delete.

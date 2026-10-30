@@ -145,7 +145,7 @@ def test_create_nfs_pool_and_place_vm(client):
     vm = client.post(
         "/api/v1/vms", json={"name": "web", "disks": [{"size_gb": 50, "pool": "nas"}]}
     ).json()
-    assert vm["disks"] == [{"size_gb": 50, "backend": "file", "pool": "nas"}]
+    assert vm["disks"] == [{"size_gb": 50, "backend": "file", "pool": "nas", "used_gb": None}]
     nas = next(p for p in client.get("/api/v1/pools").json() if p["name"] == "nas")
     assert nas["allocation_gb"] == 50
 

@@ -205,6 +205,8 @@ dialog .hint { padding: 0 22px; }
 .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--brand); border-radius: 3px; }
 .bar.warn i { background: var(--warn); } .bar.bad i { background: var(--bad); }
+.disk-cell { min-width: 110px; } .disk-cell .bar { margin: 4px 0 2px; max-width: 120px; }
+.stat .bar { margin: 2px 0 6px; } .stat b small { font-size: 13px; font-weight: 500; color: var(--muted); }
 .bar-row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 12px; }
 .bar-row .bar { grid-column: 1 / -1; }
 

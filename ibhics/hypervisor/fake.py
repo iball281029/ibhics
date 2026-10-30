@@ -178,6 +178,7 @@ class FakeDriver(HypervisorDriver):
             spec = vm.spec
         windows = "windows" in spec.os_type.lower() or spec.name.lower().startswith("win")
         seed = sum(spec.name.encode())
+        total = sum(d.size_gb for d in spec.disks)
         return GuestInfo(
             agent=True,
             os_name=spec.os_type or ("Windows Server 2022" if windows else "Ubuntu 24.04 LTS"),
@@ -192,6 +193,8 @@ class FakeDriver(HypervisorDriver):
                 )
                 for i, nic in enumerate(spec.nics)
             ],
+            fs_used_gb=round(total * (0.05 + seed % 60 / 100), 1),
+            fs_total_gb=total,
         )
 
     def console_address(self, uuid: str) -> tuple[str, int]:

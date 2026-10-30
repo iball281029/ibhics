@@ -352,6 +352,12 @@ class LibvirtDriver(HypervisorDriver):
             info.hostname = data.get("hostname", "")
         except libvirt.libvirtError:
             pass  # no agent in the guest, or it isn't running yet
+        if info.agent:
+            try:
+                fs = dom.guestInfo(libvirt.VIR_DOMAIN_GUEST_INFO_FILESYSTEM, 0)
+                info.fs_used_gb, info.fs_total_gb = filesystem_usage(fs)
+            except libvirt.libvirtError:
+                pass
         sources = [libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT] if info.agent else []
         sources.append(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE)
         for source in sources:
@@ -469,10 +475,31 @@ class LibvirtDriver(HypervisorDriver):
             spec.disks, ET.fromstring(xml).findall("./devices/disk[@device='disk']"), strict=True
         ):
             try:
-                disk.size_gb = -(-self._volume(el).info()[1] // GIB)
+                _type, capacity, allocation = self._volume(el).info()
+                disk.size_gb = -(-capacity // GIB)
+                disk.used_gb = round(allocation / GIB, 1)
             except (InvalidState, PoolNotFound, libvirt.libvirtError):
                 pass
         return VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
+
+
+def filesystem_usage(data: dict) -> tuple[float | None, float | None]:
+    """Used and total GB over the guest's filesystems, from guestInfo's fs.N.* keys. A
+    filesystem mounted twice (bind mounts, btrfs subvolumes) counts once."""
+    seen, used, total = set(), 0, 0
+    for i in range(int(data.get("fs.count", 0))):
+        size = data.get(f"fs.{i}.total-bytes")
+        if size is None:
+            continue
+        key = (data.get(f"fs.{i}.name"), size)
+        if key in seen:
+            continue
+        seen.add(key)
+        total += int(size)
+        used += int(data.get(f"fs.{i}.used-bytes", 0))
+    if not total:
+        return None, None
+    return round(used / GIB, 1), round(total / GIB, 1)
 
 
 def _pool_kind(pool) -> str:

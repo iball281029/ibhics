@@ -29,7 +29,10 @@ def spec_to_json(spec: VMSpec) -> dict:
         "vcpus": spec.vcpus,
         "memory_mb": spec.memory_mb,
         "firmware": str(spec.firmware),
-        "disks": [{"size_gb": d.size_gb, "backend": d.backend, "pool": d.pool} for d in spec.disks],
+        "disks": [
+            {"size_gb": d.size_gb, "backend": d.backend, "pool": d.pool, "used_gb": d.used_gb}
+            for d in spec.disks
+        ],
         "nics": [{"network": n.network, "model": n.model, "mac": n.mac} for n in spec.nics],
         "iso": spec.iso,
         "description": spec.description,
@@ -46,6 +49,8 @@ def guest_to_json(guest: GuestInfo) -> dict:
         "hostname": guest.hostname,
         "interfaces": [{"name": i.name, "mac": i.mac, "ips": i.ips} for i in guest.interfaces],
         "ips": guest.ips,
+        "fs_used_gb": guest.fs_used_gb,
+        "fs_total_gb": guest.fs_total_gb,
     }
 
 
@@ -57,4 +62,6 @@ def guest_from_json(data: dict) -> GuestInfo:
         kernel=data.get("kernel", ""),
         hostname=data.get("hostname", ""),
         interfaces=[GuestInterface(**i) for i in data.get("interfaces", [])],
+        fs_used_gb=data.get("fs_used_gb"),
+        fs_total_gb=data.get("fs_total_gb"),
     )

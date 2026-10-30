@@ -36,6 +36,9 @@ class DiskSpec:
     backend: str = "file"
     pool: str = "default"
     bus: str = "virtio"
+    # Reported, not requested: space the disk takes in its pool. Below size_gb for thin
+    # disks (qcow2); on thick LVM it equals the size.
+    used_gb: float | None = None
 
 
 @dataclass
@@ -171,6 +174,9 @@ class GuestInfo:
     kernel: str = ""
     hostname: str = ""
     interfaces: list[GuestInterface] = field(default_factory=list)
+    # Filesystems as the guest sees them: what is really used, whatever the disk format.
+    fs_used_gb: float | None = None
+    fs_total_gb: float | None = None
 
     @property
     def ips(self) -> list[str]:

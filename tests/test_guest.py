@@ -37,6 +37,9 @@ class LibvirtError(Exception):
     pass
 
 
+FILESYSTEM = 32
+
+
 class Domain:
     def __init__(self, agent):
         self.agent = agent
@@ -47,6 +50,17 @@ class Domain:
     def guestInfo(self, types_, flags):
         if not self.agent:
             raise LibvirtError("QEMU guest agent is not connected")
+        if types_ == FILESYSTEM:
+            return {
+                "fs.count": 3,
+                "fs.0.name": "dm-0",
+                "fs.0.total-bytes": 50 * 2**30,
+                "fs.0.used-bytes": 8 * 2**30,
+                "fs.1.name": "dm-0",  # the same filesystem mounted again
+                "fs.1.total-bytes": 50 * 2**30,
+                "fs.1.used-bytes": 8 * 2**30,
+                "fs.2.name": "sr0",  # a CD reports no size
+            }
         return {
             "os.pretty-name": "Rocky Linux 9.4",
             "os.version": "9.4",
@@ -71,6 +85,7 @@ def libvirt_driver(monkeypatch, agent):
         libvirtError=LibvirtError,
         VIR_DOMAIN_GUEST_INFO_OS=2,
         VIR_DOMAIN_GUEST_INFO_HOSTNAME=16,
+        VIR_DOMAIN_GUEST_INFO_FILESYSTEM=FILESYSTEM,
         VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE=0,
         VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT=1,
     )
@@ -86,12 +101,14 @@ def test_libvirt_guest_info_with_agent(monkeypatch):
     assert [(i.name, i.mac, i.ips) for i in guest.interfaces] == [
         ("eth0", "52:54:00:aa:bb:cc", ["10.0.0.5/24"])
     ]
+    assert (guest.fs_used_gb, guest.fs_total_gb) == (8.0, 50.0)
 
 
 def test_libvirt_guest_info_without_agent_uses_leases(monkeypatch):
     guest = libvirt_driver(monkeypatch, agent=False).guest_info("u")
     assert guest.agent is False and guest.os_name == ""
     assert guest.ips == ["10.0.0.5"]
+    assert guest.fs_used_gb is None
 
 
 def test_inventory_api():

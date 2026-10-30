@@ -36,6 +36,7 @@ class DiskOut(BaseModel):
     size_gb: int
     backend: str
     pool: str
+    used_gb: float | None = None
 
 
 class NicOut(BaseModel):
@@ -96,7 +97,10 @@ class VMOut(BaseModel):
             vcpus=spec.vcpus,
             memory_mb=spec.memory_mb,
             firmware=spec.firmware,
-            disks=[DiskOut(size_gb=d.size_gb, backend=d.backend, pool=d.pool) for d in spec.disks],
+            disks=[
+                DiskOut(size_gb=d.size_gb, backend=d.backend, pool=d.pool, used_gb=d.used_gb)
+                for d in spec.disks
+            ],
             nics=[NicOut(network=n.network, model=n.model, mac=n.mac) for n in spec.nics],
             iso=spec.iso,
             description=spec.description,
@@ -119,6 +123,8 @@ class GuestOut(BaseModel):
     hostname: str
     interfaces: list[GuestInterfaceOut]
     ips: list[str]
+    fs_used_gb: float | None = None
+    fs_total_gb: float | None = None
 
 
 class HostOut(BaseModel):
