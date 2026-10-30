@@ -70,8 +70,15 @@ jobs:
       - name: Screenshots of the VM
         if: always()
         run: |
-          sudo apt-get install -y imagemagick >/dev/null
+          sudo apt-get install -y imagemagick tesseract-ocr >/dev/null
           for f in install-test/shots/*.ppm; do [ -e "$f" ] && convert "$f" "${f%.ppm}.png" && rm "$f"; done
+          # The text of the last screen of each stage, so a stuck install shows in the log.
+          for stage in install firstboot; do
+            last=$(ls install-test/shots/$stage-*.png 2>/dev/null | tail -1)
+            [ -n "$last" ] || continue
+            echo "===== $last"
+            tesseract "$last" - 2>/dev/null || true
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
