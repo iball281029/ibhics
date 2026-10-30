@@ -11,10 +11,12 @@ echo "deb [trusted=yes] file:$SRC/repo ./" > /tmp/ibhics-install.list
 APT="-o Dir::Etc::sourcelist=/tmp/ibhics-install.list -o Dir::Etc::sourceparts=-"
 # shellcheck disable=SC2086
 apt-get $APT update
+# virt-v2v first and with its recommends (nbdkit plugins for VMware): apt does not add
+# recommends to a package that is already installed.
+# shellcheck disable=SC2086
+apt-get $APT install -y virt-v2v
 # shellcheck disable=SC2046,SC2086
 apt-get $APT install -y --no-install-recommends $(grep -v '^[[:space:]]*#' "$SRC/packages.txt")
-# shellcheck disable=SC2086
-apt-get $APT install -y virt-v2v   # with its recommends: nbdkit plugins for VMware
 rm /tmp/ibhics-install.list
 
 # Later updates come from the Debian mirror once the node is on a network.
