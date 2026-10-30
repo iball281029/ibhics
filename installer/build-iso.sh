@@ -3,24 +3,32 @@
 #
 #   installer/build-iso.sh                      # downloads the current Debian 13 netinst
 #   installer/build-iso.sh --source debian.iso  # or use an ISO you already have
+#   installer/build-iso.sh --repo DIR           # reuse a package repo from build-repo.sh
+#   installer/build-iso.sh --no-virtio-win      # leave out the Windows virtio drivers
 #
-# Needs: xorriso, python3 with pip, curl. The result keeps Debian's BIOS and UEFI boot
-# setup and adds the ibHiCS boot menu, the unattended-install answers and, so the
-# install needs no PyPI access, ibHiCS with all its Python dependencies as wheels.
+# Needs: xorriso, python3 with pip, curl, and docker (for the package repository). The
+# result keeps Debian's BIOS and UEFI boot setup and adds the ibHiCS boot menu, the
+# unattended-install answers, every Debian package a node needs (a local apt repository)
+# and ibHiCS with its Python dependencies as wheels, so installing needs no network.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$HERE")
 MIRROR=${DEBIAN_CD_MIRROR:-https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}
 TARGET_PYTHON=3.13  # Debian 13's python3: the wheels must match it
+VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso}
+NO_VIRTIO_WIN=""
 SOURCE=""
 OUT=""
+DEBREPO=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --source) SOURCE=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
+        --repo) DEBREPO=$(realpath "$2"); shift 2 ;;
+        --no-virtio-win) NO_VIRTIO_WIN=1; shift ;;
+        -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -55,12 +63,64 @@ echo ">> Building ibHiCS $VERSION and collecting its dependencies for Python $TA
 PAYLOAD=$WORK/ibhics
 mkdir -p "$PAYLOAD/wheelhouse" "$PAYLOAD/systemd"
 python3 -m pip wheel --quiet --no-deps --wheel-dir "$PAYLOAD/wheelhouse" "$REPO"
+# The web console needs noVNC's pako, which a stray ignore rule once left out.
+python3 -m zipfile -l "$PAYLOAD"/wheelhouse/ibhics-*.whl \
+    | grep -q 'static/novnc/vendor/pako/lib/zlib/inflate.js' \
+    || { echo "!! the wheel is missing the web console's files" >&2; exit 1; }
 python3 -m pip download --quiet --dest "$PAYLOAD/wheelhouse" \
     --only-binary=:all: --implementation cp --python-version "$TARGET_PYTHON" \
     --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 \
     --platform manylinux2014_x86_64 \
     "$PAYLOAD"/wheelhouse/ibhics-*.whl
-cp "$HERE/preseed.cfg" "$HERE/install-ibhics.sh" "$PAYLOAD/"
+cp "$HERE/preseed.cfg" "$HERE/install-ibhics.sh" "$HERE/upgrade.sh" "$HERE/packages.txt" "$PAYLOAD/"
+
+if [ -z "$DEBREPO" ]; then
+    echo ">> Downloading the Debian packages a node needs (in a debian:trixie container)"
+    command -v docker >/dev/null || { echo "missing tool: docker (or pass --repo)" >&2; exit 1; }
+    DEBREPO=$WORK/repo
+    mkdir -p "$DEBREPO"
+    docker run --rm -v "$REPO:/src:ro" -v "$DEBREPO:/out" debian:trixie \
+        bash /src/installer/build-repo.sh /src /out
+fi
+[ -s "$DEBREPO/Packages.gz" ] || { echo "no Packages.gz in $DEBREPO" >&2; exit 1; }
+cp -r "$DEBREPO" "$PAYLOAD/repo"
+
+# Windows guests need the virtio drivers when virt-v2v converts them. Debian does not
+# package them, so the drivers for current 64-bit Windows come from the virtio-win ISO.
+if [ -z "$NO_VIRTIO_WIN" ]; then
+    echo ">> Adding the virtio-win drivers for Windows guests"
+    curl -fL --retry 3 -o "$WORK/virtio-win.iso" "$VIRTIO_WIN_URL"
+    mkdir -p "$WORK/virtio-all"
+    xorriso -osirrox on -indev "$WORK/virtio-win.iso" -extract / "$WORK/virtio-all" >/dev/null 2>&1
+    chmod -R u+w "$WORK/virtio-all"
+    python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-all" "$PAYLOAD/virtio-win"
+    # The guest tools CD that "Install guest tools" puts in a VM's drive.
+    mkdir -p "$WORK/tools/linux"
+    cp -r "$PAYLOAD/virtio-win/." "$WORK/tools/"
+    cp "$HERE/guest-tools/install.sh" "$WORK/tools/linux/install.sh"
+    cp "$HERE/guest-tools/README.txt" "$WORK/tools/README.txt"
+    xorriso -as mkisofs -quiet -J -R -V IBHICS_TOOLS -o "$PAYLOAD/guest-tools.iso" "$WORK/tools"
+
+    # virt-v2v sets up a converted Windows guest at its first boot with rhsrvany.exe and
+    # pnp_wait.exe, from Fedora's mingw32-srvany (GPL). Debian does not package them.
+    echo ">> Adding rhsrvany.exe and pnp_wait.exe for Windows conversions"
+    url=${SRVANY_URL:-}
+    for rel in 43 42 41; do
+        [ -n "$url" ] && break
+        base="https://dl.fedoraproject.org/pub/fedora/linux/releases/$rel/Everything/x86_64/os/Packages/m/"
+        rpm=$(curl -fsL "$base" | grep -o 'mingw32-srvany-[0-9][^"]*\.noarch\.rpm' | head -1 || true)
+        [ -n "$rpm" ] && url="$base$rpm"
+    done
+    [ -n "$url" ] || { echo "could not find mingw32-srvany on the Fedora mirror" >&2; exit 1; }
+    curl -fL --retry 3 -o "$WORK/srvany.rpm" "$url"
+    mkdir -p "$WORK/srvany" "$PAYLOAD/virt-tools"
+    bsdtar -xf "$WORK/srvany.rpm" -C "$WORK/srvany"
+    for exe in rhsrvany.exe pnp_wait.exe; do
+        found=$(find "$WORK/srvany" -name "$exe" | head -1)
+        [ -n "$found" ] || { echo "$exe is not in $url" >&2; exit 1; }
+        cp "$found" "$PAYLOAD/virt-tools/$exe"
+    done
+fi
 cp "$HERE"/systemd/*.service "$PAYLOAD/systemd/"
 echo "$VERSION" > "$PAYLOAD/VERSION"
 

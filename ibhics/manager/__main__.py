@@ -22,7 +22,7 @@ from .migrations import TRANSPORTS, MigrationManager
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ibhics-manager")
     parser.add_argument("--host", default=os.environ.get("IBHICS_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("IBHICS_PORT", "8006")))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("IBHICS_PORT", "8888")))
     parser.add_argument(
         "--node-name",
         default=os.environ.get("IBHICS_NODE_NAME", socket.gethostname()),

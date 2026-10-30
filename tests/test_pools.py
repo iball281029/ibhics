@@ -30,6 +30,7 @@ IQN = "iqn.2004-04.com.example:storage.lun1"
             name="san", type=PoolType.ISCSI, host="10.0.0.60", iqn=IQN, lun=1, confirm_wipe=True
         ),
         PoolSpec(name="fc", type=PoolType.LVM, device="/dev/mapper/mpatha", confirm_wipe=True),
+        PoolSpec(name="raid", type=PoolType.DISK, device="/dev/disk/by-id/x", confirm_wipe=True),
     ],
 )
 def test_valid_pool_specs(spec):
@@ -48,6 +49,8 @@ def test_valid_pool_specs(spec):
         PoolSpec(name="fc", type=PoolType.LVM, device="/dev/mapper/mpatha"),  # no confirm_wipe
         PoolSpec(name="fc", type=PoolType.LVM, device="/etc/passwd", confirm_wipe=True),
         PoolSpec(name="fc", type=PoolType.LVM, device="/dev/sdb; rm -rf /", confirm_wipe=True),
+        PoolSpec(name="raid", type=PoolType.DISK, device="/dev/sdb"),  # no confirm_wipe
+        PoolSpec(name="raid", type=PoolType.DISK, confirm_wipe=True),  # no device
     ],
 )
 def test_invalid_pool_specs(spec):
@@ -145,7 +148,7 @@ def test_create_nfs_pool_and_place_vm(client):
     vm = client.post(
         "/api/v1/vms", json={"name": "web", "disks": [{"size_gb": 50, "pool": "nas"}]}
     ).json()
-    assert vm["disks"] == [{"size_gb": 50, "backend": "file", "pool": "nas"}]
+    assert vm["disks"] == [{"size_gb": 50, "backend": "file", "pool": "nas", "used_gb": None}]
     nas = next(p for p in client.get("/api/v1/pools").json() if p["name"] == "nas")
     assert nas["allocation_gb"] == 50
 

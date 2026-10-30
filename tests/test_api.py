@@ -34,7 +34,9 @@ def test_standalone_cluster(client):
 def test_console_served(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "ibHiCS Console" in resp.text
+    assert "<title>ibHiCS</title>" in resp.text
+    for asset in ("app.js", "app.css", "login.html", "logo.svg"):
+        assert client.get(f"/{asset}").status_code == 200
 
 
 def test_vm_lifecycle(client):
@@ -42,7 +44,7 @@ def test_vm_lifecycle(client):
     assert resp.status_code == 201
     vm = resp.json()
     assert vm["state"] == "stopped"
-    assert vm["disks"] == [{"size_gb": 40, "backend": "file", "pool": "default"}]
+    assert vm["disks"] == [{"size_gb": 40, "backend": "file", "pool": "default", "used_gb": None}]
 
     assert client.post(f"/api/v1/vms/{vm['uuid']}/start").json()["state"] == "running"
     # Running VMs must be stopped before delete.

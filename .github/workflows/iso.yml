@@ -11,16 +11,29 @@ on:
     tags: ["v*"]
 
 jobs:
+  packages:
+    # Every package in installer/packages.txt must exist in Debian 13.
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+      - name: Simulate installing installer/packages.txt
+        run: |
+          pkgs=$(grep -v '^\s*#' installer/packages.txt | xargs)
+          echo "packages: $pkgs"
+          sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' \
+            /etc/apt/sources.list.d/debian.sources
+          apt-get update -q
+          apt-get install --simulate -q $pkgs > /dev/null
+
   iso:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # to attach the ISO to a release on tag pushes
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: sudo apt-get update && sudo apt-get install -y xorriso
+      - run: sudo apt-get update && sudo apt-get install -y xorriso libarchive-tools
       - run: installer/build-iso.sh
       - name: Check that both BIOS and UEFI boot entries survived
         run: |
@@ -34,8 +47,58 @@ jobs:
           name: ibhics-installer-iso
           path: dist/
           retention-days: 14
-      - if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+
+  install-test:
+    # Installs the ISO end to end in QEMU and checks the web console of the new node.
+    needs: iso
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ibhics-installer-iso
+          path: dist
+      - name: Let QEMU use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils lvm2 tesseract-ocr
+      - run: installer/test-install.sh dist/ibhics-*-amd64.iso
+      - name: Screenshots of the VM
+        if: always()
+        run: |
+          sudo apt-get install -y imagemagick tesseract-ocr >/dev/null
+          for f in install-test/shots/*.ppm; do [ -e "$f" ] && convert "$f" "${f%.ppm}.png" && rm "$f"; done
+          # The text of the last screen of each stage, so a stuck install shows in the log.
+          for stage in install firstboot; do
+            last=$(ls install-test/shots/$stage-*.png 2>/dev/null | tail -1)
+            [ -n "$last" ] || continue
+            echo "===== $last"
+            tesseract "$last" - 2>/dev/null || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-test-screens
+          path: install-test/shots/
+          retention-days: 14
+
+  release:
+    # Tags such as v0.1.0-beta publish the ISO as a pre-release, only once it installed.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: install-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ibhics-installer-iso
+          path: dist
+      - uses: softprops/action-gh-release@v2
         with:
           prerelease: true
           files: dist/ibhics-*

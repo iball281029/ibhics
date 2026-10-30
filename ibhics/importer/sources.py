@@ -9,12 +9,19 @@ Folders are paths on the compute nodes, typically an NFS or SMB share mounted th
 
 from __future__ import annotations
 
+import base64
 import json
+import math
 import re
+import socket
+import ssl
 import subprocess
 import tarfile
+import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -31,6 +38,8 @@ class SourceType(StrEnum):
     VMWARE = "vmware"
     OVA = "ova"
     DISK = "disk"
+    UPLOAD = "upload"  # files uploaded through the web console, on the manager's node
+    KVM = "kvm"  # a Proxmox VE or plain KVM/libvirt host, read over SSH
 
 
 class SourceNotFound(LookupError):
@@ -52,6 +61,10 @@ class Source:
     # ova/disk: the folder on the compute nodes.
     path: str | None = None
     verify_tls: bool = False  # most ESXi hosts have self-signed certificates
+    # vmware: how virt-v2v reads the disks. "ssh" copies them over SSH from the ESXi
+    # host (SSH must be on there); "https" uses ESXi's /folder service, which many ESXi
+    # versions refuse because it does not serve byte ranges.
+    transport: str = "ssh"
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
@@ -63,6 +76,13 @@ class Source:
                 raise ValueError("a VMware source needs a username and password")
             if self.path and not VCENTER_PATH_RE.match(self.path):
                 raise ValueError("vCenter path looks like Datacenter/host/Cluster/esxi-host")
+            if self.transport not in ("ssh", "https"):
+                raise ValueError("transport must be ssh or https")
+        elif self.type == SourceType.KVM:
+            if not self.host or not HOST_RE.match(self.host):
+                raise ValueError("a Proxmox or KVM source needs the host's address")
+            if not self.password:
+                raise ValueError("a Proxmox or KVM source needs the root password")
         elif not self.path or not self.path.startswith("/"):
             raise ValueError(f"an {self.type} source needs an absolute folder path")
 
@@ -97,8 +117,14 @@ class SourceVM:
     firmware: Firmware = Firmware.BIOS
     disks_gb: list[int] = field(default_factory=list)  # 0 where the size is not known yet
     nics: int = 1
+    # The network each NIC is on at the source (port group, bridge), so the import can map
+    # it to an ibHiCS network. Empty where the source doesn't say.
+    networks: list[str] = field(default_factory=list)
     state: str = ""
     guest_os: str = ""
+    notes: str = ""  # vmware: the VM's annotation
+    vmx: str = ""  # vmware: "[datastore] folder/name.vmx"
+    disk_paths: list[str] = field(default_factory=list)  # kvm: the disks' paths on the host
 
     def to_dict(self) -> dict:
         return {**asdict(self), "firmware": str(self.firmware)}
@@ -113,7 +139,20 @@ class SourceVM:
 Opener = Callable[[Source], object]  # returns a libvirt connection
 
 
+def check_reachable(host: str, port: int = 443, timeout: float = 5.0) -> None:
+    """Fail fast with a clear message: libvirt waits minutes on an unreachable host."""
+    try:
+        socket.create_connection((host, port), timeout=timeout).close()
+    except OSError as exc:
+        reason = "timed out" if isinstance(exc, TimeoutError) else exc.strerror or str(exc)
+        raise SourceUnavailable(
+            f"cannot reach {host} on port {port} ({reason}). Check that this node can route "
+            f"to it and that no firewall blocks HTTPS between them."
+        ) from None
+
+
 def open_vmware(source: Source):
+    check_reachable(source.host)
     try:
         import libvirt
     except ImportError:
@@ -123,11 +162,13 @@ def open_vmware(source: Source):
         for cred in creds:
             if cred[0] == libvirt.VIR_CRED_AUTHNAME:
                 cred[4] = source.username
-            elif cred[0] == libvirt.VIR_CRED_PASSPHRASE:
+            elif cred[0] in (libvirt.VIR_CRED_PASSPHRASE, libvirt.VIR_CRED_NOECHOPROMPT):
                 cred[4] = source.password
         return 0
 
-    auth = [[libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_PASSPHRASE], credentials, None]
+    # The ESX driver asks for the password as a no-echo prompt on some libvirt versions.
+    kinds = [libvirt.VIR_CRED_AUTHNAME, libvirt.VIR_CRED_PASSPHRASE, libvirt.VIR_CRED_NOECHOPROMPT]
+    auth = [kinds, credentials, None]
     try:
         return libvirt.openAuth(source.libvirt_uri, auth, 0)
     except libvirt.libvirtError as exc:
@@ -138,28 +179,60 @@ def list_vms(
     source: Source,
     opener: Opener = open_vmware,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    fetch: Callable[[Source, str], str] | None = None,
 ) -> list[SourceVM]:
+    if source.type == SourceType.KVM:
+        from .convert import HostSSH
+        from .kvm import list_kvm_vms
+
+        return list_kvm_vms(source, HostSSH(run))
     if source.type == SourceType.VMWARE:
         conn = opener(source)
         try:
-            vms = []
+            found = []
             for dom in conn.listAllDomains():
-                vm = parse_vmware_xml(dom.XMLDesc(0))
+                xml = dom.XMLDesc(0)
+                vm = parse_vmware_xml(xml)
                 vm.state = "running" if dom.isActive() else "stopped"
-                vms.append(vm)
-            return sorted(vms, key=lambda v: v.name.lower())
+                found.append((vm, vmware_disk_files(xml)))
         finally:
             conn.close()
+        # Disk sizes and guest OS are in the VM's files on the datastore, not in what
+        # libvirt reports; read them in parallel and leave blanks where that fails.
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            reader = fetch or read_datastore_file
+            list(pool.map(lambda item: add_vmware_details(source, *item, fetch=reader), found))
+        return sorted((vm for vm, _ in found), key=lambda v: v.name.lower())
     folder = Path(source.path)
     if not folder.is_dir():
         raise SourceUnavailable(f"{folder} is not a folder on this node; is the share mounted?")
     if source.type == SourceType.OVA:
         return [parse_ova(p) for p in sorted(folder.glob("*.ova"))]
+    if source.type == SourceType.UPLOAD:
+        found = []
+        for p in sorted(folder.iterdir()):
+            if not p.is_file() or p.name.startswith("."):
+                continue  # .partial: an upload still on its way
+            if p.suffix.lower() == ".ova":
+                found.append(parse_ova(p))
+            elif p.suffix.lower() in IMAGE_SUFFIXES:
+                found.append(describe_image(p, run))
+        return found
     return [
         describe_image(p, run)
         for p in sorted(folder.iterdir())
         if p.suffix.lower() in IMAGE_SUFFIXES and p.is_file()
     ]
+
+
+def interface_networks(root) -> list[str]:
+    """The network or bridge each <interface> of a libvirt domain is on."""
+    names = []
+    for iface in root.findall("./devices/interface"):
+        source = iface.find("source")
+        attrs = source.attrib if source is not None else {}
+        names.append(attrs.get("network") or attrs.get("bridge") or attrs.get("portgroup") or "")
+    return names
 
 
 def parse_vmware_xml(xml: str) -> SourceVM:
@@ -179,8 +252,101 @@ def parse_vmware_xml(xml: str) -> SourceVM:
         firmware=Firmware.UEFI if efi else Firmware.BIOS,
         disks_gb=[0] * len(disks),  # the ESX driver doesn't report sizes
         nics=len(root.findall("./devices/interface")),
-        guest_os=root.findtext("description", "") or "",
+        networks=interface_networks(root),
+        notes=(root.findtext("description", "") or "").strip(),
     )
+
+
+DATASTORE_PATH = re.compile(r"^\[(?P<ds>[^\]]+)\]\s*(?P<path>.+)$")
+VMDK_EXTENT = re.compile(r"^\s*(?:RW|RDONLY|NOACCESS)\s+(\d+)\s", re.MULTILINE)
+VMX_GUEST = re.compile(r'^\s*guestOS\s*=\s*"([^"]*)"', re.MULTILINE)
+GUEST_NAMES = [  # VMware guestOS ids, by prefix
+    ("windows2022srvnext", "Windows Server 2025"),
+    ("windows2019srvnext", "Windows Server 2022"),
+    ("windows2019srv", "Windows Server 2019"),
+    ("windows9srv", "Windows Server 2016"),
+    ("windows8srv", "Windows Server 2012"),
+    ("windows11", "Windows 11"),
+    ("windows9", "Windows 10"),
+    ("windows", "Windows"),
+    ("ubuntu", "Ubuntu Linux"),
+    ("debian", "Debian GNU/Linux"),
+    ("rhel", "Red Hat Enterprise Linux"),
+    ("centos", "CentOS"),
+    ("rocky", "Rocky Linux"),
+    ("almalinux", "AlmaLinux"),
+    ("oraclelinux", "Oracle Linux"),
+    ("sles", "SUSE Linux Enterprise"),
+    ("freebsd", "FreeBSD"),
+    ("other", "Other Linux"),
+]
+
+
+def guest_os_name(guest_id: str) -> str:
+    gid = guest_id.lower()
+    for prefix, name in GUEST_NAMES:
+        if gid.startswith(prefix):
+            bits = " (64-bit)" if gid.endswith("-64") or gid.endswith("64guest") else ""
+            version = re.match(rf"{prefix}(\d+)", gid) if not prefix.startswith("windows") else None
+            return f"{name}{' ' + version.group(1) if version else ''}{bits}"
+    return guest_id
+
+
+def vmware_disk_files(xml: str) -> list[str]:
+    root = ET.fromstring(xml)
+    return [
+        d.find("source").get("file", "")
+        for d in root.findall("./devices/disk[@device='disk']")
+        if d.find("source") is not None
+    ]
+
+
+def datastore_url(source: Source, path: str) -> str | None:
+    """HTTPS URL of a file given as '[datastore] folder/file' (ESXi's /folder service)."""
+    m = DATASTORE_PATH.match(path)
+    if not m:
+        return None
+    dc = source.path.strip("/").split("/")[0] if source.path else "ha-datacenter"
+    query = urllib.parse.urlencode({"dcPath": dc, "dsName": m["ds"]})
+    return f"https://{source.host}/folder/{urllib.parse.quote(m['path'])}?{query}"
+
+
+def read_datastore_file(source: Source, url: str, limit: int = 65536) -> str:
+    ctx = ssl.create_default_context()
+    if not source.verify_tls:
+        ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    req = urllib.request.Request(url)
+    token = base64.b64encode(f"{source.username}:{source.password}".encode()).decode()
+    req.add_header("Authorization", f"Basic {token}")
+    req.add_header("Range", f"bytes=0-{limit - 1}")  # descriptors are small; never pull a disk
+    with urllib.request.urlopen(req, context=ctx, timeout=10) as resp:
+        return resp.read(limit).decode("utf-8", "replace")
+
+
+def add_vmware_details(
+    source: Source,
+    vm: SourceVM,
+    disks: list[str],
+    fetch: Callable[[Source, str], str] = read_datastore_file,
+) -> None:
+    for i, disk in enumerate(disks[: len(vm.disks_gb)]):
+        url = datastore_url(source, disk)
+        try:
+            sectors = sum(int(n) for n in VMDK_EXTENT.findall(fetch(source, url))) if url else 0
+        except (OSError, ValueError):
+            continue
+        vm.disks_gb[i] = math.ceil(sectors * 512 / 2**30)
+    m = DATASTORE_PATH.match(disks[0]) if disks else None
+    if m:  # the .vmx is normally next to the first disk and named after its folder
+        folder = m["path"].rsplit("/", 1)[0]
+        vmx = f"[{m['ds']}] {folder}/{folder.rsplit('/', 1)[-1]}.vmx"
+        vm.vmx = vmx
+        try:
+            found = VMX_GUEST.search(fetch(source, datastore_url(source, vmx)))
+        except (OSError, ValueError):
+            found = None
+        if found:
+            vm.guest_os = guest_os_name(found.group(1))
 
 
 OVF_NS = {
@@ -206,7 +372,7 @@ def parse_ovf(text: str) -> SourceVM:
     ovf = f"{{{OVF_NS['ovf']}}}"
     system = root.find(".//ovf:VirtualSystem", OVF_NS)
     name = system.findtext("ovf:Name", None, OVF_NS) or system.get(f"{ovf}id")
-    vcpus, memory_mb, nics = 1, 1024, 0
+    vcpus, memory_mb, nics, networks = 1, 1024, 0, []
     for item in system.findall(".//ovf:VirtualHardwareSection/ovf:Item", OVF_NS):
         kind = item.findtext("rasd:ResourceType", "", OVF_NS)
         quantity = item.findtext("rasd:VirtualQuantity", "0", OVF_NS)
@@ -217,6 +383,7 @@ def parse_ovf(text: str) -> SourceVM:
             memory_mb = int(quantity) * UNITS.get(unit.strip(), 1024**2) // 1024**2
         elif kind == "10":
             nics += 1
+            networks.append(item.findtext("rasd:Connection", "", OVF_NS).strip())
     disks = []
     for disk in root.findall(".//ovf:DiskSection/ovf:Disk", OVF_NS):
         unit = disk.get(f"{ovf}capacityAllocationUnits", "byte")
@@ -236,6 +403,7 @@ def parse_ovf(text: str) -> SourceVM:
         firmware=firmware,
         disks_gb=disks,
         nics=max(nics, 1),
+        networks=networks,
         guest_os=guest,
     )
 

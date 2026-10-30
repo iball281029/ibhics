@@ -36,7 +36,24 @@ def test_disks_map_to_volumes():
     assert disks[0].find("driver").get("type") == "qcow2"
     assert disks[0].find("source").get("volume") == "db-01-disk0.qcow2"
     assert disks[1].find("driver").get("type") == "raw"
-    assert disks[1].find("source").attrib == {"pool": "san-lvm", "volume": "db-01-disk1"}
+    # Block disks name the LV, so AppArmor's virt-aa-helper lets QEMU open it.
+    assert disks[1].get("type") == "block"
+    assert disks[1].find("source").attrib == {"dev": "/dev/ibhics_san_lvm/db-01-disk1"}
+
+
+def test_block_disks_keep_their_pool_in_metadata():
+    from ibhics.hypervisor import libvirt_driver as lv
+
+    root = ET.fromstring(build_domain_xml(spec()))
+    disks = root.findall("./devices/disk[@device='disk']")
+    assert [lv.disk_source(root, d) for d in disks] == [
+        ("default", "db-01-disk0.qcow2"),
+        ("san-lvm", "db-01-disk1"),
+    ]
+    assert [d.pool for d in lv._spec_from_xml(ET.tostring(root, encoding="unicode")).disks] == [
+        "default",
+        "san-lvm",
+    ]
 
 
 def test_uefi_and_iso():
@@ -75,3 +92,15 @@ def test_round_trip_through_libvirt_xml():
 def test_invalid_name_rejected():
     with pytest.raises(ValueError):
         build_domain_xml(spec(name="no spaces"))
+
+
+def test_hand_written_bridge_nic_is_counted():
+    from ibhics.hypervisor import libvirt_driver as lv
+
+    xml = (
+        "<domain><name>z</name><memory unit='KiB'>1048576</memory><vcpu>1</vcpu><devices>"
+        "<interface type='bridge'><source bridge='br0'/><mac address='00:50:56:01:02:03'/>"
+        "</interface></devices></domain>"
+    )
+    (nic,) = lv._spec_from_xml(xml).nics
+    assert (nic.network, nic.mac) == ("br0", "00:50:56:01:02:03")

@@ -12,13 +12,14 @@ import getpass
 import ipaddress
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .. import __version__
+from .. import RELEASE_NAME
 
 PRODUCT = "ibHiCS Hyper-Converged Infrastructure"
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -27,7 +28,7 @@ ROLES = {
     "compute": "Additional compute node (join an existing cluster)",
     "witness": "Witness (quorum vote for a 2-node cluster, runs no VMs)",
 }
-MANAGER_PORT = 8006
+MANAGER_PORT = 8888
 AGENT_PORT = 8007
 BRIDGE = "br0"
 
@@ -42,6 +43,7 @@ class Config:
     dns: list[str] = field(default_factory=list)
     timezone: str = "Asia/Bangkok"
     token: str = ""
+    ssh_key: str = ""  # optional public key for root, besides the root password
 
     @property
     def ip(self) -> str:
@@ -57,6 +59,8 @@ class Config:
         check_hostname(self.hostname)
         check_cidr(self.address)
         check_ip(self.gateway)
+        if self.ssh_key:
+            check_ssh_key(self.ssh_key)
         if ipaddress.ip_address(self.gateway) not in ipaddress.ip_interface(self.address).network:
             raise ValueError("the gateway must be inside the node's subnet")
         for server in self.dns:
@@ -95,6 +99,18 @@ def check_token(value: str) -> str:
     if len(value) < 16:
         raise ValueError("the cluster token is at least 16 characters; copy it exactly")
     return value
+
+
+def check_ssh_key(value: str) -> str:
+    kind, _, rest = value.strip().partition(" ")
+    if not (kind.startswith(("ssh-", "ecdsa-", "sk-")) and rest.strip()):
+        raise ValueError("an SSH public key looks like 'ssh-ed25519 AAAA... name'")
+    return value
+
+
+def render_sshd() -> str:
+    # Debian only allows key logins for root; admins sign in with the password from setup.
+    return "# Written by ibhics-setup.\nPermitRootLogin yes\nPasswordAuthentication yes\n"
 
 
 def check_password(value: str) -> str:
@@ -170,7 +186,7 @@ def render_issue(cfg: Config) -> str:
             f"    name {cfg.hostname}, address http://{cfg.ip}:{AGENT_PORT}"
         )
     return (
-        f"{bar}\n  {PRODUCT} beta version {_short_version()}\n"
+        f"{bar}\n  {RELEASE_NAME}\n"
         f"  Node {cfg.hostname} ({cfg.role}) at {cfg.ip}\n\n{where}\n{bar}\n\n"
     )
 
@@ -181,10 +197,6 @@ def render_bridge_network() -> str:
         "<network><name>default</name><forward mode='bridge'/>"
         f"<bridge name='{BRIDGE}'/></network>\n"
     )
-
-
-def _short_version() -> str:
-    return ".".join(__version__.split(".")[:2])
 
 
 # Applying
@@ -209,8 +221,16 @@ def apply(
         target.chmod(mode)
 
     def sh(*cmd: str, check: bool = True, stdin: str | None = None) -> None:
-        run(list(cmd), check=check, input=stdin, text=True)
+        # Quiet: the console shows our progress lines, and a command's output only if it
+        # fails and that failure matters.
+        result = run(list(cmd), check=False, input=stdin, text=True, capture_output=True)
+        if check and result is not None and result.returncode != 0:
+            raise RuntimeError(f"{' '.join(cmd[:3])} failed: {(result.stderr or '').strip()}")
 
+    def step(text: str) -> None:
+        print(f"  {text}...", flush=True)
+
+    step("Network and system settings")
     write("/etc/hostname", cfg.hostname + "\n")
     write("/etc/hosts", render_hosts(cfg))
     write("/etc/network/interfaces", render_interfaces(cfg))
@@ -221,7 +241,15 @@ def apply(
     sh("chpasswd", stdin=f"root:{root_password}\n")
     sh("systemctl", "restart", "networking")
 
+    step("SSH access for root")
+    write("/etc/ssh/sshd_config.d/10-ibhics.conf", render_sshd())
+    if cfg.ssh_key:
+        (root / "root/.ssh").mkdir(parents=True, exist_ok=True, mode=0o700)
+        write("/root/.ssh/authorized_keys", cfg.ssh_key.strip() + "\n", 0o600)
+    sh("systemctl", "restart", "ssh", check=False)  # picked up at boot if it is not running
+
     if cfg.runs_vms:
+        step("VM network bridge and storage pool")
         write("/etc/ibhics/default-network.xml", render_bridge_network())
         sh("virsh", "net-destroy", "default", check=False)
         sh("virsh", "net-undefine", "default", check=False)
@@ -241,6 +269,7 @@ def apply(
         sh("virsh", "pool-start", "default", check=False)
 
     if cfg.role == "manager":
+        step("HTTPS certificate and web console user")
         tls = root / "etc/ibhics/tls"
         tls.mkdir(parents=True, exist_ok=True)
         sh(
@@ -271,6 +300,7 @@ def apply(
     else:
         service = "ibhics-agent.service"
 
+    step("Starting ibHiCS")
     write("/etc/ibhics/configured", f"{cfg.role}\n")
     sh("systemctl", "enable", "--now", service)
     sh("systemctl", "disable", "ibhics-firstboot.service", check=False)
@@ -280,14 +310,42 @@ def apply(
 
 
 def detect_interfaces(sys_net: Path = Path("/sys/class/net")) -> list[str]:
-    """Physical NICs: the ones backed by a device, so not lo, bridges or tap devices."""
+    """Physical NICs: the ones backed by a device, so not lo, bridges or tap devices.
+    Ports with a cable plugged in come first, so the default choice is one that works."""
     if not sys_net.exists():
         return []
-    return sorted(p.name for p in sys_net.iterdir() if (p / "device").exists())
+    nics = [p.name for p in sys_net.iterdir() if (p / "device").exists()]
+    return sorted(nics, key=lambda n: (not has_link(n, sys_net), n))
 
 
-def current_address(interface: str) -> tuple[str, str]:
-    """The DHCP address and default gateway the installer got, as suggestions."""
+def has_link(interface: str, sys_net: Path = Path("/sys/class/net")) -> bool:
+    try:
+        return (sys_net / interface / "carrier").read_text().strip() == "1"
+    except OSError:  # reading carrier fails while the port is down
+        return False
+
+
+def current_address(interface: str, run: Runner = subprocess.run) -> tuple[str, str]:
+    """Address and gateway a DHCP server would give this port, as suggestions only: the
+    node always gets a static address. Blank when there is no DHCP server."""
+    if shutil.which("dhcpcd"):
+        try:
+            run(["ip", "link", "set", interface, "up"], check=False)
+            run(
+                ["dhcpcd", "--oneshot", "--ipv4only", "--timeout", "15", interface],
+                check=False,
+                capture_output=True,
+            )
+            return _read_address(interface)
+        except OSError:
+            return "", ""
+        finally:  # apply() configures the port itself; leave nothing behind
+            run(["dhcpcd", "--release", interface], check=False, capture_output=True)
+            run(["ip", "-4", "addr", "flush", "dev", interface], check=False)
+    return _read_address(interface)
+
+
+def _read_address(interface: str) -> tuple[str, str]:
     try:
         addr = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "dev", interface],
@@ -309,10 +367,13 @@ def ask(
     default: str = "",
     check: Callable[[str], object] | None = None,
     reader: Callable[[str], str] = input,
+    optional: bool = False,
 ) -> str:
     while True:
         hint = f" [{default}]" if default else ""
         value = reader(f"{prompt}{hint}: ").strip() or default
+        if not value and optional:
+            return ""
         if not value:
             print("  A value is needed.")
             continue
@@ -351,8 +412,66 @@ def choose(prompt: str, options: Sequence[tuple[str, str]], reader=input) -> str
     return keys[int(ask("Choose", "1", check, reader)) - 1]
 
 
+ANSWERS = Path("/etc/ibhics/answers.conf")
+
+
+def read_answers(text: str, nics: Sequence[str]) -> tuple[Config, str, str | None]:
+    """Settings from an answers file (KEY=value lines) for unattended installs and tests.
+    It holds passwords, so main() deletes it once it is read."""
+    values = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            key, sep, value = line.partition("=")
+            if not sep:
+                raise ValueError(f"answers file: expected KEY=value, got {line!r}")
+            values[key.strip().upper()] = value.strip()
+
+    def need(key: str) -> str:
+        if not values.get(key):
+            raise ValueError(f"answers file: {key} is missing")
+        return values[key]
+
+    role = need("ROLE")
+    cfg = Config(
+        role=role,
+        hostname=need("HOSTNAME"),
+        interface=values.get("INTERFACE") or (nics[0] if nics else ""),
+        address=need("ADDRESS"),
+        gateway=need("GATEWAY"),
+        dns=values.get("DNS", values["GATEWAY"]).split(),
+        timezone=values.get("TIMEZONE", "Asia/Bangkok"),
+        token=secrets.token_urlsafe(24) if role == "manager" else need("TOKEN"),
+        ssh_key=values.get("SSH_KEY", ""),
+    )
+    if not cfg.interface:
+        raise ValueError("answers file: no network interface found; set INTERFACE")
+    admin = need("ADMIN_PASSWORD") if role == "manager" else None
+    return cfg, need("ROOT_PASSWORD"), admin
+
+
+def unattended(path: Path) -> int:
+    try:
+        cfg, root_password, admin_password = read_answers(path.read_text(), detect_interfaces())
+        cfg.validate()
+    except ValueError as exc:
+        print(f"\n  {exc}\n")
+        return 1
+    finally:
+        path.unlink(missing_ok=True)
+    try:
+        apply(cfg, root_password, admin_password)
+    except RuntimeError as exc:
+        print(f"\n  Setup did not finish: {exc}\n  Fix it and run ibhics-setup again.\n")
+        return 1
+    print("\n" + render_issue(cfg))
+    return 0
+
+
 def main() -> int:
-    print(f"\n  Welcome to {PRODUCT} beta version {_short_version()}\n")
+    if ANSWERS.exists():
+        return unattended(ANSWERS)
+    print(f"\n  Welcome to {RELEASE_NAME}\n")
     print("  This sets up the node. You can run it again later with: ibhics-setup\n")
     role = choose("What is this node?", list(ROLES.items()))
     hostname = ask("Node name", "node1" if role == "manager" else "", check_hostname)
@@ -361,9 +480,8 @@ def main() -> int:
     if not nics:
         print("No network interface found.")
         return 1
-    interface = (
-        nics[0] if len(nics) == 1 else choose("Management network port", [(n, n) for n in nics])
-    )
+    ports = [(n, f"{n}  (cable connected)" if has_link(n) else n) for n in nics]
+    interface = nics[0] if len(nics) == 1 else choose("Management network port", ports)
     suggested, gateway = current_address(interface)
     address = ask("Management address with prefix", suggested, check_cidr)
     gateway = ask("Default gateway", gateway, check_ip)
@@ -375,11 +493,16 @@ def main() -> int:
     else:
         token = ask("Cluster token (shown on the first node's console)", "", check_token)
     root_password = ask_password("Password for the console and SSH user 'root'")
+    ssh_key = ask(
+        "SSH public key for root (optional, press Enter to skip)",
+        check=check_ssh_key,
+        optional=True,
+    )
     admin_password = (
         ask_password("Password for the web console user 'admin'") if role == "manager" else None
     )
 
-    cfg = Config(role, hostname, interface, address, gateway, dns.split(), timezone, token)
+    cfg = Config(role, hostname, interface, address, gateway, dns.split(), timezone, token, ssh_key)
     try:
         cfg.validate()
     except ValueError as exc:
@@ -388,7 +511,11 @@ def main() -> int:
     print(f"\n  {ROLES[role]}\n  {hostname} at {address} via {gateway} on {interface}\n")
     if ask("Apply these settings? (yes/no)", "yes").lower() not in ("y", "yes"):
         return 1
-    apply(cfg, root_password, admin_password)
+    try:
+        apply(cfg, root_password, admin_password)
+    except RuntimeError as exc:
+        print(f"\n  Setup did not finish: {exc}\n  Fix it and run ibhics-setup again.\n")
+        return 1
     print("\n" + render_issue(cfg))
     if role == "manager":
         print(

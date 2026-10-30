@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, status
 
@@ -12,6 +13,7 @@ from ..backup import BackupTarget, NodeBackup
 from ..cluster.remote import TOKEN_HEADER
 from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
+from ..hypervisor.serialize import guest_to_json
 from ..importer import NodeImport, Source, SourceVM
 from ..manager.errors import install_driver_errors
 from ..manager.schemas import (
@@ -23,11 +25,14 @@ from ..manager.schemas import (
     AgentPrune,
     AgentRestore,
     BackupOut,
+    CdromRequest,
     HostOut,
+    NetworkIn,
     PoolCreate,
     PoolOut,
     StopRequest,
     VMCreate,
+    VMEditIn,
     VMOut,
 )
 
@@ -71,9 +76,41 @@ def create_agent_app(
         def create_vm(body: VMCreate) -> VMOut:
             return VMOut.from_info(driver.create_vm(body.to_spec()))
 
+        @api.get("/disks")
+        def disks() -> list[dict]:
+            return [asdict(d) for d in driver.list_local_disks()]
+
+        @api.get("/networks")
+        def networks() -> list[dict]:
+            return [asdict(n) for n in driver.list_networks()]
+
+        @api.post("/networks", status_code=status.HTTP_201_CREATED)
+        def create_network(body: NetworkIn) -> dict:
+            return asdict(driver.create_network(body.to_spec()))
+
+        @api.delete("/networks/{name}", status_code=status.HTTP_204_NO_CONTENT)
+        def delete_network(name: str) -> None:
+            driver.delete_network(name)
+
+        @api.get("/guests")
+        def guests() -> dict:
+            return {uuid: guest_to_json(g) for uuid, g in driver.list_guest_info().items()}
+
+        @api.get("/vms/{uuid}/guest")
+        def guest(uuid: str) -> dict:
+            return guest_to_json(driver.guest_info(uuid))
+
         @api.get("/vms/{uuid}", response_model=VMOut)
         def get_vm(uuid: str) -> VMOut:
             return VMOut.from_info(driver.get_vm(uuid))
+
+        @api.post("/vms/{uuid}/cdrom", response_model=VMOut)
+        def insert_cdrom(uuid: str, body: CdromRequest) -> VMOut:
+            return VMOut.from_info(driver.insert_cdrom(uuid, body.iso))
+
+        @api.patch("/vms/{uuid}", response_model=VMOut)
+        def update_vm(uuid: str, body: VMEditIn) -> VMOut:
+            return VMOut.from_info(driver.update_vm(uuid, body.to_edit()))
 
         @api.post("/vms/{uuid}/start", response_model=VMOut)
         def start_vm(uuid: str) -> VMOut:
@@ -137,6 +174,14 @@ def create_agent_app(
 
         imports = imports or NodeImport(driver)
 
+        @api.get("/imports/progress")
+        def import_progress() -> dict:
+            return {name: list(p) for name, p in imports.progress.items()}
+
+        @api.get("/imports/{name}/log")
+        def import_log(name: str) -> dict:
+            return {"log": imports.log(name)}
+
         @api.post("/imports/run", response_model=VMOut)
         def run_import(body: AgentImport) -> VMOut:
             try:
@@ -153,6 +198,7 @@ def create_agent_app(
                 body.vcpus,
                 body.memory_mb,
                 body.start,
+                clear_hibernation=body.clear_hibernation,
             )
             return VMOut.from_info(info)
 

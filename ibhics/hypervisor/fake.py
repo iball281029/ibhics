@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import shutil
 import socket
 import tempfile
@@ -14,14 +15,21 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .base import (
+    DiskSpec,
+    GuestInfo,
+    GuestInterface,
     HostInfo,
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NetworkInfo,
+    NetworkSpec,
+    NicSpec,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
     PoolType,
+    VMEdit,
     VMExists,
     VMInfo,
     VMNotFound,
@@ -77,8 +85,49 @@ class FakeDriver(HypervisorDriver):
                     raise PoolNotFound(disk.pool)
                 disk.backend = self._pools[disk.pool][0].disk_backend
             vm = VMInfo(uuid=str(uuidlib.uuid4()), spec=spec, state=VMState.STOPPED)
+            for index, nic in enumerate(spec.nics):  # libvirt picks a MAC like this
+                a, b = uuidlib.UUID(vm.uuid).bytes[:2]
+                nic.mac = nic.mac or f"52:54:00:{a:02x}:{b:02x}:{index:02x}"
             self._vms[vm.uuid] = vm
             self._disks[vm.uuid] = [bytearray(d.size_gb * FAKE_BYTES_PER_GB) for d in spec.disks]
+            return copy.deepcopy(vm)
+
+    def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            vm.spec.iso = iso
+            return copy.deepcopy(vm)
+
+    def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            new = edit.apply_to(vm.spec)
+            running = vm.state == VMState.RUNNING
+            if running and _restart_key(new) != _restart_key(vm.spec):
+                vm.restart_needed = True
+            if edit.disks is not None:
+                disks, data = [], []
+                for d in edit.disks:
+                    if d.index is not None:
+                        disk = copy.deepcopy(vm.spec.disks[d.index])
+                        blob = self._disks[uuid][d.index]
+                        blob.extend(bytes((d.size_gb - disk.size_gb) * FAKE_BYTES_PER_GB))
+                        disk.size_gb = d.size_gb
+                    else:
+                        if d.pool not in self._pools:
+                            raise PoolNotFound(d.pool)
+                        backend = self._pools[d.pool][0].disk_backend
+                        disk = DiskSpec(size_gb=d.size_gb, pool=d.pool, backend=backend)
+                        blob = bytearray(d.size_gb * FAKE_BYTES_PER_GB)
+                    disks.append(disk)
+                    data.append(blob)
+                new.disks, self._disks[uuid] = disks, data
+            if edit.nics is not None:
+                new.nics = [
+                    NicSpec(network=n.network, model=n.model, mac=n.mac or _random_mac())
+                    for n in edit.nics
+                ]
+            vm.spec = new
             return copy.deepcopy(vm)
 
     def start_vm(self, uuid: str) -> VMInfo:
@@ -95,6 +144,7 @@ class FakeDriver(HypervisorDriver):
             if vm.state == VMState.STOPPED:
                 raise InvalidState("VM is already stopped")
             vm.state = VMState.STOPPED
+            vm.restart_needed = False
             return copy.deepcopy(vm)
 
     def delete_vm(self, uuid: str) -> None:
@@ -149,6 +199,72 @@ class FakeDriver(HypervisorDriver):
                 dest._vms[uuid] = self._vms.pop(uuid)
                 dest._disks[uuid] = self._disks.pop(uuid)
             self.consoles.pop(uuid, None)
+
+    def list_networks(self) -> list[NetworkInfo]:
+        with self._lock:
+            nets = getattr(self, "_networks", None)
+            if nets is None:
+                nets = self._networks = {"default": NetworkInfo("default", "br0")}
+            return sorted(copy.deepcopy(list(nets.values())), key=lambda n: (n.vlan or 0, n.name))
+
+    def create_network(self, spec: NetworkSpec) -> NetworkInfo:
+        spec.validate()
+        for net in self.list_networks():
+            if net.name == spec.name:
+                raise InvalidState(f"a network named {spec.name!r} already exists")
+            if net.vlan == spec.vlan:
+                raise InvalidState(f"VLAN {spec.vlan} already has network {net.name!r}")
+        with self._lock:
+            info = NetworkInfo(spec.name, f"ibr{spec.vlan}", vlan=spec.vlan)
+            self._networks[spec.name] = info
+            return copy.deepcopy(info)
+
+    def delete_network(self, name: str) -> None:
+        if name == "default":
+            raise InvalidState("the default network is the LAN itself and stays")
+        self.list_networks()
+        with self._lock:
+            for vm in self._vms.values():
+                if any(n.network == name for n in vm.spec.nics):
+                    raise InvalidState(f"VM {vm.spec.name!r} is still on network {name!r}")
+            if self._networks.pop(name, None) is None:
+                raise InvalidState(f"no network named {name!r}")
+
+    def list_local_disks(self):
+        from .disks import LocalDisk
+
+        return [
+            LocalDisk("/dev/sdb", 12509.0, "RAID 930-8i", "6000d31000f0", "sas"),
+            LocalDisk("/dev/sdc", 894.3, "MZ7L3960", "S6KN", "sata", False, "3 partitions (vmfs)"),
+        ]
+
+    def guest_info(self, uuid: str) -> GuestInfo:
+        """A pretend guest agent: running VMs answer, as if qemu-guest-agent were installed."""
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                return GuestInfo()
+            spec = vm.spec
+        windows = "windows" in spec.os_type.lower() or spec.name.lower().startswith("win")
+        seed = sum(spec.name.encode())
+        total = sum(d.size_gb for d in spec.disks)
+        return GuestInfo(
+            agent=True,
+            os_name=spec.os_type or ("Windows Server 2022" if windows else "Ubuntu 24.04 LTS"),
+            os_version="10.0.20348" if windows else "24.04",
+            kernel="" if windows else "6.8.0-45-generic",
+            hostname=spec.name.upper() if windows else spec.name,
+            interfaces=[
+                GuestInterface(
+                    name=f"Ethernet{i}" if windows else f"ens{3 + i}",
+                    mac=nic.mac or "",
+                    ips=[f"10.0.{10 + i}.{20 + seed % 200}/24"],
+                )
+                for i, nic in enumerate(spec.nics)
+            ],
+            fs_used_gb=round(total * (0.05 + seed % 60 / 100), 1),
+            fs_total_gb=total,
+        )
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         with self._lock:
@@ -209,6 +325,7 @@ class FakeDriver(HypervisorDriver):
             PoolType.NFS: f"{spec.host}:{spec.export}",
             PoolType.ISCSI: f"{spec.host}:{spec.port} {spec.iqn} lun {spec.lun}",
             PoolType.LVM: spec.device or "",
+            PoolType.DISK: spec.device or "",
         }[spec.type]
         return PoolInfo(
             name=name,
@@ -225,3 +342,11 @@ class FakeDriver(HypervisorDriver):
             return self._vms[uuid]
         except KeyError:
             raise VMNotFound(uuid) from None
+
+
+def _random_mac() -> str:
+    return "52:54:00:" + ":".join(f"{b:02x}" for b in os.urandom(3))
+
+
+def _restart_key(spec: VMSpec) -> tuple:
+    return (spec.vcpus, spec.memory_mb, spec.boot)

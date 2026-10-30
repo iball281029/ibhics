@@ -7,13 +7,17 @@ from pydantic import BaseModel, Field
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
 from ..hypervisor import (
+    DiskEdit,
     DiskSpec,
     Firmware,
     HostInfo,
+    NetworkSpec,
+    NicEdit,
     NicSpec,
     PoolInfo,
     PoolSpec,
     PoolType,
+    VMEdit,
     VMInfo,
     VMSpec,
     VMState,
@@ -36,6 +40,7 @@ class DiskOut(BaseModel):
     size_gb: int
     backend: str
     pool: str
+    used_gb: float | None = None
 
 
 class NicOut(BaseModel):
@@ -53,6 +58,7 @@ class VMCreate(BaseModel):
     nics: list[NicIn] = Field(default_factory=lambda: [NicIn()])
     iso: str | None = None
     description: str = Field(default="", max_length=1024)
+    os_type: str = Field(default="", max_length=64)
     # Manager only: which compute node to place the VM on. Empty picks automatically.
     node: str | None = None
 
@@ -66,6 +72,7 @@ class VMCreate(BaseModel):
             nics=[NicSpec(**n.model_dump()) for n in self.nics],
             iso=self.iso,
             description=self.description,
+            os_type=self.os_type,
         )
 
 
@@ -80,6 +87,10 @@ class VMOut(BaseModel):
     nics: list[NicOut]
     iso: str | None
     description: str
+    os_type: str = ""
+    boot: list[str] | None = None
+    autostart: bool = False
+    restart_needed: bool = False
     node: str | None = None
 
     @classmethod
@@ -93,11 +104,87 @@ class VMOut(BaseModel):
             vcpus=spec.vcpus,
             memory_mb=spec.memory_mb,
             firmware=spec.firmware,
-            disks=[DiskOut(size_gb=d.size_gb, backend=d.backend, pool=d.pool) for d in spec.disks],
+            disks=[
+                DiskOut(size_gb=d.size_gb, backend=d.backend, pool=d.pool, used_gb=d.used_gb)
+                for d in spec.disks
+            ],
             nics=[NicOut(network=n.network, model=n.model, mac=n.mac) for n in spec.nics],
             iso=spec.iso,
             description=spec.description,
+            os_type=spec.os_type,
+            boot=spec.boot,
+            autostart=spec.autostart,
+            restart_needed=info.restart_needed,
         )
+
+
+class NetworkIn(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    vlan: int = Field(ge=1, le=4094)
+
+    def to_spec(self) -> NetworkSpec:
+        return NetworkSpec(name=self.name, vlan=self.vlan)
+
+
+class NetworkOut(BaseModel):
+    name: str
+    bridge: str
+    vlan: int | None = None
+    nodes: list[str] = Field(default_factory=list, description="compute nodes that have it")
+
+
+class DiskEditIn(BaseModel):
+    size_gb: int = Field(ge=1)
+    index: int | None = Field(default=None, ge=0, description="existing disk; empty = new")
+    pool: str = "default"
+
+
+class NicEditIn(BaseModel):
+    network: str = "default"
+    mac: str | None = Field(default=None, description="existing NIC; empty = new")
+    model: str = Field(default="virtio", pattern=r"^(virtio|e1000e|e1000|rtl8139)$")
+
+
+class VMEditIn(BaseModel):
+    """New settings for a VM. Fields left out stay as they are; disks and nics, when
+    given, are the whole list (existing ones left out are removed)."""
+
+    description: str | None = Field(default=None, max_length=1024)
+    os_type: str | None = Field(default=None, max_length=64)
+    vcpus: int | None = Field(default=None, ge=1, le=256)
+    memory_mb: int | None = Field(default=None, ge=128)
+    boot: list[str] | None = None
+    autostart: bool | None = None
+    disks: list[DiskEditIn] | None = Field(default=None, max_length=26)
+    nics: list[NicEditIn] | None = Field(default=None, max_length=16)
+    delete_removed_disks: bool = False
+
+    def to_edit(self) -> VMEdit:
+        data = self.model_dump()
+        if self.disks is not None:
+            data["disks"] = [DiskEdit(**d) for d in data["disks"]]
+        if self.nics is not None:
+            data["nics"] = [NicEdit(**n) for n in data["nics"]]
+        return VMEdit(**data)
+
+
+class GuestInterfaceOut(BaseModel):
+    name: str
+    mac: str
+    ips: list[str]
+
+
+class GuestOut(BaseModel):
+    uuid: str = ""
+    agent: bool
+    os_name: str
+    os_version: str
+    kernel: str
+    hostname: str
+    interfaces: list[GuestInterfaceOut]
+    ips: list[str]
+    fs_used_gb: float | None = None
+    fs_total_gb: float | None = None
 
 
 class HostOut(BaseModel):
@@ -175,13 +262,23 @@ class PoolCreate(BaseModel):
     export: str | None = Field(default=None, description="nfs export path")
     iqn: str | None = None
     lun: int = Field(default=0, ge=0)
-    device: str | None = Field(default=None, description="lvm: e.g. /dev/mapper/mpatha")
+    device: str | None = Field(default=None, description="disk or lvm: e.g. /dev/disk/by-id/...")
     confirm_wipe: bool = Field(
-        default=False, description="required for iscsi and lvm: the device is erased"
+        default=False, description="required for iscsi, lvm and disk: the device is erased"
     )
 
     def to_spec(self) -> PoolSpec:
         return PoolSpec(**self.model_dump())
+
+
+class LocalDiskOut(BaseModel):
+    path: str
+    size_gb: float
+    model: str
+    serial: str
+    transport: str
+    empty: bool
+    contents: str
 
 
 class PoolOut(BaseModel):
@@ -416,17 +513,27 @@ class AuditOut(BaseModel):
 
 class SourceIn(BaseModel):
     name: str
-    type: str = Field(pattern=r"^(vmware|ova|disk)$")
+    type: str = Field(pattern=r"^(vmware|kvm|ova|disk)$")
     host: str | None = None
     username: str | None = None
     password: str | None = Field(default=None, max_length=256)
     path: str | None = None
     verify_tls: bool = False
+    transport: str = Field(default="ssh", pattern=r"^(ssh|https)$")
 
     def to_source(self):
         from ..importer import Source, SourceType
 
         return Source(**{**self.model_dump(), "type": SourceType(self.type)})
+
+
+class CdromRequest(BaseModel):
+    iso: str | None = Field(default=None, pattern=r"^/.+\.iso$")
+
+
+class UploadOut(BaseModel):
+    name: str
+    size_bytes: int
 
 
 class SourceOut(BaseModel):
@@ -443,8 +550,10 @@ class SourceVMOut(BaseModel):
     firmware: str
     disks_gb: list[int]
     nics: int
+    networks: list[str] = []
     state: str
     guest_os: str
+    notes: str = ""
 
 
 class ImportRequest(BaseModel):
@@ -453,10 +562,16 @@ class ImportRequest(BaseModel):
     name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     node: str | None = None
     pool: str = "default"
-    network: str = "default"
+    network: str | list[str] = Field(
+        default="default", description="one network, or one per source NIC"
+    )
     vcpus: int | None = Field(default=None, ge=1, le=256)
     memory_mb: int | None = Field(default=None, ge=128)
     start: bool = False
+    clear_hibernation: bool = Field(
+        default=False,
+        description="Windows only: clear hibernation / Fast Startup on the copied disks",
+    )
 
 
 class ImportJobOut(BaseModel):
@@ -470,6 +585,8 @@ class ImportJobOut(BaseModel):
     finished: str | None
     result: str | None
     error: str | None
+    step: str = ""
+    percent: int | None = None
 
 
 class AgentImport(BaseModel):
@@ -477,7 +594,10 @@ class AgentImport(BaseModel):
     vm: dict
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     pool: str = "default"
-    network: str = "default"
+    network: str | list[str] = Field(
+        default="default", description="one network, or one per source NIC"
+    )
     vcpus: int | None = None
     memory_mb: int | None = None
     start: bool = False
+    clear_hibernation: bool = False
