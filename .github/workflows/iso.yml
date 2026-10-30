@@ -26,8 +26,8 @@ jobs:
         run: |
           report=$(xorriso -indev dist/ibhics-*-amd64.iso -report_el_torito plain 2>&1)
           echo "$report"
-          echo "$report" | grep -q "El Torito boot img :   1  BIOS"
-          echo "$report" | grep -q "El Torito boot img :   2  UEFI"
+          echo "$report" | grep -Eq "boot img : +[0-9]+ +BIOS"
+          echo "$report" | grep -Eq "boot img : +[0-9]+ +UEFI"
           xorriso -indev dist/ibhics-*-amd64.iso -find /ibhics/wheelhouse -name 'ibhics-*.whl' 2>/dev/null | grep -q ibhics
       - uses: actions/upload-artifact@v4
         with:
