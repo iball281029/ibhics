@@ -447,7 +447,7 @@ class AuditOut(BaseModel):
 
 class SourceIn(BaseModel):
     name: str
-    type: str = Field(pattern=r"^(vmware|ova|disk)$")
+    type: str = Field(pattern=r"^(vmware|kvm|ova|disk)$")
     host: str | None = None
     username: str | None = None
     password: str | None = Field(default=None, max_length=256)

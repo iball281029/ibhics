@@ -39,6 +39,7 @@ class SourceType(StrEnum):
     OVA = "ova"
     DISK = "disk"
     UPLOAD = "upload"  # files uploaded through the web console, on the manager's node
+    KVM = "kvm"  # a Proxmox VE or plain KVM/libvirt host, read over SSH
 
 
 class SourceNotFound(LookupError):
@@ -77,6 +78,11 @@ class Source:
                 raise ValueError("vCenter path looks like Datacenter/host/Cluster/esxi-host")
             if self.transport not in ("ssh", "https"):
                 raise ValueError("transport must be ssh or https")
+        elif self.type == SourceType.KVM:
+            if not self.host or not HOST_RE.match(self.host):
+                raise ValueError("a Proxmox or KVM source needs the host's address")
+            if not self.password:
+                raise ValueError("a Proxmox or KVM source needs the root password")
         elif not self.path or not self.path.startswith("/"):
             raise ValueError(f"an {self.type} source needs an absolute folder path")
 
@@ -115,6 +121,7 @@ class SourceVM:
     guest_os: str = ""
     notes: str = ""  # vmware: the VM's annotation
     vmx: str = ""  # vmware: "[datastore] folder/name.vmx"
+    disk_paths: list[str] = field(default_factory=list)  # kvm: the disks' paths on the host
 
     def to_dict(self) -> dict:
         return {**asdict(self), "firmware": str(self.firmware)}
@@ -171,6 +178,11 @@ def list_vms(
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     fetch: Callable[[Source, str], str] | None = None,
 ) -> list[SourceVM]:
+    if source.type == SourceType.KVM:
+        from .convert import HostSSH
+        from .kvm import list_kvm_vms
+
+        return list_kvm_vms(source, HostSSH(run))
     if source.type == SourceType.VMWARE:
         conn = opener(source)
         try:

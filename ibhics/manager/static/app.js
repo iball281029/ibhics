@@ -65,7 +65,7 @@ const state = { me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: 
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Local", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
-const SOURCE_TYPES = { vmware: "VMware", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
+const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
@@ -939,7 +939,7 @@ function renderSources() {
   const admin = isAdmin();
   $("#sources").innerHTML = state.sources.length ? state.sources.map((s) => {
     const st = s.settings;
-    const where = s.type === "vmware" ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
+    const where = s.type === "vmware" || s.type === "kvm" ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
       : s.type === "upload" ? "Files uploaded with Import VMs → Upload files" : st.path;
     return `<tr>
       <td><div class="name-cell">${avatar("i-migrate")}<span class="vm-name">${esc(s.name)}</span></div></td>
@@ -1065,7 +1065,8 @@ handlers["source-dialog"] = async (f) => {
   if (type === "vmware") {
     Object.assign(body, { host: f.get("host"), username: f.get("username"), password: f.get("password"), verify_tls: f.get("verify_tls") === "on", transport: f.get("transport") });
     if (f.get("vpath")) body.path = f.get("vpath");
-  } else body.path = f.get("path");
+  } else if (type === "kvm") Object.assign(body, { host: f.get("host"), username: "root", password: f.get("password") });
+  else body.path = f.get("path");
   await post("/migrate/sources", body);
   toast(`Source ${body.name} added`);
   await refresh("migrate");

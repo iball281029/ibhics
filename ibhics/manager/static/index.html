@@ -512,24 +512,25 @@
       <label>Type
         <select name="type" data-switch>
           <option value="vmware">VMware ESXi / vCenter</option>
+          <option value="kvm">Proxmox VE / KVM host</option>
           <option value="ova">Folder of OVA files</option>
           <option value="disk">Folder of disk images</option>
         </select>
       </label>
-      <label data-for="vmware">Host <input name="host" placeholder="10.0.0.50 or vcenter.local"></label>
+      <label data-for="vmware kvm">Host <input name="host" placeholder="10.0.0.50 or vcenter.local"></label>
       <label data-for="vmware">Username <input name="username" placeholder="root or administrator@vsphere.local"></label>
-      <label data-for="vmware">Password <input name="password" type="password" autocomplete="new-password"></label>
+      <label data-for="vmware kvm">Password <input name="password" type="password" autocomplete="new-password" placeholder="the root password"></label>
       <label data-for="vmware">vCenter path (blank for ESXi) <input name="vpath" placeholder="DC1/host/Cluster1/esx1.local"></label>
       <label data-for="ova disk">Folder on the nodes <input name="path" placeholder="/mnt/exports"></label>
       <label data-for="vmware" class="wide">Transfer
         <select name="transport">
-          <option value="ssh">SSH: works with every ESXi version (turn on SSH on the ESXi host first)</option>
+          <option value="ssh">SSH: works with every ESXi version (ibHiCS turns SSH on and sets up a key)</option>
           <option value="https">HTTPS: no SSH needed, but many ESXi versions refuse it</option>
         </select>
       </label>
       <label class="check" data-for="vmware"><input name="verify_tls" type="checkbox"> Verify the host's TLS certificate</label>
     </div>
-    <p class="hint" style="padding:0 18px">Folders must be mounted at the same path on every node, e.g. an NFS or SMB share.</p>
+    <p class="hint" style="padding:0 18px">Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Files from Hyper-V, Nutanix, Sangfor or Xen: export them and use Upload files.</p>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
   </form>
 </dialog>

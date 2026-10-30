@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -101,6 +102,12 @@ def stage_progress(line: str) -> tuple[str, int] | None:
     return None
 
 
+def _image_format(path: Path, run) -> str:
+    """qcow2 or raw: Proxmox keeps disks as either (LVM and ZFS volumes are raw)."""
+    with open(path, "rb") as f:
+        return "qcow2" if f.read(4) == b"QFI\xfb" else "raw"
+
+
 def vmx_ssh_url(source: Source, vm: SourceVM) -> str:
     m = DATASTORE_PATH.match(vm.vmx)
     if not m:
@@ -116,6 +123,8 @@ def _ssh_closed(stderr: str | None) -> bool:
 class EsxiSSH:
     """Lets this node's root key into the ESXi host, using the source's password once, so
     virt-v2v can copy the disks over SSH without asking."""
+
+    authorized_keys = "/etc/ssh/keys-root/authorized_keys"
 
     def __init__(self, run=subprocess.run, key: Path = SSH_KEY, api=None) -> None:
         self.run = run
@@ -133,7 +142,7 @@ class EsxiSSH:
             ) from None
 
     def ensure_access(self, source: Source) -> None:
-        if source.path:
+        if source.path and source.type == SourceType.VMWARE:
             raise ConversionFailed(
                 "SSH transfer needs the ESXi host itself as the source, not a vCenter"
             )
@@ -149,9 +158,10 @@ class EsxiSSH:
             # SSH is off on most ESXi hosts; turn it on with the same credentials.
             self._start_ssh_service(source)
         public = self.key.with_suffix(".pub").read_text().strip()
+        keys = self.authorized_keys
         add = (
-            f"grep -qxF '{public}' /etc/ssh/keys-root/authorized_keys 2>/dev/null || "
-            f"echo '{public}' >> /etc/ssh/keys-root/authorized_keys"
+            f"mkdir -p \"$(dirname {keys})\"; grep -qxF '{public}' {keys} 2>/dev/null || "
+            f"echo '{public}' >> {keys}"
         )
         with tempfile.TemporaryDirectory() as tmp:
             # ssh reads the password only from a terminal or SSH_ASKPASS.
@@ -192,17 +202,46 @@ class EsxiSSH:
         cmd += ["-o", "ConnectTimeout=10", *options, f"root@{source.host}", command]
         return self.run(cmd, capture_output=True, text=True, env=env)
 
+    def ssh_command(self, source: Source, command: str) -> list[str]:
+        cmd = ["ssh", "-i", str(self.key), "-o", "StrictHostKeyChecking=accept-new"]
+        return cmd + ["-o", "BatchMode=yes", f"root@{source.host}", command]
+
+    def command(self, source: Source, command: str) -> str:
+        """Run a command on the host with the key; its output, or ConversionFailed."""
+        result = self._ssh(source, ["-o", "BatchMode=yes"], command)
+        if result.returncode != 0:
+            raise ConversionFailed(
+                f"{source.host}: {command.split()[0]} failed: {(result.stderr or '').strip()}"
+            )
+        return result.stdout or ""
+
     def _check(self, cmd: list[str]) -> None:
         result = self.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise ConversionFailed(f"{cmd[0]} failed: {(result.stderr or '').strip()}")
 
 
+class HostSSH(EsxiSSH):
+    """The same for a Linux host (Proxmox VE, plain KVM): root's own authorized_keys."""
+
+    authorized_keys = "~/.ssh/authorized_keys"
+
+    def _start_ssh_service(self, source: Source) -> None:
+        raise ConversionFailed(f"Cannot reach SSH on {source.host} (port 22).")
+
+
 class V2VConverter:
-    def __init__(self, run=subprocess.run, log_dir: Path = LOG_DIR, ssh: EsxiSSH | None = None):
+    def __init__(
+        self,
+        run=subprocess.run,
+        log_dir: Path = LOG_DIR,
+        ssh: EsxiSSH | None = None,
+        host_ssh: HostSSH | None = None,
+    ):
         self.run = run
         self.log_dir = log_dir
         self.ssh = ssh or EsxiSSH(run)
+        self.host_ssh = host_ssh or HostSSH(run)
 
     def convert(
         self,
@@ -227,6 +266,9 @@ class V2VConverter:
                 with os.fdopen(fd, "w") as f:  # mkstemp makes it readable by us only
                     f.write(source.password or "")
                 cmd = ["virt-v2v", "-ic", source.libvirt_uri, "-ip", password_file, vm.ref]
+            elif source.type == SourceType.KVM:
+                xml = self._pull_kvm_disks(source, vm, out_dir, progress)
+                cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
             elif source.type == SourceType.OVA or vm.ref.lower().endswith(".ova"):
                 cmd = ["virt-v2v", "-i", "ova", vm.ref]
             else:
@@ -247,6 +289,32 @@ class V2VConverter:
                 message = NO_RANGES
             raise ConversionFailed(message + (f" (full log: {log})" if log else ""))
         return read_output(out_dir, name)
+
+    def _pull_kvm_disks(self, source: Source, vm: SourceVM, out_dir: Path, progress) -> Path:
+        """Copy the VM's disks from the Proxmox/KVM host into out_dir over SSH, then describe
+        them for virt-v2v -i libvirtxml. The copies are removed with out_dir."""
+        from .kvm import libvirt_xml
+
+        progress("Setting up SSH access to the host", 1)
+        self.host_ssh.ensure_access(source)
+        if not vm.disk_paths:
+            raise ConversionFailed(f"{vm.name} has no disks to copy")
+        pull = out_dir / "source"
+        pull.mkdir(exist_ok=True)
+        disks = []
+        for index, remote in enumerate(vm.disk_paths):
+            local = pull / f"disk{index}"
+            progress(f"Copying disk {index + 1}/{len(vm.disk_paths)} from {source.host}", 2)
+            with open(local, "wb") as f:
+                cmd = self.host_ssh.ssh_command(source, f"dd if={shlex.quote(remote)} bs=4M")
+                result = self.run(cmd, stdout=f, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                err = result.stderr.decode(errors="replace") if result.stderr else ""
+                raise ConversionFailed(f"copying {remote} from {source.host} failed: {err.strip()}")
+            disks.append((str(local), _image_format(local, self.run)))
+        xml = out_dir / "source.xml"
+        xml.write_text(libvirt_xml(vm, disks))
+        return xml
 
     def _run_streaming(self, cmd, env, name: str, progress: Progress):
         """Run virt-v2v writing its output to the log as it comes, so the web console can
