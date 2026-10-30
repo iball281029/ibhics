@@ -453,6 +453,7 @@ class SourceIn(BaseModel):
     password: str | None = Field(default=None, max_length=256)
     path: str | None = None
     verify_tls: bool = False
+    transport: str = Field(default="ssh", pattern=r"^(ssh|https)$")
 
     def to_source(self):
         from ..importer import Source, SourceType

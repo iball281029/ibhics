@@ -76,7 +76,9 @@ def make_ova(path: Path, ovf: str = OVF) -> Path:
     return path
 
 
-VMWARE = Source("esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw")
+VMWARE = Source(
+    "esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw", transport="https"
+)
 
 
 # Sources
@@ -237,6 +239,74 @@ def test_v2v_from_vmware(tmp_path):
     assert not list(tmp_path.glob("v2v-*"))  # the password file is gone
     assert [p.name for p in out.images] == ["db-sda", "db-sdb"]
     assert out.firmware == Firmware.UEFI
+
+
+class FakeSSH:
+    """ssh/ssh-keygen stand-in: the ESXi host accepts the key once the password run added it."""
+
+    def __init__(self, port_open=True):
+        self.cmds, self.authorised, self.port_open = [], False, port_open
+        self.password_seen = None
+
+    def __call__(self, cmd, **kw):
+        self.cmds.append(cmd)
+        if cmd[0] == "ssh-keygen":
+            key = Path(cmd[cmd.index("-f") + 1])
+            key.write_text("private")
+            key.with_suffix(".pub").write_text("ssh-ed25519 AAAA root@node1")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if not self.port_open:
+            return subprocess.CompletedProcess(cmd, 255, "", "connect to host: Connection refused")
+        if "BatchMode=yes" in cmd and cmd[-1].startswith("ls "):
+            return subprocess.CompletedProcess(
+                cmd, 0, "/vmfs/volumes/datastore1/Zabbix/zbx 7.vmx\n", ""
+            )
+        if "BatchMode=yes" in cmd:
+            return subprocess.CompletedProcess(cmd, 0 if self.authorised else 255, "", "denied")
+        askpass = kw["env"]["SSH_ASKPASS"]
+        self.password_seen = subprocess.run([askpass], capture_output=True, text=True).stdout
+        assert "keys-root/authorized_keys" in cmd[-1] and "ssh-ed25519 AAAA" in cmd[-1]
+        self.authorised = True
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+
+def test_v2v_over_ssh_sets_up_the_key_first(tmp_path):
+    from ibhics.importer.convert import EsxiSSH
+
+    ssh = FakeSSH()
+    run = FakeV2V()
+    source = Source("esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw")
+    assert source.transport == "ssh"  # the default: HTTPS fails on many ESXi versions
+    vm = SourceVM(ref="Zabbix", name="Zabbix", vmx="[datastore1] Zabbix/Zabbix.vmx")
+    converter = V2VConverter(run, log_dir=tmp_path, ssh=EsxiSSH(ssh, key=tmp_path / "k/id"))
+    converter.convert(source, vm, "zabbix", tmp_path / "out")
+    assert ssh.password_seen == "pw" and ssh.authorised
+    assert run.cmds[0][:6] == [
+        "virt-v2v",
+        "-i",
+        "vmx",
+        "-it",
+        "ssh",
+        "ssh://root@10.0.0.50/vmfs/volumes/datastore1/Zabbix/zbx%207.vmx",  # found by ls
+    ]
+    # Next time the key already works: no password is sent again.
+    ssh.cmds.clear()
+    converter.convert(source, vm, "zabbix", tmp_path / "out2")
+    assert len(ssh.cmds) == 2 and all("BatchMode=yes" in c for c in ssh.cmds)
+
+    closed = EsxiSSH(FakeSSH(port_open=False), key=tmp_path / "k/id")
+    with pytest.raises(ConversionFailed, match="Turn on SSH on the ESXi host"):
+        closed.ensure_access(source)
+
+
+def test_v2v_https_without_byte_ranges_says_what_to_do(tmp_path):
+    run = FakeV2V(
+        fail="nbdkit: curl[1]: error: server does not support 'range' (byte range) requests"
+    )
+    with pytest.raises(ConversionFailed, match="Transfer: SSH"):
+        V2VConverter(run, log_dir=tmp_path).convert(
+            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path
+        )
 
 
 def test_v2v_inputs_and_failure(tmp_path):

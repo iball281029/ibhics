@@ -940,7 +940,7 @@ handlers["source-dialog"] = async (f) => {
   const type = f.get("type");
   const body = { name: f.get("name"), type };
   if (type === "vmware") {
-    Object.assign(body, { host: f.get("host"), username: f.get("username"), password: f.get("password"), verify_tls: f.get("verify_tls") === "on" });
+    Object.assign(body, { host: f.get("host"), username: f.get("username"), password: f.get("password"), verify_tls: f.get("verify_tls") === "on", transport: f.get("transport") });
     if (f.get("vpath")) body.path = f.get("vpath");
   } else body.path = f.get("path");
   await post("/migrate/sources", body);

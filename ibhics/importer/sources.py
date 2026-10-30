@@ -59,6 +59,10 @@ class Source:
     # ova/disk: the folder on the compute nodes.
     path: str | None = None
     verify_tls: bool = False  # most ESXi hosts have self-signed certificates
+    # vmware: how virt-v2v reads the disks. "ssh" copies them over SSH from the ESXi
+    # host (SSH must be on there); "https" uses ESXi's /folder service, which many ESXi
+    # versions refuse because it does not serve byte ranges.
+    transport: str = "ssh"
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
@@ -70,6 +74,8 @@ class Source:
                 raise ValueError("a VMware source needs a username and password")
             if self.path and not VCENTER_PATH_RE.match(self.path):
                 raise ValueError("vCenter path looks like Datacenter/host/Cluster/esxi-host")
+            if self.transport not in ("ssh", "https"):
+                raise ValueError("transport must be ssh or https")
         elif not self.path or not self.path.startswith("/"):
             raise ValueError(f"an {self.type} source needs an absolute folder path")
 
@@ -107,6 +113,7 @@ class SourceVM:
     state: str = ""
     guest_os: str = ""
     notes: str = ""  # vmware: the VM's annotation
+    vmx: str = ""  # vmware: "[datastore] folder/name.vmx"
 
     def to_dict(self) -> dict:
         return {**asdict(self), "firmware": str(self.firmware)}
@@ -296,6 +303,7 @@ def add_vmware_details(
     if m:  # the .vmx is normally next to the first disk and named after its folder
         folder = m["path"].rsplit("/", 1)[0]
         vmx = f"[{m['ds']}] {folder}/{folder.rsplit('/', 1)[-1]}.vmx"
+        vm.vmx = vmx
         try:
             found = VMX_GUEST.search(fetch(source, datastore_url(source, vmx)))
         except (OSError, ValueError):

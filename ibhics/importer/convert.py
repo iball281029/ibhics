@@ -9,11 +9,13 @@ on the node (/usr/share/virtio-win).
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from ..hypervisor.base import Firmware
 from .sources import Source, SourceType, SourceVM
@@ -30,6 +32,17 @@ class ConversionFailed(RuntimeError):
 
 
 LOG_DIR = Path("/var/log/ibhics/imports")
+SSH_KEY = Path.home() / ".ssh" / "id_ed25519"  # virt-v2v and nbdkit use root's default key
+DATASTORE_PATH = re.compile(r"^\[(?P<ds>[^\]]+)\]\s*(?P<path>.+)$")
+NO_RANGES = (
+    "This ESXi host does not serve disks in the way the HTTPS transfer needs (no byte "
+    "ranges). Remove the source and add it again with Transfer: SSH, after turning on SSH "
+    "on the ESXi host."
+)
+SSH_OFF = (
+    "Cannot reach SSH on {host}. Turn on SSH on the ESXi host (Host > Actions > Services > "
+    "Enable Secure Shell), or add the source with Transfer: HTTPS."
+)
 
 
 def v2v_error(output: str, returncode: int) -> str:
@@ -48,17 +61,97 @@ def v2v_error(output: str, returncode: int) -> str:
     return useful[-1] if useful else f"virt-v2v exited {returncode}"
 
 
+def vmx_ssh_url(source: Source, vm: SourceVM) -> str:
+    m = DATASTORE_PATH.match(vm.vmx)
+    if not m:
+        raise ConversionFailed(f"the location of {vm.name}'s .vmx file is not known")
+    return f"ssh://root@{source.host}/vmfs/volumes/{quote(m['ds'])}/{quote(m['path'])}"
+
+
+class EsxiSSH:
+    """Lets this node's root key into the ESXi host, using the source's password once, so
+    virt-v2v can copy the disks over SSH without asking."""
+
+    def __init__(self, run=subprocess.run, key: Path = SSH_KEY) -> None:
+        self.run = run
+        self.key = key
+
+    def ensure_access(self, source: Source) -> None:
+        if source.path:
+            raise ConversionFailed(
+                "SSH transfer needs the ESXi host itself as the source, not a vCenter"
+            )
+        if not self.key.exists():
+            self.key.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._check(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.key)])
+        if self._ssh(source, ["-o", "BatchMode=yes"], "true").returncode == 0:
+            return  # the key is already authorised
+        public = self.key.with_suffix(".pub").read_text().strip()
+        add = (
+            f"grep -qxF '{public}' /etc/ssh/keys-root/authorized_keys 2>/dev/null || "
+            f"echo '{public}' >> /etc/ssh/keys-root/authorized_keys"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            # ssh reads the password only from a terminal or SSH_ASKPASS.
+            secret = Path(tmp) / "password"
+            secret.write_text(source.password or "")
+            askpass = Path(tmp) / "askpass"
+            askpass.write_text(f"#!/bin/sh\ncat '{secret}'\n")
+            askpass.chmod(0o700)
+            env = {**os.environ, "SSH_ASKPASS": str(askpass), "SSH_ASKPASS_REQUIRE": "force"}
+            result = self._ssh(
+                source,
+                ["-o", "PubkeyAuthentication=no", "-o", "NumberOfPasswordPrompts=1"],
+                add,
+                env=env,
+            )
+        if result.returncode != 0:
+            err = (result.stderr or "").strip()
+            if "Connection refused" in err or "timed out" in err or "No route" in err:
+                raise ConversionFailed(SSH_OFF.format(host=source.host))
+            raise ConversionFailed(f"could not set up SSH access to {source.host}: {err}")
+        if self._ssh(source, ["-o", "BatchMode=yes"], "true").returncode != 0:
+            raise ConversionFailed(f"{source.host} still asks for a password over SSH")
+
+    def find_vmx(self, source: Source, url: str) -> str:
+        """The .vmx is usually named after its folder; when it is not (a renamed VM), use
+        the one .vmx file in that folder."""
+        prefix = f"ssh://root@{source.host}"
+        folder = unquote(url.removeprefix(prefix)).rsplit("/", 1)[0]
+        result = self._ssh(source, ["-o", "BatchMode=yes"], f"ls -1 '{folder}'/*.vmx")
+        found = (result.stdout or "").split("\n") if result.returncode == 0 else []
+        found = [f.strip() for f in found if f.strip().endswith(".vmx")]
+        if len(found) == 1:
+            return prefix + quote(found[0])
+        return url
+
+    def _ssh(self, source: Source, options: list[str], command: str, env=None):
+        cmd = ["ssh", "-i", str(self.key), "-o", "StrictHostKeyChecking=accept-new"]
+        cmd += ["-o", "ConnectTimeout=10", *options, f"root@{source.host}", command]
+        return self.run(cmd, capture_output=True, text=True, env=env)
+
+    def _check(self, cmd: list[str]) -> None:
+        result = self.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise ConversionFailed(f"{cmd[0]} failed: {(result.stderr or '').strip()}")
+
+
 class V2VConverter:
-    def __init__(self, run=subprocess.run, log_dir: Path = LOG_DIR) -> None:
+    def __init__(self, run=subprocess.run, log_dir: Path = LOG_DIR, ssh: EsxiSSH | None = None):
         self.run = run
         self.log_dir = log_dir
+        self.ssh = ssh or EsxiSSH(run)
 
     def convert(self, source: Source, vm: SourceVM, name: str, out_dir: Path) -> Converted:
         out_dir.mkdir(parents=True, exist_ok=True)
         output = ["-o", "local", "-os", str(out_dir), "-of", "raw", "-on", name]
         password_file = None
         try:
-            if source.type == SourceType.VMWARE:
+            if source.type == SourceType.VMWARE and source.transport == "ssh":
+                self.ssh.ensure_access(source)
+                url = self.ssh.find_vmx(source, vmx_ssh_url(source, vm))
+                cmd = ["virt-v2v", "-i", "vmx", "-it", "ssh", url]
+            elif source.type == SourceType.VMWARE:
                 fd, password_file = tempfile.mkstemp(prefix="v2v-", dir=out_dir)
                 with os.fdopen(fd, "w") as f:  # mkstemp makes it readable by us only
                     f.write(source.password or "")
@@ -78,7 +171,10 @@ class V2VConverter:
                 os.unlink(password_file)
         log = self._keep_log(name, result)
         if result.returncode != 0:
-            message = v2v_error(result.stderr or result.stdout or "", result.returncode)
+            output_text = result.stderr or result.stdout or ""
+            message = v2v_error(output_text, result.returncode)
+            if "does not support 'range'" in output_text:
+                message = NO_RANGES
             raise ConversionFailed(message + (f" (full log: {log})" if log else ""))
         return read_output(out_dir, name)
 

@@ -514,6 +514,12 @@
       <label data-for="vmware">Password <input name="password" type="password" autocomplete="new-password"></label>
       <label data-for="vmware">vCenter path (blank for ESXi) <input name="vpath" placeholder="DC1/host/Cluster1/esx1.local"></label>
       <label data-for="ova disk">Folder on the nodes <input name="path" placeholder="/mnt/exports"></label>
+      <label data-for="vmware" class="wide">Transfer
+        <select name="transport">
+          <option value="ssh">SSH: works with every ESXi version (turn on SSH on the ESXi host first)</option>
+          <option value="https">HTTPS: no SSH needed, but many ESXi versions refuse it</option>
+        </select>
+      </label>
       <label class="check" data-for="vmware"><input name="verify_tls" type="checkbox"> Verify the host's TLS certificate</label>
     </div>
     <p class="hint" style="padding:0 18px">Folders must be mounted at the same path on every node, e.g. an NFS or SMB share.</p>
