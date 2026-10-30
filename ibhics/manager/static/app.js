@@ -165,6 +165,9 @@ function openDialog(id, context = null, prefill = {}) {
   syncSwitch(form);
   dialogContext = context;
   dlg.showModal();
+  // Pickers need the current pools and VMs even when the page did not load them.
+  const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms"].filter(Boolean);
+  if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
 }
 
 $$("dialog").forEach((dlg) => {
@@ -198,8 +201,38 @@ function fillSelects() {
   });
   keep(".target-list", state.targets.map((t) => t.name));
   keep(".source-list", state.sources.map((s) => s.name));
-  $("#pool-names").innerHTML = [...new Set(state.pools.map((p) => p.name))].map((n) => `<option value="${esc(n)}">`).join("");
+  $$("form").forEach(fillPools);
+  $$(".vm-check-list").forEach((box) => {
+    box.innerHTML = state.vms.length
+      ? [...state.vms].sort((a, b) => a.name.localeCompare(b.name)).map((v) =>
+        `<label class="check"><input type="checkbox" name="vms" value="${esc(v.name)}"> ${esc(v.name)} <span class="muted">${esc(v.node || "")}</span></label>`).join("")
+      : `<p class="hint">No VMs yet.</p>`;
+  });
 }
+
+// Pool pickers list the pools of the chosen node (or every node's, for Automatic) with
+// their free space, so nobody has to type a pool name.
+function fillPools(form) {
+  const sel = $(".pool-list", form);
+  if (!sel) return;
+  const node = form.elements.node?.value || "";
+  const pools = state.pools.filter((p) => p.active && (!node || p.node === node));
+  const byName = new Map();
+  for (const p of pools) {
+    const seen = byName.get(p.name);
+    if (!seen || p.available_gb < seen.available_gb) byName.set(p.name, p); // the tightest node
+  }
+  const was = sel.value;
+  const opts = [...byName.values()].sort((a, b) => b.available_gb - a.available_gb).map((p) =>
+    `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb).toLocaleString()} GB free, ${esc(p.type)})</option>`);
+  if (sel.dataset.original) opts.unshift(`<option value="">${esc(sel.dataset.original)}</option>`);
+  sel.innerHTML = opts.join("") || `<option value="">No storage pool on this node</option>`;
+  if ([...sel.options].some((o) => o.value === was)) sel.value = was;
+  else if (!sel.dataset.original && byName.has("default")) sel.value = "default";
+}
+$$("form").forEach((form) => {
+  if ($(".pool-list", form) && form.elements.node) form.elements.node.addEventListener("change", () => fillPools(form));
+});
 
 // ---------- data ----------
 
@@ -789,7 +822,7 @@ handlers["policy-dialog"] = async (f) => {
   const body = {
     name: f.get("name"),
     target: f.get("target"),
-    vms: f.get("vms").split(",").map((v) => v.trim()).filter(Boolean),
+    vms: f.getAll("vms"),
     keep_last: Number(f.get("keep_last")),
   };
   if (f.get("mode") === "at") body.at = f.get("at"); else body.every_hours = Number(f.get("every_hours"));

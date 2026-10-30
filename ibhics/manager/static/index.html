@@ -355,10 +355,10 @@
       <label>vCPU <input name="vcpus" type="number" min="1" value="2"></label>
       <label>Memory (MB) <input name="memory_mb" type="number" min="128" step="128" value="2048"></label>
       <label>Disk (GB) <input name="disk_gb" type="number" min="1" value="40"></label>
-      <label>Storage pool <input name="pool" value="default" list="pool-names"></label>
+      <label>Storage pool <select name="pool" class="pool-list" required></select></label>
       <label>Firmware <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select></label>
       <label>Operating system <input name="os_type" maxlength="64" list="os-names" placeholder="Ubuntu 24.04 LTS"></label>
-      <label>Network <input name="network" value="default"></label>
+      <label>Network <select name="network"><option value="default">default (bridge br0, management LAN)</option></select></label>
       <label>ISO (optional) <input name="iso" placeholder="/var/lib/ibhics/iso/debian.iso"></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create</button></footer>
@@ -369,7 +369,6 @@
   <option value="Ubuntu 24.04 LTS"><option value="Ubuntu 22.04 LTS"><option value="Debian 13"><option value="Red Hat Enterprise Linux 9">
   <option value="Rocky Linux 9"><option value="AlmaLinux 9"><option value="Oracle Linux 9"><option value="SUSE Linux Enterprise 15">
 </datalist>
-<datalist id="pool-names"></datalist>
 
 <dialog id="pool-dialog">
   <form method="dialog" id="pool-form">
@@ -448,7 +447,7 @@
       <label>Repeat <select name="mode" data-switch><option value="at">Daily at</option><option value="every">Every N hours</option></select></label>
       <label data-for="at">Time <input name="at" type="time" value="02:00"></label>
       <label data-for="every">Hours <input name="every_hours" type="number" min="1" max="168" value="6"></label>
-      <label>VMs (comma separated, blank = all) <input name="vms" placeholder="web-01, db-01"></label>
+      <fieldset class="vm-checks"><legend>VMs (none ticked = all VMs, including new ones)</legend><div class="vm-check-list"></div></fieldset>
       <label>Keep last <input name="keep_last" type="number" min="1" value="7"></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create schedule</button></footer>
@@ -461,7 +460,7 @@
     <div class="body form-grid">
       <label>New VM name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
       <label>Node <select name="node" class="node-list-auto"></select></label>
-      <label>Storage pool (blank = original) <input name="pool" list="pool-names"></label>
+      <label>Storage pool <select name="pool" class="pool-list" data-original="Same as the original VM"></select></label>
     </div>
     <p class="hint" style="padding:0 18px">Restoring under the original name works only if that VM no longer exists.</p>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Restore</button></footer>
@@ -527,8 +526,8 @@
     <div class="body form-grid">
       <label>Name in ibHiCS <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
       <label>Node <select name="node" class="node-list-auto"></select></label>
-      <label>Storage pool <input name="pool" value="default" list="pool-names"></label>
-      <label>Network <input name="network" value="default"></label>
+      <label>Storage pool <select name="pool" class="pool-list" required></select></label>
+      <label>Network <select name="network"><option value="default">default (bridge br0, management LAN)</option></select></label>
       <label>vCPU <input name="vcpus" type="number" min="1"></label>
       <label>Memory (MB) <input name="memory_mb" type="number" min="128" step="128"></label>
       <label class="check"><input name="start" type="checkbox"> Power on when done</label>
