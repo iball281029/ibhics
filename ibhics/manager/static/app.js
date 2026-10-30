@@ -88,6 +88,8 @@ document.addEventListener("click", (e) => {
   }
   const menu = e.target.closest("#user-menu");
   $("#user-dropdown").classList.toggle("open", Boolean(menu) && !e.target.closest(".dropdown"));
+  const tasks = e.target.closest("#tasks-menu");
+  if (!tasks || !e.target.closest(".dropdown")) $("#tasks-panel").classList.toggle("open", Boolean(tasks) && !$("#tasks-panel").classList.contains("open"));
   $$("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.removeAttribute("open"); });
   const link = e.target.closest("[data-tab-link]");
   if (link) setTimeout(() => selectTab("system-tabs", link.dataset.tabLink), 0);
@@ -260,8 +262,75 @@ const loaders = {
 };
 const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
 
+// ---------- tasks ----------
+
+// Everything long-running the system does, newest first: imports, backups and restores,
+// VM moves. Running ones show their current step and how far along they are.
+function allTasks() {
+  const tasks = [
+    ...state.imports.map((j) => ({
+      kind: "Import", title: j.name, sub: `from ${j.source} to ${j.node}`, state: j.state,
+      step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id,
+    })),
+    ...state.jobs.map((j) => ({
+      kind: j.kind === "restore" ? "Restore" : "Backup", title: j.vm, sub: `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
+      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error,
+    })),
+    ...state.moves.map((m) => ({
+      kind: m.live ? "Live migration" : "Move", title: m.vm, sub: `${m.source} → ${m.target || "auto"}`,
+      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error,
+    })),
+  ];
+  return tasks.sort((a, b) => String(b.created).localeCompare(String(a.created)));
+}
+const isActive = (t) => t.state === "running" || t.state === "queued";
+function renderTasks() {
+  const tasks = allTasks();
+  const active = tasks.filter(isActive);
+  $("#tasks-count").innerHTML = active.length
+    ? `<span class="spinner"></span> ${active.length} running`
+    : `<span class="dot ok"></span> None running`;
+  const row = (t) => `<div class="task ${esc(t.state)}">
+    <div class="task-head"><span class="badge plain">${esc(t.kind)}</span><b>${esc(t.title)}</b><span class="vm-sub">${esc(t.sub)}</span>
+      <span class="spacer"></span><span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span></div>
+    ${isActive(t) ? `<div class="task-step">${esc(t.step || (t.state === "queued" ? "Waiting for a free slot" : "Working"))}${t.percent != null ? ` · ${t.percent}%` : ""}</div>
+      <div class="bar${t.percent == null ? " busy" : ""}"><i style="width:${t.percent ?? 30}%"></i></div>` : ""}
+    ${t.error ? `<div class="task-error">${esc(t.error)}</div>` : ""}
+    <div class="task-foot"><span>${esc(when(t.created))}</span>${t.log ? `<button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Log</button>` : ""}</div>
+  </div>`;
+  $("#tasks-panel").innerHTML = tasks.length
+    ? `<div class="tasks-title">Tasks</div>${tasks.slice(0, 15).map(row).join("")}`
+    : `<p class="hint" style="padding:10px">Nothing has run yet.</p>`;
+}
+let logTimer = null;
+async function showLog(id, title) {
+  $("#log-title").textContent = `Import log: ${title}`;
+  const dlg = $("#log-dialog");
+  const pull = async () => {
+    const { log } = await api(`/migrate/jobs/${enc(id)}/log`).catch((err) => ({ log: err.message }));
+    const pre = $("#log-text");
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    pre.textContent = log || "No output yet.";
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
+  };
+  await pull();
+  dlg.showModal();
+  clearInterval(logTimer);
+  logTimer = setInterval(() => (dlg.open ? pull() : clearInterval(logTimer)), 3000);
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-task-log]");
+  if (b) showLog(b.dataset.taskLog, b.dataset.taskTitle);
+});
+// While something runs, keep the tasks fresh every few seconds, whatever page is open.
+setInterval(async () => {
+  if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
+  try { await load("imports", "jobs", "moves"); renderTasks(); } catch { /* next tick */ }
+}, 3000);
+
 async function refresh(page, auto = false) {
   await loadCluster();
+  await load("imports", "jobs", "moves").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
@@ -967,7 +1036,8 @@ function renderImports() {
     <td class="vm-sub" style="display:table-cell" title="${esc(j.vm)}">${esc(j.vm.split("/").pop())}</td><td>${esc(j.source)}</td>
     <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}</td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${esc(j.error || "")}</td></tr>`).join("") : empty(7, "No imports yet");
+    <td class="vm-sub" style="display:table-cell">${esc(j.error || (j.state === "running" ? `${j.step || "Working"}${j.percent != null ? ` · ${j.percent}%` : ""}` : ""))}
+      <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button></td></tr>`).join("") : empty(7, "No imports yet");
 }
 
 $("#page-migrate").addEventListener("click", async (e) => {

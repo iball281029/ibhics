@@ -66,6 +66,10 @@
   <header class="appbar">
     <div class="product"><span class="mark"><svg><use href="#logo"/></svg></span><span><b>ibHiCS</b> <span class="full">Hyper-Converged</span></span></div>
     <span class="spacer"></span>
+    <div class="menu-btn meta" id="tasks-menu" tabindex="0">
+      <small>Tasks</small><span id="tasks-count"><span class="dot"></span> None running</span>
+      <div class="dropdown tasks-panel" id="tasks-panel"></div>
+    </div>
     <div class="meta wide"><small>Cluster</small><span id="topology">…</span></div>
     <div class="meta wide"><small>Quorum</small><span id="quorum"><span class="dot"></span> …</span></div>
     <div class="menu-btn meta" id="user-menu" tabindex="0">
@@ -527,6 +531,14 @@
     </div>
     <p class="hint" style="padding:0 18px">Folders must be mounted at the same path on every node, e.g. an NFS or SMB share.</p>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
+  </form>
+</dialog>
+
+<dialog id="log-dialog">
+  <form method="dialog">
+    <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate>×</button></header>
+    <pre class="log" id="log-text"></pre>
+    <footer><button value="cancel" formnovalidate>Close</button></footer>
   </form>
 </dialog>
 
