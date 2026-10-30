@@ -149,6 +149,9 @@ sys.exit(1)
 PY
 }
 
+[ -s /usr/share/ibhics/guest-tools.iso ] \
+    || echo "   (warning: this ISO has no guest tools CD, so Insert guest tools CD will not work)"
+
 say "Checking that ibHiCS $NEW answers"
 tries=0
 until healthy; do
