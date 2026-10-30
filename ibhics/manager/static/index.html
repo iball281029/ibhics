@@ -43,7 +43,8 @@
 <body>
 <header>
   <h1>ibHiCS Console</h1>
-  <div class="host" id="host">กำลังโหลด…</div>
+  <div class="actions"><span class="host" id="host">กำลังโหลด…</span>
+    <button id="logout" title="Sign out">Sign out</button></div>
 </header>
 <main>
   <section>
@@ -188,8 +189,16 @@
   </section>
 </main>
 <script>
+document.getElementById("logout").addEventListener("click", async () => {
+  await fetch("/api/v1/auth/logout", { method: "POST" });
+  location.href = "/login.html";
+});
 const api = (path, opts = {}) =>
   fetch(`/api/v1${path}`, { headers: { "Content-Type": "application/json" }, ...opts }).then(async (r) => {
+    if (r.status === 401 || r.status === 403 && /initial password/.test(await r.clone().text())) {
+      location.href = `/login.html?next=${encodeURIComponent(location.pathname + location.hash)}`;
+      return new Promise(() => {});
+    }
     if (!r.ok) {
       const body = await r.json().catch(() => ({}));
       const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join(", ") : body.detail;

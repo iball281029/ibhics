@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · ibHiCS</title>
+<style>
+  :root { --bg: #eef3f8; --panel: #fff; --text: #172033; --muted: #5d6b82; --line: #d8e0ea; --brand: #0891b2; --bad: #cf222e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b1220; --panel: #121a2b; --text: #e6ebf3; --muted: #93a1b8; --line: #243049; --brand: #22d3ee; --bad: #f85149; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; display: grid; place-items: center; padding: 16px; font: 14px/1.5 system-ui, sans-serif; color: var(--text);
+         background: radial-gradient(1200px 600px at 10% -10%, rgba(34,211,238,.18), transparent), radial-gradient(900px 500px at 110% 110%, rgba(99,102,241,.18), transparent), var(--bg); }
+  .card { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; box-shadow: 0 20px 50px rgba(15,23,42,.12); }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .brand svg { width: 44px; height: 44px; }
+  .brand b { font-size: 22px; letter-spacing: .2px; }
+  .brand b span { background: linear-gradient(90deg, #06b6d4, #6366f1); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  p.sub { margin: 0 0 22px; color: var(--muted); }
+  h2 { margin: 0 0 4px; font-size: 16px; }
+  label { display: grid; gap: 6px; margin-bottom: 14px; color: var(--muted); font-size: 12px; font-weight: 600; }
+  input { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); font: inherit; }
+  input:focus { outline: 2px solid var(--brand); outline-offset: -1px; }
+  button { width: 100%; padding: 10px; border: 0; border-radius: 8px; background: linear-gradient(90deg, #06b6d4, #6366f1); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  #error { min-height: 20px; margin: 0 0 10px; color: var(--bad); font-size: 13px; }
+  .hint { color: var(--muted); font-size: 12px; margin: -6px 0 14px; }
+  [hidden] { display: none !important; }
+  footer { margin-top: 18px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <linearGradient id="t" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
+        <linearGradient id="l" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
+        <linearGradient id="r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#4338ca"/></linearGradient>
+      </defs>
+      <path d="M32 4 56 18 32 32 8 18Z" fill="url(#t)"/><path d="M8 18 32 32V60L8 46Z" fill="url(#l)"/><path d="M56 18 32 32V60L56 46Z" fill="url(#r)"/>
+      <path d="M32 12.5 41.5 18 32 23.5 22.5 18Z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>
+      <path d="M13 30.5 27 38.6M13 37.5 27 45.6" stroke="#fff" stroke-opacity=".85" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="44" cy="39" r="3" fill="#fff" fill-opacity=".85"/>
+    </svg>
+    <b>ib<span>HiCS</span></b>
+  </div>
+  <p class="sub">Hyper-Converged Infrastructure</p>
+
+  <form id="login">
+    <label>Username <input name="username" autocomplete="username" required autofocus></label>
+    <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <p id="error" role="alert"></p>
+    <button>Sign in</button>
+  </form>
+
+  <form id="change" hidden>
+    <h2>Set a new password</h2>
+    <p class="hint">This is your first sign-in. Replace the password you were given.</p>
+    <label>New password <input name="new" type="password" autocomplete="new-password" minlength="8" required></label>
+    <label>Confirm new password <input name="confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+    <p class="hint">At least 8 characters, different from your username.</p>
+    <p id="error2" role="alert" style="min-height:20px;color:var(--bad);font-size:13px"></p>
+    <button>Save and continue</button>
+  </form>
+
+  <footer>Open source under the GNU AGPLv3</footer>
+</main>
+<script>
+const next = () => {
+  const target = new URLSearchParams(location.search).get("next") || "/";
+  location.href = target.startsWith("/") && !target.startsWith("//") ? target : "/";  // stay on this site
+};
+const post = async (path, body) => {
+  const r = await fetch(`/api/v1${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = r.status === 204 ? null : await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join(", ") : data.detail || r.statusText);
+  return data;
+};
+let current = "";
+
+document.getElementById("login").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target), button = e.submitter;
+  button.disabled = true;
+  try {
+    const res = await post("/auth/login", { username: f.get("username"), password: f.get("password") });
+    if (res.user.must_change_password) {
+      current = f.get("password");
+      e.target.hidden = true;
+      document.getElementById("change").hidden = false;
+      document.querySelector("#change input").focus();
+    } else next();
+  } catch (err) {
+    document.getElementById("error").textContent = err.message;
+  } finally { button.disabled = false; }
+});
+
+document.getElementById("change").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target), out = document.getElementById("error2");
+  if (f.get("new") !== f.get("confirm")) { out.textContent = "The two passwords do not match."; return; }
+  try {
+    await post("/auth/password", { current_password: current, new_password: f.get("new") });
+    next();
+  } catch (err) { out.textContent = err.message; }
+});
+</script>
+</body>
+</html>

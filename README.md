@@ -24,10 +24,12 @@ ibHiCS รวม compute, storage และ network ไว้ในระบบ�
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
-python -m ibhics.manager --driver fake --state-file ./.ibhics/cluster.json
+IBHICS_ADMIN_PASSWORD=change-me-now python -m ibhics.manager --driver fake \
+  --state-file ./.ibhics/cluster.json --backup-state-file ./.ibhics/backup.json \
+  --users-file ./.ibhics/users.json --audit-log ./.ibhics/audit.log
 ```
 
-เปิด http://127.0.0.1:8006 เพื่อใช้ Web Console หรือ http://127.0.0.1:8006/docs เพื่อดู API
+เปิด http://127.0.0.1:8006 แล้ว sign in ด้วย `admin` / `change-me-now` (ระบบจะให้เปลี่ยนรหัสก่อน) เพื่อใช้ Web Console หรือ http://127.0.0.1:8006/docs เพื่อดู API
 
 ## ใช้งานกับ KVM จริง
 
@@ -126,6 +128,31 @@ curl -X POST http://node1:8006/api/v1/backup/policies -H 'content-type: applicat
 
 VNC ของทุก VM ฟังเฉพาะ `127.0.0.1` ของ node ตัวเอง เบราว์เซอร์คุยกับ manager ผ่าน WebSocket `/api/v1/vms/{uuid}/console` แล้ว manager ส่งต่อไปยัง VNC บน node ของตัวเอง หรือผ่าน agent ของ node ที่ VM อยู่ (ยืนยันด้วย cluster token) จึงไม่ต้องเปิดพอร์ต VNC ออกนอกเครื่อง โหมดพัฒนา (`--driver fake`) มี VNC จำลองแสดงภาพทดสอบ
 
+## ผู้ใช้และสิทธิ์
+
+ทุกหน้าของ web console และทุก API (ยกเว้น `/api/v1/health`) ต้อง sign in ก่อน
+
+- **ครั้งแรก**: manager สร้างผู้ใช้ `admin` ให้ รหัสผ่านเริ่มต้นตั้งได้ด้วย `IBHICS_ADMIN_PASSWORD` ถ้าไม่ตั้ง ระบบจะสุ่มรหัสให้และเขียนไว้ที่ `/var/lib/ibhics/initial-admin-password` (อ่านได้เฉพาะ root ไม่แสดงใน log) sign in ครั้งแรกต้องเปลี่ยนรหัสก่อนใช้งานอย่างอื่น
+- **สิทธิ์**:
+
+| Role | ทำอะไรได้ |
+| --- | --- |
+| `viewer` | ดูได้ทุกอย่าง แก้ไขไม่ได้ |
+| `operator` | จัดการ VM: สร้าง ลบ เปิด/ปิด console backup restore และ migrate |
+| `admin` | ทำได้ทุกอย่าง รวมถึง node, storage, ปลายทาง/ตารางเวลา backup, evacuate, ผู้ใช้ และ audit log |
+
+- **Session**: browser ได้ cookie แบบ HttpOnly + SameSite=Strict หมดอายุเมื่อไม่ใช้งาน 30 นาที หรือครบ 12 ชั่วโมง ส่วน script ใช้ token ที่ได้จาก login ส่งเป็น `Authorization: Bearer <token>` ถ้า restart manager ทุกคนต้อง sign in ใหม่
+- **ป้องกันการเดารหัส**: ใส่รหัสผิด 5 ครั้งภายใน 5 นาที บัญชีนั้นถูกล็อก 5 นาที รหัสผ่านเก็บแบบ scrypt hash ใน `/var/lib/ibhics/users.json` (สิทธิ์ 600)
+- **Audit log**: ทุกการ sign in และทุกการแก้ไข (ใคร ทำอะไร ผลเป็นอย่างไร มาจาก IP ไหน) บันทึกไว้ที่ `/var/log/ibhics/audit.log` และดูได้ที่ `GET /api/v1/audit`
+- เมื่อใช้งานจริง ควรเปิด manager หลัง HTTPS (reverse proxy) เพื่อให้ cookie ส่งแบบ Secure
+
+```bash
+# script: sign in แล้วใช้ token
+TOKEN=$(curl -s localhost:8006/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"..."}' | jq -r .token)
+curl -H "Authorization: Bearer $TOKEN" localhost:8006/api/v1/vms
+```
+
 ## Live migration
 
 ย้าย VM ไปอีก node โดย VM ยังทำงานต่อ (ผู้ใช้แทบไม่รู้สึก) ใช้ live migration ของ libvirt แบบ peer-to-peer: libvirtd ของ node ต้นทางคุยกับ node ปลายทางโดยตรง เมื่อย้ายเสร็จ VM จะถูก define ที่ปลายทางและลบออกจากต้นทาง จึงไม่มีช่วงที่ VM อยู่สองที่
@@ -163,7 +190,14 @@ curl -X POST localhost:8006/api/v1/nodes/node2/evacuate
 
 | Method | Path | ทำอะไร |
 | --- | --- | --- |
-| GET | `/api/v1/health` | ตรวจสถานะ |
+| GET | `/api/v1/health` | ตรวจสถานะ (ไม่ต้อง sign in) |
+| POST | `/api/v1/auth/login` | sign in (`username`, `password`) ได้ cookie และ token |
+| POST | `/api/v1/auth/logout` | sign out |
+| GET | `/api/v1/auth/me` | ผู้ใช้ปัจจุบัน |
+| POST | `/api/v1/auth/password` | เปลี่ยนรหัสผ่านตัวเอง |
+| GET/POST | `/api/v1/users` | ผู้ใช้ (admin) |
+| PATCH/DELETE | `/api/v1/users/{name}` | เปลี่ยน role, ปิดบัญชี, ตั้งรหัสใหม่, ลบ (admin) |
+| GET | `/api/v1/audit` | audit log (admin) |
 | GET | `/api/v1/cluster` | รูปแบบ cluster, quorum, สมาชิก |
 | POST | `/api/v1/cluster/nodes` | เพิ่ม node (compute หรือ witness) |
 | DELETE | `/api/v1/cluster/nodes/{name}` | นำ node ออก |

@@ -31,7 +31,12 @@ def install_driver_errors(app: FastAPI) -> None:
 
 def install_cluster_errors(app: FastAPI) -> None:
     from ..cluster import MembershipError, NodeUnavailable, NoQuorum
+    from .auth import AuthError, Forbidden, UserNotFound
     from .backups import PolicyNotFound, TargetNotFound
+
+    app.add_exception_handler(AuthError, _handler(401))
+    app.add_exception_handler(Forbidden, _handler(403))
+    app.add_exception_handler(UserNotFound, _handler(404, "user not found: "))
 
     app.add_exception_handler(TargetNotFound, _handler(404, "backup target not found: "))
     app.add_exception_handler(PolicyNotFound, _handler(404, "backup policy not found: "))
