@@ -92,3 +92,15 @@ def test_round_trip_through_libvirt_xml():
 def test_invalid_name_rejected():
     with pytest.raises(ValueError):
         build_domain_xml(spec(name="no spaces"))
+
+
+def test_hand_written_bridge_nic_is_counted():
+    from ibhics.hypervisor import libvirt_driver as lv
+
+    xml = (
+        "<domain><name>z</name><memory unit='KiB'>1048576</memory><vcpu>1</vcpu><devices>"
+        "<interface type='bridge'><source bridge='br0'/><mac address='00:50:56:01:02:03'/>"
+        "</interface></devices></domain>"
+    )
+    (nic,) = lv._spec_from_xml(xml).nics
+    assert (nic.network, nic.mac) == ("br0", "00:50:56:01:02:03")

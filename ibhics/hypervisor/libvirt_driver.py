@@ -519,10 +519,16 @@ class LibvirtDriver(HypervisorDriver):
         ):
             try:
                 _type, capacity, allocation = self._volume(el).info()
-                disk.size_gb = -(-capacity // GIB)
-                disk.used_gb = round(allocation / GIB, 1)
             except (InvalidState, PoolNotFound, libvirt.libvirtError):
-                pass
+                # Not in a pool we know (a hand-written disk): ask QEMU/libvirt directly.
+                source = el.find("source")
+                path = source.get("dev") or source.get("file") if source is not None else None
+                try:
+                    capacity, allocation, _physical = dom.blockInfo(path)
+                except (TypeError, libvirt.libvirtError):
+                    continue
+            disk.size_gb = -(-capacity // GIB)
+            disk.used_gb = round(allocation / GIB, 1)
         return VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
 
 
@@ -613,11 +619,15 @@ def _spec_from_xml(xml: str) -> VMSpec:
         )
     nics = [
         NicSpec(
-            network=iface.find("source").get("network", ""),
-            model=iface.find("model").get("type", "virtio"),
+            # A hand-made <interface type='bridge'> reports its bridge, e.g. br0.
+            network=iface.find("source").get("network") or iface.find("source").get("bridge", ""),
+            model=iface.find("model").get("type", "virtio")
+            if iface.find("model") is not None
+            else "",
             mac=iface.find("mac").get("address") if iface.find("mac") is not None else None,
         )
-        for iface in root.findall("./devices/interface[@type='network']")
+        for iface in root.findall("./devices/interface")
+        if iface.get("type") in ("network", "bridge") and iface.find("source") is not None
     ]
     cdrom = root.find("./devices/disk[@device='cdrom']/source")
     os_el = root.find("os")
