@@ -29,9 +29,29 @@ class ConversionFailed(RuntimeError):
     pass
 
 
+LOG_DIR = Path("/var/log/ibhics/imports")
+
+
+def v2v_error(output: str, returncode: int) -> str:
+    """The 'virt-v2v: error: ...' paragraph. The last line of output is only virt-v2v's
+    advice to rerun with -v -x, which says nothing about what went wrong."""
+    lines = output.strip().splitlines()
+    for i, line in enumerate(lines):
+        if "virt-v2v: error:" in line:
+            message = [line.split("virt-v2v: error:", 1)[1].strip()]
+            for more in lines[i + 1 :]:
+                if not more.strip() or "virt-v2v -v -x" in more or more.startswith("If reporting"):
+                    break
+                message.append(more.strip())
+            return " ".join(message)
+    useful = [ln for ln in lines if ln.strip() and "virt-v2v -v -x" not in ln]
+    return useful[-1] if useful else f"virt-v2v exited {returncode}"
+
+
 class V2VConverter:
-    def __init__(self, run=subprocess.run) -> None:
+    def __init__(self, run=subprocess.run, log_dir: Path = LOG_DIR) -> None:
         self.run = run
+        self.log_dir = log_dir
 
     def convert(self, source: Source, vm: SourceVM, name: str, out_dir: Path) -> Converted:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -56,10 +76,20 @@ class V2VConverter:
         finally:
             if password_file:
                 os.unlink(password_file)
+        log = self._keep_log(name, result)
         if result.returncode != 0:
-            lines = (result.stderr or result.stdout or "").strip().splitlines()
-            raise ConversionFailed(lines[-1] if lines else f"virt-v2v exited {result.returncode}")
+            message = v2v_error(result.stderr or result.stdout or "", result.returncode)
+            raise ConversionFailed(message + (f" (full log: {log})" if log else ""))
         return read_output(out_dir, name)
+
+    def _keep_log(self, name: str, result) -> Path | None:
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            log = self.log_dir / f"{name}.log"
+            log.write_text((result.stdout or "") + (result.stderr or ""))
+            return log
+        except OSError:
+            return None
 
 
 def read_output(out_dir: Path, name: str) -> Converted:

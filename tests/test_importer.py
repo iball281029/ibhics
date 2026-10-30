@@ -219,7 +219,7 @@ class FakeV2V:
 def test_v2v_from_vmware(tmp_path):
     run = FakeV2V(efi=True)
     vm = parse_vmware_xml(ESX_XML)
-    out = V2VConverter(run).convert(VMWARE, vm, "db", tmp_path)
+    out = V2VConverter(run, log_dir=tmp_path).convert(VMWARE, vm, "db", tmp_path)
     cmd = run.cmds[0]
     assert cmd[:3] == ["virt-v2v", "-ic", "esx://root@10.0.0.50/?no_verify=1"]
     assert cmd[-9:] == [
@@ -242,18 +242,20 @@ def test_v2v_from_vmware(tmp_path):
 def test_v2v_inputs_and_failure(tmp_path):
     run = FakeV2V()
     ova = SourceVM(ref="/mnt/exports/web.ova", name="web")
-    V2VConverter(run).convert(
+    V2VConverter(run, log_dir=tmp_path).convert(
         Source("o", SourceType.OVA, path="/mnt/exports"), ova, "web", tmp_path
     )
     assert run.cmds[0][:4] == ["virt-v2v", "-i", "ova", "/mnt/exports/web.ova"]
     disk = SourceVM(ref="/mnt/hv/dc01.vhdx", name="dc01")
-    V2VConverter(run).convert(Source("d", SourceType.DISK, path="/mnt/hv"), disk, "dc01", tmp_path)
+    V2VConverter(run, log_dir=tmp_path).convert(
+        Source("d", SourceType.DISK, path="/mnt/hv"), disk, "dc01", tmp_path
+    )
     assert run.cmds[1][:4] == ["virt-v2v", "-i", "disk", "/mnt/hv/dc01.vhdx"]
 
     with pytest.raises(ConversionFailed, match="inspection could not detect the source guest"):
-        V2VConverter(FakeV2V(fail="inspection could not detect the source guest")).convert(
-            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "f"
-        )
+        V2VConverter(
+            FakeV2V(fail="inspection could not detect the source guest"), log_dir=tmp_path
+        ).convert(VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "f")
 
 
 def test_node_import_creates_vm_after_conversion(tmp_path):
@@ -381,3 +383,24 @@ def test_unreachable_vmware_host_fails_fast():
     with pytest.raises(SourceUnavailable, match=f"cannot reach 127.0.0.1 on port {port}"):
         check_reachable("127.0.0.1", port, timeout=2)
     assert time.monotonic() - start < 3
+
+
+def test_v2v_error_is_the_real_reason():
+    from ibhics.importer.convert import v2v_error
+
+    out = """[   0.0] Setting up the source
+virt-v2v: error: internal error: invalid argument: libvirt domain 'Zabbix' is
+running or paused.  It must be shut down in order to perform virt-v2v
+conversion
+
+If reporting bugs, run virt-v2v with debugging enabled and include the
+complete output:
+
+  virt-v2v -v -x [...]
+"""
+    assert v2v_error(out, 1) == (
+        "internal error: invalid argument: libvirt domain 'Zabbix' is running or paused."
+        "  It must be shut down in order to perform virt-v2v conversion"
+    )
+    assert v2v_error("something broke\n  virt-v2v -v -x [...]\n", 1) == "something broke"
+    assert v2v_error("", 3) == "virt-v2v exited 3"
