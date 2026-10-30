@@ -336,6 +336,85 @@ def test_v2v_over_ssh_sets_up_the_key_first(tmp_path):
         closed.ensure_access(source)
 
 
+VMX = """
+scsi0:0.present = "TRUE"
+scsi0:0.fileName = "Zabbix.vmdk"
+scsi0:1.present = "TRUE"
+scsi0:1.fileName = "/vmfs/volumes/ds2/Zabbix/Zabbix_1.vmdk"
+scsi0:2.present = "FALSE"
+scsi0:2.fileName = "old.vmdk"
+sata0:0.deviceType = "cdrom-image"
+sata0:0.fileName = "/vmfs/volumes/iso/alma.iso"
+sata0:1.fileName = "boot.vmdk"
+"""
+
+
+def test_vmx_disks_and_flat_files():
+    from ibhics.importer.convert import vmdk_flat_file, vmx_disk_files
+
+    assert vmx_disk_files(VMX) == [
+        "Zabbix.vmdk",
+        "/vmfs/volumes/ds2/Zabbix/Zabbix_1.vmdk",
+        "boot.vmdk",
+    ]
+    desc = 'createType="vmfs"\nRW 629145600 VMFS "Zabbix-flat.vmdk"\n'
+    assert vmdk_flat_file(desc, "Zabbix.vmdk") == "Zabbix-flat.vmdk"
+    snap = 'parentFileNameHint="Zabbix.vmdk"\nRW 629145600 SESPARSE "Zabbix-000001-sesparse.vmdk"\n'
+    with pytest.raises(ConversionFailed, match="snapshots"):
+        vmdk_flat_file(snap, "Zabbix-000001.vmdk")
+
+
+def test_clear_hibernation_copies_the_disks_and_fixes_ntfs(tmp_path):
+    from ibhics.importer.convert import EsxiSSH
+
+    ssh = FakeSSH()
+    ssh.authorised = True
+    answers = {
+        "zbx 7.vmx": 'scsi0:0.present = "TRUE"\nscsi0:0.fileName = "Zabbix.vmdk"\n',
+        "Zabbix.vmdk": 'RW 629145600 VMFS "Zabbix-flat.vmdk"\n',
+    }
+
+    def esxi(cmd, **kw):
+        if cmd[-1].startswith("cat "):
+            key = next(k for k in answers if cmd[-1].rstrip("'").endswith(k))
+            return subprocess.CompletedProcess(cmd, 0, answers[key], "")
+        return ssh(cmd, **kw)
+
+    v2v, calls = FakeV2V(), []
+
+    def run(cmd, **kw):
+        if cmd[0] == "virt-v2v":
+            return v2v(cmd, **kw)
+        calls.append(cmd)
+        out = {
+            "losetup": "/dev/loop3\n" if "--find" in cmd else "",
+            "lsblk": "/dev/loop3\n/dev/loop3p1\n/dev/loop3p2\n",
+            "blkid": "ntfs\n" if cmd[-1] == "/dev/loop3p2" else "vfat\n",
+        }.get(cmd[0], "")
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    source = Source("esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw")
+    vm = SourceVM(ref="Zabbix", name="Zabbix", vmx="[datastore1] Zabbix/Zabbix.vmx", disks_gb=[300])
+    converter = V2VConverter(run, log_dir=tmp_path, ssh=EsxiSSH(esxi, key=tmp_path / "k/id"))
+    converter.convert(source, vm, "win", tmp_path / "out", clear_hibernation=True)
+    copy = calls[0]
+    assert copy[:2] == ["bash", "-c"]
+    assert "dd if=/vmfs/volumes/datastore1/Zabbix/Zabbix-flat.vmdk" in copy[2]
+    assert "conv=sparse" in copy[2]
+    assert ["ntfsfix", "-d", "/dev/loop3p2"] in calls
+    assert not any(c[0] == "ntfsfix" and c[-1] == "/dev/loop3p1" for c in calls)
+    assert any(c[:4] == ["mount", "-t", "ntfs-3g", "-o"] and "remove_hiberfile" in c for c in calls)
+    assert calls[-1] == ["losetup", "-d", "/dev/loop3"]
+    assert v2v.cmds[0][:3] == ["virt-v2v", "-i", "libvirtxml"]
+    xml = Path(v2v.cmds[0][3]).read_text()
+    assert "disk0" in xml and 'type="raw"' in xml
+
+    with pytest.raises(ConversionFailed, match="ESXi over SSH"):
+        V2VConverter(run, log_dir=tmp_path).convert(
+            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "h", clear_hibernation=True
+        )
+
+
 def test_v2v_https_without_byte_ranges_says_what_to_do(tmp_path):
     run = FakeV2V(
         fail="nbdkit: curl[1]: error: server does not support 'range' (byte range) requests"
@@ -367,6 +446,12 @@ def test_v2v_inputs_and_failure(tmp_path):
         V2VConverter(FakeV2V(fail=hibernated), log_dir=tmp_path).convert(
             VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "h"
         )
+
+    with pytest.raises(ConversionFailed, match="Upgrade the node from the ibHiCS ISO"):
+        V2VConverter(
+            FakeV2V(fail="One of rhsrvany.exe or pvvxsvc.exe is missing in /usr/share/virt-tools"),
+            log_dir=tmp_path,
+        ).convert(VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "s")
 
     with pytest.raises(ConversionFailed, match="inspection could not detect the source guest"):
         V2VConverter(

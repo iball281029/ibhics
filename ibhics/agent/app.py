@@ -246,6 +246,7 @@ def create_agent_app(
                 body.vcpus,
                 body.memory_mb,
                 body.start,
+                clear_hibernation=body.clear_hibernation,
             )
             return VMOut.from_info(info)
 

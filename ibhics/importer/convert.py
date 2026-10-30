@@ -53,6 +53,20 @@ WINDOWS_HIBERNATED = (
     "'powercfg /h off' as administrator, then shut it down fully (Start > Power > Shut down, "
     "not Restart), and import it again."
 )
+CLEAR_HIBERNATION_SOURCES = (
+    "clearing Windows hibernation works on copies of the disks, which ibHiCS makes from "
+    "VMware ESXi over SSH and from Proxmox/KVM hosts; for this source, turn Fast Startup off "
+    "in the VM instead ('powercfg /h off', then shut it down fully)"
+)
+VMX_DISK = re.compile(
+    r'^(?P<dev>(?P<bus>scsi|sata|nvme|ide)(?P<ctl>\d+):(?P<unit>\d+))\.(?P<key>\w+)\s*=\s*"(?P<val>[^"]*)"',
+    re.IGNORECASE | re.MULTILINE,
+)
+VMDK_EXTENT = re.compile(r'^(?:RW|RDONLY)\s+\d+\s+(?P<type>\w+)\s+"(?P<file>[^"]+)"', re.MULTILINE)
+NO_SRVANY = (
+    "virt-v2v needs rhsrvany.exe and pnp_wait.exe in /usr/share/virt-tools to convert Windows "
+    "guests, and this node has none. Upgrade the node from the ibHiCS ISO, which puts them there."
+)
 SSH_OFF = (
     "Cannot reach SSH on {host}. Check that a firewall lets this node reach port 22 of "
     "the ESXi host, or turn on SSH there (Host > Actions > Services > Enable Secure Shell)."
@@ -123,6 +137,39 @@ def vmx_ssh_url(source: Source, vm: SourceVM) -> str:
     if not m:
         raise ConversionFailed(f"the location of {vm.name}'s .vmx file is not known")
     return f"ssh://root@{source.host}/vmfs/volumes/{quote(m['ds'])}/{quote(m['path'])}"
+
+
+def vmx_disk_files(vmx: str) -> list[str]:
+    """The VM's virtual disks (their .vmdk descriptors) from a .vmx, in boot order."""
+    devices: dict[str, dict[str, str]] = {}
+    order: dict[str, tuple] = {}
+    buses = {"scsi": 0, "sata": 1, "nvme": 2, "ide": 3}
+    for m in VMX_DISK.finditer(vmx):
+        dev = m["dev"].lower()
+        devices.setdefault(dev, {})[m["key"].lower()] = m["val"]
+        order[dev] = (buses[m["bus"].lower()], int(m["ctl"]), int(m["unit"]))
+    found = []
+    for dev, keys in devices.items():
+        name = keys.get("filename", "")
+        if (
+            name.lower().endswith(".vmdk")
+            and keys.get("present", "true").lower() == "true"
+            and "cdrom" not in keys.get("devicetype", "").lower()
+        ):
+            found.append((order[dev], name))
+    return [name for _, name in sorted(found)]
+
+
+def vmdk_flat_file(descriptor: str, name: str) -> str:
+    """The -flat.vmdk that holds a VMware disk's data, from its descriptor."""
+    m = VMDK_EXTENT.search(descriptor)
+    if "parentFileNameHint" in descriptor or (m and m["type"].upper() != "VMFS"):
+        raise ConversionFailed(
+            f"{name} has snapshots: delete or consolidate them on the ESXi host first"
+        )
+    if not m:
+        raise ConversionFailed(f"{name}: cannot tell where its data is from the descriptor")
+    return m["file"]
 
 
 def _ssh_closed(stderr: str | None) -> bool:
@@ -317,13 +364,29 @@ class V2VConverter:
         name: str,
         out_dir: Path,
         progress: Progress | None = None,
+        clear_hibernation: bool = False,
     ) -> Converted:
         progress = progress or (lambda step, pct: None)
         out_dir.mkdir(parents=True, exist_ok=True)
         output = ["-o", "local", "-os", str(out_dir), "-of", "raw", "-on", name]
         password_file = None
         try:
-            if source.type == SourceType.VMWARE and source.transport == "ssh":
+            if clear_hibernation:
+                # Copy the disks here, clear hibernation on the copies, convert those.
+                if source.type == SourceType.VMWARE and source.transport == "ssh":
+                    disks = self._pull_esxi_disks(source, vm, out_dir, progress)
+                elif source.type == SourceType.KVM:
+                    disks = self._pull_kvm_disks(source, vm, out_dir, progress)
+                else:
+                    raise ConversionFailed(CLEAR_HIBERNATION_SOURCES)
+                progress("Clearing Windows hibernation on the copied disks", 4)
+                self.clear_hibernation([Path(p) for p, fmt in disks if fmt == "raw"])
+                from .kvm import libvirt_xml
+
+                xml = out_dir / "source.xml"
+                xml.write_text(libvirt_xml(vm, disks))
+                cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
+            elif source.type == SourceType.VMWARE and source.transport == "ssh":
                 progress("Setting up SSH access to the ESXi host", 1)
                 self.ssh.ensure_access(source)
                 url = self.ssh.find_vmx(source, vmx_ssh_url(source, vm))
@@ -334,7 +397,10 @@ class V2VConverter:
                     f.write(source.password or "")
                 cmd = ["virt-v2v", "-ic", source.libvirt_uri, "-ip", password_file, vm.ref]
             elif source.type == SourceType.KVM:
-                xml = self._pull_kvm_disks(source, vm, out_dir, progress)
+                from .kvm import libvirt_xml
+
+                xml = out_dir / "source.xml"
+                xml.write_text(libvirt_xml(vm, self._pull_kvm_disks(source, vm, out_dir, progress)))
                 cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
             elif source.type == SourceType.OVA or vm.ref.lower().endswith(".ova"):
                 cmd = ["virt-v2v", "-i", "ova", vm.ref]
@@ -354,16 +420,18 @@ class V2VConverter:
             message = v2v_error(output_text, result.returncode)
             if "does not support 'range'" in output_text:
                 message = NO_RANGES
+            elif re.search(r"rhsrvany\.exe|pvvxsvc\.exe|pnp_wait\.exe", output_text):
+                message = NO_SRVANY
             elif re.search(r"[Hh]ibernat|Fast Restart|Fast Startup", output_text):
                 message = WINDOWS_HIBERNATED
             raise ConversionFailed(message + (f" (full log: {log})" if log else ""))
         return read_output(out_dir, name)
 
-    def _pull_kvm_disks(self, source: Source, vm: SourceVM, out_dir: Path, progress) -> Path:
-        """Copy the VM's disks from the Proxmox/KVM host into out_dir over SSH, then describe
-        them for virt-v2v -i libvirtxml. The copies are removed with out_dir."""
-        from .kvm import libvirt_xml
-
+    def _pull_kvm_disks(
+        self, source: Source, vm: SourceVM, out_dir: Path, progress
+    ) -> list[tuple[str, str]]:
+        """Copy the VM's disks from the Proxmox/KVM host into out_dir over SSH: (path, format)
+        of each copy, for virt-v2v -i libvirtxml. The copies are removed with out_dir."""
         progress("Setting up SSH access to the host", 1)
         self.host_ssh.ensure_access(source)
         if not vm.disk_paths:
@@ -381,9 +449,78 @@ class V2VConverter:
                 err = result.stderr.decode(errors="replace") if result.stderr else ""
                 raise ConversionFailed(f"copying {remote} from {source.host} failed: {err.strip()}")
             disks.append((str(local), _image_format(local, self.run)))
-        xml = out_dir / "source.xml"
-        xml.write_text(libvirt_xml(vm, disks))
-        return xml
+        return disks
+
+    def _pull_esxi_disks(
+        self, source: Source, vm: SourceVM, out_dir: Path, progress
+    ) -> list[tuple[str, str]]:
+        """Copy the VM's -flat.vmdk files (raw disks) from the ESXi host into out_dir over
+        SSH, skipping runs of zeros so thin disks stay small here."""
+        progress("Setting up SSH access to the ESXi host", 1)
+        self.ssh.ensure_access(source)
+        vmx = unquote(self.ssh.find_vmx(source, vmx_ssh_url(source, vm)).split(source.host, 1)[1])
+        folder = vmx.rsplit("/", 1)[0]
+        files = vmx_disk_files(self.ssh.command(source, f"cat {shlex.quote(vmx)}"))
+        if not files:
+            raise ConversionFailed(f"{vm.name} has no disks in its .vmx")
+        pull = out_dir / "source"
+        pull.mkdir(exist_ok=True)
+        disks = []
+        for index, name in enumerate(files):
+            desc = name if name.startswith("/") else f"{folder}/{name}"
+            flat = vmdk_flat_file(self.ssh.command(source, f"cat {shlex.quote(desc)}"), name)
+            remote = flat if flat.startswith("/") else f"{desc.rsplit('/', 1)[0]}/{flat}"
+            local = pull / f"disk{index}"
+            progress(f"Copying disk {index + 1}/{len(files)} from {source.host}", 2)
+            ssh = shlex.join(
+                self.ssh.ssh_command(source, f"dd if={shlex.quote(remote)} bs=1048576")
+            )
+            copy = f"set -o pipefail; {ssh} | dd of={shlex.quote(str(local))} bs=4M conv=sparse"
+            result = self.run(["bash", "-c", copy], capture_output=True, text=True)
+            if result.returncode != 0:
+                raise ConversionFailed(
+                    f"copying {remote} from {source.host} failed: {(result.stderr or '').strip()}"
+                )
+            disks.append((str(local), "raw"))
+        return disks
+
+    def clear_hibernation(self, images: list[Path]) -> list[str]:
+        """Clear the hibernation file and the dirty flag of every NTFS partition on these raw
+        disk copies, as Windows does when it starts fully. Returns the partitions done."""
+        done = []
+        for image in images:
+            got = self.run(
+                ["losetup", "--find", "--show", "--partscan", str(image)],
+                capture_output=True,
+                text=True,
+            )
+            loop = (got.stdout or "").strip()
+            if got.returncode != 0 or not loop:
+                raise ConversionFailed(f"cannot open {image.name}: {(got.stderr or '').strip()}")
+            try:
+                parts = self.run(["lsblk", "-nrpo", "NAME", loop], capture_output=True, text=True)
+                for part in (parts.stdout or "").split()[1:]:
+                    kind = self.run(
+                        ["blkid", "-o", "value", "-s", "TYPE", part], capture_output=True, text=True
+                    )
+                    if (kind.stdout or "").strip() != "ntfs":
+                        continue
+                    self.run(["ntfsfix", "-d", part], capture_output=True, text=True)
+                    mount = tempfile.mkdtemp(prefix="ibhics-ntfs-")
+                    try:
+                        mounted = self.run(
+                            ["mount", "-t", "ntfs-3g", "-o", "remove_hiberfile", part, mount],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if mounted.returncode == 0:
+                            self.run(["umount", mount], capture_output=True, text=True)
+                            done.append(part)
+                    finally:
+                        os.rmdir(mount)
+            finally:
+                self.run(["losetup", "-d", loop], capture_output=True, text=True)
+        return done
 
     def _run_streaming(self, cmd, env, name: str, progress: Progress):
         """Run virt-v2v writing its output to the log as it comes, so the web console can
@@ -448,7 +585,13 @@ class FakeConverter:
     """For the fake driver: small images with a recognisable first sector."""
 
     def convert(
-        self, source: Source, vm: SourceVM, name: str, out_dir: Path, progress=None
+        self,
+        source: Source,
+        vm: SourceVM,
+        name: str,
+        out_dir: Path,
+        progress=None,
+        clear_hibernation: bool = False,
     ) -> Converted:
         if progress:
             progress("Copying disk 1/1", 30)

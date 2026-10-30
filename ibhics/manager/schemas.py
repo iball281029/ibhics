@@ -607,6 +607,10 @@ class ImportRequest(BaseModel):
     vcpus: int | None = Field(default=None, ge=1, le=256)
     memory_mb: int | None = Field(default=None, ge=128)
     start: bool = False
+    clear_hibernation: bool = Field(
+        default=False,
+        description="Windows only: clear hibernation / Fast Startup on the copied disks",
+    )
 
 
 class ImportJobOut(BaseModel):
@@ -635,3 +639,4 @@ class AgentImport(BaseModel):
     vcpus: int | None = None
     memory_mb: int | None = None
     start: bool = False
+    clear_hibernation: bool = False

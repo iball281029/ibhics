@@ -268,6 +268,7 @@ class RemoteImport:
         memory_mb: int | None = None,
         start: bool = False,
         progress=None,
+        clear_hibernation: bool = False,
     ) -> VMInfo:
         body = {
             "source": source.to_dict(),
@@ -278,6 +279,7 @@ class RemoteImport:
             "vcpus": vcpus,
             "memory_mb": memory_mb,
             "start": start,
+            "clear_hibernation": clear_hibernation,
         }
         done = threading.Event()
         if progress:

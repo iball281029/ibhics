@@ -8,6 +8,7 @@ libvirt-clients
 ovmf
 virt-v2v
 guestfs-tools
+ntfs-3g
 # ibHiCS runs on the system Python
 python3
 python3-venv

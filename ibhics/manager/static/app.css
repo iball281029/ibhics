@@ -376,3 +376,4 @@ dialog.wide-dialog { width: min(860px, calc(100vw - 32px)); }
 dialog footer .spacer { flex: 1; }
 input[readonly] { background: var(--hover); color: var(--muted); }
 .toolbar .grow { flex: 1; min-width: 280px; }
+.win-note p { margin: 0 0 8px; } .win-note label.check { align-items: flex-start; }

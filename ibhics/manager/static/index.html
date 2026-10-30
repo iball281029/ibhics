@@ -714,7 +714,10 @@
       <label class="check"><input name="start" type="checkbox"> Power on when done</label>
     </div>
     <p class="hint" style="padding:0 18px">Power the VM off at the source first so its disks don't change during the copy.</p>
-    <p class="edit-note win-note" id="import-win" hidden>Windows: in the VM at the source, run <code>powercfg /h off</code> as administrator, then shut it down fully (not Restart). With Fast Startup on, its disk is locked and the virtio drivers cannot be added.</p>
+    <div class="edit-note win-note" id="import-win" hidden>
+      <p>Windows: in the VM at the source, run <code>powercfg /h off</code> as administrator, then shut it down fully (not Restart). With Fast Startup on, its disk is locked and the virtio drivers cannot be added.</p>
+      <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Can't do that? Clear hibernation on the copy instead. ibHiCS copies the disks first and discards the hibernated session (unsaved work in it is lost). VMware over SSH and Proxmox/KVM only.</label>
+    </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start import</button></footer>
   </form>
 </dialog>
