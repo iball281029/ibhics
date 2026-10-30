@@ -11,6 +11,23 @@ on:
     tags: ["v*"]
 
 jobs:
+  packages:
+    # Every package the preseed installs must exist in Debian 13, or the install stops
+    # at "Select and install software".
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+      - name: Simulate installing the preseed's package list
+        run: |
+          pkgs=$(sed -n '/^d-i pkgsel\/include/,/^[^ ]/p' installer/preseed.cfg \
+            | sed 's/^d-i pkgsel\/include string//; s/\\//g' | grep -v '^d-i\|^popularity' | xargs)
+          echo "packages: $pkgs"
+          sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' \
+            /etc/apt/sources.list.d/debian.sources
+          apt-get update -q
+          apt-get install --simulate -q $pkgs > /dev/null
+
   iso:
     runs-on: ubuntu-latest
     permissions:
