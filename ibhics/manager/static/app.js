@@ -1280,6 +1280,8 @@ $("#page-migrate").addEventListener("click", async (e) => {
     if (vm.state === "running" && !confirm(`${vm.name} is running at the source. Its disks may change during the copy. Continue anyway?`)) return;
     openDialog("import-dialog", { source: $("#browse-source").value, vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
     $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
+    const src = state.sources.find((s) => s.name === $("#browse-source").value);
+    $("#import-hib").hidden = !src || !(src.type === "kvm" || (src.type === "vmware" && (src.settings?.transport || "ssh") === "ssh"));
     renderImportNets(vm);
     load("networks").then(() => renderImportNets(vm)).catch(() => {});
   }
@@ -1326,6 +1328,7 @@ handlers["import-dialog"] = async (f, ctx) => {
   const body = {
     source: ctx.source, vm: ctx.vm.ref, name: f.get("name"), node: f.get("node") || null,
     pool: f.get("pool") || "default", network: networks.length ? networks : "default", start: f.get("start") === "on",
+    clear_hibernation: f.get("clear_hibernation") === "on" && !$("#import-win").hidden && !$("#import-hib").hidden,
   };
   if (f.get("vcpus")) body.vcpus = Number(f.get("vcpus"));
   if (f.get("memory_mb")) body.memory_mb = Number(f.get("memory_mb"));

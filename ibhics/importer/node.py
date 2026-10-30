@@ -37,6 +37,7 @@ class NodeImport:
         memory_mb: int | None = None,
         start: bool = False,
         progress=None,
+        clear_hibernation: bool = False,
     ) -> VMInfo:
         """Convert first, then create the VM, so nothing half-made exists during the copy.
         The converted images wait on the target pool, not on the system disk."""
@@ -55,7 +56,16 @@ class NodeImport:
         try:
             with scratch as base:
                 created = self._convert_and_create(
-                    source, vm, name, pool, network, vcpus, memory_mb, base, track
+                    source,
+                    vm,
+                    name,
+                    pool,
+                    network,
+                    vcpus,
+                    memory_mb,
+                    base,
+                    track,
+                    clear_hibernation,
                 )
         finally:
             self.progress.pop(name, None)
@@ -74,11 +84,22 @@ class NodeImport:
             return f.read().decode(errors="replace")
 
     def _convert_and_create(
-        self, source, vm, name, pool, network, vcpus, memory_mb, base: Path, track
+        self,
+        source,
+        vm,
+        name,
+        pool,
+        network,
+        vcpus,
+        memory_mb,
+        base: Path,
+        track,
+        clear_hibernation: bool = False,
     ) -> VMInfo:
         work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=base))
         try:
-            converted = self._converter.convert(source, vm, name, work, track)
+            extra = {"clear_hibernation": True} if clear_hibernation else {}
+            converted = self._converter.convert(source, vm, name, work, track, **extra)
             track("Creating the VM", 96)
             spec = VMSpec(
                 name=name,

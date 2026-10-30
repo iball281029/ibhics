@@ -162,6 +162,7 @@ class ImportManager:
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
+        clear_hibernation: bool = False,
     ) -> ImportJob:
         self._cluster.require_quorum()
         source = self.source(source_name)
@@ -205,8 +206,18 @@ class ImportManager:
                 job.step, job.percent = step, percent
 
             try:
+                extra = {"clear_hibernation": True} if clear_hibernation else {}
                 info = member.imports.run(
-                    source, vm, name, pool, network, vcpus, memory_mb, start, progress=progress
+                    source,
+                    vm,
+                    name,
+                    pool,
+                    network,
+                    vcpus,
+                    memory_mb,
+                    start,
+                    progress=progress,
+                    **extra,
                 )
                 job.result, job.state, job.step, job.percent = info.uuid, "done", "", 100
             except Exception as exc:  # recorded on the job; nobody else is waiting

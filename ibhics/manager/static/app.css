@@ -361,3 +361,4 @@ dialog.wide-dialog { width: min(860px, calc(100vw - 32px)); }
 .win-note { margin: 10px 22px 16px; }
 .win-note code { font-family: ui-monospace, monospace; font-size: 12px; }
 @media (max-width: 640px) { .net-map { grid-template-columns: 1fr; } .net-map .arrow { display: none; } }
+.win-note p { margin: 0 0 8px; } .win-note label.check { align-items: flex-start; }

@@ -582,6 +582,7 @@ def create_app(
             body.vcpus,
             body.memory_mb,
             body.start,
+            clear_hibernation=body.clear_hibernation,
         )
         return ImportJobOut(**job.__dict__)
 
