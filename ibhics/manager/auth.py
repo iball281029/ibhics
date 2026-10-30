@@ -154,9 +154,10 @@ class Auth:
             json.dump({"users": users}, f, indent=2)
         tmp.replace(self._state_path)
 
-    def bootstrap(self, password: str | None = None) -> str | None:
+    def bootstrap(self, password: str | None = None, must_change: bool = True) -> str | None:
         """Create the first admin if there are no users. Returns the generated password
-        when one was made up, so the caller can show it once."""
+        when one was made up, so the caller can show it once. `must_change=False` is for
+        a password the admin chose themselves at the node's console."""
         with self._lock:
             if self._users:
                 return None
@@ -167,7 +168,7 @@ class Auth:
                 name="admin",
                 role=Role.ADMIN,
                 password_hash=hash_password(password),
-                must_change_password=True,
+                must_change_password=must_change or generated is not None,
                 created=self._stamp(),
             )
             self._save()
