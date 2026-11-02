@@ -49,7 +49,8 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
     local name=$1 minutes=$2
     shift 2
     qemu-system-x86_64 "${ACCEL[@]}" -m 4096 -smp 2 -display none \
-        -drive file=raid.qcow2,if=virtio,serial=RAID0 -drive file=disk.qcow2,if=virtio,serial=BOOT \
+        -drive file=raid.qcow2,if=none,id=raid -device virtio-blk-pci,drive=raid,serial=RAID0 \
+        -drive file=disk.qcow2,if=none,id=boot -device virtio-blk-pci,drive=boot,serial=BOOT \
         -monitor unix:mon.sock,server,nowait "$@" &
     local pid=$! i=0 shot last="" same=0
     while kill -0 $pid 2>/dev/null; do
