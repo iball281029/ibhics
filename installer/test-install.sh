@@ -142,7 +142,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.2", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.3", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -153,6 +153,10 @@ assert cluster["quorum"] and cluster["members"][0]["healthy"], cluster
 host = call("GET", f"/nodes/{cluster['members'][0]['name']}/host", token=token)
 assert host["hypervisor"] != "fake", host
 print("ok  node is healthy and uses", host["hypervisor"], "with", host["cpus"], "CPUs")
+
+settings = call("GET", f"/nodes/{cluster['members'][0]['name']}/settings", token=token)
+assert settings["dns"] == ["10.0.2.3"], settings
+print("ok  /etc/resolv.conf has the DNS server from setup")
 
 pools = call("GET", "/pools", token=token)
 assert any(p["name"] == "default" for p in pools), pools

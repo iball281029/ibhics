@@ -166,6 +166,12 @@ def render_env(cfg: Config) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_resolv(cfg: Config) -> str:
+    lines = ["# Written by ibhics-setup."]
+    lines += [f"nameserver {server}" for server in (cfg.dns or [cfg.gateway])]
+    return "\n".join(lines) + "\n"
+
+
 def render_hosts(cfg: Config) -> str:
     return (
         "127.0.0.1\tlocalhost\n"
@@ -236,6 +242,12 @@ def apply(
     write("/etc/network/interfaces", render_interfaces(cfg))
     write("/etc/ibhics/ibhics.env", render_env(cfg), 0o600)  # holds the cluster token
     write("/etc/issue", render_issue(cfg))
+    # ifupdown only hands dns-nameservers to resolvconf, which is not installed, so a
+    # node had no DNS and apt could not reach the mirror. Write resolv.conf ourselves.
+    resolv = root / "etc/resolv.conf"
+    if resolv.is_symlink():
+        resolv.unlink()  # a stub from another resolver: ours replaces it
+    write("/etc/resolv.conf", render_resolv(cfg))
     sh("hostname", cfg.hostname)
     sh("timedatectl", "set-timezone", cfg.timezone)
     sh("chpasswd", stdin=f"root:{root_password}\n")

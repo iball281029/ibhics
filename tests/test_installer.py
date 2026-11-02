@@ -79,7 +79,7 @@ def test_console_banner_says_where_to_go():
     assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
-    assert "beta version 0.2" in issue
+    assert "beta version 0.3" in issue
 
 
 def test_apply_manager(tmp_path):
@@ -88,6 +88,9 @@ def test_apply_manager(tmp_path):
 
     assert (tmp_path / "etc/hostname").read_text() == "node1\n"
     assert "10.0.0.11\tnode1" in (tmp_path / "etc/hosts").read_text()
+    # DNS works without resolvconf: apt can reach the Debian mirror after setup.
+    resolv = (tmp_path / "etc/resolv.conf").read_text()
+    assert "nameserver 10.0.0.1\nnameserver 1.1.1.1\n" in resolv
     env = tmp_path / "etc/ibhics/ibhics.env"
     assert env.stat().st_mode & 0o077 == 0  # the cluster token is secret
     assert (tmp_path / "etc/ibhics/configured").read_text() == "manager\n"
