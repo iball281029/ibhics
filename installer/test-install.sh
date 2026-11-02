@@ -20,6 +20,7 @@ API=https://127.0.0.1:8888/api/v1
 rm -rf "$WORK" && mkdir -p "$WORK/shots"
 cd "$WORK"
 ACCEL=(-accel tcg)
+BOOT_DISK=""
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 echo ">> Accelerator: ${ACCEL[*]}"
 # Like a server with a big RAID volume that comes up first and a small boot drive:
@@ -50,7 +51,7 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
     shift 2
     qemu-system-x86_64 "${ACCEL[@]}" -m 4096 -smp 2 -display none \
         -drive file=raid.qcow2,if=none,id=raid -device virtio-blk-pci,drive=raid,serial=RAID0 \
-        -drive file=disk.qcow2,if=none,id=boot -device virtio-blk-pci,drive=boot,serial=BOOT \
+        -drive file=disk.qcow2,if=none,id=boot -device "virtio-blk-pci,drive=boot,serial=BOOT$BOOT_DISK" \
         -monitor unix:mon.sock,server,nowait "$@" &
     local pid=$! i=0 shot last="" same=0
     while kill -0 $pid 2>/dev/null; do
@@ -124,7 +125,10 @@ sudo qemu-nbd -d /dev/nbd0
 trap - EXIT
 
 echo ">> 3/4 First boot"
-run_vm firstboot 30 -boot c -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8888-:8888 &
+# SeaBIOS tries only the first hard disk (the big, empty one), as a server's firmware
+# boots only the drive set in its boot order: point it at the drive we installed to.
+BOOT_DISK=,bootindex=1
+run_vm firstboot 30 -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8888-:8888 &
 VM=$!
 trap 'monitor quit 2>/dev/null || true' EXIT
 for _ in $(seq 60); do
