@@ -377,3 +377,6 @@ dialog footer .spacer { flex: 1; }
 input[readonly] { background: var(--hover); color: var(--muted); }
 .toolbar .grow { flex: 1; min-width: 280px; }
 .win-note p { margin: 0 0 8px; } .win-note label.check { align-items: flex-start; }
+.iso-pick { display: flex; align-items: flex-end; }
+.iso-progress:empty { display: none; }
+.iso-progress { display: grid; gap: 6px; margin-top: 8px; grid-column: 1 / -1; }

@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [] };
+const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Local", disk: "Local disk (thin)", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -185,7 +185,7 @@ function openDialog(id, context = null, prefill = {}) {
   dlg.showModal();
   // Pickers need the current pools and VMs even when the page did not load them.
   const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms",
-    $(".net-list", form) && "networks"].filter(Boolean);
+    $(".net-list", form) && "networks", $(".iso-list", form) && "isos"].filter(Boolean);
   if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
   if ($(".disk-list", form)) fillDisks(form);
 }
@@ -225,6 +225,7 @@ function fillSelects() {
     s.innerHTML = netOptions(was);
   });
   keep(".source-list", state.sources.map((s) => s.name));
+  $$(".iso-list").forEach((s) => { const was = s.value; s.innerHTML = isoOptions(was); });
   $$("form").forEach(fillPools);
   $$(".vm-check-list").forEach((box) => {
     box.innerHTML = state.vms.length
@@ -279,6 +280,7 @@ const loaders = {
   jobs: async () => { state.jobs = await api("/backup/jobs"); },
   moves: async () => { state.moves = await api("/migrations"); },
   sources: async () => { state.sources = await api("/migrate/sources"); },
+  isos: async () => { state.isos = await api("/isos"); },
   imports: async () => { state.imports = await api("/migrate/jobs"); },
   users: async () => { state.users = isAdmin() && state.me ? await api("/users") : []; },
 };
@@ -356,7 +358,7 @@ async function refresh(page, auto = false) {
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
-  if (page === "storage") { await load("pools", "vms", "networks"); renderPools(); renderNetworks(); }
+  if (page === "storage") { await load("pools", "vms", "networks", "isos"); renderPools(); renderIsos(); renderNetworks(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -600,7 +602,7 @@ let editing = null;
 const BOOT_NAMES = { hd: "Hard disk", cdrom: "CD/DVD", network: "Network (PXE)" };
 
 async function openEdit(uuid) {
-  const [vm] = await Promise.all([api(`/vms/${uuid}`), load("pools", "networks")]);
+  const [vm] = await Promise.all([api(`/vms/${uuid}`), load("pools", "networks", "isos")]);
   editing = {
     vm,
     vcpus: vm.vcpus,
@@ -662,8 +664,10 @@ function renderEdit() {
       <p class="hint">MAC address <span class="mono">${esc(n.mac || "assigned when saved")}</span></p>
       <button type="button" class="danger small" data-remove="nic" data-i="${i}">Remove this adapter</button>`;
   } else {
-    pane.innerHTML = `<h4>CD/DVD drive</h4><label>ISO file on the node <input value="${esc(e.iso)}" placeholder="/var/lib/ibhics/iso/debian.iso" data-set="iso"></label>
-      <div class="row-btns"><button type="button" class="small" data-iso="tools">Guest tools CD</button><button type="button" class="small" data-iso="">Empty the drive</button></div>`;
+    pane.innerHTML = `<h4>CD/DVD drive</h4><label>ISO <select data-set="iso" class="iso-list">${isoOptions(e.iso, "Empty")}</select></label>
+      <div class="row-btns"><label class="btn small operator-only">Upload ISO<input type="file" class="iso-upload" accept=".iso" hidden></label></div>
+      <div class="iso-progress"></div>
+      <p class="hint">Upload an ISO here or under Storage → ISO library; it then shows in this list.</p>`;
   }
   const boot = $("#edit-boot");
   boot.innerHTML = [0, 1, 2].map((slot) => `<label class="boot-slot"><b>${slot + 1}</b><select data-boot="${slot}">
@@ -697,15 +701,13 @@ function renderEdit() {
       renderEdit();
       return;
     }
-    const iso = ev.target.closest("[data-iso]");
-    if (iso) { editing.iso = iso.dataset.iso === "tools" ? "/usr/share/ibhics/guest-tools.iso" : ""; renderEdit(); }
   });
   form.addEventListener("change", (ev) => {
     const t = ev.target, e = editing;
     if (!e) return;
     if (t.dataset.set === "vcpus") e.vcpus = Number(t.value);
     if (t.dataset.set === "memory_gb") e.memory_mb = Math.round(Number(t.value) * 1024);
-    if (t.dataset.set === "iso") e.iso = t.value.trim();
+    if (t.dataset.set === "iso") e.iso = t.value;
     if (t.dataset.disk) e.disks[Number(t.dataset.disk)][t.dataset.field] = t.dataset.field === "size_gb" ? Number(t.value) : t.value;
     if (t.dataset.nic) e.nics[Number(t.dataset.nic)][t.dataset.field] = t.value;
     if (t.dataset.boot) {
@@ -821,6 +823,71 @@ $("#pools").addEventListener("click", async (e) => {
     await del(`/nodes/${enc(btn.dataset.node)}/pools/${enc(btn.dataset.pool)}`);
     await refresh("storage");
   } catch (err) { fail(err); }
+});
+
+// ---------- ISO library ----------
+
+// Options for an ISO picker; an ISO set by hand that is not in the library stays listed.
+function isoOptions(selected = "", none = "None") {
+  const items = state.isos.map((i) => [i.path, `${i.name} (${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))})`]);
+  if (selected && !items.some(([p]) => p === selected)) items.push([selected, selected.split("/").pop()]);
+  return [["", none], ...items].map(([p, label]) =>
+    `<option value="${esc(p)}" ${p === selected ? "selected" : ""}>${esc(label)}</option>`).join("");
+}
+
+function renderIsos() {
+  const users = (path) => state.vms.filter((v) => v.iso === path).map((v) => v.name);
+  $("#isos").innerHTML = state.isos.length ? state.isos.map((i) => {
+    const own = i.path.startsWith("/var/lib/ibhics/iso/");
+    return `<tr>
+      <td><div class="name-cell">${avatar("i-cd")}<span class="vm-name">${esc(i.name)}</span></div></td>
+      <td>${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}</td>
+      <td>${esc(users(i.path).join(", ") || "–")}</td>
+      <td><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
+    </tr>`;
+  }).join("") : empty(4, "No ISOs yet: upload one to install a new VM from it");
+}
+
+$("#isos").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-iso-del]");
+  if (!btn || !confirm(`Delete ${btn.dataset.isoDel}?`)) return;
+  try { await del(`/isos/${enc(btn.dataset.isoDel)}`); await refresh("storage"); } catch (err) { fail(err); }
+});
+
+// Any "Upload ISO" button: progress shows next to it, and a picker beside it selects the
+// new ISO once it is in.
+document.addEventListener("change", async (e) => {
+  const input = e.target.closest(".iso-upload");
+  if (!input) return;
+  const files = [...input.files];
+  input.value = "";
+  const scope = input.closest("form, .sheet") || document;
+  const box = $(".iso-progress", scope);
+  let last = null;
+  for (const file of files) {
+    const row = document.createElement("div");
+    row.className = "upload-row";
+    row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
+    box.append(row);
+    try {
+      await uploadFile(file, row, `/api/v1/isos/${enc(file.name)}`);
+      $(".pct", row).textContent = "Uploaded";
+      setTimeout(() => row.remove(), 5000);
+      last = file.name;
+    } catch (err) {
+      row.classList.add("failed");
+      $(".pct", row).textContent = err.message;
+    }
+  }
+  await load("isos");
+  fillSelects();
+  const picker = $(".iso-list", scope);
+  const added = state.isos.find((i) => i.name === last);
+  if (picker && added) {
+    picker.value = added.path;
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  if (currentPage() === "storage") renderIsos();
 });
 
 // The disk picker lists the node's unused whole disks, so nobody has to find /dev/sdX.
@@ -1513,10 +1580,10 @@ $("#browse-source").addEventListener("change", () => renderSourceVMs());
 
 // Uploads stream straight to the node's disk; big exports take a while, so each file
 // shows its own progress bar.
-function uploadFile(file, row) {
+function uploadFile(file, row, url = `/api/v1/migrate/uploads/${enc(file.name)}`) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("PUT", `/api/v1/migrate/uploads/${enc(file.name)}`);
+    xhr.open("PUT", url);
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const pct = Math.floor((e.loaded / e.total) * 100);

@@ -209,6 +209,18 @@
       </div>
       <div class="sheet" style="margin-top:18px">
         <div class="page-head">
+          <h1>ISO library</h1><span class="sub">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
+          <span class="spacer"></span>
+          <label class="btn primary operator-only">Upload ISO<input type="file" class="iso-upload" accept=".iso" multiple hidden></label>
+        </div>
+        <div class="iso-progress"></div>
+        <div class="table-wrap" style="margin-top:14px"><table>
+          <thead><tr><th>ISO</th><th>Size</th><th>In the CD/DVD drive of</th><th></th></tr></thead>
+          <tbody id="isos"></tbody>
+        </table></div>
+      </div>
+      <div class="sheet" style="margin-top:18px">
+        <div class="page-head">
           <h1>Networks</h1><span class="sub">The LAN (untagged on br0) and VLANs on it, on every compute node</span>
           <span class="spacer"></span>
           <button class="primary admin-only" data-open="net-dialog">+ Add VLAN network</button>
@@ -445,7 +457,9 @@
       <label>Firmware <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select></label>
       <label>Operating system <input name="os_type" maxlength="64" list="os-names" placeholder="Ubuntu 24.04 LTS"></label>
       <label>Network <select name="network" class="net-list"><option value="default">default</option></select></label>
-      <label>ISO (optional) <input name="iso" placeholder="/var/lib/ibhics/iso/debian.iso"></label>
+      <label>Install from ISO <select name="iso" class="iso-list"></select></label>
+      <div class="iso-pick"><label class="btn small operator-only" title="Add an ISO to the library; it is picked here when it is in">Upload ISO<input type="file" class="iso-upload" accept=".iso" hidden></label></div>
+      <div class="iso-progress span-2"></div>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create</button></footer>
   </form>
