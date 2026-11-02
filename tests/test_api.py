@@ -90,3 +90,24 @@ def test_start_twice_conflicts(client):
 
 def test_unknown_vm(client):
     assert client.post("/api/v1/vms/does-not-exist/start").status_code == 404
+
+
+def test_iso_library(tmp_path):
+    client = TestClient(create_app(FakeDriver(), iso_dir=tmp_path / "iso"))
+    assert client.get("/api/v1/isos").json() == []  # the folder appears with the first upload
+
+    resp = client.put("/api/v1/isos/debian-13.0.0-amd64-netinst.iso", content=b"x" * 10)
+    assert resp.status_code == 200, resp.text
+    path = str(tmp_path / "iso" / "debian-13.0.0-amd64-netinst.iso")
+    name = "debian-13.0.0-amd64-netinst.iso"
+    assert resp.json() == {"name": name, "path": path, "size_bytes": 10}
+    assert [i["path"] for i in client.get("/api/v1/isos").json()] == [path]
+    for bad in ("x.exe", ".hidden.iso", "a$b.iso"):
+        assert client.put(f"/api/v1/isos/{bad}", content=b"x").status_code == 422, bad
+
+    vm = create(client, iso=path).json()
+    resp = client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso")
+    assert resp.status_code == 422 and "web-01" in resp.json()["detail"]
+    client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": None})
+    assert client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso").status_code == 204
+    assert client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso").status_code == 404

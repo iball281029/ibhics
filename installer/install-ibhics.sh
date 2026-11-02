@@ -45,7 +45,7 @@ if [ -d "$SRC/virt-tools" ]; then
     install -D -m 0644 -t /usr/share/virt-tools "$SRC"/virt-tools/*
 fi
 
-install -d -m 0755 /etc/ibhics /var/lib/ibhics/pools/default /var/log/ibhics
+install -d -m 0755 /etc/ibhics /var/lib/ibhics/pools/default /var/lib/ibhics/iso /var/log/ibhics
 install -m 0644 "$SRC"/systemd/*.service /etc/systemd/system/
 systemctl enable ibhics-firstboot.service
 systemctl enable libvirtd.service

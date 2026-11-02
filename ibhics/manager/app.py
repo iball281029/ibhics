@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import socket
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, WebSocket, status
 from fastapi.staticfiles import StaticFiles
 
 from .. import RELEASE_NAME, __version__, console
@@ -35,6 +36,7 @@ from .schemas import (
     HostSettingsIn,
     ImportJobOut,
     ImportRequest,
+    IsoOut,
     JobOut,
     LocalDiskOut,
     LoginOut,
@@ -69,6 +71,35 @@ STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "ibhics_session"
 API = "/api/v1"
 GUEST_TOOLS_ISO = "/usr/share/ibhics/guest-tools.iso"
+# Install media for new VMs, uploaded from the browser (Storage > ISO library).
+ISO_DIR = Path("/var/lib/ibhics/iso")
+
+
+def iso_path(folder: Path, filename: str) -> Path:
+    """Where an uploaded ISO goes; refuses names that could leave the folder."""
+    name = Path(filename).name
+    if name != filename or name.startswith(".") or not name:
+        raise ValueError("file name must not contain a path")
+    if not name.lower().endswith(".iso") or not re.fullmatch(r"[\w.+\- ()]+", name):
+        raise ValueError("upload an .iso file named with letters, digits, spaces, . _ - + ( )")
+    return folder / name
+
+
+async def receive_file(request: Request, target: Path) -> int:
+    """Stream a request body to `target` through a hidden partial file; returns its size."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.partial")
+    size = 0
+    try:
+        with open(partial, "wb") as f:
+            async for chunk in request.stream():
+                await asyncio.to_thread(f.write, chunk)
+                size += len(chunk)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
+    return size
+
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
@@ -124,6 +155,7 @@ def create_app(
     migrations: MigrationManager | None = None,
     auth: Auth | None = None,
     imports: ImportManager | None = None,
+    iso_dir: Path = ISO_DIR,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -595,6 +627,40 @@ def create_app(
         cluster.require_quorum()
         imports.remove_source(name)
 
+    # ISO library: install media for new VMs and the CD/DVD drive, kept on the manager.
+
+    @api.get("/isos", response_model=list[IsoOut])
+    def list_isos() -> list[IsoOut]:
+        files = sorted(iso_dir.iterdir()) if iso_dir.is_dir() else []
+        isos = [
+            IsoOut(name=p.name, path=str(p), size_bytes=p.stat().st_size)
+            for p in files
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() == ".iso"
+        ]
+        tools = Path(GUEST_TOOLS_ISO)
+        if tools.is_file():
+            isos.append(
+                IsoOut(name="ibHiCS guest tools", path=str(tools), size_bytes=tools.stat().st_size)
+            )
+        return isos
+
+    @api.put("/isos/{filename}", response_model=IsoOut)
+    async def upload_iso(filename: str, request: Request) -> IsoOut:
+        target = iso_path(iso_dir, filename)
+        size = await receive_file(request, target)
+        return IsoOut(name=target.name, path=str(target), size_bytes=size)
+
+    @api.delete("/isos/{filename}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_iso(filename: str) -> None:
+        target = iso_path(iso_dir, filename)
+        if not target.is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no ISO named {filename!r}")
+        in_use = [vm.spec.name for _, vm in cluster.all_vms() if vm.spec.iso == str(target)]
+        if in_use:
+            names = ", ".join(in_use)
+            raise ValueError(f"{filename} is in the CD/DVD drive of {names}; eject it first")
+        target.unlink()
+
     # Files uploaded from the browser (OVA, VMDK, VHD/VHDX, QCOW2, raw): for VMs from any
     # platform that can export them. They appear under the built-in "uploads" source.
 
@@ -611,17 +677,7 @@ def create_app(
     @api.put("/migrate/uploads/{filename}", response_model=UploadOut)
     async def upload(filename: str, request: Request) -> UploadOut:
         target = upload_path(imports.upload_dir, filename)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        partial = target.with_name(f".{target.name}.partial")
-        size = 0
-        try:
-            with open(partial, "wb") as f:
-                async for chunk in request.stream():
-                    await asyncio.to_thread(f.write, chunk)
-                    size += len(chunk)
-            partial.replace(target)
-        finally:
-            partial.unlink(missing_ok=True)
+        size = await receive_file(request, target)
         return UploadOut(name=target.name, size_bytes=size)
 
     @api.delete("/migrate/uploads/{filename}", status_code=status.HTTP_204_NO_CONTENT)

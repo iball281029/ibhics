@@ -570,6 +570,12 @@ class CdromRequest(BaseModel):
     iso: str | None = Field(default=None, pattern=r"^/.+\.iso$")
 
 
+class IsoOut(BaseModel):
+    name: str
+    path: str
+    size_bytes: int
+
+
 class UploadOut(BaseModel):
     name: str
     size_bytes: int
