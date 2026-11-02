@@ -222,3 +222,48 @@ def test_ssh_key_for_root(tmp_path):
         cfg(ssh_key="not-a-key").validate()
     # The wizard question can be skipped with Enter.
     assert setup.ask("key", check=setup.check_ssh_key, reader=lambda _p: "", optional=True) == ""
+
+
+def test_pick_disk_prefers_small_internal_boot_drive(tmp_path):
+    """A server with a big RAID volume first and an M.2 boot drive: install on the M.2,
+    never on the USB stick the installer runs from or a small/removable disk."""
+    gib = 1024 * 1024 * 2  # sectors
+    disks = {
+        "sda": (12_000 * gib, "0", "/devices/pci0000:00/raid/host0"),  # RAID 5
+        "sdb": (16 * gib, "0", "/devices/pci0000:00/usb1/1-1"),  # the installer stick
+        "sdc": (64 * gib, "0", "/devices/pci0000:00/usb2/2-1"),  # another USB disk
+        "sdd": (8 * gib, "0", "/devices/pci0000:00/ata1"),  # SATADOM too small
+        "sde": (100 * gib, "1", "/devices/pci0000:00/sd"),  # removable
+        "nvme0n1": (240 * gib, "0", "/devices/pci0000:00/nvme0"),  # M.2 boot drive
+    }
+    sys_block = tmp_path / "block"
+    for name, (size, removable, device) in disks.items():
+        d = sys_block / name
+        d.mkdir(parents=True)
+        (d / "size").write_text(f"{size}\n")
+        (d / "removable").write_text(removable + "\n")
+        target = tmp_path / device.lstrip("/")
+        target.mkdir(parents=True, exist_ok=True)
+        (d / "device").symlink_to(target)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    listing = "\n".join(f"/dev/{n}" for n in disks)
+    (bin_dir / "list-devices").write_text(f"#!/bin/sh\nprintf '%s\\n' '{listing}'\n")
+    (bin_dir / "list-devices").chmod(0o755)
+    mounts = tmp_path / "mounts"
+    mounts.write_text("/dev/sdb1 /cdrom iso9660 ro 0 0\n")
+
+    def pick(**extra):
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "SYS": str(sys_block), "MOUNTS": str(mounts)}
+        out = subprocess.run(
+            ["sh", str(INSTALLER / "pick-disk.sh")],
+            env={**env, **extra},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return out.stdout.strip()
+
+    assert pick() == "/dev/nvme0n1"
+    (sys_block / "nvme0n1" / "size").write_text("0\n")
+    assert pick() == "/dev/sda"  # no small drive: the RAID volume, never the USB stick

@@ -22,6 +22,9 @@ cd "$WORK"
 ACCEL=(-accel tcg)
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 echo ">> Accelerator: ${ACCEL[*]}"
+# Like a server with a big RAID volume that comes up first and a small boot drive:
+# ibHiCS must go on the small one (disk.qcow2) and leave the big one free for VMs.
+qemu-img create -q -f qcow2 raid.qcow2 400G
 qemu-img create -q -f qcow2 disk.qcow2 80G
 
 monitor() {  # send one command to the QEMU monitor
@@ -46,7 +49,8 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
     local name=$1 minutes=$2
     shift 2
     qemu-system-x86_64 "${ACCEL[@]}" -m 4096 -smp 2 -display none \
-        -drive file=disk.qcow2,if=virtio -monitor unix:mon.sock,server,nowait "$@" &
+        -drive file=raid.qcow2,if=virtio,serial=RAID0 -drive file=disk.qcow2,if=virtio,serial=BOOT \
+        -monitor unix:mon.sock,server,nowait "$@" &
     local pid=$! i=0 shot last="" same=0
     while kill -0 $pid 2>/dev/null; do
         sleep 60
@@ -73,6 +77,11 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
 echo ">> 1/4 Unattended install from the default menu entry, with no network at all"
 run_vm install "$INSTALL_MINUTES" -cdrom "$ISO" -boot d -no-reboot -nic none
 echo ">> Install finished (the installer rebooted, so QEMU exited)"
+
+raid_used=$(qemu-img info --output=json raid.qcow2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["actual-size"])')
+[ "$raid_used" -lt $((64 * 1024 * 1024)) ] \
+    || { echo "!! the installer wrote to the big disk ($raid_used bytes): it must use the small one"; exit 1; }
+echo ">> The big disk is untouched; ibHiCS went on the small one"
 
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
 sudo modprobe nbd max_part=16
@@ -157,6 +166,10 @@ print("ok  node is healthy and uses", host["hypervisor"], "with", host["cpus"], 
 settings = call("GET", f"/nodes/{cluster['members'][0]['name']}/settings", token=token)
 assert settings["dns"] == ["10.0.2.3"], settings
 print("ok  /etc/resolv.conf has the DNS server from setup")
+
+disks = call("GET", f"/nodes/{cluster['members'][0]['name']}/disks", token=token)
+assert any(d["serial"] == "RAID0" and d["empty"] for d in disks), disks
+print("ok  the big disk is listed as free, ready to add as a pool")
 
 pools = call("GET", "/pools", token=token)
 assert any(p["name"] == "default" for p in pools), pools
