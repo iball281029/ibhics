@@ -314,7 +314,8 @@
 
     <section class="page" id="page-backup">
       <div class="sheet">
-        <div class="page-head"><h1>Backup</h1><span class="sub">Incremental, deduplicated backups to local disk, NAS, SAN, USB or S3</span></div>
+        <div class="page-head"><h1>Backup</h1><span class="sub">Incremental, deduplicated backups to local disk, NAS, SAN, USB or S3</span>
+          <span class="spacer"></span><button class="primary operator-only" data-open="restore-dialog">Restore VM</button></div>
         <div class="tabs" id="backup-tabs">
           <button data-tab="backups" class="active">Restore points</button>
           <button data-tab="policies">Schedules</button>
@@ -791,16 +792,49 @@
   </form>
 </dialog>
 
-<dialog id="restore-dialog">
-  <form method="dialog" id="restore-form">
+<dialog id="restore-dialog" class="wizard">
+  <form method="dialog" id="restore-form" novalidate>
     <header><h3>Restore VM</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>New VM name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
-      <label>Node <select name="node" class="node-list-auto"></select></label>
-      <label>Storage pool <select name="pool" class="pool-list" data-original="Same as the original VM"></select></label>
+    <ol class="wiz-steps">
+      <li data-step="1"><b>1</b>VM</li>
+      <li data-step="2"><b>2</b>Restore point</li>
+      <li data-step="3"><b>3</b>Restore as</li>
+    </ol>
+    <div class="body">
+      <section class="wiz-page" data-page="1">
+        <div class="wiz-bar"><span class="muted">Which VM do you want back?</span><span class="spacer"></span><input type="search" class="search rs-search" placeholder="Search VMs"></div>
+        <div class="table-wrap disk-table"><table>
+          <thead><tr><th style="width:36px"></th><th>VM</th><th>Restore points</th><th>Latest</th><th>Still exists</th></tr></thead>
+          <tbody class="rs-vms"></tbody>
+        </table></div>
+      </section>
+      <section class="wiz-page" data-page="2">
+        <div class="wiz-bar"><span class="muted rs-vm-title"></span></div>
+        <div class="table-wrap disk-table"><table>
+          <thead><tr><th style="width:36px"></th><th>Taken</th><th>Target</th><th>Node</th><th>Size</th></tr></thead>
+          <tbody class="rs-points"></tbody>
+        </table></div>
+      </section>
+      <section class="wiz-page" data-page="3">
+        <div class="formats" style="margin-top:0">
+          <label class="type-card small"><input type="radio" name="as" value="new" checked><svg><use href="#i-compute"/></svg><span><b>A new VM</b><em>The original keeps running. Check the copy, then switch.</em></span></label>
+          <label class="type-card small"><input type="radio" name="as" value="original"><svg><use href="#i-backup"/></svg><span><b>The original VM</b><em class="rs-orig-note">Only when the original VM no longer exists.</em></span></label>
+        </div>
+        <div class="form-grid" style="margin-top:16px">
+          <label>New VM name <input name="name" autocomplete="off"></label>
+          <label>Node <select name="node" class="node-list-auto"></select></label>
+          <label>Storage pool <select name="pool" class="pool-list" data-original="Same as the original VM"></select></label>
+        </div>
+        <dl class="kv wiz-summary"></dl>
+      </section>
     </div>
-    <p class="hint" style="padding:0 18px">Restoring under the original name works only if that VM no longer exists.</p>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Restore</button></footer>
+    <footer>
+      <button value="cancel" formnovalidate>Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" class="wiz-back">Back</button>
+      <button type="button" class="primary wiz-next">Next</button>
+      <button class="primary wiz-ok" value="ok">Restore</button>
+    </footer>
   </form>
 </dialog>
 

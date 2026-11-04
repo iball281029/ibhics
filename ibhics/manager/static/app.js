@@ -193,6 +193,7 @@ function wizard(id, { steps = 3, check = () => {}, show = () => {}, reset = () =
     show(w.step);
   };
   w.start = () => { w.step = 1; reset(); paint(); };
+  w.go = (n) => { w.step = n; paint(); };
   w.check = check;
   $(".wiz-next", form).addEventListener("click", () => {
     try { check(w.step); w.step++; paint(); } catch (err) { fail(err); }
@@ -1931,9 +1932,111 @@ handlers["policy-dialog"] = async (f) => {
   await refresh("backup");
 };
 
-handlers["restore-dialog"] = async (f, ctx) => {
-  const body = { name: f.get("name") || null, node: f.get("node") || null, pool: f.get("pool") || null, source_node: ctx.sourceNode || null };
-  await post(`/backup/targets/${enc(ctx.target)}/backups/${enc(ctx.id)}/restore`, body);
+// Restore: pick the VM, then the restore point, then restore it as a new VM or under
+// its own name (only when the original is gone). Restore buttons on a restore point
+// open it at the last step with that point chosen.
+const rsForm = $("#restore-form");
+const rs = { points: [], vm: null, point: null, nameTouched: false };
+const rsKey = (p) => `${p.target}/${p.id}`;
+function rsVmGone(name) { return !state.vms.some((v) => v.name === name); }
+async function rsLoad() {
+  const lists = await Promise.all(state.targets.map((t) =>
+    api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
+  rs.points = lists.flat().sort((a, b) => String(b.created).localeCompare(String(a.created)));
+}
+function rsRenderVms() {
+  const q = $(".rs-search", rsForm).value.trim().toLowerCase();
+  const byVm = new Map();
+  for (const p of rs.points) (byVm.get(p.vm_name) || byVm.set(p.vm_name, []).get(p.vm_name)).push(p);
+  const names = [...byVm.keys()].sort().filter((n) => !q || n.toLowerCase().includes(q));
+  $(".rs-vms", rsForm).innerHTML = names.length ? names.map((n) => {
+    const on = rs.vm === n, pts = byVm.get(n);
+    return `<tr data-vm="${esc(n)}" class="${on ? "sel" : ""}"><td><input type="radio" ${on ? "checked" : ""} aria-label="${esc(n)}"></td>
+      <td class="vm-name">${esc(n)}</td><td>${pts.length}</td><td>${esc(when(pts[0].created))}</td>
+      <td>${rsVmGone(n) ? `<span class="badge failed">Deleted</span>` : `<span class="badge online">Yes</span>`}</td></tr>`;
+  }).join("") : empty(5, state.targets.length ? (rs.points.length ? "No VM matches" : "No restore points yet") : "Add a backup target first");
+}
+function rsRenderPoints() {
+  $(".rs-vm-title", rsForm).textContent = `Restore points of ${rs.vm}, newest first`;
+  const pts = rs.points.filter((p) => p.vm_name === rs.vm);
+  $(".rs-points", rsForm).innerHTML = pts.map((p) => {
+    const on = rs.point && rsKey(p) === rsKey(rs.point);
+    return `<tr data-key="${esc(rsKey(p))}" class="${on ? "sel" : ""}"><td><input type="radio" ${on ? "checked" : ""} aria-label="${esc(when(p.created))}"></td>
+      <td>${esc(when(p.created))}</td><td>${esc(p.target)}</td><td>${esc(p.node || "shared")}</td><td>${size(p.size_bytes)}</td></tr>`;
+  }).join("");
+}
+function rsAs() {
+  const f = rsForm.elements, gone = rsVmGone(rs.vm);
+  const orig = $('input[name="as"][value="original"]', rsForm);
+  orig.disabled = !gone;
+  $(".rs-orig-note", rsForm).textContent = gone ? `${rs.vm} was deleted, so it can come back under its own name.` : `${rs.vm} still exists. Delete it first to restore over it.`;
+  if (!gone && f.as.value === "original") f.as.value = "new";
+  if (f.as.value === "original") { f.name.value = rs.vm; f.name.readOnly = true; }
+  else {
+    f.name.readOnly = false;
+    if (!rs.nameTouched || !f.name.value || f.name.value === rs.vm) {
+      let name = `${rs.vm}-restore`;
+      for (let i = 2; state.vms.some((v) => v.name === name); i++) name = `${rs.vm}-restore-${i}`;
+      f.name.value = name;
+    }
+  }
+  const rows = [["VM", esc(rs.vm)], ["Restore point", `${esc(when(rs.point.created))} on ${esc(rs.point.target)}`],
+    ["Restore as", esc(f.name.value)], ["Node", esc(f.node.value || "Automatic")], ["Storage", esc(f.pool.value || "Same as the original VM")]];
+  $(".wiz-summary", rsForm).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+const restoreWiz = wizard("restore-dialog", {
+  reset() {
+    const ctx = dialogContext || {};
+    Object.assign(rs, { vm: null, point: null, nameTouched: false });
+    $(".rs-search", rsForm).value = "";
+    $(".rs-vms", rsForm).innerHTML = empty(5, "Looking for restore points...");
+    Promise.all([load("vms", "targets"), rsLoad()]).then(() => {
+      if (ctx.id) {
+        const p = rs.points.find((x) => x.id === ctx.id && (!ctx.target || x.target === ctx.target));
+        if (p) { rs.vm = p.vm_name; rs.point = p; restoreWiz.go(3); return; }
+      }
+      rsRenderVms();
+    }).catch(fail);
+  },
+  check(step) {
+    if (step === 1 && !rs.vm) throw new Error("Pick the VM to restore.");
+    if (step === 2 && !rs.point) throw new Error("Pick a restore point.");
+    if (step === 3) {
+      const n = rsForm.elements.name.value;
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(n)) throw new Error("Name the VM with letters, digits, '-', '_' or '.'.");
+      if (state.vms.some((v) => v.name === n)) throw new Error(`A VM named ${n} already exists.`);
+    }
+  },
+  show(step) {
+    if (step === 1) rsRenderVms();
+    if (step === 2) {
+      if (!rs.point || rs.point.vm_name !== rs.vm) rs.point = rs.points.find((p) => p.vm_name === rs.vm) || null;
+      rsRenderPoints();
+    }
+    if (step === 3) rsAs();
+  },
+});
+{
+  $(".rs-search", rsForm).addEventListener("input", rsRenderVms);
+  $(".rs-vms", rsForm).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-vm]");
+    if (tr) { rs.vm = tr.dataset.vm; rsRenderVms(); }
+  });
+  $(".rs-vms", rsForm).addEventListener("dblclick", (e) => { if (e.target.closest("tr[data-vm]")) $(".wiz-next", rsForm).click(); });
+  $(".rs-points", rsForm).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-key]");
+    if (tr) { rs.point = rs.points.find((p) => rsKey(p) === tr.dataset.key); rsRenderPoints(); }
+  });
+  $$('input[name="as"]', rsForm).forEach((r) => r.addEventListener("change", rsAs));
+  ["node", "pool"].forEach((n) => rsForm.elements[n].addEventListener("change", rsAs));
+  rsForm.elements.name.addEventListener("input", () => { rs.nameTouched = true; rsAs(); });
+}
+
+handlers["restore-dialog"] = async (f) => {
+  restoreWiz.check(3);
+  const p = rs.point;
+  const body = { name: f.get("name") || null, node: f.get("node") || null, pool: f.get("pool") || null, source_node: p.node || null };
+  await post(`/backup/targets/${enc(p.target)}/backups/${enc(p.id)}/restore`, body);
   toast(`Restoring ${body.name}. Progress is under Backup → Jobs.`);
   await refresh(currentPage());
 };
