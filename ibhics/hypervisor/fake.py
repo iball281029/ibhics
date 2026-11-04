@@ -241,8 +241,15 @@ class FakeDriver(HypervisorDriver):
         from .disks import LocalDisk
 
         return [
-            LocalDisk("/dev/sdb", 12509.0, "RAID 930-8i", "6000d31000f0", "sas"),
-            LocalDisk("/dev/sdc", 894.3, "MZ7L3960", "S6KN", "sata", False, "3 partitions (vmfs)"),
+            LocalDisk("/dev/sdb", 12509.0, "RAID 930-8i", "6000d31000f0", "sas", media="hdd"),
+            LocalDisk(
+                "/dev/sdc", 894.3, "MZ7L3960", "S6KN", "sata", False, "3 partitions (vmfs)", "ssd"
+            ),
+            LocalDisk(
+                "/dev/sdd", 894.3, "MZ7L3960", "S6KP", "sata", False, "Ceph OSD (LVM)", "ssd"
+            ),
+            LocalDisk("/dev/sde", 3726.0, "ST4000NM0035", "ZC1A", "sata", media="hdd"),
+            LocalDisk("/dev/sdf", 3726.0, "ST4000NM0035", "ZC1B", "sata", media="hdd"),
         ]
 
     def guest_info(self, uuid: str) -> GuestInfo:
@@ -331,7 +338,7 @@ class FakeDriver(HypervisorDriver):
             PoolType.DIR: spec.path or f"/var/lib/ibhics/pools/{name}",
             PoolType.NFS: f"{spec.host}:{spec.export}",
             PoolType.ISCSI: f"{spec.host}:{spec.port} {spec.iqn} lun {spec.lun}",
-            PoolType.LVM: spec.device or "",
+            PoolType.LVM: ", ".join(spec.all_devices()),
             PoolType.DISK: spec.device or "",
         }[spec.type]
         return PoolInfo(
