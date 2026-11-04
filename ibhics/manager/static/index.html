@@ -213,11 +213,12 @@
         <div class="page-head">
           <h1>ISO library</h1><span class="sub">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
           <span class="spacer"></span>
+          <label class="inline operator-only">Save to <select id="iso-dest"></select></label>
           <label class="btn primary operator-only">Upload ISO<input type="file" class="iso-upload" accept=".iso" multiple hidden></label>
         </div>
         <div class="iso-progress"></div>
         <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>ISO</th><th>Size</th><th>In the CD/DVD drive of</th><th></th></tr></thead>
+          <thead><tr><th>ISO</th><th>Stored on</th><th>Size</th><th>In the CD/DVD drive of</th><th></th></tr></thead>
           <tbody id="isos"></tbody>
         </table></div>
       </div>
@@ -571,6 +572,31 @@
     </div>
     <p class="hint" style="padding:0 22px 18px">VMs on this network get the frames tagged with this VLAN on the node's LAN port, untagged. The switch port must carry the VLAN tagged (trunk).</p>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add</button></footer>
+  </form>
+</dialog>
+
+<dialog id="pool-view" class="wizard">
+  <form method="dialog">
+    <header><h3 class="pv-title">Storage</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="tabs" id="pv-tabs" style="padding:0 22px"><button type="button" data-tab="pv-summary" class="active">Summary</button><button type="button" data-tab="pv-files">Files</button></div>
+    <div class="subpage active body" id="tab-pv-summary">
+      <div class="pv-stats stats" style="padding:0"></div>
+      <dl class="kv pv-kv" style="padding:18px 0 0"></dl>
+      <p class="wiz-label">VM disks in this pool</p>
+      <div class="table-wrap disk-table"><table><thead><tr><th>VM</th><th>Disk</th><th>Size</th><th>Status</th></tr></thead><tbody class="pv-disks"></tbody></table></div>
+    </div>
+    <div class="subpage body" id="tab-pv-files">
+      <div class="wiz-bar">
+        <nav class="pv-crumb crumb" style="margin:0"></nav><span class="spacer"></span>
+        <button type="button" class="pv-mkdir operator-only">+ New folder</button>
+        <label class="btn primary operator-only pv-up-btn">Upload file<input type="file" class="pv-upload" multiple hidden></label>
+        <button type="button" class="ghost pv-refresh">Refresh</button>
+      </div>
+      <div class="pv-progress iso-progress"></div>
+      <div class="table-wrap disk-table"><table><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead><tbody class="pv-files"></tbody></table></div>
+      <p class="hint pv-note" style="padding:0;margin-top:10px">Files in the top folder are VM disks; make a folder (for example iso) for install media and other files.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Close</button></footer>
   </form>
 </dialog>
 

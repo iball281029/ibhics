@@ -446,6 +446,17 @@ label.inline select { width: auto; min-width: 140px; }
   .wiz-bar input.search { width: 100%; }
 }
 
+/* Storage detail */
+.pv-stats { grid-template-columns: repeat(3, 1fr); }
+.pool-link { cursor: pointer; }
+.pool-link:hover .vm-name { color: var(--brand); text-decoration: underline; }
+.pv-files tr[data-dir] td:first-child { cursor: pointer; }
+.pv-files .avatar { width: 28px; height: 28px; }
+.pv-crumb button { border: 0; padding: 2px 4px; background: none; color: var(--brand); }
+#pool-view .tabs { border-bottom: 1px solid var(--line); }
+#pool-view .subpage .disk-table { max-height: 320px; }
+@media (max-width: 640px) { .pv-stats { grid-template-columns: 1fr; } }
+
 /* New VM wizard */
 .wiz-label { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .os-cards { grid-template-columns: repeat(3, 1fr); }

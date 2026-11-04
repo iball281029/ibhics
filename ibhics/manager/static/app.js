@@ -926,7 +926,7 @@ function renderPools() {
   $("#pools").innerHTML = state.pools.length ? state.pools.map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
-      <td><div class="name-cell">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
+      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
       <td>${esc(p.node)}</td>
       <td><span class="badge info plain">${esc(POOL_TYPES[p.type] || p.type)}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
@@ -937,6 +937,8 @@ function renderPools() {
 }
 
 $("#pools").addEventListener("click", async (e) => {
+  const link = e.target.closest("[data-pool-view]");
+  if (link) { openPoolView(link.dataset.node, link.dataset.poolView); return; }
   const btn = e.target.closest("button[data-pool]");
   if (!btn || !confirm(`Remove pool ${btn.dataset.pool} from ${btn.dataset.node}? Data on the storage stays.`)) return;
   try {
@@ -945,11 +947,110 @@ $("#pools").addEventListener("click", async (e) => {
   } catch (err) { fail(err); }
 });
 
+// ---------- storage detail: summary and files ----------
+
+const pv = { node: "", pool: "", path: "" };
+const pvDlg = $("#pool-view");
+function openPoolView(node, pool) {
+  Object.assign(pv, { node, pool, path: "" });
+  selectTab("pv-tabs", "pv-summary");
+  pvSummary();
+  pvDlg.showModal();
+  pvFiles();
+}
+function pvInfo() { return state.pools.find((p) => p.node === pv.node && p.name === pv.pool); }
+function pvSummary() {
+  const p = pvInfo();
+  if (!p) return;
+  $(".pv-title", pvDlg).textContent = `${p.name} on ${p.node}`;
+  const used = pct(p.allocation_gb, p.capacity_gb), free = p.available_gb ?? p.capacity_gb - p.allocation_gb;
+  $(".pv-stats", pvDlg).innerHTML = `
+    <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(POOL_TYPES[p.type] || p.type)}</em></div>
+    <div class="stat"><span>Used</span><b>${sizeText(p.allocation_gb)} <small>${used}%</small></b>${bar(used)}</div>
+    <div class="stat"><span>Free</span><b>${sizeText(free)}</b><em>${p.active ? "Online" : "Offline"}</em></div>`;
+  const disks = state.vms.filter((v) => v.node === p.node).flatMap((v) => v.disks.map((d, i) => ({ vm: v, d, i }))).filter((x) => x.d.pool === p.name);
+  const isos = state.isos.filter((i) => i.pool === p.name);
+  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(p.node)], ["Type", esc(POOL_TYPES[p.type] || p.type)], ["Source", `<span class="mono">${esc(p.source)}</span>`],
+    ["VM disks", `${disks.length} (${sizeText(disks.reduce((s, x) => s + x.d.size_gb, 0))} provisioned)`], ["ISOs", String(isos.length)]]
+    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $(".pv-disks", pvDlg).innerHTML = disks.length ? disks.map((x) => `<tr><td class="vm-name"><a class="vm-link" href="#vm/${esc(x.vm.uuid)}">${esc(x.vm.name)}</a></td>
+    <td>Disk ${x.i + 1}</td><td>${num(x.d.size_gb)} GB</td><td><span class="badge ${esc(x.vm.state)}">${esc(x.vm.state)}</span></td></tr>`).join("")
+    : empty(4, "No VM disks here yet");
+  const files = ["dir", "disk", "nfs"].includes(p.type);
+  $('#pv-tabs [data-tab="pv-files"]').hidden = !files;
+}
+async function pvFiles() {
+  const p = pvInfo();
+  if (!p || !["dir", "disk", "nfs"].includes(p.type)) return;
+  const parts = pv.path ? pv.path.split("/") : [];
+  $(".pv-crumb", pvDlg).innerHTML = [`<button type="button" data-go="">${esc(pv.pool)}</button>`,
+    ...parts.map((n, i) => `<svg><use href="#i-chev"/></svg><button type="button" data-go="${esc(parts.slice(0, i + 1).join("/"))}">${esc(n)}</button>`)].join("");
+  $(".pv-up-btn", pvDlg).hidden = !pv.path; // uploads go into a folder, not next to the VM disks
+  $(".pv-note", pvDlg).hidden = !!pv.path;
+  const tbody = $(".pv-files", pvDlg);
+  tbody.innerHTML = empty(4, "Loading...");
+  try {
+    const items = await api(`/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/files?path=${enc(pv.path)}`);
+    const op = canOperate(), admin = isAdmin();
+    tbody.innerHTML = items.length ? items.map((f) => `<tr ${f.dir ? `data-dir="${esc(f.path)}"` : ""}>
+      <td><div class="name-cell">${avatar(f.dir ? "i-storage" : f.name.toLowerCase().endsWith(".iso") ? "i-cd" : "i-hdd")}<span class="vm-name">${esc(f.name)}</span></div></td>
+      <td>${f.dir ? "Folder" : size(f.size_bytes)}</td>
+      <td>${f.modified ? esc(new Date(f.modified * 1000).toLocaleString()) : ""}</td>
+      <td><div class="actions">${admin && (f.dir || pv.path) ? `<button type="button" class="small danger" data-del="${esc(f.path)}">Delete</button>` : ""}${op ? "" : ""}</div></td>
+    </tr>`).join("") : empty(4, pv.path ? "Empty folder. Upload files into it." : "No files yet. Make a folder such as iso.");
+  } catch (err) { tbody.innerHTML = empty(4, err.message); }
+}
+{
+  $("#pv-tabs").addEventListener("click", (e) => { if (e.target.closest('[data-tab="pv-files"]')) pvFiles(); });
+  $(".pv-crumb", pvDlg).addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-go]");
+    if (b) { pv.path = b.dataset.go; pvFiles(); }
+  });
+  $(".pv-files", pvDlg).addEventListener("click", async (e) => {
+    const del = e.target.closest("button[data-del]");
+    if (del) {
+      if (!confirm(`Delete ${del.dataset.del}${e.target.closest("tr[data-dir]") ? " and everything in it" : ""}?`)) return;
+      try { await del_(`/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/files?path=${enc(del.dataset.del)}`); } catch (err) { fail(err); }
+      await Promise.all([pvFiles(), load("isos").catch(() => {})]);
+      return;
+    }
+    const dir = e.target.closest("tr[data-dir]");
+    if (dir) { pv.path = dir.dataset.dir; pvFiles(); }
+  });
+  $(".pv-refresh", pvDlg).addEventListener("click", pvFiles);
+  $(".pv-mkdir", pvDlg).addEventListener("click", async () => {
+    const name = prompt("Folder name", pv.path ? "" : "iso");
+    if (!name) return;
+    try {
+      await post(`/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/folders`, { path: pv.path ? `${pv.path}/${name}` : name });
+      pvFiles();
+    } catch (err) { fail(err); }
+  });
+  $(".pv-upload", pvDlg).addEventListener("change", async (e) => {
+    const files = [...e.target.files];
+    e.target.value = "";
+    for (const file of files) {
+      const row = document.createElement("div");
+      row.className = "upload-row";
+      row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
+      $(".pv-progress", pvDlg).append(row);
+      try {
+        await uploadFile(file, row, `/api/v1/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/files?path=${enc(`${pv.path}/${file.name}`)}`);
+        $(".pct", row).textContent = "Uploaded";
+        setTimeout(() => row.parentNode && row.parentNode.removeChild(row), 4000);
+      } catch (err) { row.classList.add("failed"); $(".pct", row).textContent = err.message; }
+    }
+    await Promise.all([pvFiles(), load("isos").then(() => currentPage() === "storage" && renderIsos()).catch(() => {})]);
+  });
+}
+const del_ = (path) => del(path);
+
+
 // ---------- ISO library ----------
 
 // Options for an ISO picker; an ISO set by hand that is not in the library stays listed.
 function isoOptions(selected = "", none = "None") {
-  const items = state.isos.map((i) => [i.path, `${i.name} (${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))})`]);
+  const items = state.isos.map((i) => [i.path, `${i.name} (${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}${i.pool ? `, ${i.pool}` : ""})`]);
   if (selected && !items.some(([p]) => p === selected)) items.push([selected, selected.split("/").pop()]);
   return [["", none], ...items].map(([p, label]) =>
     `<option value="${esc(p)}" ${p === selected ? "selected" : ""}>${esc(label)}</option>`).join("");
@@ -958,14 +1059,39 @@ function isoOptions(selected = "", none = "None") {
 function renderIsos() {
   const users = (path) => state.vms.filter((v) => v.iso === path).map((v) => v.name);
   $("#isos").innerHTML = state.isos.length ? state.isos.map((i) => {
-    const own = i.path.startsWith("/var/lib/ibhics/iso/");
+    const own = !i.pool && i.name !== "ibHiCS guest tools";
+    const where = i.pool ? `${i.pool}${i.folder ? ` / ${i.folder}` : ""}` : own ? "System disk" : "Built in";
     return `<tr>
       <td><div class="name-cell">${avatar("i-cd")}<span class="vm-name">${esc(i.name)}</span></div></td>
+      <td>${esc(where)}</td>
       <td>${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}</td>
       <td>${esc(users(i.path).join(", ") || "–")}</td>
       <td><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
     </tr>`;
-  }).join("") : empty(4, "No ISOs yet: upload one to install a new VM from it");
+  }).join("") : empty(5, "No ISOs yet: upload one to install a new VM from it");
+  fillIsoDest();
+}
+
+// Where "Upload ISO" saves: the system disk's ISO library, or the iso folder of a
+// file-based pool (folder, thin disk, NFS), which has far more room.
+function fillIsoDest() {
+  const sel = $("#iso-dest");
+  if (!sel) return;
+  const was = sel.value;
+  const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
+  sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
+    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(p.node)} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
+  if (sel.dataset.touched && [...sel.options].some((o) => o.value === was)) sel.value = was;
+  else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
+}
+$("#iso-dest").addEventListener("change", (e) => { e.target.dataset.touched = "1"; });
+async function isoUploadUrl(file, input) {
+  const dest = input.closest("#page-storage") ? $("#iso-dest").value : "";
+  if (!dest) return `/api/v1/isos/${enc(file.name)}`;
+  const [node, pool] = dest.split("|");
+  const base = `/nodes/${enc(node)}/pools/${enc(pool)}`;
+  try { await post(`${base}/folders`, { path: "iso" }); } catch { /* already there */ }
+  return `/api/v1${base}/files?path=${enc(`iso/${file.name}`)}`;
 }
 
 $("#isos").addEventListener("click", async (e) => {
@@ -990,7 +1116,7 @@ document.addEventListener("change", async (e) => {
     row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
     box.append(row);
     try {
-      await uploadFile(file, row, `/api/v1/isos/${enc(file.name)}`);
+      await uploadFile(file, row, await isoUploadUrl(file, input));
       $(".pct", row).textContent = "Uploaded";
       setTimeout(() => row.remove(), 5000);
       last = file.name;
