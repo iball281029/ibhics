@@ -1822,16 +1822,112 @@ handlers["target-dialog"] = async (f) => {
   await refresh("backup");
 };
 
+// New backup schedule: which VMs, when and how many to keep, where to, then a name.
+const polWiz = { picked: new Set(), nameTouched: false };
+const polForm = $("#policy-form");
+function polScope() { return polForm.elements.scope.value; }
+function polRender() {
+  const pick = polScope() === "pick";
+  $(".pol-vms", polForm).hidden = !pick;
+  if (!pick) return;
+  const q = $(".pol-search", polForm).value.trim().toLowerCase();
+  const vms = [...state.vms].sort((a, b) => a.name.localeCompare(b.name)).filter((v) => !q || v.name.toLowerCase().includes(q));
+  $(".pol-rows", polForm).innerHTML = vms.length ? vms.map((v) => {
+    const on = polWiz.picked.has(v.name);
+    return `<tr data-vm="${esc(v.name)}" class="${on ? "sel" : ""}"><td><input type="checkbox" ${on ? "checked" : ""} aria-label="Back up ${esc(v.name)}"></td>
+      <td class="vm-name">${esc(v.name)}</td><td>${esc(v.node || "")}</td><td><span class="badge ${esc(v.state)}">${esc(v.state)}</span></td>
+      <td>${v.disks.reduce((s, d) => s + d.size_gb, 0).toLocaleString()} GB</td></tr>`;
+  }).join("") : empty(5, state.vms.length ? "No VM matches" : "No VMs yet");
+  $(".pol-count", polForm).textContent = `${polWiz.picked.size} of ${state.vms.length} VMs ticked`;
+}
+function polSchedule() {
+  const f = polForm.elements;
+  $(".pol-at", polForm).hidden = f.mode.value !== "at";
+  $(".pol-every", polForm).hidden = f.mode.value !== "every";
+  const keep = Number(f.keep_last.value) || 0;
+  const hours = f.mode.value === "at" ? 24 : Number(f.every_hours.value) || 0;
+  const span = keep * hours;
+  $(".pol-keep", polForm).textContent = keep && hours
+    ? `You can go back about ${span >= 48 ? `${Math.round(span / 24)} days` : `${span} hours`}. Older backups are deleted automatically.` : "";
+}
+function polText() {
+  const f = polForm.elements;
+  return f.mode.value === "at" ? `Every day at ${f.at.value}` : `Every ${f.every_hours.value} hours`;
+}
+const policyWiz = wizard("policy-dialog", {
+  steps: 4,
+  reset() {
+    polWiz.picked = new Set();
+    polWiz.nameTouched = false;
+    $(".pol-search", polForm).value = "";
+    syncPresets(polForm);
+    polSchedule();
+    polRender();
+    load("vms", "targets", "policies").then(polRender).catch(() => {});
+  },
+  check(step) {
+    const f = polForm.elements;
+    if (step === 1 && polScope() === "pick" && !polWiz.picked.size) throw new Error("Tick at least one VM, or choose Every VM.");
+    if (step === 2) {
+      if (f.mode.value === "at" && !/^\d\d:\d\d$/.test(f.at.value)) throw new Error("Pick a time of day.");
+      if (f.mode.value === "every" && !(Number(f.every_hours.value) >= 1 && Number(f.every_hours.value) <= 168)) throw new Error("Hours must be 1 to 168.");
+      if (!(Number(f.keep_last.value) >= 1)) throw new Error("Keep at least 1 backup.");
+    }
+    if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup target first (Backup → Targets).");
+    if (step === 4 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the schedule with letters, digits, '-', '_' or '.'.");
+    if (step === 4 && state.policies.some((p) => p.name === f.name.value)) throw new Error(`A schedule named ${f.name.value} already exists.`);
+  },
+  show(step) {
+    const f = polForm.elements;
+    if (step === 1) polRender();
+    if (step === 2) polSchedule();
+    if (step === 3) {
+      const was = $('input[name="target"]:checked', polForm)?.value;
+      $(".pol-targets", polForm).innerHTML = state.targets.map((t, i) => `<label class="type-card small"><input type="radio" name="target" value="${esc(t.name)}" ${(was ? t.name === was : i === 0) ? "checked" : ""}>
+        <svg><use href="#i-backup"/></svg><span><b>${esc(t.name)}</b><em>${esc(TARGET_TYPES[t.type] || t.type)} · ${esc(t.source)}</em></span></label>`).join("")
+        || `<p class="hint" style="padding:0">No backup target yet.</p>`;
+    }
+    if (step === 4) {
+      if (!polWiz.nameTouched || !f.name.value) {
+        let base = f.mode.value === "at" ? (f.at.value < "06:00" || f.at.value >= "20:00" ? "nightly" : "daily") : `every-${f.every_hours.value}h`;
+        if (polScope() === "pick" && polWiz.picked.size === 1) base = `${[...polWiz.picked][0]}-${base}`;
+        let name = base;
+        for (let i = 2; state.policies.some((p) => p.name === name); i++) name = `${base}-${i}`;
+        f.name.value = name;
+      }
+      const vms = polScope() === "all" ? "Every VM, including new ones" : esc([...polWiz.picked].join(", "));
+      const rows = [["VMs", vms], ["When", esc(polText())], ["Keep", `${esc(f.keep_last.value)} latest of each VM`],
+        ["Target", esc($('input[name="target"]:checked', polForm)?.value || "")]];
+      $(".wiz-summary", polForm).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    }
+  },
+});
+{
+  $$('input[name="scope"]', polForm).forEach((r) => r.addEventListener("change", polRender));
+  $$('input[name="mode"]', polForm).forEach((r) => r.addEventListener("change", polSchedule));
+  ["every_hours", "keep_last"].forEach((n) => polForm.elements[n].addEventListener("input", polSchedule));
+  $(".chips.presets", polForm).addEventListener("click", () => setTimeout(polSchedule));
+  $(".pol-search", polForm).addEventListener("input", polRender);
+  polForm.elements.name.addEventListener("input", () => { polWiz.nameTouched = true; });
+  $(".pol-rows", polForm).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-vm]");
+    if (!tr) return;
+    if (polWiz.picked.has(tr.dataset.vm)) polWiz.picked.delete(tr.dataset.vm); else polWiz.picked.add(tr.dataset.vm);
+    polRender();
+  });
+}
+
 handlers["policy-dialog"] = async (f) => {
+  [1, 2, 3, 4].forEach((n) => policyWiz.check(n));
   const body = {
     name: f.get("name"),
     target: f.get("target"),
-    vms: f.getAll("vms"),
+    vms: polScope() === "all" ? [] : [...polWiz.picked],
     keep_last: Number(f.get("keep_last")),
   };
   if (f.get("mode") === "at") body.at = f.get("at"); else body.every_hours = Number(f.get("every_hours"));
   await post("/backup/policies", body);
-  toast(`Schedule ${body.name} created`);
+  toast(`Schedule ${body.name} created: ${polText()}`);
   await refresh("backup");
 };
 

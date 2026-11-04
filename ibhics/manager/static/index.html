@@ -729,19 +729,65 @@
   </form>
 </dialog>
 
-<dialog id="policy-dialog">
-  <form method="dialog" id="policy-form">
+<dialog id="policy-dialog" class="wizard">
+  <form method="dialog" id="policy-form" novalidate>
     <header><h3>New backup schedule</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>Name <input name="name" required placeholder="nightly"></label>
-      <label>Target <select name="target" class="target-list" required></select></label>
-      <label>Repeat <select name="mode" data-switch><option value="at">Daily at</option><option value="every">Every N hours</option></select></label>
-      <label data-for="at">Time <input name="at" type="time" value="02:00"></label>
-      <label data-for="every">Hours <input name="every_hours" type="number" min="1" max="168" value="6"></label>
-      <fieldset class="vm-checks"><legend>VMs (none ticked = all VMs, including new ones)</legend><div class="vm-check-list"></div></fieldset>
-      <label>Keep last <input name="keep_last" type="number" min="1" value="7"></label>
+    <ol class="wiz-steps">
+      <li data-step="1"><b>1</b>VMs</li>
+      <li data-step="2"><b>2</b>When and how long</li>
+      <li data-step="3"><b>3</b>Where</li>
+      <li data-step="4"><b>4</b>Name and confirm</li>
+    </ol>
+    <div class="body">
+      <section class="wiz-page" data-page="1">
+        <div class="formats" style="margin-top:0">
+          <label class="type-card small"><input type="radio" name="scope" value="all" checked><svg><use href="#i-compute"/></svg><span><b>Every VM</b><em>Includes VMs created later. Nothing gets forgotten.</em></span></label>
+          <label class="type-card small"><input type="radio" name="scope" value="pick"><svg><use href="#i-backup"/></svg><span><b>Chosen VMs</b><em>Tick the VMs below.</em></span></label>
+        </div>
+        <div class="pol-vms" hidden>
+          <div class="wiz-bar" style="margin-top:14px"><span class="pol-count muted"></span><span class="spacer"></span><input type="search" class="search pol-search" placeholder="Search VMs"></div>
+          <div class="table-wrap disk-table"><table>
+            <thead><tr><th style="width:36px"></th><th>VM</th><th>Node</th><th>Status</th><th>Disks</th></tr></thead>
+            <tbody class="pol-rows"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <section class="wiz-page" data-page="2">
+        <p class="wiz-label" style="margin-top:0">Run</p>
+        <div class="formats" style="margin-top:0">
+          <label class="type-card small"><input type="radio" name="mode" value="at" checked><span><b>Once a day</b><em>At a quiet hour, e.g. 02:00.</em></span></label>
+          <label class="type-card small"><input type="radio" name="mode" value="every"><span><b>Every few hours</b><em>For VMs whose data changes all day.</em></span></label>
+        </div>
+        <div class="form-grid" style="margin-top:14px">
+          <label class="pol-at">Time <input name="at" type="time" value="02:00"></label>
+          <label class="pol-every" hidden>Every <span class="inline unit"><input name="every_hours" type="number" min="1" max="168" value="6"> hours</span></label>
+        </div>
+        <p class="wiz-label">Keep</p>
+        <div class="hw-row" style="padding:0">
+          <div class="chips presets" data-target="keep_last"><button type="button" data-v="3">3</button><button type="button" data-v="7">7</button><button type="button" data-v="14">14</button><button type="button" data-v="30">30</button></div>
+          <label class="inline unit"><input name="keep_last" type="number" min="1" max="1000" value="7"> latest backups of each VM</label>
+        </div>
+        <p class="hint pol-keep" style="padding:0;margin-top:8px"></p>
+      </section>
+
+      <section class="wiz-page" data-page="3">
+        <div class="type-cards pol-targets"></div>
+        <p class="hint" style="padding:0;margin-top:12px">Need somewhere new? Add a target (NAS, USB disk, S3...) under Backup → Targets first.</p>
+      </section>
+
+      <section class="wiz-page" data-page="4">
+        <div class="form-grid"><label>Schedule name <input name="name" placeholder="nightly" autocomplete="off"></label></div>
+        <dl class="kv wiz-summary"></dl>
+      </section>
     </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create schedule</button></footer>
+    <footer>
+      <button value="cancel" formnovalidate>Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" class="wiz-back">Back</button>
+      <button type="button" class="primary wiz-next">Next</button>
+      <button class="primary wiz-ok" value="ok">Create schedule</button>
+    </footer>
   </form>
 </dialog>
 
