@@ -578,6 +578,20 @@ class IsoOut(BaseModel):
     name: str
     path: str
     size_bytes: int
+    pool: str = ""  # empty: the ISO library folder on the system disk
+    folder: str = ""
+
+
+class PoolFileOut(BaseModel):
+    name: str
+    path: str  # relative to the pool
+    dir: bool
+    size_bytes: int
+    modified: float
+
+
+class FolderIn(BaseModel):
+    path: str = Field(min_length=1, max_length=512)
 
 
 class UploadOut(BaseModel):

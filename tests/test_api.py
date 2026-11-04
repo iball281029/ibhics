@@ -100,7 +100,7 @@ def test_iso_library(tmp_path):
     assert resp.status_code == 200, resp.text
     path = str(tmp_path / "iso" / "debian-13.0.0-amd64-netinst.iso")
     name = "debian-13.0.0-amd64-netinst.iso"
-    assert resp.json() == {"name": name, "path": path, "size_bytes": 10}
+    assert resp.json() == {"name": name, "path": path, "size_bytes": 10, "pool": "", "folder": ""}
     assert [i["path"] for i in client.get("/api/v1/isos").json()] == [path]
     for bad in ("x.exe", ".hidden.iso", "a$b.iso"):
         assert client.put(f"/api/v1/isos/{bad}", content=b"x").status_code == 422, bad
@@ -111,3 +111,44 @@ def test_iso_library(tmp_path):
     client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": None})
     assert client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso").status_code == 204
     assert client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso").status_code == 404
+
+
+def test_datastore_browser_folders_uploads_and_isos(tmp_path):
+    driver = FakeDriver()
+    driver.files_root = tmp_path / "pools"
+    client = TestClient(create_app(driver, iso_dir=tmp_path / "iso"))
+    node = client.get("/api/v1/pools").json()[0]["node"]
+    base = f"/api/v1/nodes/{node}/pools/default"
+
+    assert client.get(f"{base}/files").json() == []
+    assert client.post(f"{base}/folders", json={"path": "iso"}).status_code == 201
+    assert client.post(f"{base}/folders", json={"path": "iso"}).status_code == 422  # exists
+    for bad in ("../etc", ".hidden", "a/../../b"):
+        assert client.post(f"{base}/folders", json={"path": bad}).status_code == 422, bad
+
+    # Uploads go into a folder, never next to the VM disks.
+    assert client.put(f"{base}/files?path=win.iso", content=b"x").status_code == 422
+    resp = client.put(f"{base}/files?path=iso/win.iso", content=b"x" * 5)
+    assert resp.status_code == 200 and resp.json()["path"] == "iso/win.iso"
+    assert client.put(f"{base}/files?path=nope/win.iso", content=b"x").status_code == 404
+    [folder] = client.get(f"{base}/files").json()
+    assert (folder["name"], folder["dir"]) == ("iso", True)
+    [iso] = client.get(f"{base}/files?path=iso").json()
+    assert (iso["name"], iso["size_bytes"]) == ("win.iso", 5)
+
+    # The ISO library lists it, and a VM using it keeps it from being deleted.
+    lib = [i for i in client.get("/api/v1/isos").json() if i["pool"] == "default"]
+    assert [(i["name"], i["folder"]) for i in lib] == [("win.iso", "iso")]
+    vm = create(client, iso=lib[0]["path"]).json()
+    assert client.delete(f"{base}/files?path=iso").status_code == 422
+    client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": None})
+    assert client.delete(f"{base}/files?path=iso").status_code == 204
+    assert client.get(f"{base}/files").json() == []
+
+    # LVM pools hold only VM disks.
+    client.post(
+        f"/api/v1/nodes/{node}/pools",
+        json={"name": "fc", "type": "lvm", "device": "/dev/sdb", "confirm_wipe": True},
+    )
+    resp = client.get(f"/api/v1/nodes/{node}/pools/fc/files")
+    assert resp.status_code == 422 and "VM disks only" in resp.json()["detail"]

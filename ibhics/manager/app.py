@@ -17,6 +17,7 @@ from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
+from . import datastore
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
@@ -30,6 +31,7 @@ from .schemas import (
     BackupTargetOut,
     CdromRequest,
     ClusterOut,
+    FolderIn,
     GuestOut,
     HostNetworkIn,
     HostOut,
@@ -51,6 +53,7 @@ from .schemas import (
     PolicyIn,
     PolicyOut,
     PoolCreate,
+    PoolFileOut,
     PoolOut,
     PowerIn,
     RestoreRequest,
@@ -107,6 +110,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/cluster/nodes/{{name}}"),
     ("POST", f"{API}/nodes/{{name}}/pools"),
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}"),
+    ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}/files"),
     ("POST", f"{API}/nodes/{{name}}/evacuate"),
     ("PUT", f"{API}/nodes/{{name}}/network"),
     ("POST", f"{API}/nodes/{{name}}/network/confirm"),
@@ -502,6 +506,50 @@ def create_app(
         cluster.require_quorum()
         cluster.member(name).driver.delete_pool(pool)
 
+    # Datastore browser: the files of a folder, thin-disk or NFS pool, with folders
+    # (such as "iso") that uploads go into.
+
+    def pool_root(name: str, pool: str) -> str:
+        driver = cluster.member(name).driver
+        root = driver.pool_path(pool)
+        if root is None:
+            kind = next((p.type for p in driver.list_pools() if p.name == pool), None)
+            if kind is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, f"no pool {pool!r} on {name}")
+            if kind in ("lvm", "iscsi"):
+                raise ValueError("an LVM pool holds VM disks only; it has no files or folders")
+            raise ValueError("files of this pool can be browsed only on the node holding it")
+        return root
+
+    def pool_call(fn, *args):
+        try:
+            return fn(*args)
+        except LookupError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
+
+    @api.get("/nodes/{name}/pools/{pool}/files", response_model=list[PoolFileOut])
+    def pool_files(name: str, pool: str, path: str = "") -> list[PoolFileOut]:
+        entries = pool_call(datastore.listing, pool_root(name, pool), path)
+        return [PoolFileOut(**asdict(e)) for e in entries]
+
+    @api.post("/nodes/{name}/pools/{pool}/folders", status_code=status.HTTP_201_CREATED)
+    def pool_folder(name: str, pool: str, body: FolderIn) -> dict:
+        datastore.make_folder(pool_root(name, pool), body.path)
+        return {"path": str(datastore.clean(body.path))}
+
+    @api.put("/nodes/{name}/pools/{pool}/files", response_model=PoolFileOut)
+    async def pool_upload(name: str, pool: str, path: str, request: Request) -> PoolFileOut:
+        root = pool_root(name, pool)
+        target = pool_call(datastore.upload_target, root, path)
+        size = await receive_file(request, target)
+        rel = str(target.relative_to(Path(root).resolve()))
+        return PoolFileOut(name=target.name, path=rel, dir=False, size_bytes=size, modified=0)
+
+    @api.delete("/nodes/{name}/pools/{pool}/files", status_code=status.HTTP_204_NO_CONTENT)
+    def pool_delete(name: str, pool: str, path: str) -> None:
+        in_use = {vm.spec.iso for _, vm in cluster.all_vms() if vm.spec.iso}
+        pool_call(datastore.remove, pool_root(name, pool), path, in_use)
+
     # VMs: reads work without quorum so operators can see what is going on;
     # anything that changes state needs a majority of nodes.
 
@@ -637,6 +685,30 @@ def create_app(
             for p in files
             if p.is_file() and not p.name.startswith(".") and p.suffix.lower() == ".iso"
         ]
+        # .iso files kept in storage pools (for example SSD01/iso) on this node.
+        for member in cluster.compute_members():
+            try:
+                pools = member.driver.list_pools()
+            except NodeUnavailable:
+                continue
+            for pool in pools:
+                try:
+                    root = member.driver.pool_path(pool.name)
+                except Exception:  # a pool that went away: just skip it
+                    continue
+                if not root:
+                    continue
+                for p in datastore.find_isos(root):
+                    rel = p.relative_to(root)
+                    isos.append(
+                        IsoOut(
+                            name=p.name,
+                            path=str(p),
+                            size_bytes=p.stat().st_size,
+                            pool=pool.name,
+                            folder=str(rel.parent) if rel.parent.parts else "",
+                        )
+                    )
         tools = Path(GUEST_TOOLS_ISO)
         if tools.is_file():
             isos.append(

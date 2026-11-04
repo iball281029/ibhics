@@ -502,6 +502,16 @@ class LibvirtDriver(HypervisorDriver):
                 except RuntimeError:
                     pass  # the bridge is not back (yet); the next change tries again
 
+    def pool_path(self, name: str) -> str | None:
+        try:
+            pool = self._conn.storagePoolLookupByName(name)
+        except libvirt.libvirtError:
+            raise PoolNotFound(name) from None
+        root = ET.fromstring(pool.XMLDesc(0))
+        if root.get("type") not in ("dir", "netfs", "fs") or not pool.isActive():
+            return None
+        return root.findtext("target/path")
+
     def list_local_disks(self):
         from .disks import list_local_disks
 

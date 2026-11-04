@@ -50,6 +50,8 @@ class FakeDriver(HypervisorDriver):
             "default": (PoolSpec(name="default", type=PoolType.DIR), 1000.0)
         }
         self._disks: dict[str, list[bytearray]] = {}
+        # Set to a folder to give file-based fake pools real files (datastore browser).
+        self.files_root: Path | None = None
         # Where each VM's "screen" is. By default a running VM gets a small built-in VNC
         # server with a test picture; tests can map a uuid to any (host, port) instead.
         self.consoles: dict[str, tuple[str, int]] = {}
@@ -236,6 +238,17 @@ class FakeDriver(HypervisorDriver):
         if getattr(self, "_host", None) is None:
             self._host = FakeHost()
         return self._host
+
+    def pool_path(self, name: str) -> str | None:
+        with self._lock:
+            if name not in self._pools:
+                raise PoolNotFound(name)
+            spec = self._pools[name][0]
+        if self.files_root is None or spec.type in (PoolType.LVM, PoolType.ISCSI):
+            return None
+        path = Path(self.files_root) / name
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
 
     def list_local_disks(self):
         from .disks import LocalDisk

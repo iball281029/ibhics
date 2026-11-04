@@ -400,6 +400,11 @@ class HypervisorDriver(abc.ABC):
         """Whole disks on this node that could become an LVM pool (disks.LocalDisk)."""
         return []
 
+    def pool_path(self, name: str) -> str | None:
+        """The folder a file-based pool (folder, thin XFS disk, NFS) keeps its files in,
+        when this process can reach it; None for LVM pools and pools on other nodes."""
+        return None
+
     def host_system(self):
         """The node itself: its summary, network ports and settings (host.HostSystem)."""
         raise NotImplementedError
