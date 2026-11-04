@@ -445,3 +445,31 @@ label.inline select { width: auto; min-width: 140px; }
   .wiz-steps b { font-size: 12px; }
   .wiz-bar input.search { width: 100%; }
 }
+
+/* New VM wizard */
+.wiz-label { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.os-cards { grid-template-columns: repeat(3, 1fr); }
+.type-card.small { padding: 12px 14px; }
+.type-card.small svg { width: 30px; height: 30px; padding: 6px; }
+.hw-rows { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 10px; }
+.hw-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; }
+.hw-row + .hw-row { border-top: 1px solid var(--line); }
+.hw-head { display: flex; align-items: center; gap: 10px; width: 130px; flex: none; }
+.hw-head svg { width: 30px; height: 30px; padding: 6px; border-radius: 8px; background: var(--brand-soft); color: var(--brand); }
+.hw-row > select { width: auto; min-width: 220px; }
+.unit { font-weight: 400; color: var(--muted); }
+.unit input { width: 90px; }
+.presets button { min-width: 44px; justify-content: center; }
+.vm-disks { display: grid; gap: 8px; flex: 1; min-width: 260px; }
+.vm-disk { display: flex; align-items: center; gap: 8px; }
+.vm-disk input { width: 90px; }
+.vm-disk select { flex: 1; }
+.vm-disk button { padding: 4px 9px; }
+.disks-row { align-items: flex-start; }
+.disks-row .add-disk { margin-left: 144px; }
+@media (max-width: 640px) {
+  .os-cards { grid-template-columns: 1fr; }
+  .hw-head { width: 100%; }
+  .disks-row .add-disk { margin-left: 0; }
+}
+.vm-disk:first-child::after { content: ""; flex: none; width: 30px; }

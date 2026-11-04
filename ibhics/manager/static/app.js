@@ -174,6 +174,52 @@ $$("dialog form").forEach((form) => {
 const handlers = {};
 let dialogContext = null;
 
+// Step-by-step dialogs ("wizards"): .wiz-steps on top, .wiz-page[data-page] sections, and
+// Back / Next / OK buttons. check(step) throws to stop Next; show(step) fills a page.
+const wizards = {};
+function wizard(id, { steps = 3, check = () => {}, show = () => {}, reset = () => {} }) {
+  const form = $(`#${id} form`);
+  const w = { step: 1, form };
+  const paint = () => {
+    $$(".wiz-steps li", form).forEach((li) => {
+      const n = Number(li.dataset.step);
+      li.classList.toggle("on", n === w.step);
+      li.classList.toggle("done", n < w.step);
+    });
+    $$(".wiz-page", form).forEach((p) => { p.hidden = Number(p.dataset.page) !== w.step; });
+    $(".wiz-back", form).hidden = w.step === 1;
+    $(".wiz-next", form).hidden = w.step === steps;
+    $(".wiz-ok", form).hidden = w.step !== steps;
+    show(w.step);
+  };
+  w.start = () => { w.step = 1; reset(); paint(); };
+  w.check = check;
+  $(".wiz-next", form).addEventListener("click", () => {
+    try { check(w.step); w.step++; paint(); } catch (err) { fail(err); }
+  });
+  $(".wiz-back", form).addEventListener("click", () => { w.step--; paint(); });
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT" && w.step < steps) { e.preventDefault(); $(".wiz-next", form).click(); }
+  });
+  wizards[id] = w;
+  return w;
+}
+// Preset buttons (.chips.presets[data-target]) set a number field and show which is on.
+function syncPresets(form) {
+  $$(".chips.presets", form).forEach((c) => {
+    const v = form.elements[c.dataset.target].value;
+    $$("button", c).forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+  });
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".chips.presets button[data-v]");
+  if (!b) return;
+  const form = b.closest("form");
+  form.elements[b.closest(".chips").dataset.target].value = b.dataset.v;
+  syncPresets(form);
+});
+document.addEventListener("input", (e) => { if (e.target.form && $(".chips.presets", e.target.form)) syncPresets(e.target.form); });
+
 function openDialog(id, context = null, prefill = {}) {
   const dlg = document.getElementById(id);
   const form = $("form", dlg);
@@ -187,7 +233,7 @@ function openDialog(id, context = null, prefill = {}) {
   const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms",
     $(".net-list", form) && "networks", $(".iso-list", form) && "isos"].filter(Boolean);
   if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
-  if (id === "pool-dialog") wizStart();
+  wizards[id]?.start();
 }
 
 $$("dialog").forEach((dlg) => {
@@ -737,20 +783,93 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
   await refresh(currentPage());
 };
 
+// New VM: basics (name, OS), hardware (CPU, memory, disks, network), then install media
+// and a summary. Windows and recent OS versions default to UEFI.
+const vmWiz = wizard("vm-dialog", {
+  reset() {
+    const f = $("#vm-form");
+    $$(".vm-disk:not(:first-child)", f).forEach((d) => d.parentNode.removeChild(d));
+    f.elements.vcpus.value = 2;
+    f.elements.memory_gb.value = 4;
+    f.elements.disk_gb.value = 60;
+    vmWizOs(f);
+    syncPresets(f);
+  },
+  check(step) {
+    const f = $("#vm-form").elements;
+    if (step === 1 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the VM with letters, digits, '-', '_' or '.' (no spaces).");
+    if (step === 1 && state.vms.some((v) => v.name === f.name.value)) throw new Error(`A VM named ${f.name.value} already exists.`);
+    if (step === 2) {
+      if (!(Number(f.vcpus.value) >= 1)) throw new Error("Give the VM at least 1 vCPU.");
+      if (!(Number(f.memory_gb.value) >= 0.25)) throw new Error("Give the VM at least 0.25 GB of memory.");
+      if ($$(".vm-disk", $("#vm-form")).some((d) => !(Number($("input", d).value) >= 1) || !$("select", d).value)) throw new Error("Each disk needs a size and a storage pool.");
+    }
+  },
+  show(step) {
+    const form = $("#vm-form"), f = form.elements;
+    if (step === 3) {
+      const disks = $$(".vm-disk", form).map((d) => `${esc($("input", d).value)} GB on ${esc($("select", d).value)}`);
+      const rows = [["Name", esc(f.name.value)], ["Node", esc(f.node.value || "Automatic")],
+        ["OS", esc(f.os_type.value || { windows: "Windows", linux: "Linux", other: "Other" }[f.os_family.value])],
+        ["CPU / memory", `${esc(f.vcpus.value)} vCPU · ${esc(f.memory_gb.value)} GB`], ["Disks", disks.join("<br>")],
+        ["Network", esc(f.network.value)], ["Firmware", esc(f.firmware.value.toUpperCase())]];
+      $(".wiz-summary", form).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    }
+  },
+});
+function vmWizOs(form) {
+  const f = form.elements, family = f.os_family.value, ver = f.os_type.value.toLowerCase();
+  const uefi = (family === "windows" && !/2012|2016|windows 7|windows 8/.test(ver)) || /2025|red hat enterprise linux 9|24\.04/.test(ver);
+  f.firmware.value = uefi ? "uefi" : "bios";
+  $(".fw-hint", form).textContent = uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "";
+  f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
+}
+{
+  const form = $("#vm-form");
+  $$('input[name="os_family"]', form).forEach((r) => r.addEventListener("change", () => vmWizOs(form)));
+  form.elements.os_type.addEventListener("change", () => {
+    const v = form.elements.os_type.value.toLowerCase();
+    const fam = /windows/.test(v) ? "windows" : /ubuntu|debian|linux|rhel|rocky|alma|suse|centos|fedora/.test(v) ? "linux" : null;
+    if (fam) form.elements.os_family.value = fam;
+    vmWizOs(form);
+  });
+  $(".add-disk", form).addEventListener("click", () => {
+    const first = $(".vm-disk", form);
+    const row = document.createElement("div");
+    row.className = "vm-disk";
+    row.innerHTML = `<input type="number" min="1" value="100" aria-label="Size (GB)"><span class="muted">GB on</span><select>${$("select", first).innerHTML}</select><button type="button" class="ghost" title="Remove disk">×</button>`;
+    $("select", row).value = $("select", first).value;
+    $(".vm-disks", form).append(row);
+  });
+  $(".vm-disks", form).addEventListener("click", (e) => {
+    const row = e.target.closest("button") && e.target.closest(".vm-disk");
+    if (row) row.parentNode.removeChild(row);
+  });
+}
+
 handlers["vm-dialog"] = async (f) => {
+  const form = $("#vm-form");
+  vmWiz.check(1); vmWiz.check(2);
   const body = {
     name: f.get("name"),
     vcpus: Number(f.get("vcpus")),
-    memory_mb: Number(f.get("memory_mb")),
+    memory_mb: Math.round(Number(f.get("memory_gb")) * 1024),
     firmware: f.get("firmware"),
     os_type: f.get("os_type").trim(),
-    disks: [{ size_gb: Number(f.get("disk_gb")), pool: f.get("pool") || "default" }],
+    description: f.get("description").trim(),
+    disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default" })),
     nics: [{ network: f.get("network") || "default" }],
     node: f.get("node") || null,
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);
   toast(`${vm.name} created on ${vm.node}`);
+  if (f.get("start") === "on") {
+    try {
+      await post(`/vms/${vm.uuid}/start`);
+      window.open(`console.html?${new URLSearchParams({ vm: vm.uuid, name: vm.name })}`, `console-${vm.uuid}`, "width=1100,height=760");
+    } catch (err) { fail(err); }
+  }
   if (currentPage() === "compute") await refresh("compute"); else location.hash = "compute";
 };
 
@@ -1094,6 +1213,8 @@ function wizCheck(step) {
     if (e.key === "Enter" && e.target.tagName === "INPUT" && poolWiz.step < 3) { e.preventDefault(); $(".wiz-next", form).click(); }
   });
 }
+
+wizards["pool-dialog"] = { start: wizStart };
 
 handlers["pool-dialog"] = async (f) => {
   wizCheck(3);
