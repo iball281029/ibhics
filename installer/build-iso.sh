@@ -72,7 +72,7 @@ python3 -m pip download --quiet --dest "$PAYLOAD/wheelhouse" \
     --platform manylinux_2_28_x86_64 --platform manylinux_2_17_x86_64 \
     --platform manylinux2014_x86_64 \
     "$PAYLOAD"/wheelhouse/ibhics-*.whl
-cp "$HERE/preseed.cfg" "$HERE/pick-disk.sh" "$HERE/install-ibhics.sh" "$HERE/upgrade.sh" "$HERE/packages.txt" "$PAYLOAD/"
+cp "$HERE/preseed.cfg" "$HERE/pick-disk.sh" "$HERE/find-ibhics.sh" "$HERE/already-installed.sh" "$HERE/ibhics.templates" "$HERE/install-ibhics.sh" "$HERE/upgrade.sh" "$HERE/packages.txt" "$PAYLOAD/"
 
 if [ -z "$DEBREPO" ]; then
     echo ">> Downloading the Debian packages a node needs (in a debian:trixie container)"
@@ -124,14 +124,20 @@ fi
 cp "$HERE"/systemd/*.service "$PAYLOAD/systemd/"
 echo "$VERSION" > "$PAYLOAD/VERSION"
 
+# The boot menus name the release; the title in the repository carries a placeholder.
+mkdir -p "$WORK/boot"
+for menu in isolinux.cfg grub.cfg; do
+    sed "s/@VERSION@/$SHORT/g" "$HERE/boot/$menu" > "$WORK/boot/$menu"
+done
+
 echo ">> Writing $OUT"
 mkdir -p "$(dirname "$OUT")"
 rm -f "$OUT"
 xorriso -indev "$SOURCE" -outdev "$OUT" \
     -boot_image any replay \
     -map "$PAYLOAD" /ibhics \
-    -map "$HERE/boot/isolinux.cfg" /isolinux/isolinux.cfg \
-    -map "$HERE/boot/grub.cfg" /boot/grub/grub.cfg \
+    -map "$WORK/boot/isolinux.cfg" /isolinux/isolinux.cfg \
+    -map "$WORK/boot/grub.cfg" /boot/grub/grub.cfg \
     2>&1 | grep -E "^xorriso : (FAILURE|SORRY|WARNING)" >&2 || true
 [ -s "$OUT" ] || { echo "xorriso did not write $OUT" >&2; exit 1; }
 (cd "$(dirname "$OUT")" && sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256")

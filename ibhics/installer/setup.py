@@ -330,6 +330,29 @@ def detect_interfaces(sys_net: Path = Path("/sys/class/net")) -> list[str]:
     return sorted(nics, key=lambda n: (not has_link(n, sys_net), n))
 
 
+def wake_ports(
+    interfaces: Sequence[str],
+    run: Runner = subprocess.run,
+    sys_net: Path = Path("/sys/class/net"),
+    wait: float = 8.0,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """Bring the ports up so their carrier can be read: on a fresh boot nothing has
+    configured them yet, a down port reports no carrier, and every port would look
+    unplugged. Waits until a port shows a link (negotiation takes a few seconds) or
+    the time runs out."""
+    import time
+
+    sleep = sleep or time.sleep
+    for interface in interfaces:
+        run(["ip", "link", "set", interface, "up"], check=False, capture_output=True)
+    step = 0.5
+    waited = 0.0
+    while waited < wait and not any(has_link(n, sys_net) for n in interfaces):
+        sleep(step)
+        waited += step
+
+
 def has_link(interface: str, sys_net: Path = Path("/sys/class/net")) -> bool:
     try:
         return (sys_net / interface / "carrier").read_text().strip() == "1"
@@ -464,6 +487,8 @@ def read_answers(text: str, nics: Sequence[str]) -> tuple[Config, str, str | Non
 
 def unattended(path: Path) -> int:
     try:
+        nics = detect_interfaces()
+        wake_ports(nics)
         cfg, root_password, admin_password = read_answers(path.read_text(), detect_interfaces())
         cfg.validate()
     except ValueError as exc:
@@ -492,6 +517,8 @@ def main() -> int:
     if not nics:
         print("No network interface found.")
         return 1
+    wake_ports(nics)
+    nics = detect_interfaces()  # again, now that the cabled ports show their link
     ports = [(n, f"{n}  (cable connected)" if has_link(n) else n) for n in nics]
     interface = nics[0] if len(nics) == 1 else choose("Management network port", ports)
     suggested, gateway = current_address(interface)
