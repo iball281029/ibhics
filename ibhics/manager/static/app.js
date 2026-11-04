@@ -63,7 +63,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
-const POOL_TYPES = { dir: "Local", disk: "Local disk (thin)", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
+const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
@@ -187,7 +187,7 @@ function openDialog(id, context = null, prefill = {}) {
   const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms",
     $(".net-list", form) && "networks", $(".iso-list", form) && "isos"].filter(Boolean);
   if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
-  if ($(".disk-list", form)) fillDisks(form);
+  if (id === "pool-dialog") wizStart();
 }
 
 $$("dialog").forEach((dlg) => {
@@ -890,42 +890,236 @@ document.addEventListener("change", async (e) => {
   if (currentPage() === "storage") renderIsos();
 });
 
-// The disk picker lists the node's unused whole disks, so nobody has to find /dev/sdX.
-async function fillDisks(form) {
-  const sel = $(".disk-list", form);
-  const node = form.elements.node.value;
-  if (!node || !["disk", "lvm"].includes(form.elements.type.value)) return;
-  sel.innerHTML = `<option value="">Looking for disks on ${esc(node)}...</option>`;
-  let disks = [];
-  try { disks = await api(`/nodes/${enc(node)}/disks`); } catch (err) { /* offered by hand below */ }
-  const label = (d) => [d.path, `${Math.round(d.size_gb).toLocaleString()} GB`, d.model, d.transport.toUpperCase(),
-    d.empty ? "empty" : `has data: ${d.contents}`].filter(Boolean).join(" · ");
-  sel.innerHTML = (disks.length ? disks.map((d) => `<option value="${esc(d.path)}">${esc(label(d))}</option>`).join("")
-    : `<option value="">No unused disk found on ${esc(node)}</option>`) + `<option value="other">Other device path...</option>`;
-  syncDiskPath(form);
+// ---------- Add storage wizard ----------
+// Three steps: what kind of storage, which disks (or where the share is), then a name
+// and a clear warning about what gets erased. Local disks are picked from a table with
+// SSD/HDD shown, and several disks make one pool.
+
+const poolWiz = {
+  form: $("#pool-form"),
+  step: 1,
+  disks: {}, // node -> [disk] (null while loading)
+  picked: new Set(),
+  media: "",
+  nameTouched: false,
+};
+const KIND_LABEL = { local: "Local disks", fc: "Fibre Channel", nfs: "NFS", iscsi: "iSCSI", dir: "Folder" };
+const sizeText = (gb) => (gb >= 1000 ? `${(gb / 1024).toFixed(gb >= 10240 ? 1 : 2)} TB` : `${Math.round(gb)} GB`);
+const isFcDisk = (d) => d.transport === "fc" || d.path.startsWith("/dev/mapper/");
+
+function wizKind() { return poolWiz.form.elements.kind.value; }
+function wizNode() { return poolWiz.form.elements.node.value; }
+function wizDiskList() {
+  const all = poolWiz.disks[wizNode()] || [];
+  return all.filter((d) => (wizKind() === "fc" ? isFcDisk(d) : !isFcDisk(d)));
 }
-function syncDiskPath(form) {
-  $(".disk-path", form).hidden = form.elements.device.value !== "other";
+function wizPicked() { return wizDiskList().filter((d) => poolWiz.picked.has(d.path)); }
+
+function wizStart() {
+  Object.assign(poolWiz, { step: 1, disks: {}, picked: new Set(), media: "", nameTouched: false });
+  $$(".chips button", poolWiz.form).forEach((b) => b.classList.toggle("on", b.dataset.media === ""));
+  $(".disk-search", poolWiz.form).value = "";
+  $(".node-check-list", poolWiz.form).innerHTML = computeMembers().filter((m) => m.healthy).map((m, i) =>
+    `<label class="check"><input type="checkbox" name="nodes" value="${esc(m.name)}" ${i === 0 ? "checked" : ""}> ${esc(m.name)}</label>`).join("")
+    || `<p class="hint">No node is online.</p>`;
+  wizShow();
 }
+
+function wizShow() {
+  const { form, step } = poolWiz, kind = wizKind();
+  $$(".wiz-steps li", form).forEach((li) => {
+    const n = Number(li.dataset.step);
+    li.classList.toggle("on", n === step);
+    li.classList.toggle("done", n < step);
+  });
+  $(".wiz-step2", form).textContent = ["local", "fc"].includes(kind) ? "Disks" : kind === "dir" ? "Folder" : "Connection";
+  $$(".wiz-page", form).forEach((p) => {
+    p.hidden = Number(p.dataset.page) !== step || (p.dataset.kinds && !p.dataset.kinds.split(" ").includes(kind));
+  });
+  $$("[data-kinds]:not(.wiz-page)", form).forEach((el) => { el.hidden = !el.dataset.kinds.split(" ").includes(kind); });
+  $(".wiz-back", form).hidden = step === 1;
+  $(".wiz-next", form).hidden = step === 3;
+  $(".wiz-ok", form).hidden = step !== 3;
+  if (step === 2 && ["local", "fc"].includes(kind)) wizLoadDisks();
+  if (step === 3) wizReview();
+}
+
+async function wizLoadDisks(force = false) {
+  const node = wizNode();
+  if (!node) { wizRenderDisks(); return; }
+  if (poolWiz.disks[node] !== undefined && !force) { wizRenderDisks(); return; }
+  poolWiz.disks[node] = null;
+  wizRenderDisks();
+  try { poolWiz.disks[node] = await api(`/nodes/${enc(node)}/disks`); } catch (err) { poolWiz.disks[node] = []; fail(err); }
+  if (wizNode() === node) wizRenderDisks();
+}
+
+function wizRenderDisks() {
+  const { form } = poolWiz, node = wizNode(), kind = wizKind();
+  const rows = $(".disk-rows", form);
+  if (!node) { rows.innerHTML = empty(6, "No node is online"); return wizPickText(); }
+  if (poolWiz.disks[node] === null) { rows.innerHTML = empty(6, `Looking for disks on ${node}...`); return wizPickText(); }
+  const q = $(".disk-search", form).value.trim().toLowerCase();
+  const list = wizDiskList().filter((d) => (!poolWiz.media || d.media === poolWiz.media)
+    && (!q || [d.path, d.model, d.serial, d.contents].join(" ").toLowerCase().includes(q)));
+  rows.innerHTML = list.length ? list.map((d) => {
+    const on = poolWiz.picked.has(d.path);
+    return `<tr data-path="${esc(d.path)}" class="${on ? "sel" : ""}">
+      <td><input type="checkbox" ${on ? "checked" : ""} aria-label="Select ${esc(d.path)}"></td>
+      <td>${d.empty ? `<span class="badge empty-disk">Empty</span>` : `<span class="badge has-data">Has data</span>`}</td>
+      <td><span class="vm-name mono">${esc(d.path)}</span><span class="vm-sub">${esc([d.model, d.transport.toUpperCase()].filter(Boolean).join(" · "))}</span></td>
+      <td>${d.media ? `<span class="media ${esc(d.media)}">${esc(d.media.toUpperCase())}</span>` : "–"}</td>
+      <td style="white-space:nowrap">${sizeText(d.size_gb)}</td>
+      <td class="vm-sub" style="display:table-cell">${esc(d.empty ? (d.serial ? `S/N ${d.serial}` : "") : d.contents)}</td>
+    </tr>`;
+  }).join("") : empty(6, kind === "fc"
+    ? `No FC LUN found on ${node}. Zone the LUN to this node on the SAN, then Rescan.`
+    : poolWiz.media || q ? "No disk matches the filter" : `No free disk on ${node}. Insert a disk into the node, then Rescan.`);
+  const shown = list.map((d) => d.path);
+  const all = $(".disk-all", form);
+  all.checked = shown.length > 0 && shown.every((p) => poolWiz.picked.has(p));
+  all.indeterminate = !all.checked && shown.some((p) => poolWiz.picked.has(p));
+  wizPickText();
+}
+
+function wizMixNote(picked) {
+  const kinds = new Set(picked.map((d) => d.media).filter(Boolean));
+  return kinds.size > 1
+    ? `<div class="wiz-note warn">SSD and HDD are mixed in one pool. The pool runs only as fast as its HDDs; separate pools are better.</div>` : "";
+}
+
+function wizPickText() {
+  const picked = wizPicked();
+  const box = $(".wiz-pick", poolWiz.form);
+  if (!picked.length) { box.innerHTML = `<span class="muted">Tick the disks for the new pool.</span>`; return; }
+  const total = picked.reduce((s, d) => s + d.size_gb, 0);
+  box.innerHTML = `<b>${picked.length} disk${picked.length > 1 ? "s" : ""} selected</b> · ${sizeText(total)} in total${wizMixNote(picked)}`;
+}
+
+function wizSuggestName() {
+  const el = poolWiz.form.elements.name;
+  if (poolWiz.nameTouched && el.value) return;
+  const kind = wizKind(), picked = wizPicked(), f = poolWiz.form.elements;
+  const media = new Set(picked.map((d) => d.media));
+  let base = { nfs: "nas", iscsi: "iscsi", fc: "san", dir: "local" }[kind] || (media.size === 1 ? `${[...media][0] || "data"}` : "data");
+  if (kind === "nfs" && f.host.value) base = `nas-${f.host.value.split(".").pop()}`;
+  if (kind === "local") base += `-${wizNode()}`;
+  base = base.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^[^a-zA-Z0-9]+/, "") || "pool";
+  const taken = new Set(state.pools.map((p) => p.name));
+  let name = base;
+  for (let i = 2; taken.has(name); i++) name = `${base}-${i}`;
+  el.value = name;
+}
+
+function wizReview() {
+  const { form } = poolWiz, f = form.elements, kind = wizKind(), picked = wizPicked();
+  wizSuggestName();
+  const fmt = $$('input[name="format"]', form);
+  if (kind === "local") {
+    const thin = fmt.find((r) => r.value === "disk");
+    thin.disabled = picked.length > 1;
+    if (!$('input[name="format"]:checked', form) || thin.disabled) fmt.find((r) => r.value === (picked.length > 1 ? "lvm" : "disk")).checked = true;
+  }
+  const rows = [["Type", KIND_LABEL[kind]]];
+  if (["local", "fc"].includes(kind)) {
+    rows.push(["Node", wizNode()], ["Disks", picked.map((d) => `${d.path} (${sizeText(d.size_gb)}${d.media ? ` ${d.media.toUpperCase()}` : ""})`).join("<br>")],
+      ["Capacity", `About ${sizeText(picked.reduce((s, d) => s + d.size_gb, 0))}`]);
+  } else {
+    const nodes = $$('input[name="nodes"]:checked', form).map((c) => c.value);
+    if (kind === "nfs") rows.push(["Share", esc(`${f.host.value}:${f.export.value}`)]);
+    if (kind === "iscsi") rows.push(["Target", esc(`${f.host.value} · ${f.iqn.value} · LUN ${f.lun.value}`)]);
+    if (kind === "dir") rows.push(["Folder", esc(f.path.value || "Default (/var/lib/ibhics/pools/<name>)")]);
+    rows.push(["Nodes", esc(nodes.join(", "))]);
+  }
+  $(".wiz-summary", form).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${k === "Node" || k === "Type" ? esc(v) : v}</dd>`).join("");
+  const withData = picked.filter((d) => !d.empty);
+  const erases = ["local", "fc", "iscsi"].includes(kind);
+  $(".wiz-warn", form).innerHTML = (withData.length ? `<div class="wiz-note bad"><div><b>These disks still hold data, which will be erased:</b><ul>${withData.map((d) =>
+    `<li><span class="mono">${esc(d.path)}</span>: ${esc(d.contents)}</li>`).join("")}</ul></div></div>` : "") + wizMixNote(picked);
+  $(".wiz-confirm", form).hidden = !erases;
+  $(".wiz-confirm span", form).textContent = kind === "iscsi"
+    ? "I understand everything on this LUN will be erased"
+    : `I understand everything on ${picked.length > 1 ? `these ${picked.length} disks` : "this disk"} will be erased`;
+}
+
+function wizCheck(step) {
+  const f = poolWiz.form.elements, kind = wizKind();
+  if (step === 2 && ["local", "fc"].includes(kind) && !wizPicked().length) throw new Error("Tick at least one disk.");
+  if (step === 2 && !["local", "fc"].includes(kind)) {
+    if (["nfs", "iscsi"].includes(kind) && !f.host.value.trim()) throw new Error("Enter the server address.");
+    if (kind === "nfs" && !f.export.value.trim().startsWith("/")) throw new Error("Enter the export path, starting with /.");
+    if (kind === "iscsi" && !f.iqn.value.trim()) throw new Error("Enter the target IQN.");
+    if (!$$('input[name="nodes"]:checked', poolWiz.form).length) throw new Error("Pick at least one node.");
+  }
+  if (step === 3) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the pool with letters, digits, '-', '_' or '.'.");
+    if (!$(".wiz-confirm", poolWiz.form).hidden && !f.confirm_wipe.checked) throw new Error("Tick the box to confirm the disks may be erased.");
+  }
+}
+
 {
-  const form = $("#pool-form");
-  form.elements.node.addEventListener("change", () => fillDisks(form));
-  form.elements.type.addEventListener("change", () => fillDisks(form));
-  form.elements.device.addEventListener("change", () => syncDiskPath(form));
+  const { form } = poolWiz;
+  $(".wiz-next", form).addEventListener("click", () => {
+    try { wizCheck(poolWiz.step); poolWiz.step++; wizShow(); } catch (err) { fail(err); }
+  });
+  $(".wiz-back", form).addEventListener("click", () => { poolWiz.step--; wizShow(); });
+  $$(".type-card input[name=kind]", form).forEach((r) => r.addEventListener("change", () => { poolWiz.picked.clear(); poolWiz.nameTouched = false; }));
+  $$(".type-cards .type-card", form).forEach((c) => c.addEventListener("dblclick", () => $(".wiz-next", form).click()));
+  form.elements.node.addEventListener("change", () => { poolWiz.picked.clear(); wizLoadDisks(); });
+  form.elements.name.addEventListener("input", () => { poolWiz.nameTouched = true; });
+  $(".disk-rescan", form).addEventListener("click", () => wizLoadDisks(true));
+  $(".disk-search", form).addEventListener("input", wizRenderDisks);
+  $(".chips", form).addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-media]");
+    if (!b) return;
+    poolWiz.media = b.dataset.media;
+    $$(".chips button", form).forEach((x) => x.classList.toggle("on", x === b));
+    wizRenderDisks();
+  });
+  $(".disk-rows", form).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-path]");
+    if (!tr) return;
+    const p = tr.dataset.path;
+    if (poolWiz.picked.has(p)) poolWiz.picked.delete(p); else poolWiz.picked.add(p);
+    wizRenderDisks();
+  });
+  $(".disk-all", form).addEventListener("change", (e) => {
+    $$(".disk-rows tr[data-path]", form).forEach((tr) => {
+      if (e.target.checked) poolWiz.picked.add(tr.dataset.path); else poolWiz.picked.delete(tr.dataset.path);
+    });
+    wizRenderDisks();
+  });
+  // Enter in a field moves on instead of submitting from an earlier step.
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT" && poolWiz.step < 3) { e.preventDefault(); $(".wiz-next", form).click(); }
+  });
 }
 
 handlers["pool-dialog"] = async (f) => {
-  const type = f.get("type");
-  const body = { name: f.get("name"), type, confirm_wipe: f.get("confirm_wipe") === "on" };
-  if (type === "dir" && f.get("path")) body.path = f.get("path");
-  if (type === "nfs" || type === "iscsi") body.host = f.get("host");
-  if (type === "nfs") body.export = f.get("export");
-  if (type === "iscsi") { body.iqn = f.get("iqn"); body.lun = Number(f.get("lun")); }
-  const onDisk = type === "disk" || type === "lvm";
-  if (onDisk) body.device = f.get("device") === "other" ? f.get("device_path") : f.get("device");
-  if (onDisk && !body.device) throw new Error("Pick a disk.");
-  await post(`/nodes/${enc(f.get("node"))}/pools`, body);
-  toast(`Pool ${body.name} added`);
+  wizCheck(3);
+  const kind = wizKind(), name = f.get("name"), confirm_wipe = f.get("confirm_wipe") === "on";
+  if (["local", "fc"].includes(kind)) {
+    const devices = wizPicked().map((d) => d.path);
+    const type = kind === "local" ? f.get("format") : "lvm";
+    const body = type === "disk" ? { name, type, device: devices[0], confirm_wipe } : { name, type, devices, confirm_wipe };
+    await post(`/nodes/${enc(wizNode())}/pools`, body);
+    toast(`Storage ${name} added on ${wizNode()}`);
+  } else {
+    const body = { name, type: kind, confirm_wipe };
+    if (kind === "dir" && f.get("path")) body.path = f.get("path");
+    if (kind === "nfs" || kind === "iscsi") body.host = f.get("host").trim();
+    if (kind === "nfs") body.export = f.get("export").trim();
+    if (kind === "iscsi") { body.iqn = f.get("iqn").trim(); body.lun = Number(f.get("lun")); }
+    const nodes = f.getAll("nodes"), done = [];
+    for (const node of nodes) {
+      try { await post(`/nodes/${enc(node)}/pools`, body); done.push(node); } catch (err) {
+        if (done.length) toast(`Storage ${name} added on ${done.join(", ")}`);
+        await refresh("storage");
+        throw new Error(`${node}: ${err.message}`);
+      }
+    }
+    toast(`Storage ${name} added on ${done.join(", ")}`);
+  }
   await refresh("storage");
 };
 

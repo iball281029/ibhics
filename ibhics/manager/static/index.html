@@ -200,7 +200,7 @@
         <div class="page-head">
           <h1>Storage</h1><span class="sub">Pools on each node: local disk, NFS, iSCSI or FC</span>
           <span class="spacer"></span>
-          <button class="primary admin-only" data-open="pool-dialog">+ Add pool</button>
+          <button class="primary admin-only" data-open="pool-dialog">+ Add storage</button>
         </div>
         <div class="table-wrap" style="margin-top:14px"><table>
           <thead><tr><th>Pool</th><th>Node</th><th>Type</th><th>Source</th><th style="min-width:220px">Usage</th><th></th></tr></thead>
@@ -515,30 +515,83 @@
   </form>
 </dialog>
 
-<dialog id="pool-dialog">
-  <form method="dialog" id="pool-form">
-    <header><h3>Add storage pool</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>Node <select name="node" class="node-list" required></select></label>
-      <label>Name <input name="name" required placeholder="nas01"></label>
-      <label>Type
-        <select name="type" data-switch>
-          <option value="disk">Local disk, thin (recommended)</option><option value="lvm">Local disk or FC LUN, thick (LVM)</option>
-          <option value="dir">Local directory</option>
-          <option value="nfs">NFS</option><option value="iscsi">iSCSI (LVM on a LUN)</option>
-        </select>
-      </label>
-      <label data-for="dir">Path (blank = default) <input name="path" placeholder="/var/lib/ibhics/pools/..."></label>
-      <label data-for="nfs iscsi">Server / portal <input name="host" placeholder="10.0.0.50"></label>
-      <label data-for="nfs">Export <input name="export" placeholder="/vol/vms"></label>
-      <label data-for="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:lun1"></label>
-      <label data-for="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
-      <label data-for="disk lvm" class="wide">Disk <select name="device" class="disk-list"></select></label>
-      <label data-for="disk lvm" class="wide disk-path" hidden>Device path <input name="device_path" placeholder="/dev/mapper/mpatha"></label>
-      <p class="hint wide" data-for="disk">Formats the disk XFS. VM disks take only the space the guest writes, and imports skip empty areas, so a 300 GB disk with 8 GB of data copies in minutes.</p>
-      <label class="check" data-for="iscsi lvm disk"><input name="confirm_wipe" type="checkbox"> I understand all data on the device will be erased</label>
+<dialog id="pool-dialog" class="wizard">
+  <form method="dialog" id="pool-form" novalidate>
+    <header><h3>Add storage</h3><button value="cancel" formnovalidate>×</button></header>
+    <ol class="wiz-steps">
+      <li data-step="1"><b>1</b>Storage type</li>
+      <li data-step="2"><b>2</b><span class="wiz-step2">Disks</span></li>
+      <li data-step="3"><b>3</b>Name and confirm</li>
+    </ol>
+    <div class="body">
+      <section class="wiz-page" data-page="1">
+        <div class="type-cards">
+          <label class="type-card"><input type="radio" name="kind" value="local" checked>
+            <svg><use href="#i-hdd"/></svg><span><b>Local disks</b><em>Disks inside a node: SSD, HDD or NVMe. No RAID needed.</em></span></label>
+          <label class="type-card"><input type="radio" name="kind" value="nfs">
+            <svg><use href="#i-storage"/></svg><span><b>NFS</b><em>A folder shared by a NAS. Can be added to every node.</em></span></label>
+          <label class="type-card"><input type="radio" name="kind" value="iscsi">
+            <svg><use href="#i-nic"/></svg><span><b>iSCSI</b><em>A LUN on a storage array over the network.</em></span></label>
+          <label class="type-card"><input type="radio" name="kind" value="fc">
+            <svg><use href="#i-nodes"/></svg><span><b>Fibre Channel</b><em>A LUN from a SAN, seen by the node as a disk.</em></span></label>
+          <label class="type-card"><input type="radio" name="kind" value="dir">
+            <svg><use href="#i-cd"/></svg><span><b>Folder</b><em>A directory on a disk the node already uses.</em></span></label>
+        </div>
+      </section>
+
+      <section class="wiz-page" data-page="2" data-kinds="local fc">
+        <div class="wiz-bar">
+          <label class="inline">Node <select name="node" class="node-list"></select></label>
+          <div class="chips" role="group" aria-label="Disk type">
+            <button type="button" data-media="" class="on">All</button>
+            <button type="button" data-media="ssd">SSD</button>
+            <button type="button" data-media="hdd">HDD</button>
+          </div>
+          <span class="spacer"></span>
+          <input type="search" class="search disk-search" placeholder="Search disks">
+          <button type="button" class="ghost disk-rescan" title="Look for disks again">Rescan</button>
+        </div>
+        <div class="table-wrap disk-table"><table>
+          <thead><tr><th style="width:36px"><input type="checkbox" class="disk-all" aria-label="Select all"></th>
+            <th>Status</th><th>Disk</th><th>Type</th><th>Size</th><th>Details</th></tr></thead>
+          <tbody class="disk-rows"></tbody>
+        </table></div>
+        <div class="wiz-pick"></div>
+        <p class="hint wiz-tip">Tip: put SSDs and HDDs in separate pools, so VMs that need speed get the SSD pool. Several disks of one pool are joined into one large pool.</p>
+      </section>
+
+      <section class="wiz-page form-grid" data-page="2" data-kinds="nfs iscsi dir">
+        <label data-kinds="nfs iscsi">Server / portal <input name="host" placeholder="10.0.0.50"></label>
+        <label data-kinds="nfs">Export <input name="export" placeholder="/vol/vms"></label>
+        <label data-kinds="iscsi">Target IQN <input name="iqn" placeholder="iqn.2004-04.com.example:lun1"></label>
+        <label data-kinds="iscsi">LUN <input name="lun" type="number" min="0" value="0"></label>
+        <label data-kinds="dir" class="wide">Folder (blank = default) <input name="path" placeholder="/var/lib/ibhics/pools/..."></label>
+        <fieldset class="wide node-checks"><legend>Add on nodes</legend><div class="node-check-list"></div></fieldset>
+        <p class="hint wide" data-kinds="nfs">Add shared storage to every node that should run its VMs, so they can move between nodes.</p>
+      </section>
+
+      <section class="wiz-page" data-page="3">
+        <div class="form-grid">
+          <label>Pool name <input name="name" placeholder="ssd-pool" autocomplete="off"></label>
+        </div>
+        <div class="formats" data-kinds="local">
+          <label class="type-card small"><input type="radio" name="format" value="disk">
+            <span><b>Thin (XFS)</b><em>VM disks take only the space written. One disk only.</em></span></label>
+          <label class="type-card small"><input type="radio" name="format" value="lvm">
+            <span><b>Thick (LVM)</b><em>Fast block storage. Joins several disks into one pool.</em></span></label>
+        </div>
+        <dl class="kv wiz-summary"></dl>
+        <div class="wiz-warn"></div>
+        <label class="check wiz-confirm"><input name="confirm_wipe" type="checkbox"> <span></span></label>
+      </section>
     </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add pool</button></footer>
+    <footer>
+      <button value="cancel" formnovalidate>Cancel</button>
+      <span class="spacer"></span>
+      <button type="button" class="wiz-back">Back</button>
+      <button type="button" class="primary wiz-next">Next</button>
+      <button class="primary wiz-ok" value="ok">Add storage</button>
+    </footer>
   </form>
 </dialog>
 
