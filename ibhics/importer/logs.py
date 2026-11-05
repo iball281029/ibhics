@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 
 STEP = re.compile(r"^\[\s*(\d+(?:\.\d+)?)\]\s*(.+)$")
-PERCENT = re.compile(r"^[▀-▟|/\\\-\s]*(\d{1,3}(?:\.\d+)?)%\s*\[[*#=\-\s]*\]?\s*$")  # virt-v2v spins through block elements (U+2580-259F)
+# virt-v2v spins through block elements (U+2580-259F).
+PERCENT = re.compile(r"^[▀-▟|/\\\-\s]*(\d{1,3}(?:\.\d+)?)%\s*\[[*#=\-\s]*\]?\s*$")
 FRAGMENT = re.compile(r"^[*\-\s]+\]\s*$")
 ERROR = re.compile(r"error|exception|failed|traceback", re.IGNORECASE)
 
