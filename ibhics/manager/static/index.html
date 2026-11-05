@@ -58,14 +58,10 @@
     <a href="#home" data-page="home" data-label="Dashboard"><svg><use href="#i-home"/></svg></a>
     <a href="#compute" data-page="compute" data-label="Virtual Machines"><svg><use href="#i-compute"/></svg></a>
     <a href="#storage" data-page="storage" data-label="Storage"><svg><use href="#i-storage"/></svg></a>
+    <a href="#network" data-page="network" data-label="Network"><svg><use href="#i-nic"/></svg></a>
     <a href="#nodes" data-page="nodes" data-label="Nodes"><svg><use href="#i-nodes"/></svg></a>
     <a href="#backup" data-page="backup" data-label="Backup"><svg><use href="#i-backup"/></svg></a>
     <a href="#migrate" data-page="migrate" data-label="Migrate"><svg><use href="#i-migrate"/></svg></a>
-  </nav>
-  <nav class="bottom">
-    <a href="#activity" data-page="activity" data-label="Activity"><svg><use href="#i-bell"/></svg></a>
-    <a href="/docs" target="_blank" data-label="API reference"><svg><use href="#i-help"/></svg></a>
-    <a href="#system" data-page="system" data-label="Settings"><svg><use href="#i-system"/></svg></a>
   </nav>
 </aside>
 
@@ -83,6 +79,9 @@
       <small>Username</small><span><span id="whoami">…</span><svg class="chev"><use href="#i-chev"/></svg></span>
       <div class="dropdown" id="user-dropdown">
         <a href="#system" data-tab-link="account">My account</a>
+        <a href="#activity">Activity</a>
+        <a href="#system">Settings</a>
+        <a href="/docs" target="_blank">API reference</a>
         <button id="logout">Sign out</button>
       </div>
     </div>
@@ -222,7 +221,10 @@
           <tbody id="isos"></tbody>
         </table></div>
       </div>
-      <div class="sheet" style="margin-top:18px">
+    </section>
+
+    <section class="page" id="page-network">
+      <div class="sheet">
         <div class="page-head">
           <h1>Networks</h1><span class="sub">The LAN (untagged on br0) and VLANs on it, on every compute node</span>
           <span class="spacer"></span>

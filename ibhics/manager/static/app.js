@@ -122,7 +122,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "nodes", "backup", "migrate", "activity", "system"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -405,7 +405,8 @@ async function refresh(page, auto = false) {
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
-  if (page === "storage") { await load("pools", "vms", "networks", "isos"); renderPools(); renderIsos(); renderNetworks(); }
+  if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
+  if (page === "network") { await load("vms", "networks"); renderNetworks(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -913,12 +914,12 @@ function renderNetworks() {
 $("#networks").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-net-del]");
   if (!btn || !confirm(`Remove network ${btn.dataset.netDel}?`)) return;
-  try { await del(`/networks/${enc(btn.dataset.netDel)}`); await refresh("storage"); } catch (err) { fail(err); }
+  try { await del(`/networks/${enc(btn.dataset.netDel)}`); await refresh("network"); } catch (err) { fail(err); }
 });
 handlers["net-dialog"] = async (f) => {
   await post("/networks", { name: f.get("name"), vlan: Number(f.get("vlan")) });
   toast(`Network ${f.get("name")} added on every compute node`);
-  await refresh("storage");
+  await refresh("network");
 };
 
 function renderPools() {
