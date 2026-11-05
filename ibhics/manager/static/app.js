@@ -406,7 +406,7 @@ async function refresh(page, auto = false) {
   await load("imports", "jobs", "moves").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
-  if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
+  if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
   if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
@@ -2302,6 +2302,7 @@ async function renderVMDetail() {
     ["Name", esc(vm.name)],
     ["Status", `<span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`],
     ["Node", esc(vm.node || "–")],
+    ["Group", groupOf(vm) ? `<span class="g-tag">${esc(groupPath(groupOf(vm)))}</span>` : `<span class="muted">Ungrouped</span>`],
     ["Operating system", vm.os_type ? esc(vm.os_type) : `<span class="muted">Not set</span>`],
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
     ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
