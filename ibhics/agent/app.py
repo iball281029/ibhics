@@ -172,6 +172,10 @@ def create_agent_app(
         def stop_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
             return VMOut.from_info(driver.stop_vm(uuid, force=bool(body and body.force)))
 
+        @api.post("/vms/{uuid}/restart", response_model=VMOut)
+        def restart_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
+            return VMOut.from_info(driver.restart_vm(uuid, force=bool(body and body.force)))
+
         @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_vm(uuid: str) -> None:
             driver.delete_vm(uuid)

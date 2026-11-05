@@ -152,6 +152,13 @@ class FakeDriver(HypervisorDriver):
             vm.restart_needed = False
             return copy.deepcopy(vm)
 
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                raise InvalidState("VM is not running")
+            return copy.deepcopy(vm)  # a reboot keeps the same QEMU: pending changes wait
+
     def delete_vm(self, uuid: str) -> None:
         with self._lock:
             vm = self._get(uuid)

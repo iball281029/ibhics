@@ -30,6 +30,14 @@ def test_stats_of_running_vms(client):
     assert 0 < s["mem_used_mb"] <= 2048
 
 
+def test_restart(client):
+    vm = create(client, "web-01")
+    assert client.post(f"/api/v1/vms/{vm['uuid']}/restart").status_code == 409
+    client.post(f"/api/v1/vms/{vm['uuid']}/start")
+    r = client.post(f"/api/v1/vms/{vm['uuid']}/restart", json={"force": True})
+    assert r.status_code == 200 and r.json()["state"] == "running"
+
+
 def test_rates_from_two_samples():
     raw = {
         "cpu.time": 0,

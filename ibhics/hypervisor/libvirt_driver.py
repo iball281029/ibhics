@@ -318,6 +318,16 @@ class LibvirtDriver(HypervisorDriver):
             dom.shutdown()
         return self._info(dom)
 
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        dom = self._lookup(uuid)
+        if not dom.isActive():
+            raise InvalidState("VM is not running")
+        if force:
+            dom.reset(0)
+        else:
+            dom.reboot(0)
+        return self._info(dom)
+
     def delete_vm(self, uuid: str) -> None:
         dom = self._lookup(uuid)
         if dom.isActive():

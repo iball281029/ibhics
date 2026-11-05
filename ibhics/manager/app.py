@@ -687,6 +687,13 @@ def create_app(
         vm = member.driver.stop_vm(uuid, force=bool(body and body.force))
         return VMOut.from_info(vm, member.name)
 
+    @api.post("/vms/{uuid}/restart", response_model=VMOut)
+    def restart_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        vm = member.driver.restart_vm(uuid, force=bool(body and body.force))
+        return VMOut.from_info(vm, member.name)
+
     @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_vm(uuid: str) -> None:
         cluster.require_quorum()

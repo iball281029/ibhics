@@ -363,6 +363,10 @@ class HypervisorDriver(abc.ABC):
     @abc.abstractmethod
     def stop_vm(self, uuid: str, force: bool = False) -> VMInfo: ...
 
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        """Reboot a running VM: through the guest (ACPI), or a hard reset with force."""
+        raise NotImplementedError
+
     @abc.abstractmethod
     def delete_vm(self, uuid: str) -> None: ...
 
