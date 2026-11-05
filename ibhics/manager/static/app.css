@@ -677,3 +677,25 @@ th { color: color-mix(in srgb, var(--brand) 35%, var(--muted)); }
 .topo:nth-child(4) .topo-icon { background: color-mix(in srgb, var(--c-backup) 14%, transparent); }
 .topo:nth-child(5) .topo-icon { background: color-mix(in srgb, var(--c-network) 16%, transparent); }
 .topo:not(:last-child)::after { top: 38px; left: calc(50% + 48px); right: calc(-50% + 48px); }
+.menu-theme { position: static; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); margin-top: 4px; font-size: 13px; color: var(--muted); }
+.menu-theme .icon { width: 30px; height: 30px; padding: 0 !important; justify-content: center; display: inline-flex !important; }
+.menu-theme .icon svg { width: 15px; height: 15px; }
+.overview { padding-top: 24px; }
+
+/* Tasks page */
+.tasks-split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; border-top: 1px solid var(--line); }
+.task-table tr[data-key] { cursor: pointer; }
+.task-table tr[data-key]:hover td { background: var(--hover); }
+.task-table tr.picked td { background: color-mix(in srgb, var(--brand-soft) 70%, transparent); }
+.task-table .bar { max-width: 140px; }
+.task-detail { border-left: 1px solid var(--line); padding: 18px 20px; min-width: 0; }
+.task-detail h3 { margin: 0 0 12px; font-size: 15px; }
+.task-detail .kv { padding: 0; grid-template-columns: 110px 1fr; gap: 6px 10px; }
+.task-detail pre { margin: 6px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--hover); font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; }
+.task-detail .task-err { color: var(--bad); }
+.t-kind.k-backup { color: #db2777; background: color-mix(in srgb, #ec4899 12%, transparent); }
+.t-kind.k-restore { color: #7c3aed; background: color-mix(in srgb, #8b5cf6 12%, transparent); }
+.t-kind.k-import { color: #0e7490; background: color-mix(in srgb, #06b6d4 14%, transparent); }
+.t-kind.k-live, .t-kind.k-move { color: #c2410c; background: color-mix(in srgb, #f97316 12%, transparent); }
+#tasks-menu { cursor: pointer; }
+@media (max-width: 1000px) { .tasks-split { grid-template-columns: 1fr; } .task-detail { border-left: 0; border-top: 1px solid var(--line); } }

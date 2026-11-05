@@ -88,8 +88,7 @@ document.addEventListener("click", (e) => {
   }
   const menu = e.target.closest("#user-menu");
   $("#user-dropdown").classList.toggle("open", Boolean(menu) && !e.target.closest(".dropdown"));
-  const tasks = e.target.closest("#tasks-menu");
-  if (!tasks || !e.target.closest(".dropdown")) $("#tasks-panel").classList.toggle("open", Boolean(tasks) && !$("#tasks-panel").classList.contains("open"));
+  if (e.target.closest("#tasks-menu")) location.hash = "tasks"; // the Tasks page, with every detail
   $$("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.removeAttribute("open"); });
   const link = e.target.closest("[data-tab-link]");
   if (link) setTimeout(() => selectTab("system-tabs", link.dataset.tabLink), 0);
@@ -122,7 +121,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -343,15 +342,15 @@ function allTasks() {
   const tasks = [
     ...state.imports.map((j) => ({
       kind: "Import", title: j.name, sub: `from ${j.source} to ${j.node}`, state: j.state,
-      step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id,
+      step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
     })),
     ...state.jobs.map((j) => ({
       kind: j.kind === "restore" ? "Restore" : "Backup", title: j.vm, sub: `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
-      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error,
+      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
       kind: m.live ? "Live migration" : "Move", title: m.vm, sub: `${m.source} → ${m.target || "auto"}`,
-      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error,
+      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
     })),
   ];
   return tasks.sort((a, b) => String(b.created).localeCompare(String(a.created)));
@@ -375,6 +374,74 @@ function renderTasks() {
     ? `<div class="tasks-title">Tasks</div>${tasks.slice(0, 15).map(row).join("")}`
     : `<p class="hint" style="padding:10px">Nothing has run yet.</p>`;
 }
+// ---------- Tasks page ----------
+
+const tp = { state: "", kind: "", sel: "" };
+const taskKey = (t) => `${t.kind}|${t.id}`;
+function duration(t) {
+  if (!t.created) return "";
+  const s = Math.max(0, ((t.finished ? new Date(t.finished) : new Date()) - new Date(t.created)) / 1000);
+  if (s < 60) return `${Math.round(s)} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+function renderTaskPage() {
+  const q = $("#task-search").value.trim().toLowerCase();
+  const all = allTasks();
+  const tasks = all.filter((t) => (!tp.kind || t.kind === tp.kind)
+    && (!tp.state || (tp.state === "active" ? isActive(t) : t.state === tp.state))
+    && (!q || [t.title, t.sub, t.kind, t.error].join(" ").toLowerCase().includes(q)));
+  const running = all.filter(isActive).length, failed = all.filter((t) => t.state === "failed").length;
+  $("#tasks-sum").textContent = `${all.length} total · ${running} running · ${failed} failed`;
+  $$("#task-state button").forEach((b) => b.classList.toggle("on", b.dataset.v === tp.state));
+  if (!tasks.some((t) => taskKey(t) === tp.sel)) tp.sel = tasks[0] ? taskKey(tasks[0]) : "";
+  $("#task-rows").innerHTML = tasks.length ? tasks.map((t) => `<tr data-key="${esc(taskKey(t))}" class="${taskKey(t) === tp.sel ? "picked" : ""}">
+      <td><span class="badge plain t-kind k-${esc(t.kind.split(" ")[0].toLowerCase())}">${esc(t.kind)}</span></td>
+      <td class="vm-name">${esc(t.title)}</td>
+      <td class="muted">${esc(t.sub)}</td>
+      <td><span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span>
+        ${isActive(t) ? `<div class="bar${t.percent == null ? " busy" : ""}" style="margin-top:6px"><i style="width:${t.percent ?? 30}%"></i></div>` : ""}</td>
+      <td>${esc(when(t.created))}</td><td>${esc(duration(t))}</td></tr>`).join("")
+    : empty(6, all.length ? "No tasks match" : "Nothing has run yet. Backups, restores, migrations and imports show up here.");
+  renderTaskDetail(tasks.find((t) => taskKey(t) === tp.sel));
+}
+async function renderTaskDetail(t) {
+  const box = $("#task-detail");
+  if (!t) { box.innerHTML = `<p class="hint">Pick a task to see its details.</p>`; return; }
+  const step = isActive(t) ? esc(t.step || (t.state === "queued" ? "Waiting for a free slot" : "Working")) + (t.percent != null ? ` · ${t.percent}%` : "") : "";
+  const rows = [["Type", esc(t.kind)], ["Object", esc(t.title)], ["Details", esc(t.sub)],
+    ["Status", `<span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span>`],
+    ["Current step", step], ["Started", esc(when(t.created))], ["Finished", t.finished ? esc(when(t.finished)) : ""],
+    ["Duration", esc(duration(t))], ["Result", esc(t.result || "")], ["Task ID", `<span class="mono">${esc(t.id)}</span>`]].filter(([, v]) => v);
+  box.innerHTML = `<h3>${esc(t.kind)} · ${esc(t.title)}</h3><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    ${t.error ? `<p class="wiz-label">Error</p><pre class="task-err">${esc(t.error)}</pre>` : ""}
+    ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><pre class="task-log" id="task-log">Loading…</pre>` : ""}`;
+  if (t.log) {
+    const { log } = await api(`/migrate/jobs/${enc(t.log)}/log`).catch((err) => ({ log: err.message }));
+    const pre = $("#task-log");
+    if (pre) { pre.textContent = (log || "No output yet.").split("\n").slice(-40).join("\n"); pre.scrollTop = pre.scrollHeight; }
+  }
+}
+async function renderOps() {
+  const ops = await api("/audit?limit=300"); // newest first
+  $("#task-ops").innerHTML = ops.length ? ops.map((o) => `<tr>
+    <td>${esc(when(o.time))}</td><td>${esc(o.user)}</td><td>${esc(o.action)}</td><td class="mono">${esc(o.target)}</td>
+    <td><span class="badge ${o.result < 400 ? "done" : "failed"}">${o.result < 400 ? "OK" : esc(o.result)}</span></td><td class="muted">${esc(o.address)}</td></tr>`).join("")
+    : empty(6, "No operations recorded yet");
+}
+{
+  $("#task-rows").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-key]");
+    if (tr) { tp.sel = tr.dataset.key; renderTaskPage(); }
+  });
+  $("#task-state").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-v]");
+    if (b) { tp.state = b.dataset.v; renderTaskPage(); }
+  });
+  $("#task-kind").addEventListener("change", (e) => { tp.kind = e.target.value; renderTaskPage(); });
+  $("#task-search").addEventListener("input", () => renderTaskPage());
+}
+
 let logTimer = null;
 async function showLog(id, title) {
   $("#log-title").textContent = `Import log: ${title}`;
@@ -413,6 +480,7 @@ async function refresh(page, auto = false) {
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
+  if (page === "tasks") { await load("imports", "jobs", "moves"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();
@@ -467,7 +535,7 @@ function renderHome() {
   if (!c.quorum) mood = ["bad", "Cluster Has ", "Lost Quorum"];
   else if (offline.length) mood = ["warn", `${offline.length} Node${offline.length > 1 ? "s" : ""} `, "Offline"];
   else if (storagePct >= 85 || failed.length) mood = ["warn", "Needs ", "Attention"];
-  $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
+  if ($("#health")) $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
 
   const cs = $("#cluster-state");
   cs.textContent = c.quorum ? (c.ha_capable ? "Highly available" : "Healthy") : "No quorum";
@@ -1015,6 +1083,7 @@ async function vmAction(e) {
 }
 $("#vms").addEventListener("click", vmAction);
 $("#vm-actions").addEventListener("click", vmAction);
+$("#vm-panel").addEventListener("click", vmAction);
 
 // ---------- edit VM ----------
 // A list of the VM's parts on the left, the selected part's settings on the right.

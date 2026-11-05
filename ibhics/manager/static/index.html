@@ -85,6 +85,10 @@
         <a href="#system" data-tab-link="account">My account</a>
         <a href="#activity">Activity</a>
         <a href="#system">Settings</a>
+        <div class="theme-switch menu-theme">Theme
+          <button type="button" class="icon" data-theme-set="light" title="Light"><svg><use href="#i-sun"/></svg></button>
+          <button type="button" class="icon" data-theme-set="dark" title="Dark"><svg><use href="#i-moon"/></svg></button>
+        </div>
         <a href="/docs" target="_blank">API reference</a>
         <button id="logout">Sign out</button>
       </div>
@@ -94,13 +98,6 @@
   <main>
     <section class="page" id="page-home">
       <div class="sheet">
-        <div class="health">
-          <h2 id="health">Checking the cluster…</h2>
-          <div class="theme-switch">Theme
-            <button class="icon" data-theme-set="light" title="Light"><svg><use href="#i-sun"/></svg></button>
-            <button class="icon" data-theme-set="dark" title="Dark"><svg><use href="#i-moon"/></svg></button>
-          </div>
-        </div>
         <div class="overview">
           <div>
             <div class="block-title">Cluster: <span class="val" id="cluster-state">…</span></div>
@@ -108,7 +105,6 @@
           </div>
           <div>
             <div class="block-title">Infrastructure: <span class="val" id="infra-state">…</span>
-              <span class="legend"><span><i class="dot ok"></i>Good</span><span><i class="dot warn"></i>Fair</span><span><i class="dot bad"></i>Poor</span></span>
             </div>
             <div class="topology" id="topology-strip"></div>
           </div>
@@ -452,6 +448,38 @@
           <div class="table-wrap" style="margin-top:8px"><table>
             <thead><tr><th>VM</th><th>Source</th><th>New name</th><th>Node</th><th>Started</th><th>Status</th><th>Details</th></tr></thead>
             <tbody id="imports"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-tasks">
+      <div class="sheet">
+        <div class="page-head"><h1>Tasks</h1><span class="sub" id="tasks-sum"></span>
+          <span class="spacer"></span>
+          <input class="search" id="task-search" placeholder="Search by VM, node or target">
+        </div>
+        <div class="tabs" id="tasks-tabs">
+          <button data-tab="task-jobs" class="active">Jobs</button>
+          <button data-tab="task-ops" class="admin-only">Operations log</button>
+        </div>
+        <div class="subpage active" id="tab-task-jobs">
+          <div class="toolbar">
+            <div class="chips" id="task-state"><button type="button" data-v="" class="on">All</button><button type="button" data-v="active">Running</button><button type="button" data-v="done">Finished</button><button type="button" data-v="failed">Failed</button></div>
+            <select id="task-kind" style="width:auto"><option value="">All types</option><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option></select>
+          </div>
+          <div class="tasks-split">
+            <div class="table-wrap"><table class="task-table">
+              <thead><tr><th>Type</th><th>Object</th><th>Details</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead>
+              <tbody id="task-rows"></tbody>
+            </table></div>
+            <aside class="task-detail" id="task-detail"></aside>
+          </div>
+        </div>
+        <div class="subpage" id="tab-task-ops">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>User</th><th>Operation</th><th>Object</th><th>Result</th><th>From</th></tr></thead>
+            <tbody id="task-ops"></tbody>
           </table></div>
         </div>
       </div>
