@@ -14,7 +14,7 @@ and the words are ibHiCS's own.
 - Wizards: New VM, backup schedule, restore
 - Network as its own menu; VLAN IDs always shown (VLAN 1 native)
 
-## v0.5 — Compute (VM page) and network topology 🚧
+## v0.5 — Compute (VM page) and network topology ✅
 - Network topology: uplinks → virtual switches (VLANs) → VMs; click to configure, drag a VM to change its VLAN ✅
 - VM groups: folder tree beside the VM list, with counts; new group, rename, delete, move VMs ✅
 - VM list with metric views: Resources (CPU cores and usage, memory and usage, storage and usage), Basics (OS, IP, group, description), Node, Throughput, IO speed ✅
@@ -23,7 +23,11 @@ and the words are ibHiCS's own.
 - Alerts bar: VMs that are short of CPU, memory or disk, or run without the guest agent ✅
 - List or panel (cards) view ✅
 
-## v0.6 — Compute, part 2 ⏳
+## v0.6 — New look, tasks, Compute part 2 🚧
+- New ib monogram logo; brighter colours (cyan to violet) in light and dark ✅
+- Tasks page: every job with progress, duration, errors and logs; operations log ✅
+- Dashboard without the status header; theme in the user menu ✅
+- Windows VMs get the virtio driver CD as a second drive ✅
 - Clone VM (full and linked), VM templates (convert VM ⇄ template, deploy from template)
 - Snapshots (take, revert, delete) with a timeline on the VM page
 - VM detail tabs: summary, hardware, snapshots, backups, tasks, alerts
