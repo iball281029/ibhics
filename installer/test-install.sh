@@ -88,7 +88,7 @@ echo ">> The big disk is untouched; ibHiCS went on the small one"
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
 sudo modprobe nbd max_part=16
 sudo qemu-nbd -c /dev/nbd0 disk.qcow2
-trap 'sudo umount -q mnt 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
+trap 'sudo umount -q mnt/var/lib/ibhics 2>/dev/null; sudo umount -q mnt 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
 sleep 2
 sudo vgscan -q >/dev/null
 sudo vgchange -q -ay ibhics
@@ -97,7 +97,10 @@ sudo mount /dev/ibhics/root mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
 test -f mnt/usr/share/virtio-win/viostor/2k19/amd64/viostor.sys \
     || { echo "!! virtio-win drivers are missing: Windows imports would fail"; exit 1; }
+# /var/lib/ibhics is its own volume (data), not part of root.
+sudo mount /dev/ibhics/data mnt/var/lib/ibhics
 test -s mnt/var/lib/ibhics/tools/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
+sudo umount mnt/var/lib/ibhics
 for exe in rhsrvany.exe pnp_wait.exe; do
     test -s "mnt/usr/share/virt-tools/$exe" \
         || { echo "!! $exe is missing: virt-v2v cannot convert Windows guests"; exit 1; }
