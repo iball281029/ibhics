@@ -13,6 +13,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 
 from ..hypervisor.base import Firmware
+from .logs import ProgressSampler, log_lines
 from .sources import Source, SourceType, SourceVM
 
 
@@ -535,11 +537,14 @@ class V2VConverter:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
         )
+        sampler = ProgressSampler()
         for line in proc.stdout:
-            lines.append(line)
-            if sink:
-                sink.write(line)
-                sink.flush()
+            # TextIO normalizes CR and CRLF into complete terminal updates.
+            if sampler.keep(line, time.monotonic()):
+                lines.append(line)
+                if sink:
+                    sink.write(line)
+                    sink.flush()
             found = stage_progress(line)
             if found:
                 progress(*found)
@@ -553,7 +558,14 @@ class V2VConverter:
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             log = self.log_dir / f"{name}.log"
-            log.write_text((result.stdout or "") + (result.stderr or ""))
+            sampler = ProgressSampler()
+            log.write_text(
+                "".join(
+                    line + "\n"
+                    for line in log_lines((result.stdout or "") + (result.stderr or ""))
+                    if sampler.keep(line, time.monotonic())
+                )
+            )
             return log
         except OSError:
             return None

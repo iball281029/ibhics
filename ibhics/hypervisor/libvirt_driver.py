@@ -49,9 +49,9 @@ from .domain_xml import (
     build_volume_xml,
     cdrom_element,
     disk_element,
+    is_template,
     nic_element,
     set_template_flag,
-    template_facts,
     vm_meta,
     volume_name,
 )
@@ -151,7 +151,6 @@ class LibvirtDriver(HypervisorDriver):
 
     def create_vm(self, spec: VMSpec) -> VMInfo:
         spec.validate()
-        spec.linked_to = ""  # new disks are never overlays; only clone_vm makes those
         try:
             self._conn.lookupByName(spec.name)
         except libvirt.libvirtError:
@@ -335,7 +334,7 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if dom.isActive():
             raise InvalidState("VM is already running")
-        if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
+        if is_template(ET.fromstring(dom.XMLDesc(0))):
             raise InvalidState(
                 "this is a template, which does not run: deploy a VM from it, or convert it "
                 "back to a VM first"
@@ -368,7 +367,6 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if dom.isActive():
             raise InvalidState("stop the VM before deleting it")
-        self._refuse_if_linked(uuid, "deleting the template")
         root = ET.fromstring(dom.XMLDesc(0))
         seed = Path(self.seed_dir) / f"{dom.name()}-seed.iso"
         seed.unlink(missing_ok=True)
@@ -384,8 +382,6 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if template and dom.isActive():
             raise InvalidState("shut the VM down before converting it to a template")
-        if not template:
-            self._refuse_if_linked(uuid, "converting the template back to a VM")
         root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
         set_template_flag(vm_meta(root), template)
         self._conn.defineXML(ET.tostring(root, encoding="unicode"))
@@ -393,25 +389,6 @@ class LibvirtDriver(HypervisorDriver):
         if template:
             dom.setAutostart(0)
         return self._info(dom)
-
-    def linked_clones(self, uuid: str) -> list[str]:
-        """Names of the VMs whose disks are overlays on this template's."""
-        names = []
-        for dom in self._conn.listAllDomains():
-            try:
-                if template_facts(ET.fromstring(dom.XMLDesc(0)))[1] == uuid:
-                    names.append(dom.name())
-            except libvirt.libvirtError:
-                continue
-        return sorted(names)
-
-    def _refuse_if_linked(self, uuid: str, what: str) -> None:
-        clones = self.linked_clones(uuid)
-        if clones:
-            raise InvalidState(
-                f"linked clones are based on this template ({', '.join(clones)}); delete them "
-                f"before {what}"
-            )
 
     def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
         clone.validate()
@@ -425,9 +402,7 @@ class LibvirtDriver(HypervisorDriver):
         if src.isActive():
             raise InvalidState("shut the VM down before cloning it, so its disks are consistent")
         source = self._info(src)
-        if clone.linked and not source.spec.template:
-            raise InvalidState("linked clones are made from templates: convert the VM first")
-        spec = clone_spec(source.spec, clone, uuid)
+        spec = clone_spec(source.spec, clone)
         root = ET.fromstring(src.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
         new_uuid = str(uuidlib.uuid4())
         created, seed = [], None
@@ -438,18 +413,6 @@ class LibvirtDriver(HypervisorDriver):
                 base = self._volume(el)
                 pool = self._pool(disk.pool)
                 disk.backend = _backend(pool)
-                if clone.linked:
-                    driver = el.find("driver")
-                    if disk.backend != "file" or (
-                        driver is not None and driver.get("type") != "qcow2"
-                    ):
-                        raise InvalidState(
-                            "linked clones need the template's disks in qcow2 (a folder, thin "
-                            "disk or NFS pool); deploy a full clone instead"
-                        )
-                    xml = build_volume_xml(spec.name, index, disk, backing=base.path())
-                    created.append(pool.createXML(xml, 0))
-                    continue
                 vol = pool.createXML(build_volume_xml(spec.name, index, disk), 0)
                 created.append(vol)
                 driver = el.find("driver")
@@ -1115,7 +1078,6 @@ def _spec_from_xml(xml: str) -> VMSpec:
     drives = [d.find("source") for d in root.findall("./devices/disk[@device='cdrom']")]
     cdrom = drives[0] if drives else None
     driver_cd = drives[1] if len(drives) > 1 else None
-    template, linked_to = template_facts(root)
     os_el = root.find("os")
     firmware = (
         Firmware.UEFI if os_el is not None and os_el.get("firmware") == "efi" else Firmware.BIOS
@@ -1132,6 +1094,5 @@ def _spec_from_xml(xml: str) -> VMSpec:
         description=root.findtext("description", ""),
         os_type=root.findtext(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}os", ""),
         boot=[b.get("dev") for b in root.findall("os/boot")] or None,
-        template=template,
-        linked_to=linked_to,
+        template=is_template(root),
     )

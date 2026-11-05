@@ -201,12 +201,12 @@ except urllib.error.HTTPError as exc:
     print("--  no nested KVM on this runner, power-on not tested:", detail[:200])
     kvm = False
 
-# Templates: a linked clone is a qcow2 overlay on the template's disk, and its
-# customization CD is built with xorriso; powering it on proves QEMU may open both.
+# Templates: deploy an independent disk copy and a customization CD built with
+# xorriso; powering it on proves QEMU may open the copied disk and CD.
 tpl = call("POST", f"/vms/{vm['uuid']}/template", {"template": True}, token=token)
 assert tpl["template"], tpl
 custom = {"hostname": "smoke2", "username": "ops", "password": "Smoke-pass1"}
-job = call("POST", f"/vms/{vm['uuid']}/clone", {"name": "smoke-clone", "linked": True,
+job = call("POST", f"/vms/{vm['uuid']}/clone", {"name": "smoke-clone",
            "power_on": kvm, "customization": custom}, token=token)
 for _ in range(90):
     job = next(j for j in call("GET", "/deploys", token=token) if j["id"] == job["id"])
@@ -215,14 +215,45 @@ for _ in range(90):
     time.sleep(2)
 assert job["state"] == "done", job
 clone = call("GET", f"/vms/{job['result']}", token=token)
-assert clone["linked_to"] == vm["uuid"] and clone["iso"].endswith("smoke-clone-seed.iso"), clone
-print("ok  a linked clone with a customization CD deploys from the template")
+assert "linked_to" not in clone and clone["iso"].endswith("smoke-clone-seed.iso"), clone
+print("ok  a VM with a customization CD deploys from the template")
 if kvm:
     assert clone["state"] == "running", clone
-    print("ok  and powers on (QEMU opens the overlay, its template disk and the CD)")
+    print("ok  and powers on (QEMU opens the copied disk and the CD)")
     call("POST", f"/vms/{clone['uuid']}/stop", {"force": True}, token=token)
-call("DELETE", f"/vms/{clone['uuid']}", token=token)
 call("DELETE", f"/vms/{vm['uuid']}", token=token)
-print("ok  and deletes them")
+print("ok  the source template can be deleted independently")
+# Keep the stopped clone for the offline disk check below.
 EOF
+# Shut down cleanly so filesystem writes reach disk before the offline check; if the
+# guest ignores ACPI for 3 minutes, stop QEMU (the copy finished long before).
+monitor system_powerdown
+for _ in $(seq 36); do kill -0 "$VM" 2>/dev/null || break; sleep 5; done
+kill -0 "$VM" 2>/dev/null && { echo "-- no ACPI shutdown in 3 minutes, stopping QEMU"; monitor quit || true; }
+wait "$VM" || true
+trap - EXIT
+mkdir -p mnt-data
+sudo qemu-nbd --read-only -c /dev/nbd0 disk.qcow2
+trap 'sudo umount -q mnt-data 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
+sleep 2
+sudo vgscan -q >/dev/null
+sudo vgchange -q -ay ibhics
+sudo mount -o ro,norecovery /dev/ibhics/data mnt-data  # XFS
+sudo python3 - <<'EOF'
+import json
+import pathlib
+import subprocess
+
+disks = list(pathlib.Path("mnt-data/pools/default").glob("smoke-clone-disk*.qcow2"))
+assert len(disks) == 1, disks
+for disk in disks:
+    info = json.loads(subprocess.check_output(["qemu-img", "info", "--output=json", str(disk)]))
+    assert info["format"] == "qcow2" and not info.get("backing-filename"), info
+    assert not info.get("full-backing-filename"), info
+print("ok  the deployed VM disk has no backing file")
+EOF
+sudo umount mnt-data
+sudo vgchange -q -an ibhics
+sudo qemu-nbd -d /dev/nbd0
+trap - EXIT
 echo ">> All checks passed"

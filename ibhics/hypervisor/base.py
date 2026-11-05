@@ -70,10 +70,8 @@ class VMSpec:
     boot: list[str] | None = None
     autostart: bool = False  # start with the node
     # A template is a stopped VM kept as the master copy new VMs are deployed from; it
-    # cannot be powered on. linked_to: the template whose disks a linked clone's are based
-    # on (copy-on-write qcow2 overlays), so that template must stay.
+    # cannot be powered on. Each deployed VM gets independent copies of its disks.
     template: bool = False
-    linked_to: str = ""
 
     def validate(self) -> None:
         if len(self.os_type) > 64:
@@ -135,10 +133,7 @@ class CloneSpec:
     """A new VM from an existing one or from a template."""
 
     name: str
-    # Linked: the new disks are thin overlays on the template's (instant, little space;
-    # qcow2 pools only). Full: an independent copy of every disk.
-    linked: bool = False
-    pool: str | None = None  # full clones: put every disk here; None: beside the source's
+    pool: str | None = None  # put every disk here; None: beside the source's
     customization: Customization | None = None
     description: str | None = None  # None: the source's
 
@@ -147,13 +142,11 @@ class CloneSpec:
             raise ValueError(
                 "name must start with a letter or digit and use only letters, digits, '_', '.', '-'"
             )
-        if self.linked and self.pool:
-            raise ValueError("a linked clone's disks stay in the template's pool")
         if self.customization:
             self.customization.validate()
 
 
-def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpec:
+def clone_spec(source: VMSpec, clone: CloneSpec) -> VMSpec:
     """The new VM's spec: the source's hardware with its own name, new MAC addresses, no
     disc in the drives, booting from disk; drivers fill in disks and the seed CD."""
     return VMSpec(
@@ -165,7 +158,7 @@ def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpe
             DiskSpec(
                 size_gb=d.size_gb,
                 backend=d.backend,
-                pool=d.pool if clone.linked or not clone.pool else clone.pool,
+                pool=clone.pool or d.pool,
                 bus=d.bus,
             )
             for d in source.disks
@@ -174,7 +167,6 @@ def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpe
         description=source.description if clone.description is None else clone.description,
         os_type=source.os_type,
         boot=["hd"],
-        linked_to=source_uuid if clone.linked else "",
     )
 
 
@@ -493,13 +485,12 @@ class HypervisorDriver(abc.ABC):
         raise NotImplementedError
 
     def set_template(self, uuid: str, template: bool) -> VMInfo:
-        """Convert a stopped VM to a template, or a template back to a VM (refused while
-        linked clones are based on it)."""
+        """Convert a stopped VM to a template, or a template back to a VM."""
         raise NotImplementedError
 
     def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
-        """Deploy a new VM from a template or a stopped VM: a full copy of its disks, or for
-        templates on qcow2 pools a linked clone. The new VM is left stopped."""
+        """Deploy a new VM from a template or a stopped VM with independent copies of
+        every disk. The new VM is left stopped."""
         raise NotImplementedError
 
     def list_networks(self) -> list[NetworkInfo]:
