@@ -350,3 +350,15 @@ def test_apparmor_lets_qemu_open_pool_volumes():
         text = (INSTALLER / script).read_text()
         assert '"$SRC/apparmor-libvirt-qemu"' in text and target in text
     assert '"$HERE/apparmor-libvirt-qemu"' in (INSTALLER / "build-iso.sh").read_text()
+
+
+def test_custom_folder_pool_added_to_apparmor(tmp_path):
+    from ibhics.hypervisor.libvirt_driver import allow_qemu_path
+
+    rules = tmp_path / "apparmor.d/local/abstractions/libvirt-qemu"
+    rules.parent.mkdir(parents=True)
+    rules.write_text("/var/lib/ibhics/pools/** rwk,\n")
+    assert allow_qemu_path("/data/vms/", rules)
+    assert not allow_qemu_path("/data/vms", rules)  # once only
+    assert not allow_qemu_path("/var/lib/ibhics/pools/big", rules)  # already covered
+    assert rules.read_text().splitlines()[-1] == "/data/vms/** rwk,"

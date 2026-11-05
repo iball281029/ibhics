@@ -140,7 +140,7 @@ echo
 
 echo ">> 4/4 Checks"
 python3 - "$API" "$ADMIN_PASSWORD" <<'EOF'
-import json, ssl, sys, urllib.request
+import json, ssl, sys, urllib.error, urllib.request
 
 api, password = sys.argv[1], sys.argv[2]
 ctx = ssl._create_unverified_context()  # the node's certificate is self-signed
@@ -184,6 +184,17 @@ vm = call("POST", "/vms", {"name": "smoke", "vcpus": 1, "memory_mb": 512,
                            "disks": [{"size_gb": 1}]}, token=token)
 assert vm["state"] == "stopped", vm
 print("ok  libvirt defines a VM with a disk in the default pool")
+# Powering on is where AppArmor, disk permissions and the domain XML really meet QEMU.
+try:
+    started = call("POST", f"/vms/{vm['uuid']}/start", token=token)
+    assert started["state"] == "running", started
+    print("ok  the VM powers on (QEMU opens its disk)")
+    call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode(errors="replace")
+    if "Permission denied" in detail or "kvm" not in detail.lower():
+        raise SystemExit(f"!! the VM did not power on: {exc.code} {detail}")
+    print("--  no nested KVM on this runner, power-on not tested:", detail[:200])
 call("DELETE", f"/vms/{vm['uuid']}", token=token)
 print("ok  and deletes it")
 EOF

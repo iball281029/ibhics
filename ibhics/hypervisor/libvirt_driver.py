@@ -85,6 +85,29 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(f"{cmd[0]} failed: {result.stderr.strip() or result.returncode}")
 
 
+APPARMOR_LOCAL = Path("/etc/apparmor.d/local/abstractions/libvirt-qemu")
+COVERED = ("/var/lib/ibhics/pools/", "/mnt/ibhics/")
+
+
+def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
+    """Let QEMU open disk images under a folder pool outside the usual roots.
+
+    Disks are <source pool volume>, which Debian's virt-aa-helper does not add to a
+    VM's AppArmor profile; the installer allows the default roots, and this adds a
+    custom folder. Profiles are rebuilt at each VM start, so no reload is needed."""
+    path = os.path.realpath(path).rstrip("/")
+    if any((path + "/").startswith(root) for root in COVERED) or not rules.parent.parent.is_dir():
+        return False
+    line = f"{path}/** rwk,"
+    text = rules.read_text() if rules.exists() else ""
+    if line in text.splitlines():
+        return False
+    rules.parent.mkdir(parents=True, exist_ok=True)
+    with rules.open("a") as f:
+        f.write(("" if not text or text.endswith("\n") else "\n") + line + "\n")
+    return True
+
+
 class LibvirtDriver(HypervisorDriver):
     # Backups copy disks here before they are chunked; it needs room for the largest VM
     # (raw images are sparse, so only the data actually written counts).
@@ -428,6 +451,8 @@ class LibvirtDriver(HypervisorDriver):
             if session is not None:
                 _undefine(session)
             raise
+        if spec.type == PoolType.DIR and spec.path:
+            allow_qemu_path(spec.path)
         return next(p for p in self.list_pools() if p.name == spec.name)
 
     def list_networks(self) -> list[NetworkInfo]:

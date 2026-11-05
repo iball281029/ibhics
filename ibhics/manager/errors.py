@@ -33,6 +33,14 @@ def install_driver_errors(app: FastAPI) -> None:
     app.add_exception_handler(SourceNotFound, _handler(404, "migrate source not found: "))
     # Validation the driver does beyond the request schema.
     app.add_exception_handler(ValueError, _handler(422))
+    try:
+        import libvirt
+    except ImportError:
+        pass
+    else:
+        # What libvirt or QEMU refused, e.g. a disk image QEMU may not open, instead of a
+        # bare "Internal Server Error". 409 also travels from an agent to the manager.
+        app.add_exception_handler(libvirt.libvirtError, _handler(409))
 
 
 def install_cluster_errors(app: FastAPI) -> None:
