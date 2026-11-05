@@ -26,6 +26,7 @@ from ..manager.schemas import (
     AgentRestore,
     BackupOut,
     CdromRequest,
+    CloneIn,
     HostNetworkIn,
     HostOut,
     HostSettingsIn,
@@ -33,6 +34,7 @@ from ..manager.schemas import (
     PoolCreate,
     PoolOut,
     StopRequest,
+    TemplateRequest,
     VMCreate,
     VMEditIn,
     VMOut,
@@ -179,6 +181,15 @@ def create_agent_app(
         @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_vm(uuid: str) -> None:
             driver.delete_vm(uuid)
+
+        @api.post("/vms/{uuid}/template", response_model=VMOut)
+        def set_template(uuid: str, body: TemplateRequest) -> VMOut:
+            return VMOut.from_info(driver.set_template(uuid, body.template))
+
+        # Runs until every disk is copied; the manager calls it from a background job.
+        @api.post("/vms/{uuid}/clone", response_model=VMOut)
+        def clone_vm(uuid: str, body: CloneIn) -> VMOut:
+            return VMOut.from_info(driver.clone_vm(uuid, body.to_clone()))
 
         # Runs until the VM has moved, which can take minutes for a busy guest.
         @api.post("/vms/{uuid}/migrate", status_code=status.HTTP_204_NO_CONTENT)

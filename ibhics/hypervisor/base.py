@@ -69,6 +69,11 @@ class VMSpec:
     # set at creation, then the disk.
     boot: list[str] | None = None
     autostart: bool = False  # start with the node
+    # A template is a stopped VM kept as the master copy new VMs are deployed from; it
+    # cannot be powered on. linked_to: the template whose disks a linked clone's are based
+    # on (copy-on-write qcow2 overlays), so that template must stay.
+    template: bool = False
+    linked_to: str = ""
 
     def validate(self) -> None:
         if len(self.os_type) > 64:
@@ -91,6 +96,86 @@ class VMSpec:
                 raise ValueError("disk size_gb must be at least 1")
             if disk.backend not in ("file", "block"):
                 raise ValueError("disk backend must be 'file' or 'block'")
+
+
+HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+GUEST_OS = ("linux", "windows")
+
+
+@dataclass
+class Customization:
+    """Guest OS customization for the first boot of a VM deployed from a template, like
+    VMware's customization specs. Linux reads it with cloud-init (a NoCloud seed CD);
+    a Windows template that was generalized with sysprep reads an unattend answer file
+    from the same CD."""
+
+    os: str = "linux"
+    hostname: str = ""  # blank: the VM's name
+    username: str = ""  # an admin user to create; Linux, blank: the image's default user
+    password: str = ""  # that user's, and on Windows also the Administrator's
+    ssh_keys: list[str] = field(default_factory=list)
+    timezone: str = ""  # Linux: "Asia/Bangkok"; Windows: "SE Asia Standard Time"
+    user_data: str = ""  # Linux: an own #cloud-config, used instead of the fields above
+
+    def validate(self) -> None:
+        if self.os not in GUEST_OS:
+            raise ValueError("customization os must be 'linux' or 'windows'")
+        if self.hostname and not HOSTNAME_RE.match(self.hostname):
+            raise ValueError("hostname must be letters, digits and '-', at most 63 characters")
+        if self.os == "windows" and len(self.hostname) > 15:
+            raise ValueError("a Windows computer name is at most 15 characters")
+        if self.username and not re.match(r"^[a-z_][a-z0-9_-]{0,31}$", self.username):
+            raise ValueError("username must be lower case letters, digits, '_' or '-'")
+        if any("\n" in k or not k.strip() for k in self.ssh_keys):
+            raise ValueError("each SSH key is one line")
+
+
+@dataclass
+class CloneSpec:
+    """A new VM from an existing one or from a template."""
+
+    name: str
+    # Linked: the new disks are thin overlays on the template's (instant, little space;
+    # qcow2 pools only). Full: an independent copy of every disk.
+    linked: bool = False
+    pool: str | None = None  # full clones: put every disk here; None: beside the source's
+    customization: Customization | None = None
+    description: str | None = None  # None: the source's
+
+    def validate(self) -> None:
+        if not NAME_RE.match(self.name):
+            raise ValueError(
+                "name must start with a letter or digit and use only letters, digits, '_', '.', '-'"
+            )
+        if self.linked and self.pool:
+            raise ValueError("a linked clone's disks stay in the template's pool")
+        if self.customization:
+            self.customization.validate()
+
+
+def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpec:
+    """The new VM's spec: the source's hardware with its own name, new MAC addresses, no
+    disc in the drives, booting from disk; drivers fill in disks and the seed CD."""
+    return VMSpec(
+        name=clone.name,
+        vcpus=source.vcpus,
+        memory_mb=source.memory_mb,
+        firmware=source.firmware,
+        disks=[
+            DiskSpec(
+                size_gb=d.size_gb,
+                backend=d.backend,
+                pool=d.pool if clone.linked or not clone.pool else clone.pool,
+                bus=d.bus,
+            )
+            for d in source.disks
+        ],
+        nics=[NicSpec(network=n.network, model=n.model) for n in source.nics],
+        description=source.description if clone.description is None else clone.description,
+        os_type=source.os_type,
+        boot=["hd"],
+        linked_to=source_uuid if clone.linked else "",
+    )
 
 
 class PoolType(StrEnum):
@@ -405,6 +490,16 @@ class HypervisorDriver(abc.ABC):
     def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
         """Change a VM's settings. On a running VM disks and NICs change at once; CPU,
         memory and boot order are saved for its next start (restart_needed)."""
+        raise NotImplementedError
+
+    def set_template(self, uuid: str, template: bool) -> VMInfo:
+        """Convert a stopped VM to a template, or a template back to a VM (refused while
+        linked clones are based on it)."""
+        raise NotImplementedError
+
+    def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
+        """Deploy a new VM from a template or a stopped VM: a full copy of its disks, or for
+        templates on qcow2 pools a linked clone. The new VM is left stopped."""
         raise NotImplementedError
 
     def list_networks(self) -> list[NetworkInfo]:

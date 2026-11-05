@@ -9,6 +9,7 @@ import httpx
 
 from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
 from ..hypervisor import (
+    CloneSpec,
     GuestInfo,
     HostInfo,
     HypervisorDriver,
@@ -27,7 +28,13 @@ from ..hypervisor import (
     VMStats,
     host,
 )
-from ..hypervisor.serialize import edit_to_json, guest_from_json, info_from_json, spec_to_json
+from ..hypervisor.serialize import (
+    clone_to_json,
+    edit_to_json,
+    guest_from_json,
+    info_from_json,
+    spec_to_json,
+)
 
 TOKEN_HEADER = "X-Ibhics-Token"
 
@@ -124,6 +131,21 @@ class RemoteDriver(HypervisorDriver):
 
     def delete_vm(self, uuid: str) -> None:
         self._ok(self._client.request("DELETE", f"/vms/{uuid}"), uuid)
+
+    def set_template(self, uuid: str, template: bool) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/template", json={"template": template})
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
+        # A full clone copies every disk on the node: no timeout.
+        resp = self._client.request(
+            "POST", f"/vms/{uuid}/clone", json=clone_to_json(clone), timeout=None
+        )
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        if resp.status_code == 404 and "storage pool" in resp.json().get("detail", ""):
+            raise PoolNotFound(resp.json()["detail"].removeprefix("storage pool not found: "))
+        return info_from_json(self._ok(resp, uuid).json())
 
     def migrate_vm(
         self,

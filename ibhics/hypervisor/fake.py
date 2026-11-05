@@ -16,7 +16,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
+from . import customize
 from .base import (
+    CloneSpec,
     DiskSpec,
     GuestInfo,
     GuestInterface,
@@ -38,6 +40,7 @@ from .base import (
     VMSpec,
     VMState,
     VMStats,
+    clone_spec,
 )
 
 # Fake disks hold real bytes so backup and restore can be tested; keep them small.
@@ -61,6 +64,8 @@ class FakeDriver(HypervisorDriver):
         self.demo_console = demo_console
         # Other fake nodes this one can migrate VMs to, keyed by the host in a libvirt URI.
         self.peers: dict[str, FakeDriver] = {}
+        # The files each deployed VM's customization CD would hold, keyed by VM name.
+        self.seeds: dict[str, dict[str, str]] = {}
         self._lock = threading.Lock()
 
     def host_info(self) -> HostInfo:
@@ -85,6 +90,7 @@ class FakeDriver(HypervisorDriver):
             if any(vm.spec.name == spec.name for vm in self._vms.values()):
                 raise VMExists(f"VM named {spec.name!r} already exists")
             spec = copy.deepcopy(spec)
+            spec.linked_to = ""
             for disk in spec.disks:
                 if disk.pool not in self._pools:
                     raise PoolNotFound(disk.pool)
@@ -140,6 +146,11 @@ class FakeDriver(HypervisorDriver):
             vm = self._get(uuid)
             if vm.state == VMState.RUNNING:
                 raise InvalidState("VM is already running")
+            if vm.spec.template:
+                raise InvalidState(
+                    "this is a template, which does not run: deploy a VM from it, or convert "
+                    "it back to a VM first"
+                )
             vm.state = VMState.RUNNING
             return copy.deepcopy(vm)
 
@@ -164,8 +175,67 @@ class FakeDriver(HypervisorDriver):
             vm = self._get(uuid)
             if vm.state == VMState.RUNNING:
                 raise InvalidState("stop the VM before deleting it")
+            self._refuse_if_linked(uuid, "deleting the template")
             del self._vms[uuid]
             del self._disks[uuid]
+            self.seeds.pop(vm.spec.name, None)
+
+    def set_template(self, uuid: str, template: bool) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if template and vm.state != VMState.STOPPED:
+                raise InvalidState("shut the VM down before converting it to a template")
+            if not template:
+                self._refuse_if_linked(uuid, "converting the template back to a VM")
+            vm.spec.template = template
+            if template:
+                vm.spec.autostart = False
+            return copy.deepcopy(vm)
+
+    def linked_clones(self, uuid: str) -> list[str]:
+        return sorted(vm.spec.name for vm in self._vms.values() if vm.spec.linked_to == uuid)
+
+    def _refuse_if_linked(self, uuid: str, what: str) -> None:
+        clones = self.linked_clones(uuid)
+        if clones:
+            raise InvalidState(
+                f"linked clones are based on this template ({', '.join(clones)}); delete them "
+                f"before {what}"
+            )
+
+    def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
+        clone.validate()
+        with self._lock:
+            if any(vm.spec.name == clone.name for vm in self._vms.values()):
+                raise VMExists(f"VM named {clone.name!r} already exists")
+            source = self._get(uuid)
+            if source.state != VMState.STOPPED:
+                raise InvalidState(
+                    "shut the VM down before cloning it, so its disks are consistent"
+                )
+            if clone.linked and not source.spec.template:
+                raise InvalidState("linked clones are made from templates: convert the VM first")
+            spec = clone_spec(source.spec, clone, uuid)
+            for disk in spec.disks:
+                if disk.pool not in self._pools:
+                    raise PoolNotFound(disk.pool)
+                disk.backend = self._pools[disk.pool][0].disk_backend
+                if clone.linked and disk.backend != "file":
+                    raise InvalidState(
+                        "linked clones need the template's disks in qcow2 (a folder, thin "
+                        "disk or NFS pool); deploy a full clone instead"
+                    )
+            vm = VMInfo(uuid=str(uuidlib.uuid4()), spec=spec, state=VMState.STOPPED)
+            for nic in spec.nics:
+                nic.mac = _random_mac()
+            if clone.customization:
+                self.seeds[spec.name] = customize.seed_files(
+                    clone.customization, spec.name, vm.uuid
+                )
+                spec.iso = f"/var/lib/ibhics/seeds/{spec.name}-seed.iso"
+            self._vms[vm.uuid] = vm
+            self._disks[vm.uuid] = [bytearray(d) for d in self._disks[uuid]]
+            return copy.deepcopy(vm)
 
     def list_pools(self) -> list[PoolInfo]:
         with self._lock:

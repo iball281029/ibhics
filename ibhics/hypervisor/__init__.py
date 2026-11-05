@@ -1,4 +1,6 @@
 from .base import (
+    CloneSpec,
+    Customization,
     DiskEdit,
     DiskSpec,
     Firmware,
@@ -39,6 +41,8 @@ def load_driver(name: str, libvirt_uri: str = "qemu:///system") -> HypervisorDri
 
 
 __all__ = [
+    "CloneSpec",
+    "Customization",
     "DiskEdit",
     "DiskSpec",
     "Firmware",

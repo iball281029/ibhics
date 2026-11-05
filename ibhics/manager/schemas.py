@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
 from ..hypervisor import (
+    CloneSpec,
+    Customization,
     DiskEdit,
     DiskSpec,
     Firmware,
@@ -99,6 +101,8 @@ class VMOut(BaseModel):
     boot: list[str] | None = None
     autostart: bool = False
     restart_needed: bool = False
+    template: bool = False
+    linked_to: str = ""  # uuid of the template a linked clone's disks are based on
     node: str | None = None
 
     @classmethod
@@ -124,6 +128,8 @@ class VMOut(BaseModel):
             boot=spec.boot,
             autostart=spec.autostart,
             restart_needed=info.restart_needed,
+            template=spec.template,
+            linked_to=spec.linked_to,
         )
 
 
@@ -284,6 +290,57 @@ class HostOut(BaseModel):
 
 class StopRequest(BaseModel):
     force: bool = False
+
+
+class TemplateRequest(BaseModel):
+    template: bool = True  # false: convert the template back to a VM
+
+
+class CustomizationIn(BaseModel):
+    os: str = Field(default="linux", pattern=r"^(linux|windows)$")
+    hostname: str = Field(default="", max_length=63)
+    username: str = Field(default="", max_length=32)
+    password: str = Field(default="", max_length=128)
+    ssh_keys: list[str] = Field(default_factory=list, max_length=32)
+    timezone: str = Field(default="", max_length=64)
+    user_data: str = Field(default="", max_length=65536)
+
+    def to_customization(self) -> Customization:
+        return Customization(**self.model_dump())
+
+
+class CloneIn(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    linked: bool = False
+    pool: str | None = None
+    description: str | None = Field(default=None, max_length=1024)
+    customization: CustomizationIn | None = None
+    power_on: bool = False  # manager only: start the VM once it is deployed
+
+    def to_clone(self) -> CloneSpec:
+        return CloneSpec(
+            name=self.name,
+            linked=self.linked,
+            pool=self.pool or None,
+            description=self.description,
+            customization=self.customization.to_customization() if self.customization else None,
+        )
+
+
+class DeployOut(BaseModel):
+    id: str
+    vm: str  # the new VM's name
+    source: str  # the template's (or VM's) name
+    source_uuid: str
+    node: str
+    linked: bool
+    customized: bool
+    power_on: bool
+    state: str
+    created: str
+    finished: str | None = None
+    error: str | None = None
+    result: str | None = None  # the new VM's uuid
 
 
 class MigrateRequest(BaseModel):
