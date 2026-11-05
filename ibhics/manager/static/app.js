@@ -1197,6 +1197,7 @@ function vmWizOs(form) {
   f.firmware.value = uefi ? "uefi" : "bios";
   $(".fw-hint", form).textContent = uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "";
   f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
+  $(".win-driver-note", form).hidden = family !== "windows";
 }
 {
   const form = $("#vm-form");
@@ -1229,7 +1230,7 @@ handlers["vm-dialog"] = async (f) => {
     vcpus: Number(f.get("vcpus")),
     memory_mb: Math.round(Number(f.get("memory_gb")) * 1024),
     firmware: f.get("firmware"),
-    os_type: f.get("os_type").trim(),
+    os_type: f.get("os_type").trim() || (f.get("os_family") === "windows" ? "Windows" : ""),
     description: f.get("description").trim(),
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default" })),
     nics: [{ network: f.get("network") || "default" }],
