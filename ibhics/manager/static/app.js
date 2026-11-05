@@ -1153,6 +1153,7 @@ async function vmAction(e) {
     if (act === "poweroff") await post(`/vms/${id}/stop`, { force: true });
     if (act === "restart") await post(`/vms/${id}/restart`);
     if (act === "tools") {
+      if (!canOperate()) return;
       await post(`/vms/${id}/guest-tools`);
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
     }
@@ -2897,10 +2898,110 @@ document.addEventListener("click", async (e) => {
 
 // ---------- one VM ----------
 
+function guestToolsPlan(osText, selectedPm = null) {
+  const text = String(osText || "");
+  if (/windows/i.test(text)) return { family: "windows", pm: null, install: null, remove: null };
+  let pm = null;
+  if (/ubuntu|debian/i.test(text)) pm = "apt";
+  else if (/suse/i.test(text)) pm = "zypper";
+  else if (/rhel|red\s*hat|alma\s*linux|rocky|centos|oracle|fedora/i.test(text)) {
+    const legacy = text.match(/(?:centos|rhel|red\s*hat)[^\d]*(\d+)/i);
+    pm = legacy && Number(legacy[1]) <= 7 ? "yum" : "dnf";
+  }
+  if (["dnf", "yum", "apt", "zypper"].includes(selectedPm)) pm = selectedPm;
+  const install = {
+    dnf: "dnf install -y qemu-guest-agent",
+    yum: "yum install -y qemu-guest-agent",
+    apt: "apt-get update && apt-get install -y qemu-guest-agent",
+    zypper: "zypper --non-interactive install qemu-guest-agent",
+  }[pm];
+  const remove = {
+    dnf: "dnf remove -y open-vm-tools", yum: "yum remove -y open-vm-tools",
+    apt: "apt-get remove -y open-vm-tools", zypper: "zypper --non-interactive remove open-vm-tools",
+  }[pm] || null;
+  // AlmaLinux 8 changed its signing key in 2024: older installs (e.g. 8.8 appliances)
+  // reject current packages with "GPG check FAILED" until the new key is imported.
+  const almaKey = pm === "dnf" && /alma\s*linux[^\d]*8/i.test(text)
+    ? "rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && " : "";
+  return { family: "linux", pm, install: install ? `${almaKey}${install} && systemctl enable --now qemu-guest-agent` : null, remove };
+}
+
+function renderGuestTools(vm, g, selectedPm = null) {
+  const card = $("#vm-guest-tools");
+  card.hidden = vm.state !== "running" || Boolean(g?.agent);
+  card.innerHTML = "";
+  if (card.hidden) return;
+  const osText = g?.os_name || state.guests[vm.uuid]?.os_name || vm.os_type;
+  const detected = guestToolsPlan(osText);
+  const insert = canOperate() ? `<button class="small" data-vm="tools" data-id="${esc(vm.uuid)}" data-name="${esc(vm.name)}">Insert guest tools CD</button>` : "";
+  const check = `<button class="small" id="guest-tools-check">Check again</button>`;
+  const code = (id, command) => `<div class="guest-tools-command"><pre><code id="${id}">${esc(command)}</code></pre><button class="small" data-guest-tools-copy="${id}">Copy</button></div>`;
+  let body;
+  if (detected.family === "windows") {
+    body = `<ol><li>Insert the ibHiCS guest tools CD using the button below or the ⋯ menu.</li>
+      <li>Open the CD drive inside Windows.</li><li>Run <code>virtio-win-guest-tools.exe</code> and complete the installer to install the QEMU guest agent and virtio drivers.</li></ol>
+      ${insert}<p class="hint">After installation, check again to detect the guest agent.</p>${check}`;
+  } else {
+    const plan = guestToolsPlan(osText, detected.pm || selectedPm || "dnf");
+    body = `<p class="hint">Run these commands as root inside the guest VM.</p>
+      ${!detected.pm ? `<p class="hint">Distribution not detected. Choose the guest's package manager:</p><div class="tabs guest-tools-tabs" aria-label="Package manager">${["dnf", "yum", "apt", "zypper"].map((pm) => `<button class="${pm === plan.pm ? "active" : ""}" aria-pressed="${pm === plan.pm}" data-guest-tools-pm="${pm}">${pm}</button>`).join("")}</div>` : ""}
+      <h4>From the internet</h4>${code("guest-tools-install", plan.install)}
+      <h4>From the ibHiCS guest tools CD</h4>${insert}
+      ${code("guest-tools-cd", "mount /dev/sr0 /mnt && sh /mnt/linux/install.sh; umount /mnt")}
+      <p class="hint">The CD installer still needs access to your distribution's package repositories.</p>
+      <p class="hint guest-tools-vmware">Moved from VMware? Remove VMware Tools: <code>${esc(plan.remove)}</code></p>
+      <div class="guest-tools-check"><span>Check: <code>systemctl status qemu-guest-agent</code></span>${check}</div>`;
+  }
+  card.innerHTML = `<h3>Install guest tools</h3><div class="guest-tools-body">${body}</div>`;
+}
+
+async function copyGuestToolsCommand(code) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(code.textContent);
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    // Leave the command selected for manual copying if the legacy API is unavailable.
+    try { document.execCommand("copy"); } catch { /* selection remains available */ }
+  }
+  toast("Copied");
+}
+
+$("#vm-guest").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-guest-tools-link]")) return;
+  e.preventDefault();
+  const card = $("#vm-guest-tools");
+  card.focus({ preventScroll: true });
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("#vm-guest-tools").addEventListener("click", async (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  try {
+    if (button.dataset.guestToolsCopy) await copyGuestToolsCommand(document.getElementById(button.dataset.guestToolsCopy));
+    if (button.dataset.guestToolsPm) {
+      const vm = state.vms.find((v) => v.uuid === vmFromHash());
+      if (vm) renderGuestTools(vm, state.guests[vm.uuid], button.dataset.guestToolsPm);
+    }
+    if (button.id === "guest-tools-check") {
+      button.disabled = true;
+      try { await load("guests"); await renderVMDetail(); }
+      finally { button.disabled = false; }
+    }
+    if (button.dataset.vm === "tools" && canOperate()) await vmAction(e);
+  } catch (err) { fail(err); }
+});
+
 async function renderVMDetail() {
   const uuid = vmFromHash();
   const vm = state.vms.find((v) => v.uuid === uuid);
   if (!vm) {
+    $("#vm-guest-tools").hidden = true;
+    $("#vm-guest-tools").innerHTML = "";
     $("#vm-title").textContent = "VM not found";
     $("#vm-crumb").textContent = uuid;
     $("#vm-subtitle").textContent = "It may have been deleted, or moved and renamed.";
@@ -2909,6 +3010,7 @@ async function renderVMDetail() {
   }
   let g = null;
   if (vm.state === "running") g = await api(`/vms/${uuid}/guest`).catch(() => null);
+  if (g) state.guests[uuid] = g;
   const os = osName(vm, g), ips = ipList(g);
   const host = state.hosts[vm.node];
   const usage = diskUsage(vm, g);
@@ -2947,7 +3049,7 @@ async function renderVMDetail() {
   const agentText = g?.agent
     ? `<span class="dot ok"></span> Running`
     : vm.state === "running"
-      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Use ⋯ → Insert guest tools CD and run it in the guest to see its OS, hostname and IP addresses. Windows VMs imported with ibHiCS 0.2 or later get it automatically; on Linux, run linux/install.sh from the CD.</span>`
+      ? `<span class="dot warn"></span> Not detected <a class="vm-sub" href="#vm-guest-tools" data-guest-tools-link>Install guest tools</a>`
       : `<span class="dot"></span> VM is powered off`;
   $("#vm-guest").innerHTML = kv([
     ["Guest agent", agentText],
@@ -2957,6 +3059,7 @@ async function renderVMDetail() {
     ["Hostname", g?.hostname ? esc(g.hostname) : dash],
     ["IP addresses", ips.length ? ips.map((ip) => `<span class="mono">${esc(ip)}</span>`).join("<br>") : dash],
   ]);
+  renderGuestTools(vm, g);
 
   const ifaces = g?.interfaces || [];
   const byMac = (mac) => ifaces.find((i) => mac && i.mac.toLowerCase() === mac.toLowerCase());

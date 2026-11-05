@@ -42,6 +42,7 @@ def test_console_served(client):
         "topo-edit-cancel",
         "topo-palette",
         "topo-add-switch",
+        "vm-guest-tools",
     ):
         assert f'id="{element}"' in resp.text
     assert "Router <small>v0.7</small>" in resp.text

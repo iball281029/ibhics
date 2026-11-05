@@ -256,6 +256,19 @@ a.vm-link:hover { color: var(--brand); text-decoration: underline; }
 .card .kv { padding: 16px 18px; grid-template-columns: 140px 1fr; }
 .card .kv dd { min-width: 0; overflow-wrap: anywhere; }
 .card .kv .vm-sub { margin-top: 4px; }
+.guest-tools-body { padding: 16px 18px; }
+.guest-tools-body h4 { margin: 18px 0 10px; font-size: 13px; font-weight: 600; }
+.guest-tools-body p { margin: 10px 0; }
+.guest-tools-body > :first-child { margin-top: 0; }
+.guest-tools-body ol { padding-left: 22px; line-height: 1.8; }
+.guest-tools-command { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0; }
+.guest-tools-command pre { flex: 1; min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--hover); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.guest-tools-command code, .guest-tools-body code { font-size: 12px; overflow-wrap: anywhere; }
+.guest-tools-vmware { padding: 10px 0; border-top: 1px solid var(--line); }
+.guest-tools-check { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 12.5px; }
+.guest-tools-tabs { flex-wrap: wrap; }
+#vm-guest-tools { scroll-margin-top: 20px; }
+#vm-guest-tools:focus { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 /* Toast */
 #toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; display: grid; gap: 8px; }
