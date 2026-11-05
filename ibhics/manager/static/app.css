@@ -731,3 +731,34 @@ th { color: color-mix(in srgb, var(--brand) 35%, var(--muted)); }
 #deploy-form details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
 .t-kind.k-deploy { color: #9333ea; background: color-mix(in srgb, #a855f7 13%, transparent); }
 @media (max-width: 600px) { .tpl-grid, .tpl-intro { padding-left: 14px; padding-right: 14px; } }
+
+/* Topology draft editor */
+.topo-toolbar { padding: 12px 18px; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); }
+#topo-edit-tools:not([hidden]) { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#topo-pending { color: var(--muted); font-size: 12px; }
+.ntopo { grid-template-columns: minmax(0, 1fr) 290px; }
+.ntopo.editing { grid-template-columns: 175px minmax(0, 1fr) 290px; }
+#topo-palette { padding: 14px; border-right: 1px solid var(--line); background: var(--panel); }
+#topo-palette h3 { margin: 0 0 12px; font-size: 14px; }
+#topo-palette > button { width: 100%; margin-bottom: 8px; text-align: left; }
+#topo-palette small { float: right; color: var(--muted); }
+#topo-palette p { font-size: 12px; }
+#topo-add-switch[draggable="true"] { cursor: grab; }
+#topo-switch-form label { display: grid; gap: 5px; margin-bottom: 10px; }
+#topo-switch-form input { width: 100%; min-width: 0; }
+#topo-switch-form button { margin-bottom: 6px; }
+.topo-edit-hint { padding: 0; font-size: 12px; }
+.topo-error, #topo-switch-error { color: var(--warn); overflow-wrap: anywhere; }
+#topo-svg .wire.editable { pointer-events: stroke; cursor: pointer; stroke-width: 7; stroke-opacity: .65; }
+#topo-svg .wire.editable.selected { stroke: var(--brand); stroke-width: 8; stroke-opacity: 1; }
+#topo-svg .wire.pending { stroke: var(--warn); stroke-dasharray: 6 4; }
+#topo-svg .wire.removed { stroke: var(--warn); stroke-dasharray: 2 6; opacity: .4; pointer-events: none; }
+#topo-svg .wire.preview { pointer-events: none; }
+#topo-svg .tnode.pending rect { stroke: var(--warn); stroke-dasharray: 4 3; }
+.topo-handle { fill: var(--brand); stroke: var(--panel); stroke-width: 2; cursor: crosshair; }
+.ntopo.editing .tnode { cursor: grab; }
+@media (max-width: 1100px) {
+  .ntopo.editing { grid-template-columns: 160px minmax(0, 1fr); }
+  .ntopo.editing .topo-side { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 900px) { .ntopo:not(.editing) { grid-template-columns: minmax(0, 1fr); } }

@@ -270,7 +270,30 @@
           <button data-tab="net-list">Virtual switches</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
+          <div class="topo-toolbar">
+            <button id="topo-edit" class="operator-only">Edit</button>
+            <div id="topo-edit-tools" hidden>
+              <button id="topo-edit-save" class="primary">Save</button>
+              <button id="topo-edit-cancel">Cancel</button>
+              <button id="topo-auto-layout">Auto layout</button>
+              <span id="topo-pending" role="status" aria-live="polite"></span>
+            </div>
+          </div>
           <div class="ntopo">
+            <aside id="topo-palette" hidden>
+              <h3>Components</h3>
+              <button id="topo-add-switch" class="admin-only" draggable="true">Virtual switch</button>
+              <button disabled>Router <small>v0.7</small></button>
+              <button disabled>Firewall <small>v0.7</small></button>
+              <p class="muted">Drag a virtual switch onto the canvas, or click to add.</p>
+              <form id="topo-switch-form" hidden>
+                <label>Name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" maxlength="63"></label>
+                <label>VLAN ID <input name="vlan" type="number" min="2" max="4094" required></label>
+                <button type="submit">Stage switch</button>
+                <button type="button" id="topo-switch-cancel">Cancel</button>
+                <p id="topo-switch-error" role="alert"></p>
+              </form>
+            </aside>
             <div class="topo-canvas"><svg id="topo-svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
             <aside class="topo-side">
               <div class="topo-stats" id="topo-stats"></div>
