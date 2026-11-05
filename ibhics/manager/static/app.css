@@ -749,8 +749,12 @@ th { color: color-mix(in srgb, var(--brand) 35%, var(--muted)); }
 #topo-switch-form button { margin-bottom: 6px; }
 .topo-edit-hint { padding: 0; font-size: 12px; }
 .topo-error, #topo-switch-error { color: var(--warn); overflow-wrap: anywhere; }
-#topo-svg .wire.editable { pointer-events: stroke; cursor: pointer; stroke-width: 7; stroke-opacity: .65; }
-#topo-svg .wire.editable.selected { stroke: var(--brand); stroke-width: 8; stroke-opacity: 1; }
+#topo-svg .wire.editable { pointer-events: stroke; cursor: pointer; }
+#topo-svg .wire-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+#topo-svg .wire.editable.selected { stroke: var(--brand); stroke-width: 4; stroke-opacity: 1; }
+#topo-svg .topo-link-handle { fill: var(--panel); stroke: var(--brand); stroke-width: 3; cursor: pointer; }
+body.can-operate #topo-svg .topo-link-handle { cursor: grab; }
+body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 #topo-svg .wire.pending { stroke: var(--warn); stroke-dasharray: 6 4; }
 #topo-svg .wire.removed { stroke: var(--warn); stroke-dasharray: 2 6; opacity: .4; pointer-events: none; }
 #topo-svg .wire.preview { pointer-events: none; }
