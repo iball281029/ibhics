@@ -893,7 +893,9 @@ handlers["migrate-dialog"] = async (f, ctx) => {
 
 // ---------- storage ----------
 
-const netLabel = (n) => (n.vlan ? `${n.name} (VLAN ${n.vlan})` : n.name === "default" ? "default (LAN, untagged)" : n.name);
+// The LAN without a tag is the switch port's native VLAN, VLAN 1 unless the switch says otherwise.
+const vlanId = (n) => n.vlan ?? 1;
+const netLabel = (n) => `${n.name} (VLAN ${vlanId(n)})`;
 function netOptions(selected) {
   const nets = state.networks.length ? state.networks : [{ name: "default" }];
   const names = nets.map((n) => n.name);
@@ -906,7 +908,7 @@ function renderNetworks() {
   $("#networks").innerHTML = state.networks.map((n) => {
     const vms = state.vms.filter((v) => v.nics.some((x) => x.network === n.name)).length;
     return `<tr><td><div class="name-cell">${avatar("i-nic")}<span class="vm-name">${esc(n.name)}</span></div></td>
-      <td>${n.vlan ?? `<span class="muted">untagged</span>`}</td><td class="mono">${esc(n.bridge)}</td>
+      <td>VLAN ${vlanId(n)}${n.vlan ? "" : ` <span class="muted">(native)</span>`}</td><td class="mono">${esc(n.bridge)}</td>
       <td>${esc(n.nodes.join(", "))}</td><td>${vms}</td>
       <td><div class="actions">${admin && n.name !== "default" ? `<button class="small danger" data-net-del="${esc(n.name)}">Remove</button>` : ""}</div></td></tr>`;
   }).join("") || empty(6, "No networks");
