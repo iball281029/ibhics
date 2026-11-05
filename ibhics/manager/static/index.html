@@ -455,8 +455,10 @@
             <button id="refresh-source">Refresh</button>
           </div>
           <div id="uploads-progress"></div>
+          <div id="source-error" class="migrate-error" role="alert" hidden></div>
+          <button type="button" id="migrate-selected" class="primary operator-only" disabled>Migrate selected</button>
           <div class="table-wrap"><table>
-            <thead><tr><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
+            <thead><tr><th><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"></th><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
             <tbody id="source-vms"></tbody>
           </table></div>
         </div>
@@ -1103,7 +1105,8 @@
       <label class="check" data-for="vmware"><input name="verify_tls" type="checkbox"> Verify the host's TLS certificate</label>
     </div>
     <p class="hint" style="padding:0 18px">Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Files from Hyper-V, Nutanix, Sangfor or Xen: export them and use Upload files.</p>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
+    <div id="source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
+    <footer><button type="button" id="test-source-form">Test connection</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
   </form>
 </dialog>
 
@@ -1115,24 +1118,43 @@
   </form>
 </dialog>
 
-<dialog id="import-dialog">
+<dialog id="source-test-dialog">
+  <form method="dialog">
+    <header><h3>Source connection test</h3><button value="cancel" formnovalidate>×</button></header>
+    <div id="saved-source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
+    <footer><button value="cancel">Close</button></footer>
+  </form>
+</dialog>
+
+<dialog id="import-dialog" class="wizard migrate-wizard">
   <form method="dialog" id="import-form">
-    <header><h3>Import VM</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>Name in ibHiCS <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
-      <label>Node <select name="node" class="node-list-auto"></select></label>
-      <label>Storage pool <select name="pool" class="pool-list" required></select></label>
-      <div class="wide import-nets" id="import-nets"></div>
-      <label>vCPU <input name="vcpus" type="number" min="1"></label>
-      <label>Memory (MB) <input name="memory_mb" type="number" min="128" step="128"></label>
-      <label class="check"><input name="start" type="checkbox"> Power on when done</label>
-    </div>
-    <p class="hint" style="padding:0 18px">Power the VM off at the source first so its disks don't change during the copy.</p>
-    <div class="edit-note win-note" id="import-win" hidden>
-      <p>Windows: in the VM at the source, run <code>powercfg /h off</code> as administrator, then shut it down fully (not Restart). With Fast Startup on, its disk is locked and the virtio drivers cannot be added.</p>
-      <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Can't do that? Clear hibernation on the copy instead. ibHiCS copies the disks first and discards the hibernated session (unsaved work in it is lost). VMware over SSH and Proxmox/KVM only.</label>
-    </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start import</button></footer>
+    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate>×</button></header>
+    <ol class="wiz-steps">
+      <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
+      <li data-step="3"><b>3</b>Network mapping</li><li data-step="4"><b>4</b>Summary</li>
+    </ol>
+    <section class="wiz-page body" data-page="1">
+      <p class="hint">Power off selected VMs at the source before migration. Running VMs cannot proceed.</p>
+      <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
+    </section>
+    <section class="wiz-page body" data-page="2" hidden>
+      <div class="form-grid">
+        <label>Node <select name="node" id="import-node" required></select></label>
+        <label>Storage pool <select name="pool" id="import-pool" required></select></label>
+        <div id="import-capacity" class="wide" role="status"></div>
+        <div id="import-names" class="wide"></div>
+        <label class="check"><input name="start" type="checkbox"> Power on when done</label>
+      </div>
+      <div class="edit-note win-note" id="import-win" hidden>
+        <p>Windows: run <code>powercfg /h off</code> at the source, then shut down fully. Fast Startup can lock the disk and prevent driver installation.</p>
+        <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Clear hibernation on copied Windows disks (SSH VMware / KVM only; unsaved sessions on the copy are discarded).</label>
+      </div>
+    </section>
+    <section class="wiz-page body" data-page="3" hidden><div id="import-nets"></div></section>
+    <section class="wiz-page body" data-page="4" hidden>
+      <div id="import-summary"></div><div id="import-submit-status" role="status" aria-live="polite"></div>
+    </section>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" class="wiz-back">Back</button><button type="button" class="primary wiz-next">Next</button><button class="primary wiz-ok" value="ok" hidden>Start migration</button></footer>
   </form>
 </dialog>
 

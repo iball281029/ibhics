@@ -766,3 +766,20 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
   .ntopo.editing .topo-side { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
 }
 @media (max-width: 900px) { .ntopo:not(.editing) { grid-template-columns: minmax(0, 1fr); } }
+
+/* Migrate: source diagnostics and batch migration wizard. */
+.migrate-checks { padding: 12px 18px; overflow-wrap: anywhere; }
+.migrate-checks ol { padding-left: 22px; margin: 0; }
+.migrate-checks li { padding: 8px 0; }
+.migrate-checks li p { margin: 4px 0; }
+.migrate-checks .check-ok strong { color: var(--green, #23864c); }
+.migrate-checks .check-failed strong { color: var(--red, #c34040); }
+#page-migrate .migrate-error { padding: 16px; border: 1px solid var(--red, #c34040); border-radius: 8px; margin: 12px 0; }
+#page-migrate #migrate-selected { margin-bottom: 12px; }
+#import-dialog { width: min(940px, 95vw); }
+#import-dialog .wiz-page { overflow-x: auto; }
+#import-dialog #import-names [data-import-name] { min-width: 150px; }
+#import-dialog #import-names input[type="number"] { min-width: 80px; }
+#import-dialog #import-capacity { padding: 8px 0; }
+#import-dialog table { width: 100%; }
+#page-migrate progress { width: 100px; vertical-align: middle; }

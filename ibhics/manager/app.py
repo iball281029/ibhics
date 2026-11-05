@@ -10,6 +10,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, WebSocket, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import RELEASE_NAME, __version__, console
@@ -63,6 +66,7 @@ from .schemas import (
     RestoreRequest,
     SourceIn,
     SourceOut,
+    SourceTestOut,
     SourceVMOut,
     StopRequest,
     TemplateRequest,
@@ -140,6 +144,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
     ("POST", f"{API}/migrate/sources"),
+    ("POST", f"{API}/migrate/sources/test"),  # probes any host: admin, like adding one
     ("POST", f"{API}/networks"),
     ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
@@ -773,6 +778,23 @@ def create_app(
         cluster.require_quorum()
         source = imports.add_source(body.to_source())
         return SourceOut(name=source.name, type=source.type, settings=source.masked())
+
+    @app.exception_handler(RequestValidationError)
+    async def source_test_validation(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith(f"{API}/migrate/sources/") and request.url.path.endswith(
+            "/test"
+        ):
+            # Pydantic's default errors include the rejected password or entire input body.
+            return JSONResponse(status_code=422, content={"detail": "Invalid source test input"})
+        return await request_validation_exception_handler(request, exc)
+
+    @api.post("/migrate/sources/test", response_model=SourceTestOut)
+    def test_unsaved_source(body: SourceIn) -> dict:
+        return imports.test_source(body.to_source())
+
+    @api.post("/migrate/sources/{name}/test", response_model=SourceTestOut)
+    def test_saved_source(name: str) -> dict:
+        return imports.test_source(name)
 
     @api.delete("/migrate/sources/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_source(name: str) -> None:

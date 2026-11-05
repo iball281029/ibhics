@@ -3298,43 +3298,86 @@ function renderSources() {
       <td><span class="badge info plain">${esc(SOURCE_TYPES[s.type] || s.type)}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(where)}</td>
       <td>${esc(st.username || "–")}</td>
-      <td><div class="actions">${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
+      <td><div class="actions">${canOperate() ? `<button class="small" data-source-test="${esc(s.name)}">Test</button>` : ""}${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
     </tr>`;
   }).join("") : empty(5, "No sources yet. Add an ESXi host, a vCenter or a folder of exports.");
 }
 
 let sourceVMs = [];
 let sourceVMsFor = null;  // the source the list above was read from
+const migratePicked = new Set();
+let sourceReadGeneration = 0;
+function migrateSelection() {
+  $("#migrate-selected").disabled = !canOperate() || !migratePicked.size || !sourceVMsFor;
+  $("#migrate-selected").textContent = `Migrate selected (${migratePicked.size})`;
+  const all = $("#migrate-select-all");
+  all.checked = sourceVMs.length > 0 && migratePicked.size === sourceVMs.length;
+  all.indeterminate = migratePicked.size > 0 && !all.checked;
+}
+function connectionChecks(result) {
+  return `<ol>${result.checks.map((c) => `<li class="${c.ok ? "check-ok" : "check-failed"}"><strong>${c.ok ? "✓" : "✗"} ${esc(c.step)}</strong><div>${esc(c.detail)}</div>${c.hint ? `<p>${esc(c.hint)}</p>` : ""}</li>`).join("")}</ol>`;
+}
+async function runSourceTest(name, box) {
+  box.innerHTML = "Testing connection…";
+  try {
+    const result = await post(`/migrate/sources/${enc(name)}/test`, {});
+    box.innerHTML = connectionChecks(result);
+    return result;
+  } catch (err) { box.textContent = err.message; }
+}
 async function renderSourceVMs() {
   const name = $("#browse-source").value || state.sources[0]?.name;
-  const tbody = $("#source-vms");
-  if (!name) { tbody.innerHTML = empty(8, "Add a source first (Sources tab)"); return; }
-  // Reading ESXi or vCenter takes seconds, so the 10 s auto-refresh leaves this list
-  // alone; it reloads only on Refresh or when another source is picked.
-  tbody.innerHTML = empty(8, "Reading the source…");
+  const generation = ++sourceReadGeneration;
+  const tbody = $("#source-vms"), error = $("#source-error");
+  sourceVMs = []; sourceVMsFor = null; migratePicked.clear(); migrateSelection();
+  error.hidden = true;
+  if (!name) { tbody.innerHTML = empty(9, "Add a source first (Sources tab)"); return; }
+  tbody.innerHTML = empty(9, "Reading the source…");
   try {
-    sourceVMs = await api(`/migrate/sources/${enc(name)}/vms`);
-    sourceVMsFor = name;
+    const found = await api(`/migrate/sources/${enc(name)}/vms`);
+    if (generation !== sourceReadGeneration) return;
+    sourceVMs = found; sourceVMsFor = name;
   } catch (err) {
-    sourceVMsFor = null;
-    tbody.innerHTML = empty(8, err.message);
+    if (generation !== sourceReadGeneration) return;
+    tbody.innerHTML = empty(9, "Source inventory unavailable");
+    error.hidden = false;
+    error.innerHTML = `<strong>Could not list VMs from ${esc(name)}</strong><p>Run the connection test to identify the failed step and how to fix it.</p><details><summary>Inventory error</summary><p>${esc(err.message)}</p></details><button type="button" data-source-test="${esc(name)}">Run connection test</button><div class="migrate-checks"></div>`;
+    // Diagnose separately: inventory failures may be DNS, TCP, TLS, login or listing.
+    if (canOperate()) {
+      const result = await runSourceTest(name, $(".migrate-checks", error));
+      if (generation !== sourceReadGeneration) return;
+      const failed = result?.checks.find((c) => !c.ok && c.step !== "TCP 902");
+      if (failed) $("strong", error).textContent = `${name}: ${failed.step} failed`;
+    }
     return;
   }
   const op = canOperate();
   tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => `<tr>
+    <td><input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${op ? "" : "disabled"}></td>
     <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip" title="${esc(vm.ref)}">${esc(vm.ref.split("/").pop())}</span></div></div></td>
-    <td>${vm.state ? `<span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state)}</span>` : "–"}</td>
+    <td>${vm.state ? `<span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state)}</span>` : "Unknown"}${vm.state === "running" ? '<span class="vm-sub">Power off at source first</span>' : ""}</td>
     <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td>
     <td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
     <td>${esc(vm.firmware.toUpperCase())}</td>
     <td>${esc(vm.guest_os || "–")}${vm.notes ? `<span class="vm-sub clip" title="${esc(vm.notes)}">${esc(vm.notes)}</span>` : ""}</td>
-    <td><div class="actions">${!op ? "" : vm.state === "running"
-      ? `<button class="small" disabled title="Power the VM off at the source first">Import</button>`
-      : `<button class="small primary" data-import="${i}">Import</button>`}${op && sourceVMsFor === "uploads"
+    <td><div class="actions">${op ? `<button class="small primary" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads"
       ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
-  </tr>`).join("") : empty(8, "No VMs found on this source");
+  </tr>`).join("") : empty(9, "No VMs found on this source");
 }
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
+$("#source-vms").addEventListener("change", (e) => {
+  const input = e.target.closest("[data-migrate-pick]");
+  if (!input) return;
+  const index = Number(input.dataset.migratePick);
+  if (input.checked) migratePicked.add(index); else migratePicked.delete(index);
+  migrateSelection();
+});
+$("#migrate-select-all").addEventListener("change", (e) => {
+  migratePicked.clear();
+  if (canOperate() && sourceVMsFor && e.target.checked) sourceVMs.forEach((v, i) => migratePicked.add(i));
+  $$("#source-vms [data-migrate-pick]").forEach((c) => { c.checked = migratePicked.has(Number(c.dataset.migratePick)); });
+  migrateSelection();
+});
 
 // Uploads stream straight to the node's disk; big exports take a while, so each file
 // shows its own progress bar.
@@ -3383,40 +3426,57 @@ $("#upload-files").addEventListener("change", async (e) => {
 });
 $("#refresh-source").addEventListener("click", () => renderSourceVMs());
 
+function importElapsed(j) {
+  const seconds = Math.max(0, Math.floor(((j.finished ? Date.parse(j.finished) : Date.now()) - Date.parse(j.created)) / 1000));
+  return Number.isFinite(seconds) ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : "–";
+}
 function renderImports() {
   $("#imports").innerHTML = state.imports.length ? state.imports.map((j) => `<tr>
     <td class="vm-sub" style="display:table-cell" title="${esc(j.vm)}">${esc(j.vm.split("/").pop())}</td><td>${esc(j.source)}</td>
-    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}</td>
+    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}<span class="vm-sub">Elapsed ${importElapsed(j)}</span></td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${esc(j.error || (j.state === "running" ? `${j.step || "Working"}${j.percent != null ? ` · ${j.percent}%` : ""}` : ""))}
+    <td class="vm-sub" style="display:table-cell">${esc(j.error || j.step || "")}
+      ${j.percent != null ? `<progress max="100" value="${Number(j.percent)}" aria-label="Migration progress"></progress> ${Number(j.percent)}%` : ""}
       <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button></td></tr>`).join("") : empty(7, "No imports yet");
 }
 
+async function openImportWizard(indices) {
+  if (!canOperate() || !sourceVMsFor || !indices.length) return;
+  const source = sourceVMsFor, vms = [...sourceVMs];
+  await load("vms", "pools", "networks");
+  openDialog("import-dialog", { source, vms, indices });
+}
+$("#migrate-selected").addEventListener("click", () => openImportWizard([...migratePicked]).catch(fail));
 $("#page-migrate").addEventListener("click", async (e) => {
   const imp = e.target.closest("button[data-import]");
   const rm = e.target.closest("button[data-source-del]");
+  const test = e.target.closest("button[data-source-test]");
   const upDel = e.target.closest("button[data-upload-del]");
+  if (test) {
+    test.disabled = true;
+    try {
+      const panel = test.closest("#source-error");
+      const box = panel ? $(".migrate-checks", panel) : $("#saved-source-test-results");
+      if (!panel) openDialog("source-test-dialog");
+      const result = await runSourceTest(test.dataset.sourceTest, box);
+      if (panel && result) {
+        const failed = result.checks.find((c) => !c.ok && c.step !== "TCP 902");
+        $("strong", panel).textContent = failed ? `${test.dataset.sourceTest}: ${failed.step} failed` : "Connection checks passed. Refresh the source inventory.";
+      }
+    } finally { test.disabled = false; }
+  }
   if (upDel) {
     if (!confirm(`Delete the uploaded file ${upDel.dataset.uploadDel}?`)) return;
     try { await del(`/migrate/uploads/${enc(upDel.dataset.uploadDel)}`); renderSourceVMs(); } catch (err) { fail(err); }
   }
-  if (imp) {
-    const vm = sourceVMs[Number(imp.dataset.import)];
-    if (vm.state === "running" && !confirm(`${vm.name} is running at the source. Its disks may change during the copy. Continue anyway?`)) return;
-    openDialog("import-dialog", { source: $("#browse-source").value, vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
-    $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
-    const src = state.sources.find((s) => s.name === $("#browse-source").value);
-    $("#import-hib").hidden = !src || !(src.type === "kvm" || (src.type === "vmware" && (src.settings?.transport || "ssh") === "ssh"));
-    renderImportNets(vm);
-    load("networks").then(() => renderImportNets(vm)).catch(() => {});
-  }
+  if (imp) { try { await openImportWizard([Number(imp.dataset.import)]); } catch (err) { fail(err); } }
   if (rm) {
     if (!confirm(`Remove source ${rm.dataset.sourceDel}?`)) return;
     try { await del(`/migrate/sources/${enc(rm.dataset.sourceDel)}`); await refresh("migrate"); } catch (err) { fail(err); }
   }
 });
 
-handlers["source-dialog"] = async (f) => {
+function sourceFormBody(f) {
   const type = f.get("type");
   const body = { name: f.get("name"), type };
   if (type === "vmware") {
@@ -3424,6 +3484,27 @@ handlers["source-dialog"] = async (f) => {
     if (f.get("vpath")) body.path = f.get("vpath");
   } else if (type === "kvm") Object.assign(body, { host: f.get("host"), username: "root", password: f.get("password") });
   else body.path = f.get("path");
+  return body;
+}
+let sourceTestVersion = 0;
+function clearSourceTest() { sourceTestVersion++; $("#source-test-results").replaceChildren(); }
+$("#source-dialog").addEventListener("close", clearSourceTest);
+$("#source-form").addEventListener("input", clearSourceTest);
+$("#source-form").addEventListener("change", clearSourceTest);
+$("#test-source-form").addEventListener("click", async (e) => {
+  const form = $("#source-form"), box = $("#source-test-results");
+  if (!form.reportValidity()) return;
+  const version = ++sourceTestVersion;
+  e.target.disabled = true; box.textContent = "Testing connection…";
+  try {
+    const result = await post("/migrate/sources/test", sourceFormBody(new FormData(form)));
+    if (version === sourceTestVersion) box.innerHTML = connectionChecks(result);
+  } catch (err) { if (version === sourceTestVersion) box.textContent = err.message; }
+  finally { e.target.disabled = false; }
+});
+
+handlers["source-dialog"] = async (f) => {
+  const body = sourceFormBody(f);
   await post("/migrate/sources", body);
   toast(`Source ${body.name} added`);
   await refresh("migrate");
@@ -3432,33 +3513,121 @@ handlers["source-dialog"] = async (f) => {
   await renderSourceVMs();
 };
 
-// One row per source NIC: where it was at the source, and which ibHiCS network it joins.
-// A network named like the source port group is picked by itself.
-function renderImportNets(vm) {
-  const box = $("#import-nets");
-  const count = Math.max(vm.nics || 1, (vm.networks || []).length, 1);
-  const was = $$("select", box).map((s) => s.value);
-  const slug = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  box.innerHTML = `<span class="label">Network adapters</span>` + Array.from({ length: count }, (_, i) => {
-    const src = (vm.networks || [])[i] || "";
-    const match = state.networks.find((n) => slug(n.name) === slug(src) && src);
-    const pick = was[i] || match?.name || "default";
-    return `<div class="net-map"><span>Adapter ${i + 1}${src ? ` · at the source: <b>${esc(src)}</b>` : ""}</span>
-      <span class="arrow">→</span><select data-net-map="${i}">${netOptions(pick)}</select></div>`;
-  }).join("") + `<span class="vm-sub">Missing a VLAN? Add it under Storage → Networks first.</span>`;
+// Map the union of source networks, then rebuild each VM's NIC array in NIC order.
+const importForm = $("#import-form");
+const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() };
+function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
+function importNetworkKeys(vm) {
+  return Array.from({ length: Math.max(vm.nics || 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
 }
+function renderImportNets() {
+  const keys = [...new Set(importChosen().flatMap(importNetworkKeys))];
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  $("#import-nets").innerHTML = `<table><thead><tr><th>Source network</th><th>Target virtual switch</th></tr></thead><tbody>${keys.map((src, i) => {
+    const pick = importBatch.networks.get(src) || state.networks.find((n) => slug(n.name) === slug(src))?.name || "default";
+    importBatch.networks.set(src, pick);
+    return `<tr><td>${esc(src)}</td><td><select data-import-network="${i}" aria-label="Target for ${esc(src)}">${netOptions(pick)}</select></td></tr>`;
+  }).join("")}</tbody></table><p class="hint">Add missing virtual switches under Network first.</p>`;
+  $$("#import-nets select").forEach((select, i) => select.addEventListener("change", () => importBatch.networks.set(keys[i], select.value)));
+}
+function importCapacity() {
+  const f = importForm.elements;
+  const pool = state.pools.find((p) => p.node === f.node.value && p.name === f.pool.value && p.active);
+  const disks = importChosen().reduce((total, vm) => total + vm.disks_gb.reduce((a, b) => a + b, 0), 0);
+  const needed = disks * (["lvm", "iscsi"].includes(pool?.type) ? 2 : 1);
+  const unknown = importChosen().some((v) => !v.disks_gb.length || v.disks_gb.some((g) => !g));
+  $("#import-capacity").textContent = `${disks} GB total disks; ${needed} GB required including conversion space; ${pool ? `${Math.floor(pool.available_gb)} GB free` : "select an available pool"}.${unknown ? " Warning: some disk sizes are unknown; actual space may be higher." : ""}${pool && pool.available_gb < needed ? " Warning: insufficient free space. Choose a larger pool." : ""}`;
+  return { pool, needed };
+}
+function importTargetPools() {
+  const sel = importForm.elements.pool, was = sel.value;
+  const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
+  sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
+  if (pools.some((p) => p.name === was)) sel.value = was;
+  importCapacity();
+}
+const importWiz = wizard("import-dialog", {
+  steps: 4,
+  reset() {
+    const ctx = dialogContext;
+    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() });
+    $("#import-submit-status").textContent = "";
+    importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+    importTargetPools();
+  },
+  check(step) {
+    const chosen = importChosen();
+    if (!chosen.length) throw new Error("Select at least one VM.");
+    if (chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
+    if (step >= 2) {
+      const { pool, needed } = importCapacity();
+      if (!pool) throw new Error("Choose a healthy node and an available storage pool.");
+      if (pool.available_gb < needed) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
+      if (names.some((n) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters, digits, '-', '_' or '.'.");
+      if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
+      if (chosen.some((v) => {
+        const r = importBatch.resources.get(v.ref) || v;
+        return !Number.isInteger(r.vcpus) || r.vcpus < 1 || r.vcpus > 256 || !Number.isInteger(r.memory_mb) || r.memory_mb < 128;
+      })) throw new Error("Choose 1–256 vCPUs and at least 128 MB memory per VM.");
+      if (chosen.some((v, i) => !importBatch.submitted.has(v.ref) && (state.vms.some((vm) => vm.name === names[i]) || state.imports.some((j) => j.name === names[i] && ["queued", "running"].includes(j.state))))) throw new Error("A target name already exists or has a pending migration. Choose another name.");
+    }
+  },
+  show(step) {
+    if (step === 1) {
+      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" ? " — power off first" : ""}</td><td>${vm.disks_gb.map((g) => g ? `${g} GB` : "Unknown").join(", ")}</td></tr>`).join("");
+    }
+    if (step === 2) {
+      $("#import-names").innerHTML = `<table><thead><tr><th>Source VM</th><th>New name</th><th>vCPU</th><th>Memory (MB)</th></tr></thead><tbody>${importChosen().map((vm, i) => {
+        const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
+        importBatch.resources.set(vm.ref, r);
+        const lock = importBatch.submitted.has(vm.ref) ? "readonly" : "";
+        return `<tr><td>${esc(vm.name)}</td><td><input data-import-name="${i}" value="${esc(importBatch.names.get(vm.ref) ?? vm.name)}" ${lock} aria-label="New name for ${esc(vm.name)}"></td><td><input data-import-cpu="${i}" type="number" min="1" max="256" value="${r.vcpus}" ${lock} aria-label="vCPU for ${esc(vm.name)}"></td><td><input data-import-memory="${i}" type="number" min="128" step="128" value="${r.memory_mb}" ${lock} aria-label="Memory for ${esc(vm.name)}"></td></tr>`;
+      }).join("")}</tbody></table>`;
+      $$("#import-names [data-import-name]").forEach((input, i) => input.addEventListener("input", () => importBatch.names.set(importChosen()[i].ref, input.value)));
+      [["cpu", "vcpus"], ["memory", "memory_mb"]].forEach(([attr, key]) => {
+        $$(`#import-names [data-import-${attr}]`).forEach((input, i) => input.addEventListener("input", () => { importBatch.resources.get(importChosen()[i].ref)[key] = Number(input.value); }));
+      });
+      const source = state.sources.find((s) => s.name === importBatch.source);
+      $("#import-win").hidden = !importChosen().some((v) => /windows/i.test(v.guest_os));
+      $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings.transport || "ssh") === "ssh"));
+      importCapacity();
+    }
+    if (step === 3) renderImportNets();
+    if (step === 4) {
+      $("#import-summary").innerHTML = `<p>${esc(importBatch.source)} → ${esc(importForm.elements.node.value)} / ${esc(importForm.elements.pool.value)}</p><table><thead><tr><th>Source VM</th><th>New name</th><th>Disks</th><th>Network mapping</th></tr></thead><tbody>${importChosen().map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(importBatch.names.get(v.ref) ?? v.name)}</td><td>${v.disks_gb.reduce((a, b) => a + b, 0)} GB</td><td>${importNetworkKeys(v).map((k) => `${esc(k)} → ${esc(importBatch.networks.get(k) || "default")}`).join("<br>")}</td></tr>`).join("")}</tbody></table><p class="hint">Unknown disk sizes are not included. VMs must remain powered off at the source.</p>`;
+    }
+  },
+});
+$("#import-pick-vms").addEventListener("change", (e) => {
+  const input = e.target.closest("[data-wizard-vm]");
+  if (!input) return;
+  const ref = importBatch.vms[Number(input.dataset.wizardVm)].ref;
+  if (input.checked) importBatch.picked.add(ref); else importBatch.picked.delete(ref);
+});
+importForm.elements.node.addEventListener("change", importTargetPools);
+importForm.elements.pool.addEventListener("change", importCapacity);
 
-handlers["import-dialog"] = async (f, ctx) => {
-  const networks = $$("#import-nets select").map((s) => s.value);
-  const body = {
-    source: ctx.source, vm: ctx.vm.ref, name: f.get("name"), node: f.get("node") || null,
-    pool: f.get("pool") || "default", network: networks.length ? networks : "default", start: f.get("start") === "on",
-    clear_hibernation: f.get("clear_hibernation") === "on" && !$("#import-win").hidden && !$("#import-hib").hidden,
-  };
-  if (f.get("vcpus")) body.vcpus = Number(f.get("vcpus"));
-  if (f.get("memory_mb")) body.memory_mb = Number(f.get("memory_mb"));
-  const job = await post("/migrate/jobs", body);
-  toast(`Importing ${job.name} to ${job.node}. Follow it under Jobs.`);
+handlers["import-dialog"] = async (f) => {
+  if (importWiz.step !== 4) throw new Error("Review the migration summary first.");
+  importWiz.check(4);
+  const chosen = importChosen();
+  for (const vm of chosen) {
+    if (importBatch.submitted.has(vm.ref)) continue;
+    try {
+      await post("/migrate/jobs", {
+        source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
+        node: f.get("node"), pool: f.get("pool"), vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k) => importBatch.networks.get(k) || "default"), start: f.get("start") === "on",
+        clear_hibernation: f.get("clear_hibernation") === "on" && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
+      });
+      importBatch.submitted.add(vm.ref);
+      $("#import-submit-status").textContent = `${importBatch.submitted.size} of ${chosen.length} jobs created.`;
+    } catch (err) {
+      $("#import-submit-status").textContent = `${importBatch.submitted.size} of ${chosen.length} jobs created. ${vm.name}: ${err.message}. Review Jobs before retrying; accepted jobs will be skipped in this wizard.`;
+      throw err;
+    }
+  }
+  toast(`${chosen.length} migration jobs created.`);
   await refresh("migrate");
   selectTab("migrate-tabs", "imports");
 };

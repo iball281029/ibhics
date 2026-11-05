@@ -17,6 +17,7 @@ from ..cluster import Cluster
 from ..hypervisor import VMExists
 from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
+from ..importer.diagnostics import test_source
 from ..importer.sources import IMAGE_SUFFIXES
 
 
@@ -88,10 +89,12 @@ class ImportManager:
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         executor: Executor | None = None,
         upload_dir: Path = UPLOAD_DIR,
+        tester: Callable[[Source], dict] = test_source,
     ) -> None:
         self._cluster = cluster
         self.upload_dir = Path(upload_dir)
         self._state_path = state_path
+        self._tester = tester
         self._discover = discover
         self._clock = clock
         # Conversions are disk- and CPU-heavy; two at a time across the cluster.
@@ -139,6 +142,12 @@ class ImportManager:
             self.source(name)
             del self._sources[name]
             self._save()
+
+    def test_source(self, source: Source | str) -> dict:
+        """Diagnose without saving configuration or creating the uploads folder."""
+        if isinstance(source, str):
+            source = self.uploads_source if source == UPLOADS else self.source(source)
+        return self._tester(source)
 
     def source_vms(self, name: str) -> list[SourceVM]:
         """What is on a source. Folders are read on the manager's node, which mounts the

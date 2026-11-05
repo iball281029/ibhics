@@ -705,6 +705,17 @@ class UploadOut(BaseModel):
     size_bytes: int
 
 
+class SourceCheckOut(BaseModel):
+    step: str
+    ok: bool
+    detail: str
+    hint: str
+
+
+class SourceTestOut(BaseModel):
+    checks: list[SourceCheckOut]
+
+
 class SourceOut(BaseModel):
     name: str
     type: str
