@@ -339,3 +339,14 @@ def test_boot_menu_title_names_the_release():
     menu = (INSTALLER / "boot/isolinux.cfg").read_text()
     assert "menu title ibHiCS @VERSION@ beta installer" in menu
     assert "s/@VERSION@/$SHORT/g" in (INSTALLER / "build-iso.sh").read_text()
+
+
+def test_apparmor_lets_qemu_open_pool_volumes():
+    rules = (INSTALLER / "apparmor-libvirt-qemu").read_text()
+    assert "/var/lib/ibhics/pools/** rwk," in rules
+    assert "/mnt/ibhics/** rwk," in rules  # NFS pools
+    target = "/etc/apparmor.d/local/abstractions/libvirt-qemu"
+    for script in ("install-ibhics.sh", "upgrade.sh"):
+        text = (INSTALLER / script).read_text()
+        assert '"$SRC/apparmor-libvirt-qemu"' in text and target in text
+    assert '"$HERE/apparmor-libvirt-qemu"' in (INSTALLER / "build-iso.sh").read_text()

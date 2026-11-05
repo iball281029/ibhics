@@ -126,6 +126,10 @@ fi
 for tool in ibhics-manager ibhics-agent ibhics-setup; do
     ln -sf "$VENV/bin/$tool" "/usr/local/sbin/$tool"
 done
+if [ -f "$SRC/apparmor-libvirt-qemu" ]; then
+    # Nodes from 0.4/0.5 could not start VMs: AppArmor denied QEMU its pool volumes.
+    install -D -m 0644 "$SRC/apparmor-libvirt-qemu" /etc/apparmor.d/local/abstractions/libvirt-qemu
+fi
 if ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
     # Nodes set up by 0.1/0.2 had no DNS (ifupdown's dns-nameservers needs resolvconf).
     dns=$(sed -n 's/^[[:space:]]*dns-nameservers[[:space:]]*//p' /etc/network/interfaces | head -n1)
