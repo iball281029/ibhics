@@ -136,10 +136,12 @@ def build_iso(
     if not tool:
         raise InvalidState("guest customization needs xorriso on the node (apt install xorriso)")
     run = run or (lambda cmd: subprocess.run(cmd, check=True, capture_output=True))
-    out.parent.mkdir(parents=True, exist_ok=True)
+    # The CD may hold a password: only root (and QEMU, which libvirt hands it to) reads it.
+    out.parent.mkdir(mode=0o711, parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ibhics-seed-") as tmp:
         for name, text in files.items():
             (Path(tmp) / name).write_text(text)
         args = ["-quiet", "-J", "-R", "-V", label, "-o", str(out), tmp]
         run([tool, "-as", "mkisofs", *args] if tool.endswith("xorriso") else [tool, *args])
+    out.chmod(0o600)
     return out
