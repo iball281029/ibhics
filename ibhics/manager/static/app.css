@@ -446,6 +446,44 @@ label.inline select { width: auto; min-width: 140px; }
   .wiz-bar input.search { width: 100%; }
 }
 
+/* Network topology */
+.ntopo { display: grid; grid-template-columns: 1fr 290px; gap: 0; border-top: 1px solid var(--line); min-height: 520px; }
+.topo-canvas { overflow: auto; background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 22px 22px; }
+#topo-svg { display: block; min-width: 100%; touch-action: none; user-select: none; }
+#topo-svg .lanes text { font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; fill: var(--muted); }
+#topo-svg .wire { fill: none; stroke-width: 2; }
+#topo-svg .wire.native { stroke: var(--brand); }
+#topo-svg .wire.tagged { stroke: #7c3aed; stroke-dasharray: 6 4; }
+#topo-svg .wire.up { stroke: var(--ok); }
+#topo-svg .wire.down { stroke: var(--faint); }
+.tnode { cursor: pointer; }
+.tnode rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+.tnode use { color: var(--brand); }
+.tnode.uplink use { color: #0e7490; } .tnode.uplink.warn rect { stroke: var(--warn); }
+.tnode.switch use { color: #7c3aed; }
+.tnode.vm.up use { color: var(--ok); } .tnode.vm.down use { color: var(--muted); }
+.tnode.vm { cursor: grab; } .tnode.dragging { cursor: grabbing; opacity: .85; }
+.tnode:hover rect { stroke: var(--faint); }
+.tnode.sel rect, .tnode.drop rect { stroke: var(--brand); stroke-width: 2.5; fill: var(--brand-soft); }
+.tnode .t-name { font-size: 12px; font-weight: 600; fill: var(--text); text-anchor: middle; }
+.tnode .t-sub { font-size: 11px; fill: var(--muted); text-anchor: middle; }
+.topo-side { border-left: 1px solid var(--line); padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.topo-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.topo-stats div { display: grid; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.topo-stats span { font-size: 11px; color: var(--muted); } .topo-stats b { font-size: 18px; font-weight: 500; }
+.topo-panel h3 { margin: 0 0 10px; font-size: 15px; }
+.topo-panel .kv { padding: 0; grid-template-columns: 90px 1fr; gap: 6px 10px; }
+.topo-panel label { margin-top: 8px; }
+.topo-list { display: grid; gap: 6px; }
+.topo-port { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.topo-port .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.topo-port .dot.up { background: var(--ok); }
+.topo-legend { margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.topo-legend i { display: inline-block; width: 18px; height: 0; margin-right: 6px; vertical-align: middle; border-top: 2px solid; }
+.topo-legend .l-native { border-color: var(--brand); } .topo-legend .l-tagged { border-color: #7c3aed; border-top-style: dashed; }
+.topo-legend .l-up { border-color: var(--ok); } .topo-legend .l-down { border-color: var(--faint); }
+@media (max-width: 900px) { .ntopo { grid-template-columns: 1fr; } .topo-side { border-left: 0; border-top: 1px solid var(--line); } }
+
 /* Storage detail */
 .pv-stats { grid-template-columns: repeat(3, 1fr); }
 .pool-link { cursor: pointer; }

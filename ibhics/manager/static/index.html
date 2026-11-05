@@ -226,14 +226,31 @@
     <section class="page" id="page-network">
       <div class="sheet">
         <div class="page-head">
-          <h1>Networks</h1><span class="sub">The LAN (VLAN 1, native on br0) and tagged VLANs on it, on every compute node</span>
+          <h1>Network</h1><span class="sub">The LAN (VLAN 1, native on br0) and tagged VLANs on it, on every compute node</span>
           <span class="spacer"></span>
-          <button class="primary admin-only" data-open="net-dialog">+ Add VLAN network</button>
+          <button id="topo-refresh">Refresh</button>
+          <button class="primary admin-only" data-open="net-dialog">+ Add virtual switch (VLAN)</button>
         </div>
+        <div class="tabs" id="net-tabs">
+          <button data-tab="net-topology" class="active">Topology</button>
+          <button data-tab="net-list">Virtual switches</button>
+        </div>
+        <div class="subpage active" id="tab-net-topology">
+          <div class="ntopo">
+            <div class="topo-canvas"><svg id="topo-svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+            <aside class="topo-side">
+              <div class="topo-stats" id="topo-stats"></div>
+              <div class="topo-panel" id="topo-panel"></div>
+              <div class="topo-legend"><span><i class="l-native"></i>VLAN 1 (native)</span><span><i class="l-tagged"></i>Tagged VLAN</span><span><i class="l-up"></i>VM running</span><span><i class="l-down"></i>VM stopped</span></div>
+            </aside>
+          </div>
+        </div>
+        <div class="subpage" id="tab-net-list">
         <div class="table-wrap" style="margin-top:14px"><table>
           <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
           <tbody id="networks"></tbody>
         </table></div>
+        </div>
       </div>
     </section>
 

@@ -406,7 +406,7 @@ async function refresh(page, auto = false) {
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
-  if (page === "network") { await load("vms", "networks"); renderNetworks(); }
+  if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -901,6 +901,176 @@ function netOptions(selected) {
   const names = nets.map((n) => n.name);
   const extra = selected && !names.includes(selected) ? [{ name: selected }] : [];
   return [...nets, ...extra].map((n) => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""}>${esc(netLabel(n))}</option>`).join("");
+}
+
+// ---------- network topology ----------
+// Uplinks (each node's br0 and the ports in it) at the top, a virtual switch per network
+// (VLAN) in the middle, VMs at the bottom wired to the switches of their NICs. Click
+// anything to see and change it; drag a VM onto a switch to move its NIC there.
+
+const ntopo = { sel: null, nics: {}, drag: null };
+const TOPO = { w: 150, gapY: 150, top: 40 };
+const SVGNS = "http://www.w3.org/2000/svg";
+
+async function renderTopology() {
+  const nodes = computeMembers().filter((m) => m.healthy).map((m) => m.name);
+  await Promise.all(nodes.map((n) => (ntopo.nics[n] ? null : api(`/nodes/${enc(n)}/nics`).then((x) => { ntopo.nics[n] = x; }).catch(() => { ntopo.nics[n] = []; }))));
+  const nets = [...state.networks].sort((a, b) => vlanId(a) - vlanId(b));
+  // VMs ordered by their first network, so their wires stay short.
+  const netIndex = new Map(nets.map((n, i) => [n.name, i]));
+  const vms = [...state.vms].sort((a, b) => (netIndex.get(a.nics[0]?.network) ?? 99) - (netIndex.get(b.nics[0]?.network) ?? 99) || a.name.localeCompare(b.name));
+  const cols = Math.max(nodes.length, nets.length, vms.length, 4);
+  const width = cols * TOPO.w + 170; // room on the left for the row names
+  const rowX = (count, i) => 150 + (width - 170) * (i + 0.5) / count;
+  const pos = {};
+  nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
+  nets.forEach((n, i) => { pos[`net:${n.name}`] = { x: rowX(nets.length, i), y: TOPO.top + 30 + TOPO.gapY }; });
+  vms.forEach((v, i) => { pos[`vm:${v.uuid}`] = { x: rowX(vms.length, i), y: TOPO.top + 30 + TOPO.gapY * 2 }; });
+  const height = TOPO.top + 30 + TOPO.gapY * 2 + 80;
+
+  const wire = (a, b, cls) => {
+    const p = pos[a], q = pos[b];
+    if (!p || !q) return "";
+    const y0 = p.y + 60; // below the parent's label
+    return `<path class="wire ${cls}" d="M${p.x},${y0} C${p.x},${(y0 + q.y - 22) / 2 + 10} ${q.x},${(y0 + q.y - 22) / 2 - 10} ${q.x},${q.y - 22}"/>`;
+  };
+  let wires = "";
+  for (const n of nets) for (const node of n.nodes) wires += wire(`node:${node}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
+  for (const v of vms) for (const nic of v.nics) wires += wire(`net:${nic.network}`, `vm:${v.uuid}`, v.state === "running" ? "up" : "down");
+
+  const label = (x, y, text, sub) => `<text x="${x}" y="${y + 38}" class="t-name">${esc(text)}</text>${sub ? `<text x="${x}" y="${y + 53}" class="t-sub">${esc(sub)}</text>` : ""}`;
+  const node = (key, x, y, icon, cls, text, sub) =>
+    `<g class="tnode ${cls} ${ntopo.sel === key ? "sel" : ""}" data-key="${esc(key)}" transform="translate(0,0)">
+      <rect x="${x - 22}" y="${y - 22}" width="44" height="44" rx="11"/><use href="#${icon}" x="${x - 11}" y="${y - 11}" width="22" height="22"/>${label(x, y, text, sub)}</g>`;
+  let shapes = "";
+  for (const n of nodes) {
+    const ports = (ntopo.nics[n] || []).filter((p) => p.master === "br0");
+    const sub = ports.length ? ports.map((p) => `${p.name}${p.speed_mbps ? ` ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000}G` : `${p.speed_mbps}M`}` : ""}`).join(", ") : "br0";
+    const p = pos[`node:${n}`];
+    shapes += node(`node:${n}`, p.x, p.y, "i-nodes", ports.some((x) => x.link) || !ports.length ? "uplink" : "uplink warn", `${n} · uplink`, sub);
+  }
+  for (const n of nets) {
+    const p = pos[`net:${n.name}`];
+    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", "switch", n.name, `VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}`);
+  }
+  for (const v of vms) {
+    const p = pos[`vm:${v.uuid}`];
+    shapes += node(`vm:${v.uuid}`, p.x, p.y, "i-compute", `vm ${v.state === "running" ? "up" : "down"}`, v.name, v.node || "");
+  }
+  $("#topo-svg").setAttribute("viewBox", `0 0 ${width} ${height}`);
+  $("#topo-svg").setAttribute("width", width);
+  $("#topo-svg").setAttribute("height", height);
+  $("#topo-svg").innerHTML = `<g class="lanes"><text x="12" y="${TOPO.top - 8}">Uplinks</text><text x="12" y="${TOPO.top + TOPO.gapY - 8}">Virtual switches</text><text x="12" y="${TOPO.top + TOPO.gapY * 2 - 8}">Virtual machines</text></g>${wires}${shapes}`;
+  ntopo.pos = pos;
+  const running = state.vms.filter((v) => v.state === "running").length;
+  $("#topo-stats").innerHTML = [["Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
+    .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
+  topoPanel();
+}
+
+function topoPanel() {
+  const box = $("#topo-panel"), key = ntopo.sel || "", admin = isAdmin(), op = canOperate();
+  const [kind, id] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
+  if (kind === "net") {
+    const n = state.networks.find((x) => x.name === id);
+    if (!n) { ntopo.sel = null; return topoPanel(); }
+    const vms = state.vms.filter((v) => v.nics.some((x) => x.network === n.name));
+    box.innerHTML = `<h3>${esc(n.name)}</h3><dl class="kv"><dt>VLAN ID</dt><dd>${vlanId(n)}${n.vlan ? " (tagged)" : " (native, untagged on the wire)"}</dd>
+      <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>On nodes</dt><dd>${esc(n.nodes.join(", "))}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
+      <p class="wiz-label">Connected VMs</p><div class="topo-list">${vms.map((v) => `<a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a>`).join("") || `<span class="muted">None yet. Drag a VM here.</span>`}</div>
+      ${admin && n.name !== "default" ? `<button class="small danger" data-topo-del="${esc(n.name)}" style="margin-top:14px">Remove switch</button>` : ""}`;
+  } else if (kind === "vm") {
+    const v = state.vms.find((x) => x.uuid === id);
+    if (!v) { ntopo.sel = null; return topoPanel(); }
+    const opts = (cur) => state.networks.map((n) => `<option value="${esc(n.name)}" ${n.name === cur ? "selected" : ""}>${esc(netLabel(n))}</option>`).join("");
+    box.innerHTML = `<h3>${esc(v.name)}</h3><dl class="kv"><dt>Status</dt><dd><span class="badge ${esc(v.state)}">${esc(v.state)}</span></dd><dt>Node</dt><dd>${esc(v.node || "")}</dd></dl>
+      <p class="wiz-label">Network adapters</p>
+      ${v.nics.map((nic, i) => `<label>NIC ${i + 1}${nic.mac ? ` <span class="mono muted">${esc(nic.mac)}</span>` : ""}<select data-topo-nic="${i}" ${op ? "" : "disabled"}>${opts(nic.network)}</select></label>`).join("") || `<p class="muted">No network adapter.</p>`}
+      ${op && v.nics.length ? `<button class="small primary" data-topo-save="${esc(v.uuid)}" style="margin-top:12px">Apply</button>` : ""}
+      <a class="btn small" href="#vm/${esc(v.uuid)}" style="margin-top:12px">Open VM</a>`;
+  } else if (kind === "node") {
+    const ports = ntopo.nics[id] || [];
+    box.innerHTML = `<h3>${esc(id)}</h3><p class="hint" style="padding:0">The node's LAN bridge br0. Every virtual switch leaves the node through these ports; tagged VLANs need the switch port set to trunk.</p>
+      <div class="topo-list">${ports.filter((p) => p.kind === "ethernet" || p.kind === "bond").map((p) => `<div class="topo-port ${p.master === "br0" ? "in" : ""}">
+        <span class="dot ${p.link ? "up" : ""}"></span><span class="mono">${esc(p.name)}</span><span class="muted">${p.master === "br0" ? "uplink" : "not used"}${p.speed_mbps ? ` · ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000} Gb/s` : `${p.speed_mbps} Mb/s`}` : p.link ? "" : " · no cable"}</span></div>`).join("")}</div>
+      ${admin ? `<a class="btn small" href="#node/${esc(id)}" style="margin-top:14px">Change uplink ports</a>` : ""}`;
+  } else {
+    box.innerHTML = `<h3>Topology</h3><p class="hint" style="padding:0">Click an uplink, switch or VM to see and change it. Drag a VM onto another switch to move it to that VLAN.</p>`;
+  }
+}
+
+// Pointer position in the diagram's own coordinates, however the SVG is scaled.
+function svgPoint(svg, e) {
+  const pt = svg.createSVGPoint();
+  pt.x = e.clientX; pt.y = e.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+async function topoMove(uuid, nics) {
+  const v = await patch(`/vms/${uuid}`, { nics: nics.map((n) => ({ network: n.network, mac: n.mac, model: n.model })) });
+  toast(`${v.name}: ${v.nics.map((n) => n.network).join(", ")}`);
+  await load("vms");
+  renderTopology();
+}
+
+{
+  const svg = $("#topo-svg");
+  svg.addEventListener("click", (e) => {
+    const g = e.target.closest(".tnode");
+    if (ntopo.dragged) { ntopo.dragged = false; return; }
+    ntopo.sel = g ? g.dataset.key : null;
+    renderTopology();
+  });
+  // Drag a VM onto a switch.
+  svg.addEventListener("pointerdown", (e) => {
+    const g = e.target.closest(".tnode.vm");
+    if (!g || !canOperate()) return;
+    ntopo.drag = { g, key: g.dataset.key, start: svgPoint(svg, e), x0: e.clientX, y0: e.clientY };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    const d = ntopo.drag;
+    if (!d) return;
+    if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 4) d.moved = true;
+    const at = svgPoint(svg, e);
+    d.g.setAttribute("transform", `translate(${at.x - d.start.x},${at.y - d.start.y})`);
+    d.g.classList.add("dragging");
+    d.over = Object.entries(ntopo.pos).find(([k, q]) => k.startsWith("net:") && Math.hypot(q.x - at.x, q.y - at.y) < 45)?.[0] || null;
+    $$(".tnode.switch", svg).forEach((s) => s.classList.toggle("drop", s.dataset.key === d.over));
+  });
+  svg.addEventListener("pointerup", async () => {
+    const d = ntopo.drag;
+    ntopo.drag = null;
+    if (!d) return;
+    // The pointer was captured, so the click that follows lands on the SVG, not the VM:
+    // handle a plain click here and ignore that click.
+    ntopo.dragged = true;
+    setTimeout(() => { ntopo.dragged = false; });
+    if (!d.moved) { ntopo.sel = d.key; renderTopology(); return; }
+    if (!d.over) { if (d.moved) renderTopology(); return; }
+    const v = state.vms.find((x) => `vm:${x.uuid}` === d.key), net = d.over.slice(4);
+    if (!v.nics.length) { toast(`${v.name} has no network adapter`, true); renderTopology(); return; }
+    if (v.nics.length > 1) { ntopo.sel = d.key; toast("This VM has several adapters: pick the one to move on the right", true); renderTopology(); return; }
+    if (v.nics[0].network === net || !confirm(`Move ${v.name} to ${net}? Its network changes at once, even while running.`)) { renderTopology(); return; }
+    try { await topoMove(v.uuid, [{ ...v.nics[0], network: net }]); } catch (err) { fail(err); renderTopology(); }
+  });
+  $("#topo-panel").addEventListener("click", async (e) => {
+    const save = e.target.closest("[data-topo-save]");
+    const delBtn = e.target.closest("[data-topo-del]");
+    try {
+      if (save) {
+        const v = state.vms.find((x) => x.uuid === save.dataset.topoSave);
+        const nics = v.nics.map((n, i) => ({ ...n, network: $(`[data-topo-nic="${i}"]`, $("#topo-panel")).value }));
+        await topoMove(v.uuid, nics);
+      }
+      if (delBtn && confirm(`Remove network ${delBtn.dataset.topoDel}?`)) {
+        await del(`/networks/${enc(delBtn.dataset.topoDel)}`);
+        ntopo.sel = null;
+        await refresh("network");
+      }
+    } catch (err) { fail(err); }
+  });
+  $("#topo-refresh").addEventListener("click", () => { ntopo.nics = {}; refresh("network"); });
 }
 
 function renderNetworks() {
