@@ -9,7 +9,7 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from ..hypervisor import VMExists
 from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
 from ..importer.diagnostics import test_source
+from ..importer.logs import clean_v2v_log, parse_v2v_log
 from ..importer.sources import IMAGE_SUFFIXES
 
 
@@ -35,6 +36,7 @@ class ImportJob:
     error: str | None = None
     step: str = ""  # what the conversion is doing now
     percent: int | None = None
+    pool: str = "default"
 
 
 class NotEnoughSpace(ValueError):
@@ -205,6 +207,7 @@ class ImportManager:
                 name=name,
                 node=member.name,
                 created=self._now(),
+                pool=pool,
             )
             self._jobs.append(job)
 
@@ -241,6 +244,17 @@ class ImportManager:
         if job is None:
             raise SourceNotFound(f"no import job {job_id}")
         return self._cluster.member(job.node).imports.log(job.name)
+
+    def job_log_summary(self, job_id: str) -> dict:
+        text = self.job_log(job_id)
+        job = next(j for j in self._jobs if j.id == job_id)
+        data = parse_v2v_log(text)
+        end = datetime.fromisoformat(job.finished) if job.finished else self._clock()
+        elapsed = max(0, (end - datetime.fromisoformat(job.created)).total_seconds())
+        data.update(job=asdict(job), duration=elapsed, raw=clean_v2v_log(text))
+        if job.error and job.error not in data["errors"]:
+            data["errors"].append(job.error)
+        return data
 
     # Persistence: VMware passwords are kept, so the file is readable by root only.
 

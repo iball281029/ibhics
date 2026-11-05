@@ -1113,8 +1113,15 @@
 <dialog id="log-dialog">
   <form method="dialog">
     <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate>×</button></header>
-    <pre class="log" id="log-text"></pre>
-    <footer><button value="cancel" formnovalidate>Close</button></footer>
+    <div id="import-log-body">
+      <div id="log-summary" aria-live="polite"></div>
+      <details id="log-raw"><summary>Raw log</summary>
+        <label><input type="checkbox" id="log-all"> Show all progress updates</label>
+        <pre class="log" id="log-text"></pre>
+      </details>
+      <p id="log-fetch-error" role="status"></p>
+    </div>
+    <footer><a id="log-download" class="button" download>Download</a><button value="cancel" formnovalidate>Close</button></footer>
   </form>
 </dialog>
 

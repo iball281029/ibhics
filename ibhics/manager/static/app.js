@@ -429,11 +429,13 @@ async function renderTaskDetail(t) {
     ["Duration", esc(duration(t))], ["Result", esc(t.result || "")], ["Task ID", `<span class="mono">${esc(t.id)}</span>`]].filter(([, v]) => v);
   box.innerHTML = `<h3>${esc(t.kind)} · ${esc(t.title)}</h3><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${t.error ? `<p class="wiz-label">Error</p><pre class="task-err">${esc(t.error)}</pre>` : ""}
-    ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><pre class="task-log" id="task-log">Loading…</pre>` : ""}`;
+    ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><div class="task-log import-log-mini" id="task-log">Loading…</div>` : ""}`;
   if (t.log) {
-    const { log } = await api(`/migrate/jobs/${enc(t.log)}/log`).catch((err) => ({ log: err.message }));
-    const pre = $("#task-log");
-    if (pre) { pre.textContent = (log || "No output yet.").split("\n").slice(-40).join("\n"); pre.scrollTop = pre.scrollHeight; }
+    const panel = $("#task-log");
+    try {
+      const data = await api(`/migrate/jobs/${enc(t.log)}/log?format=summary`);
+      if (panel.isConnected) panel.innerHTML = importTimeline(data, true);
+    } catch (err) { if (panel.isConnected) panel.textContent = err.message; }
   }
 }
 async function renderOps() {
@@ -456,22 +458,84 @@ async function renderOps() {
   $("#task-search").addEventListener("input", () => renderTaskPage());
 }
 
-let logTimer = null;
-async function showLog(id, title) {
-  $("#log-title").textContent = `Import log: ${title}`;
-  const dlg = $("#log-dialog");
-  const pull = async () => {
-    const { log } = await api(`/migrate/jobs/${enc(id)}/log`).catch((err) => ({ log: err.message }));
-    const pre = $("#log-text");
-    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
-    pre.textContent = log || "No output yet.";
-    if (atEnd) pre.scrollTop = pre.scrollHeight;
-  };
-  await pull();
-  dlg.showModal();
-  clearInterval(logTimer);
-  logTimer = setInterval(() => (dlg.open ? pull() : clearInterval(logTimer)), 3000);
+function logTime(seconds) {
+  const n = Math.max(0, Math.floor(seconds || 0));
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
 }
+function importTimeline(data, compact = false) {
+  const steps = data.steps || [], job = data.job;
+  const active = job.state === "running" || job.state === "queued";
+  const shown = compact ? steps.slice(-5) : steps;
+  const items = shown.map((step, i) => {
+    const index = steps.length - shown.length + i, next = steps[index + 1];
+    const current = !next && active;
+    const finished = !!next || job.state === "done";
+    const elapsed = next ? next.t - step.t : Math.max(0, data.duration - step.t);
+    const progress = current && step.kind === "copy" && data.progress?.step === step.text ? data.progress.percent : null;
+    return `<li class="${current ? "current" : ""}"><span class="mono">${logTime(step.t)}</span>
+      <span>${finished ? "✓ " : (job.state === "failed" && !next ? "✕ " : "")}${esc(step.text)}
+      <small class="muted"> · ${logTime(elapsed)}${current ? " elapsed" : ""}</small>
+      ${current && step.kind === "copy" ? `<div class="bar${progress == null ? " busy" : ""}" role="progressbar" aria-label="Disk copy" aria-valuemin="0" aria-valuemax="100" ${progress == null ? "" : `aria-valuenow="${progress}"`}><i style="width:${progress ?? 30}%"></i></div><small>${progress == null ? "Waiting for copy progress" : `${progress}%`}</small>` : ""}</span></li>`;
+  }).join("");
+  return items ? `<ol class="import-timeline">${items}</ol>` : `<p class="hint">${esc(job.step || "No conversion output yet.")}</p>`;
+}
+function importLogSummary(data) {
+  const j = data.job;
+  const rows = [["VM", `${j.vm} → ${j.name}`], ["Source", j.source], ["Node / pool", `${j.node} / ${j.pool}`],
+    ["Status", JOB_STATE[j.state] || j.state], ["Started", when(j.created)], ["Elapsed", logTime(data.duration)],
+    ["Finished", j.finished ? when(j.finished) : "—"], ["Detected OS", data.os || "—"], ["Disks", data.disks || "—"]];
+  const messages = (key, title) => data[key]?.length ? `<section class="import-${key}"><h4>${title}</h4><ul>${data[key].map((v) => `<li>${esc(v)}</li>`).join("")}</ul></section>` : "";
+  return `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    <h4>Timeline</h4>${importTimeline(data)}${messages("warnings", "Warnings")}${messages("errors", "Errors")}${messages("notes", "Notes")}`;
+}
+let logTimer = null, logSession = 0;
+async function showLog(id, title) {
+  const session = ++logSession;
+  clearTimeout(logTimer);
+  $("#log-title").textContent = `Import log: ${title}`;
+  const dlg = $("#log-dialog"), body = $("#import-log-body"), pre = $("#log-text");
+  $("#log-summary").textContent = "Loading…";
+  $("#log-fetch-error").textContent = "";
+  $("#log-raw").open = false;
+  $("#log-all").checked = false;
+  pre.textContent = "";
+  $("#log-download").href = `/api/v1/migrate/jobs/${enc(id)}/log?download=1`;
+  let latest = null, full = null;
+  const setRaw = async () => {
+    if (!latest) return;
+    try {
+      if ($("#log-all").checked && full == null) full = (await api(`/migrate/jobs/${enc(id)}/log`)).log;
+      if (session !== logSession || !dlg.open) return;
+      const top = pre.scrollTop;
+      pre.textContent = ($("#log-all").checked ? full : latest.raw) || "No output yet.";
+      pre.scrollTop = top;
+    } catch (err) { if (session === logSession) $("#log-fetch-error").textContent = err.message; }
+  };
+  $("#log-all").onchange = setRaw;
+  $("#log-raw").ontoggle = () => { if ($("#log-raw").open) setRaw(); };
+  const pull = async () => {
+    try {
+      const data = await api(`/migrate/jobs/${enc(id)}/log?format=summary`);
+      if (session !== logSession || !dlg.open) return;
+      latest = data; full = null;
+      const top = body.scrollTop;
+      const html = importLogSummary(data);
+      if ($("#log-summary").innerHTML !== html) $("#log-summary").innerHTML = html;
+      if ($("#log-raw").open) await setRaw();
+      body.scrollTop = top;
+      $("#log-fetch-error").textContent = "";
+      if (["running", "queued"].includes(data.job.state)) logTimer = setTimeout(pull, 3000);
+    } catch (err) {
+      if (session !== logSession || !dlg.open) return;
+      $("#log-fetch-error").textContent = err.message;
+      logTimer = setTimeout(pull, 3000);
+    }
+  };
+  if (!dlg.open) dlg.showModal();
+  body.scrollTop = 0;
+  pull();
+}
+$("#log-dialog").addEventListener("close", () => { ++logSession; clearTimeout(logTimer); });
 document.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-task-log]");
   if (b) showLog(b.dataset.taskLog, b.dataset.taskTitle);

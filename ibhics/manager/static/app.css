@@ -783,3 +783,23 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 #import-dialog #import-capacity { padding: 8px 0; }
 #import-dialog table { width: 100%; }
 #page-migrate progress { width: 100px; vertical-align: middle; }
+
+/* Import log summary, shared by the Migrate dialog and Tasks log panel. */
+#log-dialog { width: min(1000px, 94vw); }
+#import-log-body { max-height: 70vh; overflow: auto; padding: 14px 18px; overflow-anchor: none; }
+#import-log-body pre.log { min-width: 0; max-height: 45vh; margin-top: 10px; }
+#import-log-body .kv dd { overflow-wrap: anywhere; }
+#import-log-body details summary { cursor: pointer; margin: 12px 0; }
+#import-log-body label { display: flex; align-items: center; gap: 8px; }
+#import-log-body input[type="checkbox"] { width: auto; }
+.import-timeline { list-style: none; margin: 10px 0; padding: 0; }
+.import-timeline li { display: grid; grid-template-columns: 55px minmax(0, 1fr); gap: 10px; padding: 8px 0; overflow-wrap: anywhere; }
+.import-timeline li.current { font-weight: 600; }
+.import-timeline .bar { margin: 8px 0 4px; }
+.import-warnings, .import-errors { padding: 10px 14px; border-radius: 6px; margin: 12px 0; overflow-wrap: anywhere; }
+.import-warnings { background: #fbbf2418; border: 1px solid #c78c21; color: #f4c862; }
+.import-errors { background: #ef444418; border: 1px solid #e05c5c; color: #ff9696; }
+.import-notes { font-size: 12px; overflow-wrap: anywhere; }
+.import-notes li, .import-errors li, .import-warnings li { white-space: pre-wrap; }
+.import-log-mini { max-height: 340px; overflow: auto; }
+#log-fetch-error { color: #ff9696; }

@@ -906,7 +906,18 @@ def create_app(
         return ImportJobOut(**job.__dict__)
 
     @api.get("/migrate/jobs/{job_id}/log")
-    def import_log(job_id: str) -> dict:
+    def import_log(job_id: str, format: str | None = None, download: bool = False):
+        if download:
+            # The job ID is generated locally and contains only digits.
+            return Response(
+                imports.job_log(job_id),
+                media_type="text/plain",
+                headers={"Content-Disposition": f'attachment; filename="import-{job_id}.log"'},
+            )
+        if format == "summary":
+            return imports.job_log_summary(job_id)
+        if format is not None:
+            raise HTTPException(422, "format must be summary")
         return {"log": imports.job_log(job_id)}
 
     @api.get("/migrate/jobs", response_model=list[ImportJobOut])

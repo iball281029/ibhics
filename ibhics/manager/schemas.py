@@ -755,6 +755,7 @@ class ImportRequest(BaseModel):
 
 
 class ImportJobOut(BaseModel):
+    pool: str = "default"
     id: str
     source: str
     vm: str
