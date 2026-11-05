@@ -16,12 +16,12 @@ and the words are ibHiCS's own.
 
 ## v0.5 — Compute (VM page) and network topology 🚧
 - Network topology: uplinks → virtual switches (VLANs) → VMs; click to configure, drag a VM to change its VLAN ✅
-- VM groups: folder tree beside the VM list, with counts; new group, rename, delete, move VMs
-- VM list with metric views: Resources (CPU cores and usage, memory and usage, storage and usage), Basics (OS, IP, group, description), Node
-- Live CPU and memory usage per VM
-- Select several VMs: power on, shut down, restart, power off, move to group, delete
-- Alerts bar: VMs that are short of CPU, memory or disk, or run without the guest agent
-- List or panel (cards) view
+- VM groups: folder tree beside the VM list, with counts; new group, rename, delete, move VMs ✅
+- VM list with metric views: Resources (CPU cores and usage, memory and usage, storage and usage), Basics (OS, IP, group, description), Node, Throughput, IO speed ✅
+- Live CPU, memory, disk and network usage per VM ✅
+- Select several VMs: power on, shut down, restart, power off, move to group, delete ✅
+- Alerts bar: VMs that are short of CPU, memory or disk, or run without the guest agent ✅
+- List or panel (cards) view ✅
 
 ## v0.6 — Compute, part 2 ⏳
 - Clone VM (full and linked), VM templates (convert VM ⇄ template, deploy from template)
