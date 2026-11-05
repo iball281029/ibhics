@@ -280,6 +280,20 @@ class GuestInterface:
 
 
 @dataclass
+class VMStats:
+    """How busy a running VM is right now. CPU is a percentage of all its vCPUs;
+    rates are averaged since the previous sample. None means not known (yet): memory
+    use needs the balloon driver in the guest."""
+
+    cpu_pct: float | None = None
+    mem_used_mb: int | None = None
+    disk_read_bps: float = 0.0
+    disk_write_bps: float = 0.0
+    net_rx_bps: float = 0.0
+    net_tx_bps: float = 0.0
+
+
+@dataclass
 class GuestInfo:
     """What the guest itself reports through qemu-guest-agent. Without an agent only
     `agent=False` (and, for NAT networks, DHCP lease addresses) is known."""
@@ -434,6 +448,10 @@ class HypervisorDriver(abc.ABC):
                 except (VMNotFound, InvalidState):
                     continue
         return result
+
+    def list_vm_stats(self) -> dict[str, VMStats]:
+        """VMStats for every running VM on this node, keyed by uuid."""
+        return {}
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         """Host and TCP port of the running VM's VNC display, reachable from this node."""

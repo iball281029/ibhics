@@ -39,6 +39,7 @@ def install_cluster_errors(app: FastAPI) -> None:
     from ..cluster import MembershipError, NodeUnavailable, NoQuorum
     from .auth import AuthError, Forbidden, UserNotFound
     from .backups import PolicyNotFound, TargetNotFound
+    from .vmgroups import GroupNotFound
 
     app.add_exception_handler(AuthError, _handler(401))
     app.add_exception_handler(Forbidden, _handler(403))
@@ -46,6 +47,7 @@ def install_cluster_errors(app: FastAPI) -> None:
 
     app.add_exception_handler(TargetNotFound, _handler(404, "backup target not found: "))
     app.add_exception_handler(PolicyNotFound, _handler(404, "backup policy not found: "))
+    app.add_exception_handler(GroupNotFound, _handler(404, "VM group not found: "))
     app.add_exception_handler(NoQuorum, _handler(503))
     app.add_exception_handler(NodeUnavailable, _handler(503))
     app.add_exception_handler(MembershipError, _handler(400))

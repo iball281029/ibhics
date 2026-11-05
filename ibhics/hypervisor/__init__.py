@@ -22,6 +22,7 @@ from .base import (
     VMNotFound,
     VMSpec,
     VMState,
+    VMStats,
 )
 
 
@@ -42,6 +43,7 @@ __all__ = [
     "DiskSpec",
     "Firmware",
     "GuestInfo",
+    "VMStats",
     "GuestInterface",
     "HostInfo",
     "HypervisorDriver",

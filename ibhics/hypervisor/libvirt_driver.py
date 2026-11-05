@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
+from . import vmstats
 from .base import (
     DiskSpec,
     Firmware,
@@ -37,6 +38,7 @@ from .base import (
     VMNotFound,
     VMSpec,
     VMState,
+    VMStats,
 )
 from .domain_xml import (
     DISK_DEVS,
@@ -99,6 +101,8 @@ class LibvirtDriver(HypervisorDriver):
         if libvirt is None:
             raise RuntimeError("libvirt-python is not installed: pip install 'ibhics[libvirt]'")
         self._conn = libvirt.open(uri)
+        self._samples: dict[str, vmstats.Sample] = {}
+        self._balloon_asked: set[str] = set()
 
     def host_info(self) -> HostInfo:
         _model, memory_mb, cpus, *_ = self._conn.getInfo()
@@ -634,6 +638,49 @@ class LibvirtDriver(HypervisorDriver):
                 vol.delete(0)
             raise
         return created
+
+    def _raw_stats(self) -> list[tuple[str, dict]]:
+        flags = (
+            libvirt.VIR_DOMAIN_STATS_CPU_TOTAL
+            | libvirt.VIR_DOMAIN_STATS_BALLOON
+            | libvirt.VIR_DOMAIN_STATS_VCPU
+            | libvirt.VIR_DOMAIN_STATS_INTERFACE
+            | libvirt.VIR_DOMAIN_STATS_BLOCK
+        )
+        records = self._conn.getAllDomainStats(
+            flags, libvirt.VIR_CONNECT_GET_ALL_DOMAINS_STATS_ACTIVE
+        )
+        result = []
+        for dom, raw in records:
+            uuid = dom.UUIDString()
+            if "balloon.available" not in raw and uuid not in self._balloon_asked:
+                # The balloon driver reports guest memory use only when asked to.
+                self._balloon_asked.add(uuid)
+                try:
+                    dom.setMemoryStatsPeriod(5, libvirt.VIR_DOMAIN_AFFECT_LIVE)
+                except libvirt.libvirtError:
+                    pass
+            result.append((uuid, raw))
+        return result
+
+    def list_vm_stats(self) -> dict[str, VMStats]:
+        now = time.monotonic()
+        raw = self._raw_stats()
+        if any(uuid not in self._samples for uuid, _ in raw):
+            # A rate needs two samples: take a first one for VMs seen for the first time.
+            for uuid, r in raw:
+                self._samples.setdefault(uuid, vmstats.sample(r, now))
+            time.sleep(0.5)
+            now = time.monotonic()
+            raw = self._raw_stats()
+        result = {}
+        for uuid, r in raw:
+            cur = vmstats.sample(r, now)
+            result[uuid] = vmstats.rates(self._samples.get(uuid), cur)
+            self._samples[uuid] = cur
+        for gone in set(self._samples) - set(result):
+            del self._samples[gone]
+        return result
 
     def guest_info(self, uuid: str) -> GuestInfo:
         dom = self._lookup(uuid)

@@ -144,6 +144,10 @@ def create_agent_app(
         def guests() -> dict:
             return {uuid: guest_to_json(g) for uuid, g in driver.list_guest_info().items()}
 
+        @api.get("/stats")
+        def stats() -> dict:
+            return {uuid: asdict(s) for uuid, s in driver.list_vm_stats().items()}
+
         @api.get("/vms/{uuid}/guest")
         def guest(uuid: str) -> dict:
             return guest_to_json(driver.guest_info(uuid))

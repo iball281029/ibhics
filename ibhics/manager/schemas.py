@@ -213,6 +213,45 @@ class GuestInterfaceOut(BaseModel):
     ips: list[str]
 
 
+class VMStatsOut(BaseModel):
+    uuid: str
+    cpu_pct: float | None = None
+    mem_used_mb: int | None = None
+    disk_read_bps: float = 0
+    disk_write_bps: float = 0
+    net_rx_bps: float = 0
+    net_tx_bps: float = 0
+
+
+class VMGroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    parent: str = ""
+    description: str = Field("", max_length=200)
+
+
+class VMGroupUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=64)
+    parent: str | None = None
+    description: str | None = Field(None, max_length=200)
+
+
+class VMGroupOut(BaseModel):
+    id: str
+    name: str
+    parent: str
+    description: str
+
+
+class VMGroupsOut(BaseModel):
+    groups: list[VMGroupOut]
+    members: dict[str, str]  # VM uuid -> group id
+
+
+class GroupMembersIn(BaseModel):
+    vms: list[str] = Field(min_length=1)
+    group: str = ""  # "" takes the VMs out of every group
+
+
 class GuestOut(BaseModel):
     uuid: str = ""
     agent: bool
