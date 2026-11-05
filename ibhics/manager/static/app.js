@@ -484,7 +484,7 @@ setInterval(async () => {
 async function refresh(page, auto = false) {
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
-  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
+  if (page === "home") { await load("vms", "pools", "jobs", "moves", "imports"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
@@ -575,8 +575,6 @@ function renderHome() {
     topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "nodes"),
     topo("t-storage", state.pools.length, "Storage pools", `${storagePct}% used`, "storage", true),
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
-    topo("t-backup", state.targets.length, "Backup targets", `${state.policies.length} schedule${state.policies.length === 1 ? "" : "s"}`, "backup"),
-    topo("t-users", state.me ? (state.users.length || 1) : "–", "Users", state.me ? esc(state.me.role) : "sign-in off", "system"),
   ].join("");
 
   const meter = (name, p, detail) => `<div class="meter"><div class="top"><b>${esc(name)}</b><span>${detail}</span></div>${segments(p)}</div>`;
@@ -1501,8 +1499,8 @@ async function renderTopology() {
   const netIndex = new Map(nets.map((n, i) => [n.name, i]));
   const vms = [...state.vms].sort((a, b) => (netIndex.get(a.nics[0]?.network) ?? 99) - (netIndex.get(b.nics[0]?.network) ?? 99) || a.name.localeCompare(b.name));
   const cols = Math.max(nodes.length, nets.length, vms.length, 4);
-  const width = cols * TOPO.w + 170; // room on the left for the row names
-  const rowX = (count, i) => 150 + (width - 170) * (i + 0.5) / count;
+  const width = cols * TOPO.w + 40;
+  const rowX = (count, i) => 20 + (width - 40) * (i + 0.5) / count;
   const pos = {};
   nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
   nets.forEach((n, i) => { pos[`net:${n.name}`] = { x: rowX(nets.length, i), y: TOPO.top + 30 + TOPO.gapY }; });
@@ -1541,7 +1539,7 @@ async function renderTopology() {
   $("#topo-svg").setAttribute("viewBox", `0 0 ${width} ${height}`);
   $("#topo-svg").setAttribute("width", width);
   $("#topo-svg").setAttribute("height", height);
-  $("#topo-svg").innerHTML = `<g class="lanes"><text x="12" y="${TOPO.top - 8}">Uplinks</text><text x="12" y="${TOPO.top + TOPO.gapY - 8}">Virtual switches</text><text x="12" y="${TOPO.top + TOPO.gapY * 2 - 8}">Virtual machines</text></g>${wires}${shapes}`;
+  $("#topo-svg").innerHTML = `${wires}${shapes}`;
   ntopo.pos = pos;
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#topo-stats").innerHTML = [["Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
@@ -1811,8 +1809,13 @@ function isoOptions(selected = "", none = "None") {
 }
 
 function renderIsos() {
+  fillIsoDest();
+  const dest = $("#iso-dest").value;
+  const [node, pool] = dest.split("|");
+  const isos = state.isos.filter((i) => dest ? i.pool === pool && (!i.node || i.node === node) : !i.pool);
+  $("#iso-location").textContent = `Install media for new VMs and the CD/DVD drive, kept in ${dest ? `${pool} / iso on ${node}` : "/var/lib/ibhics/iso"}`;
   const users = (path) => state.vms.filter((v) => v.iso === path).map((v) => v.name);
-  $("#isos").innerHTML = state.isos.length ? state.isos.map((i) => {
+  $("#isos").innerHTML = isos.length ? isos.map((i) => {
     const own = !i.pool && i.name !== "ibHiCS guest tools";
     const where = i.pool ? `${i.pool}${i.folder ? ` / ${i.folder}` : ""}` : own ? "System disk" : "Built in";
     return `<tr>
@@ -1822,8 +1825,7 @@ function renderIsos() {
       <td>${esc(users(i.path).join(", ") || "–")}</td>
       <td><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
     </tr>`;
-  }).join("") : empty(5, "No ISOs yet: upload one to install a new VM from it");
-  fillIsoDest();
+  }).join("") : empty(5, "No ISOs in this storage yet: upload one to install a new VM from it");
 }
 
 // Where "Upload ISO" saves: the system disk's ISO library, or the iso folder of a
@@ -1832,13 +1834,14 @@ function fillIsoDest() {
   const sel = $("#iso-dest");
   if (!sel) return;
   const was = sel.value;
+  const initialized = sel.options.length > 0;
   const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
   sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
     `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(p.node)} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
-  if (sel.dataset.touched && [...sel.options].some((o) => o.value === was)) sel.value = was;
+  if (initialized && [...sel.options].some((o) => o.value === was)) sel.value = was;
   else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
 }
-$("#iso-dest").addEventListener("change", (e) => { e.target.dataset.touched = "1"; });
+$("#iso-dest").addEventListener("change", () => renderIsos());
 async function isoUploadUrl(file, input) {
   const dest = input.closest("#page-storage") ? $("#iso-dest").value : "";
   if (!dest) return `/api/v1/isos/${enc(file.name)}`;

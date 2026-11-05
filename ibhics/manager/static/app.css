@@ -177,7 +177,7 @@ dialog .hint { padding: 0 22px; }
 .cluster-box .row { display: flex; justify-content: space-between; gap: 10px; }
 .cluster-box .row span:first-child { color: var(--muted); }
 .cluster-box .row b { font-weight: 600; }
-.topology { display: grid; grid-template-columns: repeat(5, 1fr); align-items: start; position: relative; }
+.topology { display: grid; grid-template-columns: repeat(3, 1fr); align-items: start; position: relative; }
 .topo { position: relative; display: grid; justify-items: center; text-align: center; gap: 4px; cursor: pointer; }
 .topo:hover .topo-icon { transform: translateY(-2px); }
 .topo-icon { position: relative; z-index: 1; display: grid; place-items: center; width: 64px; height: 64px; transition: transform .15s; }
@@ -457,7 +457,6 @@ label.inline select { width: auto; min-width: 140px; }
 .ntopo { display: grid; grid-template-columns: 1fr 290px; gap: 0; border-top: 1px solid var(--line); min-height: 520px; }
 .topo-canvas { overflow: auto; background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 22px 22px; }
 #topo-svg { display: block; min-width: 100%; touch-action: none; user-select: none; }
-#topo-svg .lanes text { font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; fill: var(--muted); }
 #topo-svg .wire { fill: none; stroke-width: 2; }
 #topo-svg .wire.native { stroke: var(--brand); }
 #topo-svg .wire.tagged { stroke: #7c3aed; stroke-dasharray: 6 4; }
@@ -674,8 +673,6 @@ th { color: color-mix(in srgb, var(--brand) 35%, var(--muted)); }
 .topo:nth-child(1) .topo-icon { background: color-mix(in srgb, var(--c-nodes) 16%, transparent); }
 .topo:nth-child(2) .topo-icon { background: color-mix(in srgb, var(--c-storage) 16%, transparent); }
 .topo:nth-child(3) .topo-icon { background: color-mix(in srgb, var(--c-compute) 16%, transparent); }
-.topo:nth-child(4) .topo-icon { background: color-mix(in srgb, var(--c-backup) 14%, transparent); }
-.topo:nth-child(5) .topo-icon { background: color-mix(in srgb, var(--c-network) 16%, transparent); }
 .topo:not(:last-child)::after { top: 38px; left: calc(50% + 48px); right: calc(-50% + 48px); }
 .menu-theme { position: static; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); margin-top: 4px; font-size: 13px; color: var(--muted); }
 .menu-theme .icon { width: 30px; height: 30px; padding: 0 !important; justify-content: center; display: inline-flex !important; }

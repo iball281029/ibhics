@@ -39,8 +39,6 @@
   <symbol id="t-node" viewBox="0 0 56 56"><defs><linearGradient id="tg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3f5f8"/><stop offset="1" stop-color="#d5dae2"/></linearGradient></defs><rect x="8" y="6" width="40" height="13" rx="2.5" fill="url(#tg1)" stroke="#c3c9d3"/><rect x="8" y="21.5" width="40" height="13" rx="2.5" fill="url(#tg1)" stroke="#c3c9d3"/><rect x="8" y="37" width="40" height="13" rx="2.5" fill="url(#tg1)" stroke="#c3c9d3"/><g fill="#0b8cf5"><circle cx="14" cy="12.5" r="1.8"/><circle cx="14" cy="28" r="1.8"/><circle cx="14" cy="43.5" r="1.8"/></g><g stroke="#aab2bf" stroke-width="1.6"><path d="M30 12.5h13M30 28h13M30 43.5h13"/></g></symbol>
   <symbol id="t-storage" viewBox="0 0 56 56"><defs><linearGradient id="tg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3f5f8"/><stop offset="1" stop-color="#d5dae2"/></linearGradient></defs><ellipse cx="28" cy="12" rx="19" ry="6" fill="#eef1f5" stroke="#c3c9d3"/><path d="M9 12v32c0 3.3 8.5 6 19 6s19-2.7 19-6V12c0 3.3-8.5 6-19 6S9 15.3 9 12Z" fill="url(#tg2)" stroke="#c3c9d3"/><path d="M9 23c0 3.3 8.5 6 19 6s19-2.7 19-6M9 34c0 3.3 8.5 6 19 6s19-2.7 19-6" fill="none" stroke="#c3c9d3"/><circle cx="40" cy="27" r="1.6" fill="#0b8cf5"/><circle cx="40" cy="38" r="1.6" fill="#0b8cf5"/></symbol>
   <symbol id="t-vm" viewBox="0 0 56 56"><circle cx="28" cy="28" r="22" fill="#fff" stroke="#dfe3ea" stroke-width="1.5"/><circle cx="28" cy="28" r="17" fill="none" stroke="#e8ebf0" stroke-width="5"/><circle cx="28" cy="28" r="9" fill="none" stroke="#0b8cf5" stroke-width="2.4"/></symbol>
-  <symbol id="t-backup" viewBox="0 0 56 56"><defs><linearGradient id="tg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3f5f8"/><stop offset="1" stop-color="#d0d6df"/></linearGradient></defs><path d="M28 5 47 12v14c0 12-8 21-19 25C17 47 9 38 9 26V12Z" fill="url(#tg3)" stroke="#c3c9d3"/><path d="M20 28.5l5.5 5.5L37 22.5" fill="none" stroke="#0b8cf5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="t-users" viewBox="0 0 56 56"><rect x="8" y="10" width="40" height="36" rx="4" fill="#eef1f5" stroke="#c3c9d3"/><circle cx="22" cy="25" r="5" fill="#c3c9d3"/><path d="M13 39c1.5-5 5-7 9-7s7.5 2 9 7" fill="#c3c9d3"/><path d="M34 22h8M34 28h8M34 34h5" stroke="#c3c9d3" stroke-width="2.4" stroke-linecap="round"/></symbol>
   <symbol id="i-os-win" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5.2 10.4 4v7.3H3zM11.4 3.9 21 2.5v8.8h-9.6zM3 12.6h7.4V20L3 18.8zM11.4 12.6H21v8.9l-9.6-1.4z"/></symbol>
   <symbol id="i-os-linux" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3c-2.2 0-3.4 1.8-3.4 4.2 0 1.4-.4 2.6-1.4 3.9C6 12.6 5 14.4 5 16.3c0 1.2.6 2 1.6 2.4M12 3c2.2 0 3.4 1.8 3.4 4.2 0 1.4.4 2.6 1.4 3.9 1.2 1.5 2.2 3.3 2.2 5.2 0 1.2-.6 2-1.6 2.4"/><path d="M6.5 18.5c.8 1.6 2.9 2.5 5.5 2.5s4.7-.9 5.5-2.5"/></g><circle cx="10.4" cy="7.6" r=".9" fill="currentColor"/><circle cx="13.6" cy="7.6" r=".9" fill="currentColor"/></symbol>
   <symbol id="i-cpu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></g></symbol>
@@ -246,9 +244,9 @@
       </div>
       <div class="sheet" style="margin-top:18px">
         <div class="page-head">
-          <h1>ISO library</h1><span class="sub">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
+          <h1>ISO library</h1><span class="sub" id="iso-location">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
           <span class="spacer"></span>
-          <label class="inline operator-only">Save to <select id="iso-dest"></select></label>
+          <label class="inline">Storage <select id="iso-dest"></select></label>
           <label class="btn primary operator-only">Upload ISO<input type="file" class="iso-upload" accept=".iso" multiple hidden></label>
         </div>
         <div class="iso-progress"></div>
