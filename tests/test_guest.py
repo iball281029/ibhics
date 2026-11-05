@@ -164,6 +164,25 @@ def test_guest_tools_cd():
     client = TestClient(create_app(cluster))
     vm = client.post("/api/v1/vms", json={"name": "w", "disks": [{"size_gb": 1}]}).json()
     got = client.post(f"/api/v1/vms/{vm['uuid']}/guest-tools").json()
-    assert got["iso"] == "/usr/share/ibhics/guest-tools.iso"
+    assert got["iso"] == "/var/lib/ibhics/tools/guest-tools.iso"
     assert client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": None}).json()["iso"] is None
     assert client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": "x"}).status_code == 422
+
+
+def test_windows_vm_gets_the_driver_cd(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from ibhics.hypervisor.fake import FakeDriver
+    from ibhics.manager import app as manager_app
+
+    tools = tmp_path / "guest-tools.iso"
+    tools.write_bytes(b"cd")
+    monkeypatch.setattr(manager_app, "GUEST_TOOLS_ISO", str(tools))
+    client = TestClient(manager_app.create_app(FakeDriver()))
+    body = {"disks": [{"size_gb": 1}], "iso": "/isos/win.iso"}
+    win = client.post("/api/v1/vms", json={**body, "name": "w", "os_type": "Windows Server 2022"})
+    assert win.json()["iso"] == "/isos/win.iso" and win.json()["driver_iso"] == str(tools)
+    lin = client.post("/api/v1/vms", json={**body, "name": "l", "os_type": "Ubuntu 24.04"})
+    assert lin.json()["driver_iso"] is None
+    off = {**body, "name": "w2", "os_type": "Windows 11", "driver_iso": ""}
+    assert client.post("/api/v1/vms", json=off).json()["driver_iso"] is None

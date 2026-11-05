@@ -60,6 +60,9 @@ class VMSpec:
     disks: list[DiskSpec] = field(default_factory=list)
     nics: list[NicSpec] = field(default_factory=list)
     iso: str | None = None
+    # A second CD drive, e.g. the virtio drivers a Windows installer needs to see the
+    # disk, so the install disc can stay in the first drive.
+    driver_iso: str | None = None
     description: str = ""
     os_type: str = ""  # what the admin says the guest runs, e.g. "Windows Server 2022"
     # Boot devices in order: "hd", "cdrom", "network". None: the CD first when an ISO is

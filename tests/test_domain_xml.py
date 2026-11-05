@@ -104,3 +104,12 @@ def test_hand_written_bridge_nic_is_counted():
     )
     (nic,) = lv._spec_from_xml(xml).nics
     assert (nic.network, nic.mac) == ("br0", "00:50:56:01:02:03")
+
+
+def test_driver_cd_is_a_second_drive():
+    xml = build_domain_xml(spec(driver_iso="/var/lib/ibhics/tools/guest-tools.iso"))
+    drives = ET.fromstring(xml).findall("./devices/disk[@device='cdrom']")
+    assert [d.find("target").get("dev") for d in drives] == ["sda", "sdb"]
+    parsed = _spec_from_xml(xml)
+    assert parsed.iso is None  # the first drive stays empty for the install disc
+    assert parsed.driver_iso == "/var/lib/ibhics/tools/guest-tools.iso"

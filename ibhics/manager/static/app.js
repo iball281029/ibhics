@@ -1197,6 +1197,7 @@ function vmWizOs(form) {
   f.firmware.value = uefi ? "uefi" : "bios";
   $(".fw-hint", form).textContent = uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "";
   f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
+  $(".win-driver-note", form).hidden = family !== "windows";
 }
 {
   const form = $("#vm-form");
@@ -1229,7 +1230,7 @@ handlers["vm-dialog"] = async (f) => {
     vcpus: Number(f.get("vcpus")),
     memory_mb: Math.round(Number(f.get("memory_gb")) * 1024),
     firmware: f.get("firmware"),
-    os_type: f.get("os_type").trim(),
+    os_type: f.get("os_type").trim() || (f.get("os_family") === "windows" ? "Windows" : ""),
     description: f.get("description").trim(),
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default" })),
     nics: [{ network: f.get("network") || "default" }],
@@ -2306,6 +2307,7 @@ async function renderVMDetail() {
     ["Operating system", vm.os_type ? esc(vm.os_type) : `<span class="muted">Not set</span>`],
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
     ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
+    vm.driver_iso && ["Driver CD", `<span class="mono">${esc(vm.driver_iso)}</span>`],
     ["Description", vm.description ? esc(vm.description) : dash],
     ["UUID", `<span class="mono">${esc(vm.uuid)}</span>`],
   ]);
@@ -2341,6 +2343,7 @@ async function renderVMDetail() {
       `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
     ...vm.nics.map((n, i) => ["i-migrate", `Network adapter ${i + 1}`, esc(n.network), `${esc(n.model)} · <span class="mono">${esc(n.mac || "auto")}</span>`]),
     ["i-disk", "CD/DVD drive", vm.iso ? "ISO attached" : "Empty", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : ""],
+    ...(vm.driver_iso ? [["i-disk", "CD/DVD drive 2", "Drivers (virtio)", `<span class="mono">${esc(vm.driver_iso)}</span>`]] : []),
     ["i-system", "Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS", "Guest agent channel enabled"],
   ];
   $("#vm-hw").innerHTML = hw.map(([icon, dev, conf, det]) => `<tr>

@@ -38,7 +38,7 @@ if [ -d "$SRC/virtio-win" ]; then
     cp -r "$SRC/virtio-win/." /usr/share/virtio-win/
 fi
 if [ -f "$SRC/guest-tools.iso" ]; then
-    install -D -m 0644 "$SRC/guest-tools.iso" /usr/share/ibhics/guest-tools.iso
+    install -D -m 0644 "$SRC/guest-tools.iso" /var/lib/ibhics/tools/guest-tools.iso
 fi
 if [ -d "$SRC/virt-tools" ]; then
     # Where virt-v2v looks for its Windows first-boot helpers.
