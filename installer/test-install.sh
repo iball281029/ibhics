@@ -97,7 +97,7 @@ sudo mount /dev/ibhics/root mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
 test -f mnt/usr/share/virtio-win/viostor/2k19/amd64/viostor.sys \
     || { echo "!! virtio-win drivers are missing: Windows imports would fail"; exit 1; }
-test -s mnt/usr/share/ibhics/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
+test -s mnt/var/lib/ibhics/tools/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
 for exe in rhsrvany.exe pnp_wait.exe; do
     test -s "mnt/usr/share/virt-tools/$exe" \
         || { echo "!! $exe is missing: virt-v2v cannot convert Windows guests"; exit 1; }

@@ -80,7 +80,8 @@ from .vmgroups import VMGroups
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "ibhics_session"
 API = "/api/v1"
-GUEST_TOOLS_ISO = "/usr/share/ibhics/guest-tools.iso"
+# Not under /usr: AppArmor's virt-aa-helper will not let a running VM open files there.
+GUEST_TOOLS_ISO = "/var/lib/ibhics/tools/guest-tools.iso"
 # Install media for new VMs, uploaded from the browser (Storage > ISO library).
 ISO_DIR = Path("/var/lib/ibhics/iso")
 
@@ -572,6 +573,9 @@ def create_app(
         if any(vm.spec.name == body.name for _, vm in cluster.all_vms()):
             raise VMExists(f"VM named {body.name!r} already exists in the cluster")
         member = cluster.member(body.node) if body.node else cluster.pick_node(body.memory_mb)
+        if body.driver_iso is None and "windows" in body.os_type.lower():
+            if Path(GUEST_TOOLS_ISO).is_file():
+                body.driver_iso = GUEST_TOOLS_ISO
         return VMOut.from_info(member.driver.create_vm(body.to_spec()), member.name)
 
     # Inventory: what the guests report about themselves (qemu-guest-agent).

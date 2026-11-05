@@ -117,7 +117,11 @@ if [ -d "$SRC/virtio-win" ]; then
     cp -r "$SRC/virtio-win/." /usr/share/virtio-win/
 fi
 if [ -f "$SRC/guest-tools.iso" ]; then
-    install -D -m 0644 "$SRC/guest-tools.iso" /usr/share/ibhics/guest-tools.iso
+    install -D -m 0644 "$SRC/guest-tools.iso" /var/lib/ibhics/tools/guest-tools.iso
+    # Up to 0.5 it was under /usr/share, which AppArmor's virt-aa-helper refuses to give a
+    # running VM ("skipped restricted file"), so the CD could not go in. A link stays for
+    # VMs whose drive still names the old path, so they keep starting.
+    ln -sfn /var/lib/ibhics/tools/guest-tools.iso /usr/share/ibhics/guest-tools.iso
 fi
 if [ -d "$SRC/virt-tools" ]; then
     # Where virt-v2v looks for its Windows first-boot helpers.
@@ -167,7 +171,7 @@ sys.exit(1)
 PY
 }
 
-[ -s /usr/share/ibhics/guest-tools.iso ] \
+[ -s /var/lib/ibhics/tools/guest-tools.iso ] \
     || echo "   (warning: this ISO has no guest tools CD, so Insert guest tools CD will not work)"
 
 say "Checking that ibHiCS $NEW answers"

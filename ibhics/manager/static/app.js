@@ -2306,6 +2306,7 @@ async function renderVMDetail() {
     ["Operating system", vm.os_type ? esc(vm.os_type) : `<span class="muted">Not set</span>`],
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
     ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
+    vm.driver_iso && ["Driver CD", `<span class="mono">${esc(vm.driver_iso)}</span>`],
     ["Description", vm.description ? esc(vm.description) : dash],
     ["UUID", `<span class="mono">${esc(vm.uuid)}</span>`],
   ]);
@@ -2341,6 +2342,7 @@ async function renderVMDetail() {
       `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
     ...vm.nics.map((n, i) => ["i-migrate", `Network adapter ${i + 1}`, esc(n.network), `${esc(n.model)} · <span class="mono">${esc(n.mac || "auto")}</span>`]),
     ["i-disk", "CD/DVD drive", vm.iso ? "ISO attached" : "Empty", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : ""],
+    ...(vm.driver_iso ? [["i-disk", "CD/DVD drive 2", "Drivers (virtio)", `<span class="mono">${esc(vm.driver_iso)}</span>`]] : []),
     ["i-system", "Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS", "Guest agent channel enabled"],
   ];
   $("#vm-hw").innerHTML = hw.map(([icon, dev, conf, det]) => `<tr>

@@ -1000,7 +1000,10 @@ def _spec_from_xml(xml: str) -> VMSpec:
         for iface in root.findall("./devices/interface")
         if iface.get("type") in ("network", "bridge") and iface.find("source") is not None
     ]
-    cdrom = root.find("./devices/disk[@device='cdrom']/source")
+    # The first drive is the one ISOs go into; a second one holds drivers (Windows).
+    drives = [d.find("source") for d in root.findall("./devices/disk[@device='cdrom']")]
+    cdrom = drives[0] if drives else None
+    driver_cd = drives[1] if len(drives) > 1 else None
     os_el = root.find("os")
     firmware = (
         Firmware.UEFI if os_el is not None and os_el.get("firmware") == "efi" else Firmware.BIOS
@@ -1013,6 +1016,7 @@ def _spec_from_xml(xml: str) -> VMSpec:
         disks=disks,
         nics=nics,
         iso=cdrom.get("file") if cdrom is not None else None,
+        driver_iso=driver_cd.get("file") if driver_cd is not None else None,
         description=root.findtext("description", ""),
         os_type=root.findtext(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}os", ""),
         boot=[b.get("dev") for b in root.findall("os/boot")] or None,
