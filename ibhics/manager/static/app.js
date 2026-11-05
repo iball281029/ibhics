@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [] };
+const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -320,6 +320,8 @@ async function loadCluster() {
 const loaders = {
   vms: async () => { state.vms = await api("/vms"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
+  stats: async () => { state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s])); },
+  groups: async () => { state.groups = await api("/vm-groups"); },
   pools: async () => { state.pools = await api("/pools"); },
   networks: async () => { state.networks = await api("/networks"); },
   targets: async () => { state.targets = await api("/backup/targets"); },
@@ -403,7 +405,7 @@ async function refresh(page, auto = false) {
   await loadCluster();
   await load("imports", "jobs", "moves").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
-  if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
+  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
   if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
@@ -545,16 +547,17 @@ const usageBar = (u) => {
   return `<div class="bar${pct > 90 ? " bad" : pct > 75 ? " warn" : ""}" title="${pct}% used, ${esc(u.from)}"><i style="width:${pct}%"></i></div>`;
 };
 
-function vmMenu(vm, { summary = false } = {}) {
-  if (!canOperate()) return summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : "";
+function vmMenu(vm, { summary = false, compact = false } = {}) {
+  if (!canOperate()) return summary && !compact ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : "";
   const multi = computeMembers().length > 1;
   return `
-    ${summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : `<button class="small" data-vm="edit" data-id="${vm.uuid}">Settings</button>`}
+    ${compact ? "" : summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : `<button class="small" data-vm="edit" data-id="${vm.uuid}">Settings</button>`}
     ${vm.state === "running"
-      ? `<button class="small" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button>`
-      : `<button class="small" data-vm="start" data-id="${vm.uuid}">Power on</button>`}
+      ? `<button class="small${compact ? " sq" : ""}" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Open console">${compact ? `<svg><use href="#i-compute"/></svg>` : "Console"}</button>`
+      : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="Power on">${compact ? `<svg><use href="#i-power"/></svg>` : "Power on"}</button>`}
     <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
+        <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
@@ -565,32 +568,400 @@ function vmMenu(vm, { summary = false } = {}) {
     </div></details>`;
 }
 
-function renderVMs() {
+// ---------- VM list: groups, metric views, batch actions, alerts ----------
+
+const vmp = { group: "all", metric: "resources", view: "list", picked: new Set(), closed: new Set(), sort: { key: "", dir: 1 } };
+try {
+  const saved = JSON.parse(localStorage.getItem("ibhics.vmpage") || "{}");
+  if (["list", "panel"].includes(saved.view)) vmp.view = saved.view;
+  if (saved.metric) vmp.metric = saved.metric;
+} catch { /* private window */ }
+const vmpSave = () => { try { localStorage.setItem("ibhics.vmpage", JSON.stringify({ view: vmp.view, metric: vmp.metric })); } catch { /* ignore */ } };
+
+const groupList = () => state.groups.groups || [];
+const groupById = (id) => groupList().find((g) => g.id === id);
+const groupOf = (vm) => { const id = (state.groups.members || {})[vm.uuid]; return id && groupById(id) ? id : ""; };
+const childGroups = (parent) => groupList().filter((g) => g.parent === parent).sort((a, b) => a.name.localeCompare(b.name));
+function groupAndBelow(id) {
+  const out = new Set([id]);
+  for (const g of childGroups(id)) groupAndBelow(g.id).forEach((x) => out.add(x));
+  return out;
+}
+function groupPath(id) {
+  const names = [];
+  for (let g = groupById(id); g; g = groupById(g.parent)) names.unshift(g.name);
+  return names.join(" / ");
+}
+function inGroup(vm, group) {
+  if (group === "all") return true;
+  if (group === "none") return !groupOf(vm);
+  return groupAndBelow(group).has(groupOf(vm));
+}
+
+// What needs a look, like a monitoring view would flag it.
+function vmAlerts(vm) {
+  const s = state.stats[vm.uuid], g = state.guests[vm.uuid], out = [];
+  if (vm.state === "running" && s) {
+    if (s.cpu_pct != null && s.cpu_pct >= 90) out.push(`CPU ${Math.round(s.cpu_pct)}%`);
+    if (s.mem_used_mb != null && pct(s.mem_used_mb, vm.memory_mb) >= 90) out.push(`Memory ${pct(s.mem_used_mb, vm.memory_mb)}%`);
+  }
+  const u = diskUsage(vm, g);
+  if (u.used != null && pct(u.used, u.total) >= 90) out.push(`Disk ${pct(u.used, u.total)}% full`);
+  if (vm.state === "running" && g && !g.agent) out.push("No guest agent");
+  if (vm.restart_needed) out.push("Restart to apply changes");
+  return out;
+}
+
+const rate = (bps) => (bps ? `${size(bps)}/s` : `<span class="muted">0</span>`);
+const usageCell = (used, total, unit = "") => {
+  if (used == null) return `<span class="muted">–</span>`;
+  const p = pct(used, total);
+  return `<div class="u-cell"><span>${p}%${unit ? ` <span class="muted">${unit}</span>` : ""}</span>${bar(p)}</div>`;
+};
+const osIcon = (vm) => { const k = osKind(osName(vm, state.guests[vm.uuid])); return k === "Windows" ? "i-os-win" : k === "Linux" ? "i-os-linux" : "i-compute"; };
+const ipCell = (vm) => {
+  const ips = ipList(state.guests[vm.uuid]);
+  return ips.length ? `<span class="mono">${esc(ips[0])}</span>${ips.length > 1 ? ` <span class="muted" title="${esc(ips.join(", "))}">+${ips.length - 1}</span>` : ""}` : `<span class="muted">–</span>`;
+};
+const cpuUsed = (vm) => (vm.state === "running" ? state.stats[vm.uuid]?.cpu_pct : null);
+const memUsed = (vm) => (vm.state === "running" ? state.stats[vm.uuid]?.mem_used_mb : null);
+const diskTotal = (vm) => vm.disks.reduce((s, d) => s + d.size_gb, 0);
+
+// Columns of each metric view: header, sort key, cell.
+const VM_COLUMNS = {
+  resources: [
+    ["IP address", (v) => ipList(state.guests[v.uuid])[0] || "", ipCell],
+    ["vCPU", (v) => v.vcpus, (v) => String(v.vcpus)],
+    ["CPU usage", (v) => cpuUsed(v) ?? -1, (v) => usageCell(cpuUsed(v), 100)],
+    ["Memory", (v) => v.memory_mb, (v) => gbText(v.memory_mb)],
+    ["Memory used", (v) => (memUsed(v) ?? -1) / v.memory_mb, (v) => usageCell(memUsed(v), v.memory_mb, memUsed(v) != null ? gbText(memUsed(v)) : "")],
+    ["Storage", diskTotal, (v) => `${num(diskTotal(v))} GB`],
+    ["Storage used", (v) => { const u = diskUsage(v, state.guests[v.uuid]); return u.used == null ? -1 : u.used / u.total; },
+      (v) => { const u = diskUsage(v, state.guests[v.uuid]); return usageCell(u.used, u.total, u.used != null ? `${num(u.used)} GB` : ""); }],
+  ],
+  basics: [
+    ["Operating system", (v) => osName(v, state.guests[v.uuid]), (v) => { const os = osName(v, state.guests[v.uuid]); return os ? esc(os) : `<span class="muted">Not set</span>`; }],
+    ["IP address", (v) => ipList(state.guests[v.uuid])[0] || "", ipCell],
+    ["Hostname", (v) => state.guests[v.uuid]?.hostname || "", (v) => esc(state.guests[v.uuid]?.hostname || "–")],
+    ["Group", (v) => groupPath(groupOf(v)), (v) => (groupOf(v) ? `<span class="g-tag">${esc(groupPath(groupOf(v)))}</span>` : `<span class="muted">Ungrouped</span>`)],
+    ["Guest agent", (v) => (state.guests[v.uuid]?.agent ? 1 : 0), (v) => (state.guests[v.uuid]?.agent ? "Running" : `<span class="muted">${v.state === "running" ? "Not installed" : "–"}</span>`)],
+    ["Description", (v) => v.description || "", (v) => `<span class="clip" title="${esc(v.description)}">${esc(v.description || "–")}</span>`],
+  ],
+  node: [
+    ["Node", (v) => v.node || "", (v) => `<a href="#node/${enc(v.node || "")}">${esc(v.node || "")}</a>`],
+    ["Node load", (v) => v.node || "", (v) => {
+      const h = state.hosts[v.node];
+      if (!h) return `<span class="muted">–</span>`;
+      const busy = state.vms.filter((x) => x.node === v.node && x.state === "running").reduce((s, x) => s + x.vcpus, 0);
+      return `<span class="vm-sub" style="display:block">${busy} of ${h.cpus} vCPU in use</span>`;
+    }],
+    ["Storage pools", (v) => v.disks.map((d) => d.pool).join(), (v) => esc([...new Set(v.disks.map((d) => d.pool))].join(", ") || "–")],
+    ["Networks", (v) => (v.nics || []).map((n) => n.network).join(), (v) => esc((v.nics || []).map((n) => netName(n.network)).join(", ") || "–")],
+    ["CD/DVD", (v) => v.iso || "", (v) => (v.iso ? esc(v.iso.split("/").pop()) : `<span class="muted">Empty</span>`)],
+  ],
+  throughput: [
+    ["IP address", (v) => ipList(state.guests[v.uuid])[0] || "", ipCell],
+    ["Networks", (v) => (v.nics || []).map((n) => n.network).join(), (v) => esc((v.nics || []).map((n) => netName(n.network)).join(", ") || "–")],
+    ["Received", (v) => state.stats[v.uuid]?.net_rx_bps || 0, (v) => rate(state.stats[v.uuid]?.net_rx_bps)],
+    ["Sent", (v) => state.stats[v.uuid]?.net_tx_bps || 0, (v) => rate(state.stats[v.uuid]?.net_tx_bps)],
+  ],
+  io: [
+    ["Disks", (v) => v.disks.length, (v) => `${v.disks.length} · ${num(diskTotal(v))} GB`],
+    ["Storage pools", (v) => v.disks.map((d) => d.pool).join(), (v) => esc([...new Set(v.disks.map((d) => d.pool))].join(", ") || "–")],
+    ["Read", (v) => state.stats[v.uuid]?.disk_read_bps || 0, (v) => rate(state.stats[v.uuid]?.disk_read_bps)],
+    ["Write", (v) => state.stats[v.uuid]?.disk_write_bps || 0, (v) => rate(state.stats[v.uuid]?.disk_write_bps)],
+  ],
+};
+// The network a NIC is on, by its console name (VLAN N), whatever libvirt calls it.
+function netName(id) {
+  const n = state.networks.find((x) => x.name === id);
+  return n ? `${n.name} (VLAN ${vlanId(n)})` : id;
+}
+
+function visibleVMs() {
   const q = $("#vm-search").value.trim().toLowerCase();
   const f = $("#vm-filter").value;
-  const haystack = (v) => [v.name, osName(v, state.guests[v.uuid]), state.guests[v.uuid]?.hostname, ...ipList(state.guests[v.uuid])].join(" ").toLowerCase();
-  const vms = state.vms.filter((v) => (!q || haystack(v).includes(q)) && (!f || v.state === f));
+  const hay = (v) => [v.name, v.description, osName(v, state.guests[v.uuid]), state.guests[v.uuid]?.hostname, ...ipList(state.guests[v.uuid]), groupPath(groupOf(v))].join(" ").toLowerCase();
+  let vms = state.vms.filter((v) => inGroup(v, vmp.group) && (!q || hay(v).includes(q))
+    && (!f || (f === "alert" ? vmAlerts(v).length : v.state === f)));
+  const { key, dir } = vmp.sort;
+  const col = (VM_COLUMNS[vmp.metric] || []).find((c) => c[0] === key);
+  const by = key === "Name" ? (v) => v.name.toLowerCase() : key === "Status" ? (v) => v.state : col ? col[1] : null;
+  if (by) vms = [...vms].sort((a, b) => { const x = by(a), y = by(b); return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+  return vms;
+}
+
+function renderGroupTree() {
+  if ($("#vg-tree details[open]")) return; // keep an open menu open across refreshes
+  const count = (g) => state.vms.filter((v) => inGroup(v, g)).length;
+  const op = canOperate();
+  const row = (id, name, icon, depth, extra = "") => {
+    const kids = id !== "all" && id !== "none" ? childGroups(id) : [];
+    const caret = kids.length ? `<span class="vg-caret${vmp.closed.has(id) ? " shut" : ""}" data-toggle="${esc(id)}"><svg><use href="#i-chev"/></svg></span>` : `<span class="vg-caret none"></span>`;
+    return `<li><div class="vg-row${vmp.group === id ? " active" : ""}" data-group="${esc(id)}" style="--d:${depth}">
+      ${caret}<svg class="vg-icon"><use href="#${icon}"/></svg><span class="vg-name" title="${esc(name)}">${esc(name)}</span><span class="vg-n">${count(id)}</span>${extra}</div></li>`;
+  };
+  const menu = (g) => (op ? `<details class="more vg-menu"><summary title="Group actions">⋯</summary><div class="dropdown open">
+      <button type="button" data-gact="sub" data-id="${esc(g.id)}">New group inside</button>
+      <button type="button" data-gact="edit" data-id="${esc(g.id)}">Rename or move</button>
+      <button type="button" class="danger" data-gact="del" data-id="${esc(g.id)}">Delete group</button></div></details>` : "");
+  const branch = (parent, depth) => childGroups(parent).map((g) =>
+    row(g.id, g.name, "i-folder", depth, menu(g)) + (vmp.closed.has(g.id) ? "" : branch(g.id, depth + 1))).join("");
+  $("#vg-tree").innerHTML = row("all", "All VMs", "i-compute", 0) + branch("", 0) +
+    (groupList().length ? row("none", "Ungrouped", "i-folder", 0) : "") +
+    (!groupList().length && op ? `<li class="vg-empty">Sort VMs into folders, such as Production or Branch offices. <a href="#" id="vg-first">New group</a></li>` : "");
+}
+
+function renderVMAlert() {
+  const bad = state.vms.filter((v) => inGroup(v, vmp.group) && vmAlerts(v).length);
+  const box = $("#vm-alert"), only = $("#vm-filter").value === "alert";
+  box.hidden = !bad.length && !only;
+  box.innerHTML = only
+    ? `<svg><use href="#i-alert"/></svg><span>Showing the ${bad.length} VM${bad.length === 1 ? " that needs" : "s that need"} attention</span><a href="#" data-alert="all">Show all VMs</a>`
+    : `<svg><use href="#i-alert"/></svg><span><b>${bad.length}</b> virtual machine${bad.length === 1 ? " needs" : "s need"} attention: ${esc([...new Set(bad.flatMap(vmAlerts).map((a) => a.replace(/ \d+%.*/, "")))].join(", "))}</span><a href="#" data-alert="view">View</a>`;
+}
+
+function renderVMs() {
+  for (const id of [...vmp.picked]) if (!state.vms.some((v) => v.uuid === id)) vmp.picked.delete(id);
+  if (vmp.group !== "all" && vmp.group !== "none" && !groupById(vmp.group)) vmp.group = "all";
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#vm-count").textContent = `${state.vms.length} total · ${running} running`;
+  renderGroupTree();
+  renderVMAlert();
+  $$("#vm-view button").forEach((b) => b.classList.toggle("on", b.dataset.view === vmp.view));
+  $$("#vm-metrics button").forEach((b) => b.classList.toggle("active", b.dataset.metric === vmp.metric));
+  $("#vm-metrics").hidden = vmp.view === "panel";
+  $("#vm-list").hidden = vmp.view === "panel";
+  $("#vm-panel").hidden = vmp.view !== "panel";
+  const vms = visibleVMs(), op = canOperate();
+  const picked = vms.filter((v) => vmp.picked.has(v.uuid));
+  $("#vm-picked").textContent = vmp.picked.size ? `${vmp.picked.size} selected` : "";
+  $$("#vm-batch button[data-batch], #vm-batch summary").forEach((b) => { b.disabled = !vmp.picked.size; b.classList.toggle("off", !vmp.picked.size); });
+  const none = state.vms.length ? (vmp.group === "all" ? "No VMs match" : "No VMs in this group. Select VMs, then More → Move to group, or drag them here.") : "No virtual machines yet. Create one, or bring VMs over with Migrate.";
+  const where = vmp.group === "all" ? "" : vmp.group === "none" ? "Ungrouped" : groupPath(vmp.group);
+  const cols = VM_COLUMNS[vmp.metric];
+
+  if (vmp.view === "panel") {
+    $("#vm-panel").innerHTML = (where ? `<p class="hint vm-where">${esc(where)}</p>` : "") + (vms.length ? `<div class="vm-cards">${vms.map((vm) => {
+      const g = state.guests[vm.uuid], u = diskUsage(vm, g), alerts = vmAlerts(vm);
+      return `<div class="vm-card${vmp.picked.has(vm.uuid) ? " picked" : ""}" data-uuid="${vm.uuid}" ${op ? 'draggable="true"' : ""}>
+        <div class="vc-top">${op ? `<input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}>` : ""}
+          <span class="avatar ${esc(vm.state)}"><svg><use href="#${osIcon(vm)}"/></svg></span>
+          <div class="vc-name"><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vm-sub">${ipCell(vm)}</span></div>
+          <span class="badge ${esc(vm.state)}">${esc(vm.state)}</span></div>
+        <div class="vc-meters">
+          <span>CPU</span>${usageCell(cpuUsed(vm), 100)}<em>${vm.vcpus} vCPU</em>
+          <span>Memory</span>${usageCell(memUsed(vm), vm.memory_mb)}<em>${gbText(vm.memory_mb)}</em>
+          <span>Storage</span>${usageCell(u.used, u.total)}<em>${num(u.total)} GB</em>
+        </div>
+        <div class="vc-foot">${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts[0])}</span>` : `<span class="vm-sub">${esc(vm.node || "")}</span>`}
+          <span class="spacer"></span><div class="actions">${vmMenu(vm, { summary: true, compact: true })}</div></div>
+      </div>`;
+    }).join("")}</div>` : `<p class="empty">${esc(none)}</p>`);
+    return;
+  }
+
+  const sortMark = (h) => (vmp.sort.key === h ? (vmp.sort.dir > 0 ? " ▲" : " ▼") : "");
+  const allOn = vms.length && picked.length === vms.length;
+  $("#vm-thead").innerHTML = `<tr>${op ? `<th class="pick"><input type="checkbox" id="vm-pick-all" ${allOn ? "checked" : ""} title="Select all shown"></th>` : ""}
+    <th data-sort="Status">Status${sortMark("Status")}</th><th data-sort="Name">VM name${sortMark("Name")}</th>
+    ${cols.map((c) => `<th data-sort="${esc(c[0])}">${esc(c[0])}${sortMark(c[0])}</th>`).join("")}<th></th></tr>`;
+  $("#vm-pick-all") && ($("#vm-pick-all").indeterminate = picked.length > 0 && !allOn);
+  const span = cols.length + 3 + (op ? 1 : 0);
   $("#vms").innerHTML = vms.length ? vms.map((vm) => {
-    const g = state.guests[vm.uuid], os = osName(vm, g), ips = ipList(g);
-    return `<tr>
-      <td><div class="name-cell">${avatar("i-compute")}<div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vm-sub clip" title="${esc(vm.description)}">${esc(vm.description || vm.uuid.slice(0, 8))}</span></div></div></td>
+    const alerts = vmAlerts(vm);
+    return `<tr data-uuid="${vm.uuid}" class="${vmp.picked.has(vm.uuid) ? "picked" : ""}" ${op ? 'draggable="true"' : ""}>
+      ${op ? `<td class="pick"><input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}></td>` : ""}
       <td><span class="badge ${esc(vm.state)}">${esc(vm.state)}</span></td>
-      <td>${os ? `<span class="os ${osKind(os).toLowerCase()}">${esc(os)}</span>` : `<span class="muted">Not set</span>`}
-        <span class="vm-sub">${g?.agent ? "Guest agent running" : vm.state === "running" ? "No guest agent" : ""}</span></td>
-      <td>${ips.length ? `<span class="mono">${esc(ips[0])}</span>${ips.length > 1 ? ` <span class="muted" title="${esc(ips.join(", "))}">+${ips.length - 1}</span>` : ""}` : `<span class="muted">–</span>`}
-        <span class="vm-sub">${esc(g?.hostname || "")}</span></td>
-      <td>${esc(vm.node || "")}</td>
-      <td>${vm.vcpus}</td>
-      <td>${gbText(vm.memory_mb)}</td>
-      <td class="disk-cell">${diskCell(vm, g)}</td>
-      <td><div class="actions">${vmMenu(vm, { summary: true })}</div></td>
+      <td><div class="name-cell">${avatar(osIcon(vm))}<div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a>
+        ${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts.join(" · "))}</span>` : `<span class="vm-sub clip">${esc(vmp.group === "all" && groupOf(vm) ? groupPath(groupOf(vm)) : vm.description || "")}</span>`}</div></div></td>
+      ${cols.map((c) => `<td>${c[2](vm)}</td>`).join("")}
+      <td><div class="actions">${vmMenu(vm, { summary: true, compact: true })}</div></td>
     </tr>`;
-  }).join("") : empty(9, state.vms.length ? "No VMs match" : "No virtual machines yet. Create one, or bring VMs over with Migrate.");
+  }).join("") : empty(span, none);
 }
-$("#vm-search").addEventListener("input", renderVMs);
-$("#vm-filter").addEventListener("change", renderVMs);
+
+{
+  const rerender = () => renderVMs();
+  $("#vm-search").addEventListener("input", rerender);
+  $("#vm-filter").addEventListener("change", rerender);
+  $("#vm-refresh").addEventListener("click", () => refresh("compute").catch(fail));
+  $("#vm-view").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-view]");
+    if (b) { vmp.view = b.dataset.view; vmpSave(); renderVMs(); }
+  });
+  $("#vm-metrics").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-metric]");
+    if (b) { vmp.metric = b.dataset.metric; vmp.sort = { key: "", dir: 1 }; vmpSave(); renderVMs(); }
+  });
+  $("#vm-alert").addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-alert]");
+    if (!a) return;
+    e.preventDefault();
+    $("#vm-filter").value = a.dataset.alert === "view" ? "alert" : "";
+    renderVMs();
+  });
+  $("#vm-thead").addEventListener("click", (e) => {
+    if (e.target.id === "vm-pick-all") {
+      const vms = visibleVMs();
+      vms.forEach((v) => (e.target.checked ? vmp.picked.add(v.uuid) : vmp.picked.delete(v.uuid)));
+      renderVMs();
+      return;
+    }
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    const key = th.dataset.sort;
+    vmp.sort = { key, dir: vmp.sort.key === key ? -vmp.sort.dir : 1 };
+    renderVMs();
+  });
+  const pick = (e) => {
+    const box = e.target.closest("input.vm-pick");
+    if (!box) return;
+    box.checked ? vmp.picked.add(box.dataset.uuid) : vmp.picked.delete(box.dataset.uuid);
+    renderVMs();
+  };
+  $("#vms").addEventListener("change", pick);
+  $("#vm-panel").addEventListener("change", pick);
+
+  // Drag VMs (the selected ones, or the one dragged) onto a group in the tree.
+  const dragStart = (e) => {
+    const item = e.target.closest("[data-uuid][draggable]");
+    if (!item) return;
+    const id = item.dataset.uuid;
+    const ids = vmp.picked.has(id) ? [...vmp.picked] : [id];
+    e.dataTransfer.setData("application/x-ibhics-vms", JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = "move";
+  };
+  $("#vms").addEventListener("dragstart", dragStart);
+  $("#vm-panel").addEventListener("dragstart", dragStart);
+  const tree = $("#vg-tree");
+  tree.addEventListener("dragover", (e) => {
+    const row = e.target.closest(".vg-row");
+    if (!row || row.dataset.group === "all" || !e.dataTransfer.types.includes("application/x-ibhics-vms")) return;
+    e.preventDefault();
+    $$(".vg-row.drop", tree).forEach((r) => r !== row && r.classList.remove("drop"));
+    row.classList.add("drop");
+  });
+  tree.addEventListener("dragleave", (e) => e.target.closest(".vg-row")?.classList.remove("drop"));
+  tree.addEventListener("drop", async (e) => {
+    const row = e.target.closest(".vg-row");
+    if (!row) return;
+    e.preventDefault();
+    row.classList.remove("drop");
+    const ids = JSON.parse(e.dataTransfer.getData("application/x-ibhics-vms") || "[]");
+    if (!ids.length) return;
+    await moveToGroup(ids, row.dataset.group === "none" ? "" : row.dataset.group);
+  });
+
+  tree.addEventListener("click", async (e) => {
+    const toggle = e.target.closest("[data-toggle]");
+    if (toggle) {
+      const id = toggle.dataset.toggle;
+      vmp.closed.has(id) ? vmp.closed.delete(id) : vmp.closed.add(id);
+      renderGroupTree();
+      return;
+    }
+    if (e.target.id === "vg-first") { e.preventDefault(); openGroupDialog(); return; }
+    const act = e.target.closest("button[data-gact]");
+    if (act) {
+      act.closest("details").removeAttribute("open");
+      const g = groupById(act.dataset.id);
+      if (act.dataset.gact === "sub") openGroupDialog(null, g.id);
+      if (act.dataset.gact === "edit") openGroupDialog(g);
+      if (act.dataset.gact === "del") {
+        const n = state.vms.filter((v) => groupOf(v) === g.id).length;
+        const up = g.parent ? `"${groupById(g.parent)?.name}"` : "Ungrouped";
+        if (!confirm(`Delete group "${g.name}"? Its ${n} VM${n === 1 ? "" : "s"} and subgroups move to ${up}. No VM is deleted.`)) return;
+        try { await del(`/vm-groups/${enc(g.id)}`); } catch (err) { fail(err); }
+        await load("groups");
+        renderVMs();
+      }
+      return;
+    }
+    if (e.target.closest("details")) return;
+    const row = e.target.closest(".vg-row");
+    if (row) { vmp.group = row.dataset.group; renderVMs(); }
+  });
+  $("#vg-add").addEventListener("click", () => openGroupDialog(null, groupById(vmp.group) ? vmp.group : ""));
+
+  $("#vm-batch").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-batch]");
+    if (!b) return;
+    b.closest("details")?.removeAttribute("open");
+    batch(b.dataset.batch).catch(fail);
+  });
+}
+
+function groupOptions(skip = "") {
+  const out = [];
+  const walk = (parent, depth) => childGroups(parent).forEach((g) => {
+    if (g.id === skip) return;
+    out.push(`<option value="${esc(g.id)}">${"   ".repeat(depth)}${esc(g.name)}</option>`);
+    walk(g.id, depth + 1);
+  });
+  walk("", 0);
+  return out.join("");
+}
+
+function openGroupDialog(group = null, parent = "") {
+  const dlg = $("#group-dialog");
+  $(".gd-title", dlg).textContent = group ? `Group ${group.name}` : "New group";
+  $(".gd-parent", dlg).innerHTML = `<option value="">Top level</option>${groupOptions(group?.id)}`;
+  openDialog("group-dialog", { id: group?.id || "" },
+    group ? { name: group.name, parent: group.parent, description: group.description } : { parent });
+}
+handlers["group-dialog"] = async (f, ctx) => {
+  const body = { name: f.get("name"), parent: f.get("parent"), description: f.get("description") };
+  if (ctx.id) await patch(`/vm-groups/${enc(ctx.id)}`, body);
+  else vmp.group = (await post("/vm-groups", body)).id;
+  await load("groups");
+  renderVMs();
+};
+
+async function moveToGroup(ids, group) {
+  try {
+    await api("/vm-groups/members", { method: "PUT", body: JSON.stringify({ vms: ids, group }) });
+    toast(`${ids.length} VM${ids.length === 1 ? "" : "s"} moved to ${group ? groupPath(group) : "Ungrouped"}`);
+  } catch (err) { fail(err); }
+  await load("groups");
+  renderVMs();
+}
+handlers["move-dialog"] = async (f, ctx) => { await moveToGroup(ctx.ids, f.get("group")); };
+
+// Run one power action on every selected VM that it applies to.
+async function batch(act) {
+  const vms = state.vms.filter((v) => vmp.picked.has(v.uuid));
+  if (!vms.length) return;
+  if (act === "group") {
+    if (!groupList().length) { openGroupDialog(); toast("Make a group first, then move the VMs into it"); return; }
+    const dlg = $("#move-dialog");
+    $(".md-group", dlg).innerHTML = `<option value="">Ungrouped</option>${groupOptions()}`;
+    $(".md-what", dlg).textContent = `${vms.length} VM${vms.length === 1 ? "" : "s"}: ${vms.map((v) => v.name).join(", ")}`;
+    openDialog("move-dialog", { ids: vms.map((v) => v.uuid) }, { group: groupById(vmp.group) ? vmp.group : "" });
+    return;
+  }
+  if (act === "ungroup") { await moveToGroup(vms.map((v) => v.uuid), ""); return; }
+  const fits = {
+    start: (v) => v.state !== "running", stop: (v) => v.state === "running", poweroff: (v) => v.state === "running",
+    restart: (v) => v.state === "running", delete: (v) => v.state !== "running",
+  }[act];
+  const todo = vms.filter(fits), skipped = vms.length - todo.length;
+  const label = { start: "Power on", stop: "Shut down", poweroff: "Power off", restart: "Restart", delete: "Delete" }[act];
+  if (!todo.length) { toast(`${label}: none of the selected VMs ${act === "start" ? "is stopped" : act === "delete" ? "is stopped (shut down first)" : "is running"}`, true); return; }
+  const names = todo.map((v) => v.name).join(", ");
+  if (act === "delete" && !confirm(`Delete ${todo.length} VM${todo.length === 1 ? "" : "s"} and all their disks?\n\n${names}`)) return;
+  if (["poweroff", "restart"].includes(act) && !confirm(`${label} ${names}?${act === "poweroff" ? " Unsaved work in the guests is lost." : ""}`)) return;
+  const call = (v) => ({
+    start: () => post(`/vms/${v.uuid}/start`), stop: () => post(`/vms/${v.uuid}/stop`),
+    poweroff: () => post(`/vms/${v.uuid}/stop`, { force: true }), restart: () => post(`/vms/${v.uuid}/restart`),
+    delete: () => del(`/vms/${v.uuid}`),
+  }[act])();
+  const results = await Promise.allSettled(todo.map(call));
+  const failed = results.map((r, i) => [r, todo[i]]).filter(([r]) => r.status === "rejected");
+  if (act === "delete") todo.forEach((v, i) => results[i].status === "fulfilled" && vmp.picked.delete(v.uuid));
+  toast(`${label}: ${todo.length - failed.length} done${failed.length ? `, ${failed.length} failed (${failed.map(([r, v]) => `${v.name}: ${r.reason.message}`).join("; ")})` : ""}${skipped ? `, ${skipped} skipped` : ""}`, failed.length > 0);
+  await refresh("compute");
+}
 
 function renderMoves() {
   $("#moves-panel").hidden = !state.moves.length;
@@ -627,6 +998,7 @@ async function vmAction(e) {
     if (act === "start") await post(`/vms/${id}/start`);
     if (act === "stop") await post(`/vms/${id}/stop`);
     if (act === "poweroff") await post(`/vms/${id}/stop`, { force: true });
+    if (act === "restart") await post(`/vms/${id}/restart`);
     if (act === "tools") {
       await post(`/vms/${id}/guest-tools`);
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
@@ -865,6 +1237,7 @@ handlers["vm-dialog"] = async (f) => {
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);
+  if (groupById(vmp.group)) await moveToGroup([vm.uuid], vmp.group).catch(() => {}); // created inside the open group
   toast(`${vm.name} created on ${vm.node}`);
   if (f.get("start") === "on") {
     try {
