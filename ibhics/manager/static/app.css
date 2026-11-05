@@ -1,35 +1,42 @@
 /* ibHiCS console: left icon rail, slim app bar, quiet white surfaces. */
 :root {
-  --brand: #0b8cf5;
-  --brand-soft: #e8f3fe;
+  --brand: #3563f5;
+  --brand-soft: #e9efff;
   --accent: #06b6d4;
-  --rail: #f4f5f7;
-  --rail-icon: #8a94a6;
-  --bg: #f4f5f7;
+  --violet: #8b5cf6;
+  --grad: linear-gradient(120deg, #12c8e8 0%, #3b6cf6 52%, #8b4dff 100%);
+  --grad-soft: linear-gradient(120deg, #e3f8fd 0%, #e8eeff 55%, #f1e9ff 100%);
+  --rail: #0d1330;
+  --rail-2: #1b1f52;
+  --rail-icon: #8f9bc4;
+  --bg: #eef2fb;
   --panel: #ffffff;
-  --text: #2b3445;
-  --muted: #7d8799;
-  --faint: #b6bdc9;
-  --line: #e6e9ee;
-  --hover: #f6f8fb;
-  --ok: #1fb46a;
-  --warn: #f2a10b;
-  --bad: #ec4b4b;
-  --shadow: 0 1px 2px rgb(16 24 40 / 5%);
-  --radius: 10px;
+  --text: #22293d;
+  --muted: #6d7891;
+  --faint: #b3bccd;
+  --line: #e3e8f2;
+  --hover: #f3f6fd;
+  --ok: #12b76a;
+  --warn: #f59e0b;
+  --bad: #f04461;
+  --c-compute: #3b6cf6; --c-storage: #0fb5ae; --c-network: #8b5cf6; --c-nodes: #f97316; --c-backup: #ec4899; --c-migrate: #06b6d4;
+  --shadow: 0 1px 2px rgb(30 41 90 / 6%), 0 4px 16px rgb(30 41 90 / 5%);
+  --radius: 14px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --brand: #3aa4ff; --brand-soft: #14304a; --rail: #13171f; --rail-icon: #6f7a8c;
-    --bg: #171c25; --panel: #1e2430; --text: #e3e7ee; --muted: #8e98aa; --faint: #4d5768;
-    --line: #2b3240; --hover: #242b38; --shadow: 0 1px 2px rgb(0 0 0 / 30%); color-scheme: dark;
+    --brand: #6b8cff; --brand-soft: #1d2650; --rail: #070b1e; --rail-2: #151845; --rail-icon: #7a86b3;
+    --grad-soft: linear-gradient(120deg, #0f2a3a 0%, #17204a 55%, #251a47 100%);
+    --bg: #0b1024; --panel: #141a33; --text: #e5e9f5; --muted: #919bb8; --faint: #4a5375;
+    --line: #262e4f; --hover: #1b2242; --shadow: 0 1px 2px rgb(0 0 0 / 35%); color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --brand: #3aa4ff; --brand-soft: #14304a; --rail: #13171f; --rail-icon: #6f7a8c;
-  --bg: #171c25; --panel: #1e2430; --text: #e3e7ee; --muted: #8e98aa; --faint: #4d5768;
-  --line: #2b3240; --hover: #242b38; --shadow: 0 1px 2px rgb(0 0 0 / 30%); color-scheme: dark;
+  --brand: #6b8cff; --brand-soft: #1d2650; --rail: #070b1e; --rail-2: #151845; --rail-icon: #7a86b3;
+  --grad-soft: linear-gradient(120deg, #0f2a3a 0%, #17204a 55%, #251a47 100%);
+  --bg: #0b1024; --panel: #141a33; --text: #e5e9f5; --muted: #919bb8; --faint: #4a5375;
+  --line: #262e4f; --hover: #1b2242; --shadow: 0 1px 2px rgb(0 0 0 / 35%); color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -601,3 +608,45 @@ input.vm-pick, #vm-pick-all { width: 16px; height: 16px; margin: 0; accent-color
 .vm-table .u-cell { min-width: 84px; }
 button.small.sq { padding: 4px 7px; }
 button.small.sq svg { width: 15px; height: 15px; }
+
+/* Colour: bright, mixed, still calm. Cyan to violet from the ib monogram. */
+body { background:
+  radial-gradient(900px 420px at 0% 0%, color-mix(in srgb, #22d3ee 16%, transparent), transparent 70%),
+  radial-gradient(800px 480px at 100% 0%, color-mix(in srgb, #8b5cf6 14%, transparent), transparent 70%),
+  radial-gradient(900px 600px at 60% 110%, color-mix(in srgb, #3b6cf6 10%, transparent), transparent 70%),
+  var(--bg); background-attachment: fixed; }
+.rail { background: linear-gradient(180deg, var(--rail) 0%, var(--rail-2) 100%); border-right: 0; }
+.rail .logo { background: transparent; }
+.rail .logo svg { width: 38px; height: 38px; filter: drop-shadow(0 4px 10px rgb(34 211 238 / 25%)); }
+.rail nav.bottom { border-top-color: rgb(255 255 255 / 8%); }
+.rail a:hover { color: #fff; }
+.rail a.active { color: #fff; }
+.rail a.active svg { position: relative; z-index: 1; }
+.rail a.active::before { left: 12px; right: 12px; top: 4px; bottom: 4px; width: auto; border-radius: 12px; background: var(--grad); box-shadow: 0 6px 16px rgb(59 108 246 / 40%); }
+.appbar { background: transparent; backdrop-filter: blur(10px); }
+.product .mark { background: transparent; box-shadow: none; width: 30px; }
+.product .mark svg { width: 30px; height: 30px; }
+.product b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; padding-right: 2px; }
+.sheet { border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+.page-head h1 { font-weight: 600; letter-spacing: -.2px; }
+button.primary { background: var(--grad); border-color: transparent; box-shadow: 0 4px 14px rgb(59 108 246 / 28%); }
+button.primary:hover { filter: brightness(1.08) saturate(1.05); }
+.tabs button.active { color: var(--brand); border-image: var(--grad) 1; border-bottom-width: 2px; font-weight: 600; }
+.chips button.on { background: var(--grad); color: #fff; }
+.bar i, .segments i.on { background: var(--grad); }
+.bar.warn i, .segments.warn i.on { background: linear-gradient(90deg, #fbbf24, #f97316); }
+.bar.bad i, .segments.bad i.on { background: linear-gradient(90deg, #fb7185, #e11d48); }
+.avatar { background: var(--grad-soft); color: var(--brand); }
+/* Each area of the console has its own colour, used for its icons. */
+.rail a[data-page="home"].active::before { background: var(--grad); }
+.stat { position: relative; overflow: hidden; background: var(--panel); }
+.stat::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--grad); }
+.stats .stat:nth-child(4n+2)::before { background: linear-gradient(90deg, #0fb5ae, #22d3ee); }
+.stats .stat:nth-child(4n+3)::before { background: linear-gradient(90deg, #8b5cf6, #ec4899); }
+.stats .stat:nth-child(4n+4)::before { background: linear-gradient(90deg, #f59e0b, #f97316); }
+.vm-alert { background: linear-gradient(90deg, color-mix(in srgb, #f59e0b 14%, transparent), color-mix(in srgb, #ec4899 8%, transparent)); }
+.vg-row.active { background: var(--grad-soft); }
+.vm-card { background: linear-gradient(180deg, var(--panel) 60%, color-mix(in srgb, var(--brand-soft) 45%, var(--panel))); }
+.vm-card .avatar.running { background: linear-gradient(135deg, #d1fae5, #cffafe); color: #059669; }
+.badge.running, .badge.online, .badge.done { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+th { color: color-mix(in srgb, var(--brand) 35%, var(--muted)); }
