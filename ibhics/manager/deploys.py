@@ -22,7 +22,6 @@ class Deploy:
     source: str
     source_uuid: str
     node: str
-    linked: bool
     customized: bool
     power_on: bool
     state: str  # queued, running, done, failed
@@ -65,8 +64,6 @@ class DeployManager:
         member, source = self._cluster.find_vm(uuid)
         if source.state != VMState.STOPPED:
             raise InvalidState(f"shut {source.spec.name!r} down before cloning it")
-        if clone.linked and not source.spec.template:
-            raise InvalidState("linked clones are made from templates: convert the VM first")
         with self._lock:
             pending = {j.vm for j in self._jobs if j.state in ("queued", "running")}
             if clone.name in pending or any(
@@ -79,7 +76,6 @@ class DeployManager:
                 source=source.spec.name,
                 source_uuid=uuid,
                 node=member.name,
-                linked=clone.linked,
                 customized=clone.customization is not None,
                 power_on=power_on,
                 state="queued",

@@ -35,8 +35,13 @@ def test_console_served(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "<title>ibHiCS</title>" in resp.text
+    assert 'value="linked"' not in resp.text
     for element in (
-        "topo-edit", "topo-edit-save", "topo-edit-cancel", "topo-palette", "topo-add-switch"
+        "topo-edit",
+        "topo-edit-save",
+        "topo-edit-cancel",
+        "topo-palette",
+        "topo-add-switch",
     ):
         assert f'id="{element}"' in resp.text
     assert "Router <small>v0.7</small>" in resp.text

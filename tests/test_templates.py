@@ -1,4 +1,4 @@
-"""VM templates: convert, deploy full and linked clones, guest customization."""
+"""VM templates: convert, deploy independent disk copies, guest customization."""
 
 import json
 import types
@@ -11,7 +11,7 @@ from test_migration import Env, Inline
 from ibhics.hypervisor import CloneSpec, Customization, DiskSpec, InvalidState, VMExists, VMSpec
 from ibhics.hypervisor import libvirt_driver as lv
 from ibhics.hypervisor.customize import build_iso, cloud_init_files, hostname_for, seed_files
-from ibhics.hypervisor.domain_xml import build_domain_xml, build_volume_xml, template_facts
+from ibhics.hypervisor.domain_xml import build_domain_xml, build_volume_xml, is_template
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.hypervisor.serialize import clone_from_json, clone_to_json, spec_from_json, spec_to_json
 from ibhics.manager import create_app
@@ -96,28 +96,26 @@ def test_build_iso_without_tool_says_what_to_install(tmp_path, monkeypatch):
 # ---------- XML and JSON ----------
 
 
-def test_domain_xml_carries_template_and_link():
+def test_domain_xml_carries_template():
     spec = VMSpec(name="t", template=True, disks=[DiskSpec(size_gb=1)])
-    assert template_facts(ET.fromstring(build_domain_xml(spec))) == (True, "")
-    clone = VMSpec(name="c", linked_to="uuid-t", disks=[DiskSpec(size_gb=1)])
-    assert template_facts(ET.fromstring(build_domain_xml(clone))) == (False, "uuid-t")
-    parsed = lv._spec_from_xml(build_domain_xml(spec))
-    assert parsed.template and not parsed.linked_to
+    assert is_template(ET.fromstring(build_domain_xml(spec)))
+    clone = VMSpec(name="c", disks=[DiskSpec(size_gb=1)])
+    assert not is_template(ET.fromstring(build_domain_xml(clone)))
+    assert lv._spec_from_xml(build_domain_xml(spec)).template
 
 
-def test_linked_volume_is_overlay_on_template_disk():
-    vol = ET.fromstring(build_volume_xml("c", 0, DiskSpec(size_gb=20), backing="/p/t-disk0.qcow2"))
-    assert vol.findtext("backingStore/path") == "/p/t-disk0.qcow2"
-    assert vol.find("backingStore/format").get("type") == "qcow2"
-    with pytest.raises(ValueError, match="qcow2"):
-        build_volume_xml("c", 0, DiskSpec(size_gb=20, backend="block"), backing="/dev/vg/t")
+@pytest.mark.parametrize("backend", ["file", "block"])
+def test_volume_has_no_backing_store(backend):
+    vol = ET.fromstring(build_volume_xml("c", 0, DiskSpec(size_gb=20, backend=backend)))
+    assert vol.find("backingStore") is None
 
 
 def test_json_round_trips():
-    spec = VMSpec(name="a", template=True, linked_to="x")
+    spec = VMSpec(name="a", template=True)
     back = spec_from_json(spec_to_json(spec))
-    assert back.template and back.linked_to == "x"
-    clone = CloneSpec(name="b", linked=True, customization=Customization(hostname="h"))
+    assert back.template
+    assert "linked_to" not in spec_to_json(back)
+    clone = CloneSpec(name="b", customization=Customization(hostname="h"))
     assert clone_from_json(clone_to_json(clone)) == clone
 
 
@@ -149,25 +147,25 @@ def test_full_clone_copies_disks_and_hardware(fake):
     d, uuid = fake
     vm = d.clone_vm(uuid, CloneSpec(name="ubuntu-2"))
     assert (vm.spec.vcpus, vm.spec.memory_mb, vm.spec.boot) == (2, 2048, ["hd"])
-    assert vm.spec.iso is None and not vm.spec.linked_to
+    assert vm.spec.iso is None
+    assert "linked_to" not in spec_to_json(vm.spec)
     assert d.read_disk(vm.uuid, 0).startswith(b"golden")
     assert vm.spec.nics == [] or vm.spec.nics[0].mac != d.get_vm(uuid).spec.nics[0].mac
     with pytest.raises(VMExists):
         d.clone_vm(uuid, CloneSpec(name="ubuntu-2"))
 
 
-def test_linked_clone_needs_template_and_keeps_it(fake):
+def test_template_clone_is_independent_and_template_can_be_removed(fake):
     d, uuid = fake
-    with pytest.raises(InvalidState, match="templates"):
-        d.clone_vm(uuid, CloneSpec(name="l1", linked=True))
     d.set_template(uuid, True)
-    clone = d.clone_vm(uuid, CloneSpec(name="l1", linked=True))
-    assert clone.spec.linked_to == uuid
-    for action in (lambda: d.delete_vm(uuid), lambda: d.set_template(uuid, False)):
-        with pytest.raises(InvalidState, match="l1"):
-            action()
-    d.delete_vm(clone.uuid)
+    clone = d.clone_vm(uuid, CloneSpec(name="copy1"))
+    d.write_disk(clone.uuid, 0, 0, b"edited")
+    assert d.read_disk(uuid, 0).startswith(b"golden")
     d.set_template(uuid, False)
+    d.set_template(uuid, True)
+    d.delete_vm(uuid)
+    assert d.read_disk(clone.uuid, 0).startswith(b"edited")
+    d.start_vm(clone.uuid)
 
 
 def test_customized_clone_gets_seed_cd(fake):
@@ -312,16 +310,18 @@ def lvd(monkeypatch, tmp_path):
     return make
 
 
-def test_libvirt_linked_clone_makes_overlay(lvd):
+def test_libvirt_full_clone_copies_into_file_pool(lvd):
     d = lvd()
-    vm = d.clone_vm("src", CloneSpec(name="web1", linked=True))
+    vm = d.clone_vm("src", CloneSpec(name="web1"))
     vol = ET.fromstring(d._conn.pool.created[0])
     assert vol.findtext("name") == "web1-disk0.qcow2"
-    assert vol.findtext("backingStore/path") == "/pool/tpl-disk0.qcow2"
-    assert d.commands == []  # nothing copied
-    assert vm.spec.linked_to == "src" and d.linked_clones("src") == ["web1"]
-    with pytest.raises(InvalidState, match="web1"):
-        d.set_template("src", False)
+    assert vol.find("backingStore") is None
+    assert d.commands == [
+        ["qemu-img", "convert", "-n", "-f", "qcow2", "-O", "qcow2"]
+        + ["/pool/tpl-disk0.qcow2", "/pool/web1-disk0.qcow2"]
+    ]
+    assert "linked_to" not in spec_to_json(vm.spec)
+    assert not d.set_template("src", False).spec.template
 
 
 def test_libvirt_full_clone_copies_into_block_pool(lvd):
@@ -331,12 +331,6 @@ def test_libvirt_full_clone_copies_into_block_pool(lvd):
         ["qemu-img", "convert", "-n", "-f", "qcow2", "-O", "raw"]
         + ["/pool/tpl-disk0.qcow2", "/pool/db1-disk0"]
     ]
-
-
-def test_libvirt_linked_clone_refused_on_block_pool(lvd):
-    d = lvd(kind="logical")
-    with pytest.raises(InvalidState, match="qcow2"):
-        d.clone_vm("src", CloneSpec(name="x", linked=True))
 
 
 def test_libvirt_template_does_not_start(lvd):
@@ -364,7 +358,6 @@ def test_deploy_from_template_on_remote_node(env):
 
     body = {
         "name": "web1",
-        "linked": True,
         "power_on": True,
         "customization": {"hostname": "web1", "username": "ops", "password": "pw"},
     }
@@ -372,25 +365,24 @@ def test_deploy_from_template_on_remote_node(env):
     assert resp.status_code == 202, resp.text
     job = api.get("/api/v1/deploys").json()[0]
     assert job["state"] == "done", job
-    assert (job["source"], job["node"], job["linked"], job["customized"]) == (
+    assert (job["source"], job["node"], job["customized"]) == (
         "tpl",
         "node2",
         True,
-        True,
     )
     vm = api.get(f"/api/v1/vms/{job['result']}").json()
-    assert vm["node"] == "node2" and vm["state"] == "running" and vm["linked_to"] == uuid
+    assert vm["node"] == "node2" and vm["state"] == "running"
+    assert "linked_to" not in vm and "linked" not in job
     assert "ops" in env.node2.seeds["web1"]["user-data"]
 
-    assert api.delete(f"/api/v1/vms/{uuid}").status_code == 409  # linked clone uses it
     again = api.post(f"/api/v1/vms/{uuid}/clone", json={"name": "web1"})
     assert again.status_code == 409
+    assert api.delete(f"/api/v1/vms/{uuid}").status_code == 204
+    assert api.get(f"/api/v1/vms/{job['result']}").json()["state"] == "running"
 
 
 def test_deploy_failure_is_recorded(env):
     uuid = env.create_vm("plain", start=False)
-    resp = env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "x", "linked": True})
-    assert resp.status_code == 409  # not a template: refused before a job starts
     resp = env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "x", "pool": "nope"})
     assert resp.status_code == 202
     job = env.client.get("/api/v1/deploys").json()[0]
@@ -404,3 +396,45 @@ def test_deployed_vm_joins_template_group(env):
     env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "c1"})
     new = env.client.get("/api/v1/deploys").json()[0]["result"]
     assert env.client.get("/api/v1/vm-groups").json()["members"][new] == group
+
+
+@pytest.mark.parametrize("template", [False, True])
+@pytest.mark.parametrize("linked", [True, "true", 1])
+def test_clone_and_deploy_reject_linked_before_starting_job(env, template, linked):
+    uuid = env.create_vm("source", start=False)
+    if template:
+        env.client.post(f"/api/v1/vms/{uuid}/template", json={"template": True})
+    resp = env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "copy1", "linked": linked})
+    assert resp.status_code == 422
+    assert "linked clones are not supported; VMs are deployed as full copies" in resp.text
+    assert env.client.get("/api/v1/deploys").json() == []
+    assert len(env.client.get("/api/v1/vms").json()) == 1
+
+
+def test_clone_accepts_legacy_false_without_advertising_field(env):
+    uuid = env.create_vm("source", start=False)
+    resp = env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "copy1", "linked": False})
+    assert resp.status_code == 202
+    assert resp.json()["state"] == "done"
+    schemas = env.client.get("/openapi.json").json()["components"]["schemas"]
+    assert "linked" not in schemas["CloneIn"]["properties"]
+    assert "linked" not in schemas["DeployOut"]["properties"]
+    assert "linked_to" not in schemas["VMOut"]["properties"]
+
+
+@pytest.mark.parametrize("template", [False, True])
+def test_agent_rejects_linked_clone(fake, template):
+    from ibhics.agent import create_agent_app
+    from ibhics.cluster import NodeRole
+
+    driver, uuid = fake
+    driver.set_template(uuid, template)
+    client = TestClient(create_agent_app("node", NodeRole.COMPUTE, "test-token", driver))
+    resp = client.post(
+        f"/agent/v1/vms/{uuid}/clone",
+        json={"name": "copy1", "linked": True},
+        headers={"X-Ibhics-Token": "test-token"},
+    )
+    assert resp.status_code == 422
+    assert "linked clones are not supported; VMs are deployed as full copies" in resp.text
+    assert len(driver.list_vms()) == 1

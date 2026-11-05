@@ -362,8 +362,8 @@ function allTasks() {
       state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
     })),
     ...state.deploys.map((d) => ({
-      kind: "Deploy", title: d.vm, sub: `${d.linked ? "linked clone" : "full clone"} of ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
-      state: d.state, step: d.linked ? "Creating the disks" : "Copying the disks", percent: null, created: d.created, finished: d.finished,
+      kind: "Deploy VM", title: d.vm, sub: `from ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
+      state: d.state, step: "Copying the disks", percent: null, created: d.created, finished: d.finished,
       error: d.error, id: d.id, result: d.result ? `VM ${d.result}${d.power_on ? ", powered on" : ""}` : "",
     })),
   ];
@@ -528,7 +528,7 @@ function activities() {
     ...state.jobs.map((j) => ({ kind: j.kind === "backup" ? "Backup" : "Restore", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
     ...state.moves.map((m) => ({ kind: "Live migration", icon: "i-migrate", what: m.vm, where: `${m.source} → ${m.target || "?"}`, state: m.state, created: m.created, error: m.error })),
     ...state.imports.map((j) => ({ kind: "Import", icon: "i-compute", what: j.name, where: j.source, state: j.state, created: j.created, error: j.error })),
-    ...state.deploys.map((d) => ({ kind: "Deploy", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
+    ...state.deploys.map((d) => ({ kind: "Deploy VM", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
   ];
   return items.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
 }
@@ -1114,11 +1114,8 @@ $("#vm-actions").addEventListener("click", vmAction);
 $("#vm-panel").addEventListener("click", vmAction);
 
 // ---------- templates ----------
-// VMware-style: a stopped VM becomes a template that cannot run; new VMs are deployed
-// from it as linked clones (overlays on its disks) or full copies, optionally customized.
-
-const linkedOf = (t) => state.vms.filter((v) => v.linked_to === t.uuid);
-const canLink = (t) => t.disks.length > 0 && t.disks.every((d) => d.backend === "file");
+// A stopped VM becomes a template that cannot run; deployed VMs get their own
+// copies of its disks and can optionally be customized.
 function renderTemplates() {
   const q = $("#tpl-search").value.trim().toLowerCase();
   const list = [...state.templates].sort((a, b) => a.name.localeCompare(b.name))
@@ -1126,7 +1123,7 @@ function renderTemplates() {
   $("#tpl-count").textContent = `${state.templates.length} template${state.templates.length === 1 ? "" : "s"}`;
   const busy = new Set(state.deploys.filter(isActive).map((j) => j.source_uuid));
   $("#tpl-grid").innerHTML = list.length ? list.map((t) => {
-    const clones = linkedOf(t), disk = t.disks.reduce((s, d) => s + d.size_gb, 0);
+    const disk = t.disks.reduce((s, d) => s + d.size_gb, 0);
     const win = /windows/i.test(t.os_type);
     return `<article class="tpl-card">
       <div class="tpl-top"><span class="tpl-icon ${win ? "win" : "lin"}"><svg><use href="#i-os-${win ? "win" : "linux"}"/></svg></span>
@@ -1140,7 +1137,6 @@ function renderTemplates() {
         <span><svg><use href="#i-nodes"/></svg>${esc(t.node || "")}</span>
       </div>
       <div class="tpl-foot">
-        <span class="muted">${clones.length ? `${clones.length} linked clone${clones.length === 1 ? "" : "s"}` : canLink(t) ? "Linked clones possible" : "Full clones only (block storage)"}</span>
         <span class="spacer"></span>
         ${canOperate() ? `<button class="primary small" data-tpl="deploy" data-id="${t.uuid}">Deploy VM</button>
         <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
@@ -1149,7 +1145,6 @@ function renderTemplates() {
           <button class="danger" data-tpl="delete" data-id="${t.uuid}" data-name="${esc(t.name)}">Delete</button>
         </div></details>` : ""}
       </div>
-      ${clones.length ? `<div class="tpl-clones">${clones.map((v) => `<a href="#vm/${v.uuid}">${esc(v.name)}</a>`).join("")}</div>` : ""}
     </article>`;
   }).join("") : `<div class="empty-card"><svg><use href="#i-template"/></svg><p>${state.templates.length ? "No template matches." : "No templates yet. In Virtual Machines, shut a VM down and choose <b>Convert to template</b> from its ⋯ menu."}</p></div>`;
 }
@@ -1189,29 +1184,20 @@ function openDeploy(uuid) {
     custom: isTpl ? (win ? "windows" : "linux") : "none",
   });
   const form = $("#deploy-form");
-  $("#deploy-title").textContent = isTpl ? "Deploy VM from template" : `Clone ${src.name}`;
+  $("#deploy-title").textContent = isTpl ? "Deploy VM from template" : "Clone VM";
+  form.querySelector('button[value="ok"]').textContent = isTpl ? "Deploy VM" : "Clone VM";
   $("#deploy-src").innerHTML = `<svg><use href="#i-${isTpl ? "template" : "compute"}"/></svg><div><b>${esc(src.name)}</b>
     <span class="vm-sub">${src.vcpus} vCPU · ${num(src.memory_mb / 1024)} GB · ${src.disks.length} disk${src.disks.length === 1 ? "" : "s"} · ${esc(src.node || "")}</span></div>`;
-  const linked = form.querySelector("input[value=linked]");
-  linked.disabled = !isTpl || !canLink(src);
-  linked.closest(".type-card").title = !isTpl ? "Linked clones are made from templates" : !canLink(src) ? "The template's disks are on block storage (LVM/iSCSI): only full clones" : "";
-  (linked.disabled ? form.querySelector("input[value=full]") : linked).checked = true;
   const pools = state.pools.filter((p) => p.node === src.node && p.active);
   form.elements.pool.innerHTML = `<option value="">Same pool as the ${isTpl ? "template" : "VM"}</option>`
     + pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} · ${num(p.available_gb)} GB free</option>`).join("");
-  syncDeploy();
   syncSwitch(form);
 }
-function syncDeploy() {
-  const form = $("#deploy-form");
-  $(".deploy-pool", form).hidden = form.elements.clone.value === "linked";
-}
-$("#deploy-form").addEventListener("change", (e) => { if (e.target.name === "clone") syncDeploy(); });
 handlers["deploy-dialog"] = async (f, ctx) => {
-  const linked = f.get("clone") === "linked", custom = f.get("custom");
-  const body = { name: f.get("name"), linked, power_on: f.get("power_on") === "on" };
+  const custom = f.get("custom");
+  const body = { name: f.get("name"), power_on: f.get("power_on") === "on" };
   if (f.get("description")) body.description = f.get("description");
-  if (!linked && f.get("pool")) body.pool = f.get("pool");
+  if (f.get("pool")) body.pool = f.get("pool");
   if (custom !== "none") {
     body.customization = {
       os: custom, hostname: f.get("hostname"), username: f.get("username"), password: f.get("password"),
@@ -2827,7 +2813,6 @@ async function renderVMDetail() {
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
     ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
     vm.driver_iso && ["Driver CD", `<span class="mono">${esc(vm.driver_iso)}</span>`],
-    vm.linked_to && ["Linked clone of", (() => { const t = state.templates.find((x) => x.uuid === vm.linked_to); return t ? `<a href="#templates">${esc(t.name)}</a> (template)` : `<span class="mono">${esc(vm.linked_to)}</span>`; })()],
     ["Description", vm.description ? esc(vm.description) : dash],
     ["UUID", `<span class="mono">${esc(vm.uuid)}</span>`],
   ]);

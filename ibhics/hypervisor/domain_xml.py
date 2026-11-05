@@ -23,9 +23,8 @@ def volume_name(vm_name: str, index: int, disk: DiskSpec) -> str:
     return f"{vm_name}-disk{index}{suffix}"
 
 
-def build_volume_xml(vm_name: str, index: int, disk: DiskSpec, backing: str | None = None) -> str:
-    """Volume XML for a new disk; with `backing`, a qcow2 overlay on that image (a linked
-    clone's disk: reads fall through to the template's, writes stay in the overlay)."""
+def build_volume_xml(vm_name: str, index: int, disk: DiskSpec) -> str:
+    """Volume XML for a new independent disk."""
     vol = ET.Element("volume")
     ET.SubElement(vol, "name").text = volume_name(vm_name, index, disk)
     ET.SubElement(vol, "capacity", unit="GiB").text = str(disk.size_gb)
@@ -34,12 +33,6 @@ def build_volume_xml(vm_name: str, index: int, disk: DiskSpec, backing: str | No
         ET.SubElement(vol, "allocation").text = "0"
         target = ET.SubElement(vol, "target")
         ET.SubElement(target, "format", type="qcow2")
-        if backing:
-            store = ET.SubElement(vol, "backingStore")
-            ET.SubElement(store, "path").text = backing
-            ET.SubElement(store, "format", type="qcow2")
-    elif backing:
-        raise ValueError("linked clones need qcow2 disks (a folder, thin disk or NFS pool)")
     return ET.tostring(vol, encoding="unicode")
 
 
@@ -102,16 +95,9 @@ def set_template_flag(meta: ET.Element, template: bool) -> None:
         ET.SubElement(meta, f"{{{META_NS}}}template")
 
 
-def template_facts(root: ET.Element) -> tuple[bool, str]:
-    """(is a template, uuid of the template a linked clone is based on) from domain XML."""
-    meta = root.find(f"metadata/{{{META_NS}}}vm")
-    if meta is None:
-        return False, ""
-    linked = meta.find(f"{{{META_NS}}}linked")
-    return (
-        meta.find(f"{{{META_NS}}}template") is not None,
-        linked.get("template", "") if linked is not None else "",
-    )
+def is_template(root: ET.Element) -> bool:
+    """Whether the domain XML marks this VM as a template."""
+    return root.find(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}template") is not None
 
 
 def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
@@ -129,8 +115,6 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     if spec.os_type:
         ET.SubElement(meta, f"{{{META_NS}}}os").text = spec.os_type
     set_template_flag(meta, spec.template)
-    if spec.linked_to:
-        ET.SubElement(meta, f"{{{META_NS}}}linked", template=spec.linked_to)
     ET.SubElement(dom, "memory", unit="MiB").text = str(spec.memory_mb)
     ET.SubElement(dom, "vcpu", placement="static").text = str(spec.vcpus)
 

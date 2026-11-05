@@ -35,7 +35,6 @@ def spec_from_json(data: dict) -> VMSpec:
         boot=data.get("boot"),
         autostart=data.get("autostart", False),
         template=data.get("template", False),
-        linked_to=data.get("linked_to", ""),
     )
 
 
@@ -79,7 +78,6 @@ def spec_to_json(spec: VMSpec) -> dict:
         "boot": spec.boot,
         "autostart": spec.autostart,
         "template": spec.template,
-        "linked_to": spec.linked_to,
     }
 
 

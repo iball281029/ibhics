@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
@@ -102,7 +102,6 @@ class VMOut(BaseModel):
     autostart: bool = False
     restart_needed: bool = False
     template: bool = False
-    linked_to: str = ""  # uuid of the template a linked clone's disks are based on
     node: str | None = None
 
     @classmethod
@@ -129,7 +128,6 @@ class VMOut(BaseModel):
             autostart=spec.autostart,
             restart_needed=info.restart_needed,
             template=spec.template,
-            linked_to=spec.linked_to,
         )
 
 
@@ -311,16 +309,23 @@ class CustomizationIn(BaseModel):
 
 class CloneIn(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
-    linked: bool = False
     pool: str | None = None
     description: str | None = Field(default=None, max_length=1024)
     customization: CustomizationIn | None = None
     power_on: bool = False  # manager only: start the VM once it is deployed
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_linked_clone(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "linked" in data:
+            if TypeAdapter(bool).validate_python(data["linked"]):
+                raise ValueError("linked clones are not supported; VMs are deployed as full copies")
+            data = {key: value for key, value in data.items() if key != "linked"}
+        return data
+
     def to_clone(self) -> CloneSpec:
         return CloneSpec(
             name=self.name,
-            linked=self.linked,
             pool=self.pool or None,
             description=self.description,
             customization=self.customization.to_customization() if self.customization else None,
@@ -333,7 +338,6 @@ class DeployOut(BaseModel):
     source: str  # the template's (or VM's) name
     source_uuid: str
     node: str
-    linked: bool
     customized: bool
     power_on: bool
     state: str
