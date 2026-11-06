@@ -88,17 +88,27 @@ echo ">> The big disk is untouched; ibHiCS went on the small one"
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
 sudo modprobe nbd max_part=16
 sudo qemu-nbd -c /dev/nbd0 disk.qcow2
-trap 'sudo umount -q mnt/var/lib/ibhics 2>/dev/null; sudo umount -q mnt 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
+# The test VM's volume group is called ibhics, like the host's when the test runs on an
+# ibHiCS node: find it by UUID and give it a name of its own while it is mounted here.
+TVG=ibhicstest
+put_back() {
+    sudo vgchange -q -an "$TVG" >/dev/null 2>&1
+    [ -n "${VG_UUID:-}" ] && sudo vgrename -q "$VG_UUID" ibhics >/dev/null 2>&1
+}
+trap 'sudo umount -q mnt/var/lib/ibhics 2>/dev/null; sudo umount -q mnt 2>/dev/null; put_back; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
 sleep 2
-sudo vgscan -q >/dev/null
-sudo vgchange -q -ay ibhics
+sudo pvscan -q --cache >/dev/null 2>&1 || true
+VG_UUID=$(sudo pvs --noheadings -o pv_name,vg_uuid 2>/dev/null | awk '$1 ~ /^\/dev\/nbd0/ {print $2; exit}')
+[ -n "$VG_UUID" ] || { echo "!! no LVM volume group on the installed disk"; exit 1; }
+sudo vgrename -q "$VG_UUID" "$TVG"
+sudo vgchange -q -ay "$TVG"
 mkdir -p mnt
-sudo mount /dev/ibhics/root mnt
+sudo mount "/dev/$TVG/root" mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
 test -f mnt/usr/share/virtio-win/viostor/2k19/amd64/viostor.sys \
     || { echo "!! virtio-win drivers are missing: Windows imports would fail"; exit 1; }
 # /var/lib/ibhics is its own volume (data), not part of root.
-sudo mount /dev/ibhics/data mnt/var/lib/ibhics
+sudo mount "/dev/$TVG/data" mnt/var/lib/ibhics
 test -s mnt/var/lib/ibhics/tools/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
 sudo umount mnt/var/lib/ibhics
 for exe in rhsrvany.exe pnp_wait.exe; do
@@ -123,7 +133,8 @@ EOF
 sudo chmod 600 mnt/etc/ibhics/answers.conf
 cat mnt/etc/ibhics/version
 sudo umount mnt
-sudo vgchange -q -an ibhics
+put_back
+VG_UUID=
 sudo qemu-nbd -d /dev/nbd0
 trap - EXIT
 

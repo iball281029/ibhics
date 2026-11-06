@@ -6,7 +6,7 @@
 #   installer/build-iso.sh --repo DIR           # reuse a package repo from build-repo.sh
 #   installer/build-iso.sh --no-virtio-win      # leave out the Windows virtio drivers
 #
-# Needs: xorriso, python3 with pip, curl, and docker (for the package repository). The
+# Needs: xorriso, bsdtar (libarchive-tools), python3 with pip, curl, and docker (for the package repository). The
 # result keeps Debian's BIOS and UEFI boot setup and adds the ibHiCS boot menu, the
 # unattended-install answers, every Debian package a node needs (a local apt repository)
 # and ibHiCS with its Python dependencies as wheels, so installing needs no network.
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-for tool in xorriso python3 curl; do
+for tool in xorriso bsdtar python3 curl; do
     command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }
 done
 
