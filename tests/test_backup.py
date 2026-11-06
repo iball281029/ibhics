@@ -19,7 +19,7 @@ from ibhics.backup import (
 )
 from ibhics.backup.store import open_store
 from ibhics.cluster import Cluster
-from ibhics.hypervisor import DiskSpec, VMInfo, VMSpec, VMState
+from ibhics.hypervisor import DiskSpec, InvalidState, VMInfo, VMSpec, VMState
 from ibhics.hypervisor.fake import FAKE_BYTES_PER_GB, FakeDriver
 from ibhics.hypervisor.serialize import spec_to_json
 from ibhics.manager import create_app
@@ -622,3 +622,23 @@ def test_exclusive_target_blocks_listing_while_a_job_runs(api):
     shared = backups.target("local")
     with backups._using(shared, wait=False), backups._using(shared, wait=False):
         pass  # directories and NAS shares are never locked
+
+
+def test_repository_in_a_storage_pool(api, monkeypatch):
+    client, *_ = api
+    monkeypatch.setattr(FakeDriver, "pool_path", lambda _self, _name: "/srv/default")
+    body = {"name": "repo1", "type": "local", "pool": "default", "quota_gb": 5}
+    resp = client.post("/api/v1/backup/targets", json=body)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source"] == "default · 5 GB reserved"
+    assert resp.json()["settings"]["path"] == "/srv/default/backup/repo1"
+    too_big = dict(body, name="repo2", quota_gb=10**6)
+    assert client.post("/api/v1/backup/targets", json=too_big).status_code >= 400
+    nowhere = dict(body, name="repo3", pool="nope")
+    assert client.post("/api/v1/backup/targets", json=nowhere).status_code >= 400
+    from ibhics.backup import service
+
+    monkeypatch.setattr(service, "dir_bytes", lambda _root: 5 * 1024**3)
+    target = BackupTarget(name="r", type=TargetType.LOCAL, path="/tmp", quota_gb=5)
+    with pytest.raises(InvalidState, match="full"):
+        service.check_quota(target)

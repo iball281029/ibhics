@@ -143,6 +143,38 @@ class NetworkIn(BaseModel):
         return NetworkSpec(name=self.name, vlan=self.vlan)
 
 
+class RouterIn(BaseModel):
+    gateway: str = Field(description="router address with prefix, e.g. 192.168.50.1/24")
+    nat: bool = True
+    dhcp: bool = True
+    dhcp_start: str = ""
+    dhcp_end: str = ""
+    dns: str = ""
+
+
+class FirewallRuleIn(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    action: str = Field(default="deny", pattern="^(allow|deny)$")
+    src: str = "any"
+    dst: str = "any"
+    proto: str = Field(default="any", pattern="^(any|tcp|udp|icmp)$")
+    port: int | None = Field(default=None, ge=1, le=65535)
+    enabled: bool = True
+
+
+class EdgeOut(BaseModel):
+    routers: list[dict]
+    rules: list[dict]
+    router_node: str
+
+
+class NetTestIn(BaseModel):
+    kind: str = Field(default="ping", pattern="^(ping|trace)$")
+    target: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
+    network: str = ""
+    node: str = ""
+
+
 class HostIfaceIn(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$")
     kind: str = "ethernet"
@@ -495,13 +527,17 @@ class BackupTargetIn(BaseModel):
     access_key: str | None = None
     secret_key: str | None = None
     prefix: str = "ibhics"
+    pool: str | None = Field(
+        default=None, pattern=NAME_PATTERN, description="local: keep backups in this storage pool"
+    )
+    quota_gb: int | None = Field(default=None, ge=1, description="local: space set aside (GB)")
 
     def to_target(self) -> BackupTarget:
         return BackupTarget(**self.model_dump())
 
 
 TARGET_FIELDS = {
-    TargetType.LOCAL: ("path",),
+    TargetType.LOCAL: ("path", "pool", "quota_gb"),
     TargetType.NFS: ("host", "export", "prefix"),
     TargetType.SMB: ("host", "share", "username", "password", "domain", "prefix"),
     TargetType.USB: ("device", "prefix"),
@@ -727,6 +763,17 @@ class UploadOut(BaseModel):
     size_bytes: int
 
 
+class SourceCheckOut(BaseModel):
+    step: str
+    ok: bool
+    detail: str
+    hint: str
+
+
+class SourceTestOut(BaseModel):
+    checks: list[SourceCheckOut]
+
+
 class SourceOut(BaseModel):
     name: str
     type: str
@@ -766,6 +813,7 @@ class ImportRequest(BaseModel):
 
 
 class ImportJobOut(BaseModel):
+    pool: str = "default"
     id: str
     source: str
     vm: str

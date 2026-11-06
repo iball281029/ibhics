@@ -384,6 +384,25 @@ class FakeDriver(HypervisorDriver):
             self._networks[spec.name] = info
             return copy.deepcopy(info)
 
+    def apply_edge(self, config: dict, router: bool) -> None:
+        from .edge import EdgeConfig
+
+        cfg = EdgeConfig.from_dict(config)
+        names = {n.name for n in self.list_networks()}
+        cfg.validate(names)
+        self.edge = (cfg.to_dict(), router)
+
+    def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
+        from .edge import net_test
+
+        def run(cmd: list[str]) -> tuple[int, str]:
+            return 0, f"(fake) {' '.join(cmd)}\n4 packets transmitted, 4 received, 0% packet loss"
+
+        source = ""
+        if network:
+            source = next((n.bridge for n in self.list_networks() if n.name == network), "")
+        return net_test(kind, target, run, source)
+
     def delete_network(self, name: str) -> None:
         if name == "default":
             raise InvalidState("the default network is the LAN itself and stays")

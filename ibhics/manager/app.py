@@ -10,17 +10,23 @@ from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, WebSocket, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import RELEASE_NAME, __version__, console
+from ..backup.targets import BackupTarget, TargetType
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNotFound, VMState
+from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
 from . import datastore
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .deploys import Deploy, DeployManager
+from .edge import EdgeManager
 from .errors import install_cluster_errors, install_driver_errors
 from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
@@ -35,6 +41,8 @@ from .schemas import (
     CloneIn,
     ClusterOut,
     DeployOut,
+    EdgeOut,
+    FirewallRuleIn,
     FolderIn,
     GroupMembersIn,
     GuestOut,
@@ -51,6 +59,7 @@ from .schemas import (
     MemberOut,
     MigrateRequest,
     MigrationOut,
+    NetTestIn,
     NetworkIn,
     NetworkOut,
     NodeJoin,
@@ -64,10 +73,12 @@ from .schemas import (
     RecycleBinOut,
     RecycledOut,
     RestoreRequest,
+    RouterIn,
     SnapshotIn,
     SnapshotOut,
     SourceIn,
     SourceOut,
+    SourceTestOut,
     SourceVMOut,
     StopRequest,
     TemplateRequest,
@@ -145,6 +156,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
     ("POST", f"{API}/migrate/sources"),
+    ("POST", f"{API}/migrate/sources/test"),  # probes any host: admin, like adding one
     ("POST", f"{API}/networks"),
     ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
@@ -191,6 +203,7 @@ def create_app(
     groups: VMGroups | None = None,
     deploys: DeployManager | None = None,
     recycle_days: int = 0,
+    edge_state: Path | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -215,6 +228,7 @@ def create_app(
     deploys = deploys or DeployManager(cluster)
     deploys.on_done = deployed
     recycle = RecycleBin(cluster, recycle_days, forget=groups.forget)
+    edge = EdgeManager(cluster, edge_state)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -522,6 +536,32 @@ def create_app(
         for member in cluster.compute_members():
             if any(n.name == name for n in member.driver.list_networks()):
                 member.driver.delete_network(name)
+
+    # Virtual router and distributed firewall (v0.7): one config for the cluster.
+
+    @api.get("/edge", response_model=EdgeOut)
+    def get_edge() -> EdgeOut:
+        return EdgeOut(**edge.view())
+
+    @api.put("/edge/routers/{network}", response_model=EdgeOut)
+    def set_router(network: str, body: RouterIn) -> EdgeOut:
+        return EdgeOut(**edge.set_router(RouterSpec(network=network, **body.model_dump())))
+
+    @api.delete("/edge/routers/{network}", response_model=EdgeOut)
+    def remove_router(network: str) -> EdgeOut:
+        return EdgeOut(**edge.remove_router(network))
+
+    @api.put("/edge/rules", response_model=EdgeOut)
+    def set_rules(body: list[FirewallRuleIn]) -> EdgeOut:
+        return EdgeOut(**edge.set_rules([FirewallRule(**r.model_dump()) for r in body]))
+
+    @api.put("/edge/router-node", response_model=EdgeOut)
+    def set_router_node(body: dict) -> EdgeOut:
+        return EdgeOut(**edge.set_router_node(str(body.get("node", ""))))
+
+    @api.post("/edge/test")
+    def net_test(body: NetTestIn) -> dict:
+        return edge.test(body.kind, body.target, body.network, body.node)
 
     # Storage pools live on each node. Shared storage (NFS, a shared LUN) is added
     # to every node that should reach it, under the same pool name.
@@ -852,6 +892,23 @@ def create_app(
         source = imports.add_source(body.to_source())
         return SourceOut(name=source.name, type=source.type, settings=source.masked())
 
+    @app.exception_handler(RequestValidationError)
+    async def source_test_validation(request: Request, exc: RequestValidationError):
+        if request.url.path.startswith(f"{API}/migrate/sources/") and request.url.path.endswith(
+            "/test"
+        ):
+            # Pydantic's default errors include the rejected password or entire input body.
+            return JSONResponse(status_code=422, content={"detail": "Invalid source test input"})
+        return await request_validation_exception_handler(request, exc)
+
+    @api.post("/migrate/sources/test", response_model=SourceTestOut)
+    def test_unsaved_source(body: SourceIn) -> dict:
+        return imports.test_source(body.to_source())
+
+    @api.post("/migrate/sources/{name}/test", response_model=SourceTestOut)
+    def test_saved_source(name: str) -> dict:
+        return imports.test_source(name)
+
     @api.delete("/migrate/sources/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_source(name: str) -> None:
         cluster.require_quorum()
@@ -962,7 +1019,18 @@ def create_app(
         return ImportJobOut(**job.__dict__)
 
     @api.get("/migrate/jobs/{job_id}/log")
-    def import_log(job_id: str) -> dict:
+    def import_log(job_id: str, format: str | None = None, download: bool = False):
+        if download:
+            # The job ID is generated locally and contains only digits.
+            return Response(
+                imports.job_log(job_id),
+                media_type="text/plain",
+                headers={"Content-Disposition": f'attachment; filename="import-{job_id}.log"'},
+            )
+        if format == "summary":
+            return imports.job_log_summary(job_id)
+        if format is not None:
+            raise HTTPException(422, "format must be summary")
         return {"log": imports.job_log(job_id)}
 
     @api.get("/migrate/jobs", response_model=list[ImportJobOut])
@@ -1022,7 +1090,34 @@ def create_app(
     )
     def add_target(body: BackupTargetIn) -> BackupTargetOut:
         cluster.require_quorum()
-        return BackupTargetOut.from_target(backups.add_target(body.to_target()))
+        target = body.to_target()
+        if target.pool:
+            repository_in_pool(target)
+        return BackupTargetOut.from_target(backups.add_target(target))
+
+    def repository_in_pool(target: BackupTarget) -> None:
+        """A backup repository carved out of a storage pool: a folder in the pool, with
+        the reserved size checked against the pool's free space."""
+        if target.type != TargetType.LOCAL:
+            raise InvalidState("only a local repository can live in a storage pool")
+        for member in cluster.compute_members():
+            try:
+                pool = next((p for p in member.driver.list_pools() if p.name == target.pool), None)
+                root = pool and member.driver.pool_path(pool.name)
+            except NodeUnavailable:
+                continue
+            if not pool:
+                continue
+            if not root:
+                raise InvalidState(f"pool {target.pool} has no folder to keep backups in")
+            if target.quota_gb and target.quota_gb > pool.available_gb:
+                raise InvalidState(
+                    f"pool {target.pool} has {pool.available_gb:.0f} GB free, "
+                    f"less than the {target.quota_gb} GB asked for"
+                )
+            target.path = f"{root}/backup/{target.name}"
+            return
+        raise InvalidState(f"no storage pool named {target.pool}")
 
     @api.delete("/backup/targets/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_target(name: str) -> None:

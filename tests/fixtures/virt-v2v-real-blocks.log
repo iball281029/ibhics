@@ -1,0 +1,43 @@
+[   0.0] Setting up the source: -i vmx ssh://root@esxi.example/vmfs/volumes/datastore/Zabbix/Zabbix.vmx
+[   4.4] Opening the source
+[  20.4] Inspecting the source
+[  30.3] Checking for sufficient free disk space in the guest
+[  30.3] Converting AlmaLinux release 8.8 (Sapphire Caracal) (redhat-based8.8) to run on KVM
+virt-v2v: warning: could not determine a way to update the configuration of Grub2
+virt-v2v: The QEMU Guest Agent will be installed for this guest at first boot.
+virt-v2v: This guest has virtio drivers installed.
+[  84.8] Setting a random seed
+[  84.9] SELinux relabelling
+[  85.2] Mapping filesystem data to avoid copying unused and blank areas
+[  94.1] Closing the overlay
+[  94.2] Assigning disks to buses
+[  94.2] Checking if the guest needs BIOS or UEFI to boot
+[  94.2] Setting up the destination: -o disk -os /var/lib/ibhics/pools/hdd01/.ibhics-scratch/tmpqbm0zfd5/import-Zabbix-wrpu1dtt
+[  95.5] Copying disk 1/1
+▝   0% [----------------------------------------]
+▐   0% [----------------------------------------]
+▗   0% [*---------------------------------------]
+▃   0% [*---------------------------------------]
+▖   0% [*---------------------------------------]
+▍   0% [*---------------------------------------]
+▘   0% [*---------------------------------------]
+▀   0% [*---------------------------------------]
+▝   0% [*---------------------------------------]
+▐   0% [*---------------------------------------]
+▗   0% [*---------------------------------------]
+▃   0% [*---------------------------------------]
+▖   0% [*---------------------------------------]
+▍   0% [*---------------------------------------]
+▘   0% [*---------------------------------------]
+▀   0% [*---------------------------------------]
+▝   0% [*---------------------------------------]
+▐   0% [*---------------------------------------]
+▗   0% [*---------------------------------------]
+▃   0% [*---------------------------------------]
+▖   0% [*---------------------------------------]
+▍   0% [*---------------------------------------]
+▘   0% [*---------------------------------------]
+▀   0% [*---------------------------------------]
+[ 165.0] Creating output metadata
+virt-v2v: warning: get_osinfo_id: unknown guest operating system: linux redhat-based 8.8 x86_64 (AlmaLinux release 8.8 (Sapphire Caracal))
+[ 165.0] Finishing off

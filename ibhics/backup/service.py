@@ -9,7 +9,7 @@ import threading
 from collections import defaultdict
 from pathlib import Path
 
-from ..hypervisor import HypervisorDriver, VMInfo
+from ..hypervisor import HypervisorDriver, InvalidState, VMInfo
 from ..hypervisor.serialize import spec_from_json, spec_to_json
 from .repository import CHUNK_SIZE, BackupInfo, Repository, RepositoryBusy
 from .store import Mounter, S3Store, open_store
@@ -44,6 +44,7 @@ class NodeBackup:
 
     def backup(self, uuid: str, target: BackupTarget) -> BackupInfo:
         vm = self._driver.get_vm(uuid)
+        check_quota(target)
         with self._locks[target.name], self._open(target) as store:
             with self._driver.export_disks(uuid) as images:
                 repo = Repository(store, self._chunk_size)
@@ -108,3 +109,20 @@ def _gc(repo: Repository) -> int:
         return repo.gc()
     except RepositoryBusy:
         return 0  # another node is writing; its chunks are freed by a later run
+
+
+def dir_bytes(root: Path) -> int:
+    return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+
+
+def check_quota(target: BackupTarget) -> None:
+    """A repository with a reserved size takes no new backup once that space is used."""
+    if not target.quota_gb or not target.path:
+        return
+    root = Path(target.path)
+    used = dir_bytes(root) if root.is_dir() else 0
+    if used >= target.quota_gb * 1024**3:
+        raise InvalidState(
+            f"backup repository {target.name} is full ({used / 1024**3:.1f} of "
+            f"{target.quota_gb} GB): delete old backups or give it more space"
+        )

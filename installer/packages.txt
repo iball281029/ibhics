@@ -41,3 +41,7 @@ pciutils
 usbutils
 ethtool
 lsof
+dnsmasq-base
+nftables
+iputils-ping
+iputils-tracepath

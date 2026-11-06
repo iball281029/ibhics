@@ -222,6 +222,14 @@ class RemoteDriver(HypervisorDriver):
     def delete_network(self, name: str) -> None:
         self._ok(self._client.request("DELETE", f"/networks/{name}"))
 
+    def apply_edge(self, config: dict, router: bool) -> None:
+        self._ok(self._client.request("PUT", "/edge", json={"config": config, "router": router}))
+
+    def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
+        body = {"kind": kind, "target": target, "network": network}
+        data = self._ok(self._client.request("POST", "/net-test", json=body, timeout=90)).json()
+        return data["ok"], data["output"]
+
     def host_system(self) -> RemoteHost:
         return RemoteHost(self._client)
 

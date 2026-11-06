@@ -132,6 +132,10 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 
 function show() {
   const page = currentPage();
+  if (page !== "network" && ntopo.edit) {
+    if (ntopo.edit.saving) { location.hash = "network"; toast("Wait for topology saving to finish.", true); return; }
+    topoEndEdit(); // Leaving Network discards only the local draft.
+  }
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
   const section = { vm: "compute", node: "nodes", recycle: "compute" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
@@ -325,6 +329,7 @@ const loaders = {
   },
   deploys: async () => { state.deploys = await api("/deploys"); },
   recycle: async () => { state.recycle = await api("/recycle-bin"); },
+  edge: async () => { state.edge = await api("/edge"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
   stats: async () => { state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s])); },
   groups: async () => { state.groups = await api("/vm-groups"); },
@@ -360,8 +365,8 @@ function allTasks() {
       state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
     })),
     ...state.deploys.map((d) => ({
-      kind: "Deploy", title: d.vm, sub: `${d.linked ? "linked clone" : "full clone"} of ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
-      state: d.state, step: d.linked ? "Creating the disks" : "Copying the disks", percent: null, created: d.created, finished: d.finished,
+      kind: "Deploy VM", title: d.vm, sub: `from ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
+      state: d.state, step: "Copying the disks", percent: null, created: d.created, finished: d.finished,
       error: d.error, id: d.id, result: d.result ? `VM ${d.result}${d.power_on ? ", powered on" : ""}` : "",
     })),
   ];
@@ -427,11 +432,13 @@ async function renderTaskDetail(t) {
     ["Duration", esc(duration(t))], ["Result", esc(t.result || "")], ["Task ID", `<span class="mono">${esc(t.id)}</span>`]].filter(([, v]) => v);
   box.innerHTML = `<h3>${esc(t.kind)} · ${esc(t.title)}</h3><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${t.error ? `<p class="wiz-label">Error</p><pre class="task-err">${esc(t.error)}</pre>` : ""}
-    ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><pre class="task-log" id="task-log">Loading…</pre>` : ""}`;
+    ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><div class="task-log import-log-mini" id="task-log">Loading…</div>` : ""}`;
   if (t.log) {
-    const { log } = await api(`/migrate/jobs/${enc(t.log)}/log`).catch((err) => ({ log: err.message }));
-    const pre = $("#task-log");
-    if (pre) { pre.textContent = (log || "No output yet.").split("\n").slice(-40).join("\n"); pre.scrollTop = pre.scrollHeight; }
+    const panel = $("#task-log");
+    try {
+      const data = await api(`/migrate/jobs/${enc(t.log)}/log?format=summary`);
+      if (panel.isConnected) panel.innerHTML = importTimeline(data, true);
+    } catch (err) { if (panel.isConnected) panel.textContent = err.message; }
   }
 }
 async function renderOps() {
@@ -454,22 +461,84 @@ async function renderOps() {
   $("#task-search").addEventListener("input", () => renderTaskPage());
 }
 
-let logTimer = null;
-async function showLog(id, title) {
-  $("#log-title").textContent = `Import log: ${title}`;
-  const dlg = $("#log-dialog");
-  const pull = async () => {
-    const { log } = await api(`/migrate/jobs/${enc(id)}/log`).catch((err) => ({ log: err.message }));
-    const pre = $("#log-text");
-    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
-    pre.textContent = log || "No output yet.";
-    if (atEnd) pre.scrollTop = pre.scrollHeight;
-  };
-  await pull();
-  dlg.showModal();
-  clearInterval(logTimer);
-  logTimer = setInterval(() => (dlg.open ? pull() : clearInterval(logTimer)), 3000);
+function logTime(seconds) {
+  const n = Math.max(0, Math.floor(seconds || 0));
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
 }
+function importTimeline(data, compact = false) {
+  const steps = data.steps || [], job = data.job;
+  const active = job.state === "running" || job.state === "queued";
+  const shown = compact ? steps.slice(-5) : steps;
+  const items = shown.map((step, i) => {
+    const index = steps.length - shown.length + i, next = steps[index + 1];
+    const current = !next && active;
+    const finished = !!next || job.state === "done";
+    const elapsed = next ? next.t - step.t : Math.max(0, data.duration - step.t);
+    const progress = current && step.kind === "copy" && data.progress?.step === step.text ? data.progress.percent : null;
+    return `<li class="${current ? "current" : ""}"><span class="mono">${logTime(step.t)}</span>
+      <span>${finished ? "✓ " : (job.state === "failed" && !next ? "✕ " : "")}${esc(step.text)}
+      <small class="muted"> · ${logTime(elapsed)}${current ? " elapsed" : ""}</small>
+      ${current && step.kind === "copy" ? `<div class="bar${progress == null ? " busy" : ""}" role="progressbar" aria-label="Disk copy" aria-valuemin="0" aria-valuemax="100" ${progress == null ? "" : `aria-valuenow="${progress}"`}><i style="width:${progress ?? 30}%"></i></div><small>${progress == null ? "Waiting for copy progress" : `${progress}%`}</small>` : ""}</span></li>`;
+  }).join("");
+  return items ? `<ol class="import-timeline">${items}</ol>` : `<p class="hint">${esc(job.step || "No conversion output yet.")}</p>`;
+}
+function importLogSummary(data) {
+  const j = data.job;
+  const rows = [["VM", `${j.vm} → ${j.name}`], ["Source", j.source], ["Node / pool", `${j.node} / ${j.pool}`],
+    ["Status", JOB_STATE[j.state] || j.state], ["Started", when(j.created)], ["Elapsed", logTime(data.duration)],
+    ["Finished", j.finished ? when(j.finished) : "—"], ["Detected OS", data.os || "—"], ["Disks", data.disks || "—"]];
+  const messages = (key, title) => data[key]?.length ? `<section class="import-${key}"><h4>${title}</h4><ul>${data[key].map((v) => `<li>${esc(v)}</li>`).join("")}</ul></section>` : "";
+  return `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+    <h4>Timeline</h4>${importTimeline(data)}${messages("warnings", "Warnings")}${messages("errors", "Errors")}${messages("notes", "Notes")}`;
+}
+let logTimer = null, logSession = 0;
+async function showLog(id, title) {
+  const session = ++logSession;
+  clearTimeout(logTimer);
+  $("#log-title").textContent = `Import log: ${title}`;
+  const dlg = $("#log-dialog"), body = $("#import-log-body"), pre = $("#log-text");
+  $("#log-summary").textContent = "Loading…";
+  $("#log-fetch-error").textContent = "";
+  $("#log-raw").open = false;
+  $("#log-all").checked = false;
+  pre.textContent = "";
+  $("#log-download").href = `/api/v1/migrate/jobs/${enc(id)}/log?download=1`;
+  let latest = null, full = null;
+  const setRaw = async () => {
+    if (!latest) return;
+    try {
+      if ($("#log-all").checked && full == null) full = (await api(`/migrate/jobs/${enc(id)}/log`)).log;
+      if (session !== logSession || !dlg.open) return;
+      const top = pre.scrollTop;
+      pre.textContent = ($("#log-all").checked ? full : latest.raw) || "No output yet.";
+      pre.scrollTop = top;
+    } catch (err) { if (session === logSession) $("#log-fetch-error").textContent = err.message; }
+  };
+  $("#log-all").onchange = setRaw;
+  $("#log-raw").ontoggle = () => { if ($("#log-raw").open) setRaw(); };
+  const pull = async () => {
+    try {
+      const data = await api(`/migrate/jobs/${enc(id)}/log?format=summary`);
+      if (session !== logSession || !dlg.open) return;
+      latest = data; full = null;
+      const top = body.scrollTop;
+      const html = importLogSummary(data);
+      if ($("#log-summary").innerHTML !== html) $("#log-summary").innerHTML = html;
+      if ($("#log-raw").open) await setRaw();
+      body.scrollTop = top;
+      $("#log-fetch-error").textContent = "";
+      if (["running", "queued"].includes(data.job.state)) logTimer = setTimeout(pull, 3000);
+    } catch (err) {
+      if (session !== logSession || !dlg.open) return;
+      $("#log-fetch-error").textContent = err.message;
+      logTimer = setTimeout(pull, 3000);
+    }
+  };
+  if (!dlg.open) dlg.showModal();
+  body.scrollTop = 0;
+  pull();
+}
+$("#log-dialog").addEventListener("close", () => { ++logSession; clearTimeout(logTimer); });
 document.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-task-log]");
   if (b) showLog(b.dataset.taskLog, b.dataset.taskTitle);
@@ -484,13 +553,14 @@ setInterval(async () => {
 }, 3000);
 
 async function refresh(page, auto = false) {
+  if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
-  if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
+  if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -526,7 +596,7 @@ function activities() {
     ...state.jobs.map((j) => ({ kind: j.kind === "backup" ? "Backup" : "Restore", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
     ...state.moves.map((m) => ({ kind: "Live migration", icon: "i-migrate", what: m.vm, where: `${m.source} → ${m.target || "?"}`, state: m.state, created: m.created, error: m.error })),
     ...state.imports.map((j) => ({ kind: "Import", icon: "i-compute", what: j.name, where: j.source, state: j.state, created: j.created, error: j.error })),
-    ...state.deploys.map((d) => ({ kind: "Deploy", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
+    ...state.deploys.map((d) => ({ kind: "Deploy VM", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
   ];
   return items.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
 }
@@ -578,8 +648,6 @@ function renderHome() {
     topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "nodes"),
     topo("t-storage", state.pools.length, "Storage pools", `${storagePct}% used`, "storage", true),
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
-    topo("t-backup", state.targets.length, "Backup targets", `${state.policies.length} schedule${state.policies.length === 1 ? "" : "s"}`, "backup"),
-    topo("t-users", state.me ? (state.users.length || 1) : "–", "Users", state.me ? esc(state.me.role) : "sign-in off", "system"),
   ].join("");
 
   const meter = (name, p, detail) => `<div class="meter"><div class="top"><b>${esc(name)}</b><span>${detail}</span></div>${segments(p)}</div>`;
@@ -641,12 +709,14 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
     ${vm.state === "running"
       ? `<button class="small${compact ? " sq" : ""}" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Open console">${compact ? `<svg><use href="#i-compute"/></svg>` : "Console"}</button>`
       : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="Power on">${compact ? `<svg><use href="#i-power"/></svg>` : "Power on"}</button>`}
+    ${compact || vm.template ? "" : `<button class="small" data-vm="snapshot" data-id="${vm.uuid}" title="Take a snapshot">Snapshot</button>`}
     <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
+      <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
@@ -1072,6 +1142,7 @@ async function vmAction(e) {
     return;
   }
   if (act === "edit") { openEdit(id).catch(fail); return; }
+  if (act === "snapshot") { openSnapshot(id); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
@@ -1089,6 +1160,7 @@ async function vmAction(e) {
     if (act === "poweroff") await post(`/vms/${id}/stop`, { force: true });
     if (act === "restart") await post(`/vms/${id}/restart`);
     if (act === "tools") {
+      if (!canOperate()) return;
       await post(`/vms/${id}/guest-tools`);
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
     }
@@ -1114,11 +1186,8 @@ $("#vm-actions").addEventListener("click", vmAction);
 $("#vm-panel").addEventListener("click", vmAction);
 
 // ---------- templates ----------
-// VMware-style: a stopped VM becomes a template that cannot run; new VMs are deployed
-// from it as linked clones (overlays on its disks) or full copies, optionally customized.
-
-const linkedOf = (t) => state.vms.filter((v) => v.linked_to === t.uuid);
-const canLink = (t) => t.disks.length > 0 && t.disks.every((d) => d.backend === "file");
+// A stopped VM becomes a template that cannot run; deployed VMs get their own
+// copies of its disks and can optionally be customized.
 function renderTemplates() {
   const q = $("#tpl-search").value.trim().toLowerCase();
   const list = [...state.templates].sort((a, b) => a.name.localeCompare(b.name))
@@ -1126,7 +1195,7 @@ function renderTemplates() {
   $("#tpl-count").textContent = `${state.templates.length} template${state.templates.length === 1 ? "" : "s"}`;
   const busy = new Set(state.deploys.filter(isActive).map((j) => j.source_uuid));
   $("#tpl-grid").innerHTML = list.length ? list.map((t) => {
-    const clones = linkedOf(t), disk = t.disks.reduce((s, d) => s + d.size_gb, 0);
+    const disk = t.disks.reduce((s, d) => s + d.size_gb, 0);
     const win = /windows/i.test(t.os_type);
     return `<article class="tpl-card">
       <div class="tpl-top"><span class="tpl-icon ${win ? "win" : "lin"}"><svg><use href="#i-os-${win ? "win" : "linux"}"/></svg></span>
@@ -1140,7 +1209,6 @@ function renderTemplates() {
         <span><svg><use href="#i-nodes"/></svg>${esc(t.node || "")}</span>
       </div>
       <div class="tpl-foot">
-        <span class="muted">${clones.length ? `${clones.length} linked clone${clones.length === 1 ? "" : "s"}` : canLink(t) ? "Linked clones possible" : "Full clones only (block storage)"}</span>
         <span class="spacer"></span>
         ${canOperate() ? `<button class="primary small" data-tpl="deploy" data-id="${t.uuid}">Deploy VM</button>
         <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
@@ -1149,7 +1217,6 @@ function renderTemplates() {
           <button class="danger" data-tpl="delete" data-id="${t.uuid}" data-name="${esc(t.name)}">Delete</button>
         </div></details>` : ""}
       </div>
-      ${clones.length ? `<div class="tpl-clones">${clones.map((v) => `<a href="#vm/${v.uuid}">${esc(v.name)}</a>`).join("")}</div>` : ""}
     </article>`;
   }).join("") : `<div class="empty-card"><svg><use href="#i-template"/></svg><p>${state.templates.length ? "No template matches." : "No templates yet. In Virtual Machines, shut a VM down and choose <b>Convert to template</b> from its ⋯ menu."}</p></div>`;
 }
@@ -1189,29 +1256,20 @@ function openDeploy(uuid) {
     custom: isTpl ? (win ? "windows" : "linux") : "none",
   });
   const form = $("#deploy-form");
-  $("#deploy-title").textContent = isTpl ? "Deploy VM from template" : `Clone ${src.name}`;
+  $("#deploy-title").textContent = isTpl ? "Deploy VM from template" : "Clone VM";
+  form.querySelector('button[value="ok"]').textContent = isTpl ? "Deploy VM" : "Clone VM";
   $("#deploy-src").innerHTML = `<svg><use href="#i-${isTpl ? "template" : "compute"}"/></svg><div><b>${esc(src.name)}</b>
     <span class="vm-sub">${src.vcpus} vCPU · ${num(src.memory_mb / 1024)} GB · ${src.disks.length} disk${src.disks.length === 1 ? "" : "s"} · ${esc(src.node || "")}</span></div>`;
-  const linked = form.querySelector("input[value=linked]");
-  linked.disabled = !isTpl || !canLink(src);
-  linked.closest(".type-card").title = !isTpl ? "Linked clones are made from templates" : !canLink(src) ? "The template's disks are on block storage (LVM/iSCSI): only full clones" : "";
-  (linked.disabled ? form.querySelector("input[value=full]") : linked).checked = true;
   const pools = state.pools.filter((p) => p.node === src.node && p.active);
   form.elements.pool.innerHTML = `<option value="">Same pool as the ${isTpl ? "template" : "VM"}</option>`
     + pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} · ${num(p.available_gb)} GB free</option>`).join("");
-  syncDeploy();
   syncSwitch(form);
 }
-function syncDeploy() {
-  const form = $("#deploy-form");
-  $(".deploy-pool", form).hidden = form.elements.clone.value === "linked";
-}
-$("#deploy-form").addEventListener("change", (e) => { if (e.target.name === "clone") syncDeploy(); });
 handlers["deploy-dialog"] = async (f, ctx) => {
-  const linked = f.get("clone") === "linked", custom = f.get("custom");
-  const body = { name: f.get("name"), linked, power_on: f.get("power_on") === "on" };
+  const custom = f.get("custom");
+  const body = { name: f.get("name"), power_on: f.get("power_on") === "on" };
   if (f.get("description")) body.description = f.get("description");
-  if (!linked && f.get("pool")) body.pool = f.get("pool");
+  if (f.get("pool")) body.pool = f.get("pool");
   if (custom !== "none") {
     body.customization = {
       os: custom, hostname: f.get("hostname"), username: f.get("username"), password: f.get("password"),
@@ -1464,7 +1522,7 @@ handlers["vm-dialog"] = async (f) => {
 async function backupNow(id, name) {
   await load("targets");
   if (state.targets.length) { openDialog("backup-dialog", { id, name }); return; }
-  openDialog("target-dialog", { backupAfter: { id, name } }, { name: "local-backup", type: "local" });
+  openDialog("target-dialog", { backupAfter: { id, name } }, { name: "backup-repo", type: "pool" });
 }
 
 handlers["backup-dialog"] = async (f, ctx) => {
@@ -1500,39 +1558,268 @@ function netOptions(selected) {
 // (VLAN) in the middle, VMs at the bottom wired to the switches of their NICs. Click
 // anything to see and change it; drag a VM onto a switch to move its NIC there.
 
-const ntopo = { sel: null, nics: {}, drag: null };
+const ntopo = { sel: null, nics: {}, drag: null, edit: null };
+
+// Pure draft/planning helpers. Drafts never mutate the live API data.
+const topoClone = (value) => JSON.parse(JSON.stringify(value));
+const topoNics = (nics) => nics.map((n) => ({ network: n.network, ...(n.mac ? { mac: n.mac } : {}), model: n.model || "virtio" }));
+// Change exactly one adapter, preserving order and every other adapter's identity.
+function topoLinkNics(nics, index, network, mac) {
+  if (!Number.isInteger(index) || !nics[index] || (mac && nics[index].mac !== mac)) throw new Error("This adapter changed. Select its wire again.");
+  return topoNics(nics.flatMap((nic, i) => i !== index ? [{ ...nic }] : network === null ? [] : [{ ...nic, network }]));
+}
+const topoSameNics = (a, b) => JSON.stringify(topoNics(a)) === JSON.stringify(topoNics(b));
+function topoPlan(base, draft) {
+  const creates = draft.networks.filter((n) => !base.networks.some((b) => b.name === n.name))
+    .map((n) => ({ type: "create", name: n.name, body: { name: n.name, vlan: n.vlan } }));
+  const patches = draft.vms.filter((v) => {
+    const old = base.vms.find((b) => b.uuid === v.uuid);
+    return old && !topoSameNics(old.nics, v.nics);
+  }).map((v) => ({ type: "patch", uuid: v.uuid, name: v.name, body: { nics: topoNics(v.nics) } }));
+  const deletes = base.networks.filter((n) => !draft.networks.some((d) => d.name === n.name))
+    .map((n) => ({ type: "delete", name: n.name }));
+  return [...creates, ...patches, ...deletes];
+}
+function topoValidateSwitch(name, vlan, networks) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(name)) return "Use 1–63 letters, numbers, dots, underscores or hyphens; start with a letter or number.";
+  if (!Number.isInteger(vlan) || vlan < 2 || vlan > 4094) return "VLAN ID must be an integer from 2 to 4094.";
+  if (networks.some((n) => n.name === name)) return "A switch with this name already exists.";
+  if (networks.some((n) => vlanId(n) === vlan)) return "This VLAN ID is already in use.";
+  return "";
+}
+// Rebase only unfinished operations onto freshly loaded data after a partial save.
+function topoRebase(edit, live) {
+  const remaining = topoPlan(edit.base, edit), draft = topoClone(live), base = topoClone(live);
+  for (const step of remaining) {
+    if (step.type === "create") {
+      const actual = live.networks.find((n) => n.name === step.name);
+      // A lost response may still have created the switch. Only accept an exact match.
+      const wanted = edit.networks.find((n) => n.name === step.name);
+      if (actual && actual.vlan === step.body.vlan && (wanted.nodes || []).every((n) => (actual.nodes || []).includes(n))) continue;
+      base.networks = base.networks.filter((n) => n.name !== step.name);
+      draft.networks = draft.networks.filter((n) => n.name !== step.name);
+      draft.networks.push(topoClone(wanted));
+    }
+    if (step.type === "delete") draft.networks = draft.networks.filter((n) => n.name !== step.name);
+    if (step.type === "patch") {
+      const actual = live.vms.find((v) => v.uuid === step.uuid);
+      // New adapters receive their MACs from the server; compare their other fields.
+      const applied = actual && actual.nics.length === step.body.nics.length && step.body.nics.every((n, i) => {
+        const a = topoNics(actual.nics)[i];
+        return a.network === n.network && a.model === n.model && (!n.mac || a.mac === n.mac);
+      });
+      if (applied) continue;
+      const old = edit.base.vms.find((v) => v.uuid === step.uuid);
+      // Preserve the original baseline on conflicts, so retry cannot overwrite someone else's NICs.
+      base.vms = base.vms.filter((v) => v.uuid !== step.uuid);
+      base.vms.push(topoClone(old));
+      draft.vms = draft.vms.filter((v) => v.uuid !== step.uuid);
+      draft.vms.push({ ...topoClone(actual || old), nics: topoClone(step.body.nics) });
+    }
+  }
+  return { ...edit, base, ...draft };
+}
+function topoData() { return ntopo.edit || state; }
+function topoLayoutKey() {
+  const c = state.cluster || {};
+  return `ibhics-topology-layout:${location.host}:${c.id || c.name || (c.members || []).map((m) => m.name).sort().join(",")}`;
+}
+function topoReadLayout() {
+  try {
+    const data = JSON.parse(localStorage.getItem(topoLayoutKey()) || "{}");
+    return Object.fromEntries(Object.entries(data).filter(([key, p]) => /^(node|net|vm):/.test(key) && p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 85 && p.y >= 35));
+  } catch { return {}; }
+}
+function topoLayoutChanges(edit) {
+  return Object.keys({ ...edit.layoutBase, ...edit.layout }).filter((k) => JSON.stringify(edit.layoutBase[k]) !== JSON.stringify(edit.layout[k])).length;
+}
+function topoDirty() { return ntopo.edit && (topoPlan(ntopo.edit.base, ntopo.edit).length + topoLayoutChanges(ntopo.edit)); }
+function topoToolbar() {
+  const edit = ntopo.edit, busy = Boolean(edit?.saving);
+  $("#topo-edit").disabled = Boolean(ntopo.changing);
+  $("#topo-edit").hidden = Boolean(edit) || !canOperate();
+  $("#topo-edit-tools").hidden = !edit;
+  $("#topo-palette").hidden = !edit;
+  $(".ntopo").classList.toggle("editing", Boolean(edit));
+  $("#topo-pending").textContent = edit ? `${topoDirty()} pending change${topoDirty() === 1 ? "" : "s"}${busy ? " · Saving…" : ""}` : "";
+  for (const id of ["topo-edit-save", "topo-edit-cancel", "topo-auto-layout", "topo-add-switch"]) $("#" + id).disabled = busy;
+  $("#topo-add-switch").disabled = busy || !isAdmin();
+  $("#topo-refresh").disabled = Boolean(edit) || Boolean(ntopo.changing);
+  $('[data-open="net-dialog"]').disabled = Boolean(edit);
+  $('[data-tab="net-list"]').disabled = Boolean(edit);
+  $$("input, button", $("#topo-switch-form")).forEach((el) => { el.disabled = busy; });
+}
+function topoStartEdit() {
+  if (!canOperate() || ntopo.edit || ntopo.changing) return;
+  const base = topoClone({ networks: state.networks, vms: state.vms }), layout = topoReadLayout();
+  ntopo.edit = { base, ...topoClone(base), layout, layoutBase: topoClone(layout), saving: false, error: "", completed: [] };
+  ntopo.sel = null;
+  drawTopology();
+}
+function topoEndEdit() {
+  ntopo.edit = null; ntopo.drag = null; ntopo.sel = null;
+  $("#topo-switch-form").hidden = true;
+  topoToolbar();
+}
+async function topoChangeLink(link, network) {
+  if (!canOperate() || ntopo.edit?.saving || ntopo.changing || !link) return;
+  const data = topoData(), vm = data.vms.find((v) => v.uuid === link.uuid);
+  if (!vm) throw new Error("VM no longer exists. Refresh the topology.");
+  const nics = topoLinkNics(vm.nics, link.index, network, link.mac);
+  if (network !== null && !data.networks.some((n) => n.name === network)) throw new Error("Target switch no longer exists.");
+  if (topoSameNics(vm.nics, nics)) return;
+  if (ntopo.edit) {
+    vm.nics = nics;
+    if (network === null) { ntopo.link = null; ntopo.sel = null; }
+    drawTopology(); return;
+  }
+  const action = network === null ? `Disconnect NIC ${link.index + 1} from ${vm.name}? This removes the adapter.` : `Move ${vm.name} NIC ${link.index + 1} to ${network}?`;
+  if (!confirm(`${action}\nThe network changes immediately, including while the VM is running.`)) return;
+  ntopo.changing = true; topoToolbar(); topoPanel();
+  try {
+    await topoMove(vm.uuid, nics);
+    if (ntopo.link) delete ntopo.link.target;
+    if (network === null) { ntopo.link = null; ntopo.sel = null; }
+  } finally {
+    ntopo.changing = false; drawTopology();
+  }
+}
+function topoDisconnect() { return topoChangeLink(ntopo.link, null); }
+function topoRemoveSwitch(name) {
+  const edit = ntopo.edit;
+  if (!edit || edit.saving || !isAdmin() || name === "default") return;
+  if (edit.vms.some((v) => v.nics.some((n) => n.network === name))) { toast("Disconnect all VM adapters from this switch first.", true); return; }
+  edit.networks = edit.networks.filter((n) => n.name !== name);
+  delete edit.layout[`net:${name}`];
+  ntopo.sel = null; drawTopology();
+}
+function topoStepLabel(step) {
+  if (step.type === "create") return `Create switch ${step.name} (VLAN ${step.body.vlan})`;
+  if (step.type === "delete") return `Delete switch ${step.name}`;
+  return `Update ${step.name}: ${step.body.nics.length} NIC(s) [${step.body.nics.map((n) => n.network).join(", ")}]`;
+}
+async function topoSaveEdit() {
+  const edit = ntopo.edit;
+  if (!edit || edit.saving || !canOperate()) return;
+  const plan = topoPlan(edit.base, edit), layoutCount = topoLayoutChanges(edit);
+  if (!confirm(`Save topology changes?\n${plan.map(topoStepLabel).join("\n")}\n${layoutCount} layout change(s).\nNIC changes take effect immediately, including on running VMs.`)) return;
+  edit.saving = true; edit.error = ""; ntopo.drag = null; topoToolbar(); topoPanel();
+  const completed = edit.completed || (edit.completed = []);
+  let active = "Reload current topology";
+  try {
+    // Fail before writing if someone else changed an affected VM or switch.
+    await load("vms", "networks");
+    for (const step of plan) {
+      if (step.type !== "patch" && !isAdmin()) throw new Error("Only administrators can create or delete switches.");
+      if (step.type === "patch") {
+        const live = state.vms.find((v) => v.uuid === step.uuid), old = edit.base.vms.find((v) => v.uuid === step.uuid);
+        if (!live || !topoSameNics(live.nics, old.nics)) throw new Error(`${step.name}: adapters changed outside this draft. Cancel and edit the refreshed topology.`);
+        if (step.body.nics.some((n) => !edit.networks.some((net) => net.name === n.network))) throw new Error(`${step.name}: a target switch is missing.`);
+      }
+      if (step.type === "create") {
+        const error = topoValidateSwitch(step.name, step.body.vlan, state.networks);
+        if (error) throw new Error(`${step.name}: ${error}`);
+      }
+      if (step.type === "delete" && (step.name === "default" || edit.vms.some((v) => v.nics.some((n) => n.network === step.name)))) throw new Error("Disconnect all adapters before deleting a non-default switch.");
+    }
+    for (const step of plan) {
+      active = topoStepLabel(step);
+      if (step.type === "create") {
+        const created = await post("/networks", step.body);
+        edit.base.networks.push(created);
+        edit.networks = edit.networks.map((n) => n.name === step.name ? topoClone(created) : n);
+      } else if (step.type === "patch") {
+        const updated = await patch(`/vms/${enc(step.uuid)}`, step.body);
+        edit.base.vms = edit.base.vms.map((v) => v.uuid === step.uuid ? topoClone(updated) : v);
+        edit.vms = edit.vms.map((v) => v.uuid === step.uuid ? topoClone(updated) : v);
+      } else {
+        await del(`/networks/${enc(step.name)}`);
+        edit.base.networks = edit.base.networks.filter((n) => n.name !== step.name);
+      }
+      completed.push(active);
+    }
+    active = "Save layout in this browser";
+    localStorage.setItem(topoLayoutKey(), JSON.stringify(edit.layout));
+    active = "Reload saved topology";
+    await load("vms", "networks");
+    topoEndEdit(); renderNetworks(); await renderTopology(); toast("Topology saved.");
+  } catch (err) {
+    edit.error = `Stopped at: ${active}. ${err.message} Completed: ${completed.join("; ") || "None"}. Unfinished changes remain pending.`;
+    try {
+      await load("vms", "networks");
+      // Keep only unfinished operations, retaining conflict baselines for safe retries.
+      ntopo.edit = topoRebase(edit, { networks: state.networks, vms: state.vms });
+    } catch (reloadError) { edit.error += ` Reload failed: ${reloadError.message}. Current server state could not be verified.`; }
+    ntopo.edit.error = edit.error;
+    ntopo.edit.saving = false;
+    fail(new Error(edit.error)); renderNetworks(); await renderTopology();
+  }
+}
+
 const TOPO = { w: 150, gapY: 150, top: 40 };
 const SVGNS = "http://www.w3.org/2000/svg";
 
 async function renderTopology() {
   const nodes = computeMembers().filter((m) => m.healthy).map((m) => m.name);
   await Promise.all(nodes.map((n) => (ntopo.nics[n] ? null : api(`/nodes/${enc(n)}/nics`).then((x) => { ntopo.nics[n] = x; }).catch(() => { ntopo.nics[n] = []; }))));
-  const nets = [...state.networks].sort((a, b) => vlanId(a) - vlanId(b));
+  drawTopology();
+}
+
+function drawTopology() {
+  const nodes = computeMembers().filter((m) => m.healthy).map((m) => m.name);
+  const data = topoData(), edit = ntopo.edit;
+  const nets = [...data.networks].sort((a, b) => vlanId(a) - vlanId(b));
   // VMs ordered by their first network, so their wires stay short.
   const netIndex = new Map(nets.map((n, i) => [n.name, i]));
-  const vms = [...state.vms].sort((a, b) => (netIndex.get(a.nics[0]?.network) ?? 99) - (netIndex.get(b.nics[0]?.network) ?? 99) || a.name.localeCompare(b.name));
+  const vms = [...data.vms].sort((a, b) => (netIndex.get(a.nics[0]?.network) ?? 99) - (netIndex.get(b.nics[0]?.network) ?? 99) || a.name.localeCompare(b.name));
   const cols = Math.max(nodes.length, nets.length, vms.length, 4);
-  const width = cols * TOPO.w + 170; // room on the left for the row names
-  const rowX = (count, i) => 150 + (width - 170) * (i + 0.5) / count;
+  let width = cols * TOPO.w + 40;
+  const rowX = (count, i) => 20 + (width - 40) * (i + 0.5) / count;
   const pos = {};
   nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
   nets.forEach((n, i) => { pos[`net:${n.name}`] = { x: rowX(nets.length, i), y: TOPO.top + 30 + TOPO.gapY }; });
   vms.forEach((v, i) => { pos[`vm:${v.uuid}`] = { x: rowX(vms.length, i), y: TOPO.top + 30 + TOPO.gapY * 2 }; });
-  const height = TOPO.top + 30 + TOPO.gapY * 2 + 80;
+  const layout = edit ? edit.layout : topoReadLayout();
+  for (const key of Object.keys(pos)) if (layout[key]) pos[key] = layout[key];
+  let height = TOPO.top + 30 + TOPO.gapY * 2 + 80;
+  for (const p of Object.values(pos)) { width = Math.max(width, p.x + 90); height = Math.max(height, p.y + 85); }
 
-  const wire = (a, b, cls) => {
+  // A refresh can reorder adapters; never let an old index select another MAC.
+  if (ntopo.sel === "link" && ntopo.link) {
+    const vm = data.vms.find((v) => v.uuid === ntopo.link.uuid);
+    if (ntopo.link.mac && vm) ntopo.link.index = vm.nics.findIndex((n) => n.mac === ntopo.link.mac);
+    if (!vm?.nics[ntopo.link.index]) { ntopo.sel = null; ntopo.link = null; }
+  }
+  let grips = "";
+  const wire = (a, b, cls, attrs = "", bend = 0) => {
     const p = pos[a], q = pos[b];
     if (!p || !q) return "";
     const y0 = p.y + 60; // below the parent's label
-    return `<path class="wire ${cls}" d="M${p.x},${y0} C${p.x},${(y0 + q.y - 22) / 2 + 10} ${q.x},${(y0 + q.y - 22) / 2 - 10} ${q.x},${q.y - 22}"/>`;
+    const d = `M${p.x + bend * .35},${y0} C${p.x + bend},${(y0 + q.y - 22) / 2 + 10} ${q.x + bend},${(y0 + q.y - 22) / 2 - 10} ${q.x},${q.y - 22}`;
+    return `<path ${attrs} class="wire ${cls}" d="${d}"/>${attrs ? `<path ${attrs} class="wire-hit" d="${d}"/>` : ""}`;
   };
   let wires = "";
-  for (const n of nets) for (const node of n.nodes) wires += wire(`node:${node}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
-  for (const v of vms) for (const nic of v.nics) wires += wire(`net:${nic.network}`, `vm:${v.uuid}`, v.state === "running" ? "up" : "down");
+  for (const n of nets) for (const node of n.nodes || []) wires += wire(`node:${node}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
+  for (const v of vms) v.nics.forEach((nic, index) => {
+    const old = edit?.base.vms.find((b) => b.uuid === v.uuid)?.nics || [];
+    const pending = edit && !old.some((n) => nic.mac && n.mac === nic.mac && n.network === nic.network);
+    const selected = ntopo.sel === "link" && ntopo.link?.uuid === v.uuid && ntopo.link.index === index;
+    const peers = v.nics.map((n, i) => n.network === nic.network ? i : -1).filter((i) => i >= 0);
+    const bend = (peers.indexOf(index) - (peers.length - 1) / 2) * 55;
+    wires += wire(`net:${nic.network}`, `vm:${v.uuid}`, `${v.state === "running" ? "up" : "down"} editable${pending ? " pending" : ""}${selected ? " selected" : ""}`, `data-link-vm="${esc(v.uuid)}" data-link-index="${index}" data-link-mac="${esc(nic.mac || "")}"`, bend);
+    const p = pos[`net:${nic.network}`];
+    if (selected && p) grips += `<circle class="topo-link-handle" data-link-vm="${esc(v.uuid)}" data-link-index="${index}" data-link-mac="${esc(nic.mac || "")}" cx="${p.x + bend * .35}" cy="${p.y + 60}" r="7"><title>${canOperate() ? "Drag to another switch to move this NIC" : "VM connection"}</title></circle>`;
+  });
+  // Keep removed connections visible as non-interactive draft ghosts.
+  if (edit) for (const old of edit.base.vms) {
+    const v = edit.vms.find((x) => x.uuid === old.uuid);
+    for (const nic of old.nics) if (nic.mac && v && !v.nics.some((n) => n.mac === nic.mac && n.network === nic.network))
+      wires += wire(`net:${nic.network}`, `vm:${old.uuid}`, "removed");
+  }
 
   const label = (x, y, text, sub) => `<text x="${x}" y="${y + 38}" class="t-name">${esc(text)}</text>${sub ? `<text x="${x}" y="${y + 53}" class="t-sub">${esc(sub)}</text>` : ""}`;
   const node = (key, x, y, icon, cls, text, sub) =>
-    `<g class="tnode ${cls} ${ntopo.sel === key ? "sel" : ""}" data-key="${esc(key)}" transform="translate(0,0)">
+    `<g class="tnode ${cls} ${ntopo.sel === key ? "sel" : ""} ${edit && JSON.stringify(edit.layout[key]) !== JSON.stringify(edit.layoutBase[key]) ? "pending" : ""}" data-key="${esc(key)}" transform="translate(0,0)">
       <rect x="${x - 22}" y="${y - 22}" width="44" height="44" rx="11"/><use href="#${icon}" x="${x - 11}" y="${y - 11}" width="22" height="22"/>${label(x, y, text, sub)}</g>`;
   let shapes = "";
   for (const n of nodes) {
@@ -1543,51 +1830,73 @@ async function renderTopology() {
   }
   for (const n of nets) {
     const p = pos[`net:${n.name}`];
-    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", "switch", n.name, `VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}`);
+    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}`);
   }
   for (const v of vms) {
     const p = pos[`vm:${v.uuid}`];
     shapes += node(`vm:${v.uuid}`, p.x, p.y, "i-compute", `vm ${v.state === "running" ? "up" : "down"}`, v.name, v.node || "");
+    if (edit) shapes += `<circle class="topo-handle" data-vm="${esc(v.uuid)}" cx="${p.x + 29}" cy="${p.y}" r="7"><title>Drag to a switch to add a NIC</title></circle>`;
+  }
+  if (ntopo.drag?.link && ntopo.drag.at) {
+    const a = pos[ntopo.drag.key], b = ntopo.drag.at;
+    if (a) wires += `<path class="wire pending preview" d="M${a.x},${a.y - 22} Q${a.x},${b.y} ${b.x},${b.y}"/>`;
+  }
+  if (ntopo.drag?.handle && ntopo.drag.at) {
+    const a = pos[ntopo.drag.key], b = ntopo.drag.at;
+    wires += `<path class="wire pending preview" d="M${a.x + 29},${a.y} L${b.x},${b.y}"/>`;
   }
   $("#topo-svg").setAttribute("viewBox", `0 0 ${width} ${height}`);
   $("#topo-svg").setAttribute("width", width);
   $("#topo-svg").setAttribute("height", height);
-  $("#topo-svg").innerHTML = `<g class="lanes"><text x="12" y="${TOPO.top - 8}">Uplinks</text><text x="12" y="${TOPO.top + TOPO.gapY - 8}">Virtual switches</text><text x="12" y="${TOPO.top + TOPO.gapY * 2 - 8}">Virtual machines</text></g>${wires}${shapes}`;
+  $("#topo-svg").innerHTML = `${wires}${shapes}${grips}`;
   ntopo.pos = pos;
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#topo-stats").innerHTML = [["Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
     .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
-  topoPanel();
+  topoToolbar();
+  if (!ntopo.drag) topoPanel();
 }
 
 function topoPanel() {
   const box = $("#topo-panel"), key = ntopo.sel || "", admin = isAdmin(), op = canOperate();
-  const [kind, id] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
-  if (kind === "net") {
-    const n = state.networks.find((x) => x.name === id);
-    if (!n) { ntopo.sel = null; return topoPanel(); }
-    const vms = state.vms.filter((v) => v.nics.some((x) => x.network === n.name));
-    box.innerHTML = `<h3>${esc(n.name)}</h3><dl class="kv"><dt>VLAN ID</dt><dd>${vlanId(n)}${n.vlan ? " (tagged)" : " (native, untagged on the wire)"}</dd>
-      <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>On nodes</dt><dd>${esc(n.nodes.join(", "))}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
-      <p class="wiz-label">Connected VMs</p><div class="topo-list">${vms.map((v) => `<a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a>`).join("") || `<span class="muted">None yet. Drag a VM here.</span>`}</div>
-      ${admin && n.name !== "default" ? `<button class="small danger" data-topo-del="${esc(n.name)}" style="margin-top:14px">Remove switch</button>` : ""}`;
-  } else if (kind === "vm") {
-    const v = state.vms.find((x) => x.uuid === id);
-    if (!v) { ntopo.sel = null; return topoPanel(); }
-    const opts = (cur) => state.networks.map((n) => `<option value="${esc(n.name)}" ${n.name === cur ? "selected" : ""}>${esc(netLabel(n))}</option>`).join("");
-    box.innerHTML = `<h3>${esc(v.name)}</h3><dl class="kv"><dt>Status</dt><dd><span class="badge ${esc(v.state)}">${esc(v.state)}</span></dd><dt>Node</dt><dd>${esc(v.node || "")}</dd></dl>
-      <p class="wiz-label">Network adapters</p>
-      ${v.nics.map((nic, i) => `<label>NIC ${i + 1}${nic.mac ? ` <span class="mono muted">${esc(nic.mac)}</span>` : ""}<select data-topo-nic="${i}" ${op ? "" : "disabled"}>${opts(nic.network)}</select></label>`).join("") || `<p class="muted">No network adapter.</p>`}
-      ${op && v.nics.length ? `<button class="small primary" data-topo-save="${esc(v.uuid)}" style="margin-top:12px">Apply</button>` : ""}
-      <a class="btn small" href="#vm/${esc(v.uuid)}" style="margin-top:12px">Open VM</a>`;
-  } else if (kind === "node") {
-    const ports = ntopo.nics[id] || [];
-    box.innerHTML = `<h3>${esc(id)}</h3><p class="hint" style="padding:0">The node's LAN bridge br0. Every virtual switch leaves the node through these ports; tagged VLANs need the switch port set to trunk.</p>
-      <div class="topo-list">${ports.filter((p) => p.kind === "ethernet" || p.kind === "bond").map((p) => `<div class="topo-port ${p.master === "br0" ? "in" : ""}">
-        <span class="dot ${p.link ? "up" : ""}"></span><span class="mono">${esc(p.name)}</span><span class="muted">${p.master === "br0" ? "uplink" : "not used"}${p.speed_mbps ? ` · ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000} Gb/s` : `${p.speed_mbps} Mb/s`}` : p.link ? "" : " · no cable"}</span></div>`).join("")}</div>
-      ${admin ? `<a class="btn small" href="#node/${esc(id)}" style="margin-top:14px">Change uplink ports</a>` : ""}`;
+  const data = topoData(), edit = ntopo.edit;
+  if (key === "link" && ntopo.link) {
+    const v = data.vms.find((v) => v.uuid === ntopo.link.uuid), nic = v?.nics[ntopo.link.index];
+    box.innerHTML = nic ? `<h3>VM connection</h3><dl class="kv"><dt>VM</dt><dd>${esc(v.name)}</dd><dt>Adapter</dt><dd>NIC ${ntopo.link.index + 1}</dd><dt>MAC</dt><dd class="mono">${esc(nic.mac || "New adapter")}</dd><dt>Status</dt><dd><span class="badge ${esc(v.state)}">${esc(v.state)}</span></dd></dl>
+      <label>Connected to<select data-topo-link-network ${!op || edit?.saving || ntopo.changing ? "disabled" : ""}>${data.networks.map((n) => `<option value="${esc(n.name)}" ${n.name === (ntopo.link.target || nic.network) ? "selected" : ""}>${esc(n.name)} · VLAN ${vlanId(n)}</option>`).join("")}</select></label>
+      ${op ? `${!edit ? `<button class="primary small" data-topo-link-move ${ntopo.changing ? "disabled" : ""}>Move</button>` : ""} <button class="small danger" data-topo-disconnect ${edit?.saving || ntopo.changing ? "disabled" : ""}>Disconnect</button>` : ""}` : "";
   } else {
-    box.innerHTML = `<h3>Topology</h3><p class="hint" style="padding:0">Click an uplink, switch or VM to see and change it. Drag a VM onto another switch to move it to that VLAN.</p>`;
+    const [kind, id] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
+    if (kind === "net") {
+      const n = data.networks.find((x) => x.name === id);
+      if (!n) { ntopo.sel = null; return topoPanel(); }
+      const vms = data.vms.filter((v) => v.nics.some((x) => x.network === n.name));
+      box.innerHTML = `<h3>${esc(n.name)}</h3><dl class="kv"><dt>VLAN ID</dt><dd>${vlanId(n)}${n.vlan ? " (tagged)" : " (native, untagged on the wire)"}</dd>
+        <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>On nodes</dt><dd>${esc(n.nodes.join(", "))}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
+        <p class="wiz-label">Connected VMs</p><div class="topo-list">${vms.map((v) => `<a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a>`).join("") || `<span class="muted">None yet. Drag a VM here.</span>`}</div>
+        ${admin && n.name !== "default" ? `<button class="small danger" data-topo-del="${esc(n.name)}" style="margin-top:14px">Remove switch</button>` : ""}`;
+    } else if (kind === "vm") {
+      const v = data.vms.find((x) => x.uuid === id);
+      if (!v) { ntopo.sel = null; return topoPanel(); }
+      const opts = (cur) => data.networks.map((n) => `<option value="${esc(n.name)}" ${n.name === cur ? "selected" : ""}>${esc(netLabel(n))}</option>`).join("");
+      box.innerHTML = `<h3>${esc(v.name)}</h3><dl class="kv"><dt>Status</dt><dd><span class="badge ${esc(v.state)}">${esc(v.state)}</span></dd><dt>Node</dt><dd>${esc(v.node || "")}</dd></dl>
+        <p class="wiz-label">Network adapters</p>
+        ${v.nics.map((nic, i) => `<label>NIC ${i + 1}${nic.mac ? ` <span class="mono muted">${esc(nic.mac)}</span>` : ""}<select data-topo-nic="${i}" ${op && !edit?.saving ? "" : "disabled"}>${opts(nic.network)}</select></label>`).join("") || `<p class="muted">No network adapter.</p>`}
+        ${op && !edit && v.nics.length ? `<button class="small primary" data-topo-save="${esc(v.uuid)}" style="margin-top:12px">Apply</button>` : ""}
+        <a class="btn small" href="#vm/${esc(v.uuid)}" style="margin-top:12px">Open VM</a>`;
+    } else if (kind === "node") {
+      const ports = ntopo.nics[id] || [];
+      box.innerHTML = `<h3>${esc(id)}</h3><p class="hint" style="padding:0">The node's LAN bridge br0. Every virtual switch leaves the node through these ports; tagged VLANs need the switch port set to trunk.</p>
+        <div class="topo-list">${ports.filter((p) => p.kind === "ethernet" || p.kind === "bond").map((p) => `<div class="topo-port ${p.master === "br0" ? "in" : ""}">
+          <span class="dot ${p.link ? "up" : ""}"></span><span class="mono">${esc(p.name)}</span><span class="muted">${p.master === "br0" ? "uplink" : "not used"}${p.speed_mbps ? ` · ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000} Gb/s` : `${p.speed_mbps} Mb/s`}` : p.link ? "" : " · no cable"}</span></div>`).join("")}</div>
+        ${admin ? `<a class="btn small" href="#node/${esc(id)}" style="margin-top:14px">Change uplink ports</a>` : ""}`;
+    } else {
+      box.innerHTML = `<h3>Topology</h3><p class="hint" style="padding:0">Click a node or wire for details. Select a wire to choose a VLAN or drag its switch-end dot. Drag a VM onto a switch to move its NIC; Edit stages changes until Save.</p>`;
+    }
+  }
+  if (edit) {
+    box.insertAdjacentHTML("afterbegin", `<p class="hint topo-edit-hint">Drag nodes to arrange; VM handles add NICs. Select a wire: choose a VLAN, drag its dot to a switch, or Delete to disconnect. Save applies pending changes.</p>${edit.error ? `<p class="topo-error" role="alert">${esc(edit.error)}</p>` : ""}`);
+    $$("button, select", box).forEach((el) => { if (edit.saving) el.disabled = true; });
   }
 }
 
@@ -1599,70 +1908,186 @@ function svgPoint(svg, e) {
 }
 
 async function topoMove(uuid, nics) {
-  const v = await patch(`/vms/${uuid}`, { nics: nics.map((n) => ({ network: n.network, mac: n.mac, model: n.model })) });
-  toast(`${v.name}: ${v.nics.map((n) => n.network).join(", ")}`);
+  if (!canOperate()) return;
+  const v = await patch(`/vms/${enc(uuid)}`, { nics: topoNics(nics) });
+  toast(`${v.name}: ${v.nics.map((n) => n.network).join(", ") || "No network adapters"}`);
   await load("vms");
-  renderTopology();
+  await renderTopology();
 }
 
 {
   const svg = $("#topo-svg");
   svg.addEventListener("click", (e) => {
-    const g = e.target.closest(".tnode");
-    if (ntopo.dragged) { ntopo.dragged = false; return; }
-    ntopo.sel = g ? g.dataset.key : null;
-    renderTopology();
+    if (ntopo.edit?.saving || ntopo.changing || ntopo.dragged) { ntopo.dragged = false; return; }
+    const g = e.target.closest(".tnode"), link = e.target.closest("[data-link-vm]");
+    ntopo.sel = link ? "link" : g ? g.dataset.key : null;
+    ntopo.link = link ? { uuid: link.dataset.linkVm, index: Number(link.dataset.linkIndex), mac: link.dataset.linkMac } : null;
+    drawTopology();
   });
-  // Drag a VM onto a switch.
   svg.addEventListener("pointerdown", (e) => {
-    const g = e.target.closest(".tnode.vm");
-    if (!g || !canOperate()) return;
-    ntopo.drag = { g, key: g.dataset.key, start: svgPoint(svg, e), x0: e.clientX, y0: e.clientY };
+    if (e.button !== 0 || !canOperate() || ntopo.edit?.saving || ntopo.changing) return;
+    const link = e.target.closest("[data-link-vm]");
+    if (link && (link.matches(".topo-link-handle") || (ntopo.sel === "link" && ntopo.link?.uuid === link.dataset.linkVm && ntopo.link.index === Number(link.dataset.linkIndex)))) {
+      const selection = { uuid: link.dataset.linkVm, index: Number(link.dataset.linkIndex), mac: link.dataset.linkMac };
+      ntopo.sel = "link"; ntopo.link = selection;
+      ntopo.drag = { key: `vm:${selection.uuid}`, link: { ...selection }, x0: e.clientX, y0: e.clientY };
+      svg.setPointerCapture(e.pointerId); e.preventDefault(); return;
+    }
+    const handle = ntopo.edit && e.target.closest(".topo-handle");
+    const g = e.target.closest(ntopo.edit ? ".tnode" : ".tnode.vm");
+    if (!g && !handle) return;
+    const key = handle ? `vm:${handle.dataset.vm}` : g.dataset.key;
+    ntopo.drag = { key, handle: Boolean(handle), start: svgPoint(svg, e), origin: { ...ntopo.pos[key] }, savedLayout: ntopo.edit?.layout[key], x0: e.clientX, y0: e.clientY };
     svg.setPointerCapture(e.pointerId);
+    e.preventDefault();
   });
   svg.addEventListener("pointermove", (e) => {
     const d = ntopo.drag;
     if (!d) return;
     if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 4) d.moved = true;
+    if (!d.moved) return;
     const at = svgPoint(svg, e);
-    d.g.setAttribute("transform", `translate(${at.x - d.start.x},${at.y - d.start.y})`);
-    d.g.classList.add("dragging");
-    d.over = Object.entries(ntopo.pos).find(([k, q]) => k.startsWith("net:") && Math.hypot(q.x - at.x, q.y - at.y) < 45)?.[0] || null;
+    d.at = at;
+    d.over = Object.entries(ntopo.pos).find(([k, q]) => k.startsWith("net:") && k !== d.key && Math.hypot(q.x - at.x, q.y - at.y) < 45)?.[0] || null;
+    if (d.link) {
+      drawTopology();
+    } else if (ntopo.edit) {
+      if (!d.handle) ntopo.edit.layout[d.key] = { x: Math.max(85, d.origin.x + at.x - d.start.x), y: Math.max(35, d.origin.y + at.y - d.start.y) };
+      drawTopology();
+    } else {
+      const g = $$(".tnode", svg).find((g) => g.dataset.key === d.key);
+      g?.setAttribute("transform", `translate(${at.x - d.start.x},${at.y - d.start.y})`);
+    }
     $$(".tnode.switch", svg).forEach((s) => s.classList.toggle("drop", s.dataset.key === d.over));
   });
-  svg.addEventListener("pointerup", async () => {
+  svg.addEventListener("pointerup", async (e) => {
     const d = ntopo.drag;
     ntopo.drag = null;
+    if (svg.hasPointerCapture(e.pointerId)) svg.releasePointerCapture(e.pointerId);
     if (!d) return;
-    // The pointer was captured, so the click that follows lands on the SVG, not the VM:
-    // handle a plain click here and ignore that click.
     ntopo.dragged = true;
-    setTimeout(() => { ntopo.dragged = false; });
-    if (!d.moved) { ntopo.sel = d.key; renderTopology(); return; }
-    if (!d.over) { if (d.moved) renderTopology(); return; }
-    const v = state.vms.find((x) => `vm:${x.uuid}` === d.key), net = d.over.slice(4);
-    if (!v.nics.length) { toast(`${v.name} has no network adapter`, true); renderTopology(); return; }
-    if (v.nics.length > 1) { ntopo.sel = d.key; toast("This VM has several adapters: pick the one to move on the right", true); renderTopology(); return; }
-    if (v.nics[0].network === net || !confirm(`Move ${v.name} to ${net}? Its network changes at once, even while running.`)) { renderTopology(); return; }
-    try { await topoMove(v.uuid, [{ ...v.nics[0], network: net }]); } catch (err) { fail(err); renderTopology(); }
+    setTimeout(() => { ntopo.dragged = false; }, 0);
+    if (d.link) {
+      ntopo.sel = "link"; ntopo.link = d.link;
+      drawTopology();
+      if (d.moved && d.over) {
+        try { await topoChangeLink(d.link, d.over.slice(4)); } catch (err) { fail(err); drawTopology(); }
+      }
+      return;
+    }
+    ntopo.sel = d.key;
+    if (!d.moved || !d.over || !d.key.startsWith("vm:")) { drawTopology(); return; }
+    const v = topoData().vms.find((x) => `vm:${x.uuid}` === d.key), net = d.over.slice(4);
+    if (!v) { drawTopology(); return; }
+    if (ntopo.edit) {
+      if (d.handle) v.nics.push({ network: net, model: "virtio" });
+      else if (v.nics.length === 1) v.nics[0].network = net;
+      else toast(v.nics.length ? "This VM has several adapters: choose the NIC and network in the panel." : "Drag the VM handle to a switch to add an adapter.", true);
+      // A connection gesture should keep the VM at its previous position.
+      if (!d.handle) {
+        if (d.savedLayout) ntopo.edit.layout[d.key] = d.savedLayout; else delete ntopo.edit.layout[d.key];
+      }
+      drawTopology(); return;
+    }
+    if (!v.nics.length) { toast(`${v.name} has no network adapter`, true); drawTopology(); return; }
+    if (v.nics.length > 1) { toast("This VM has several adapters: pick the one to move on the right", true); drawTopology(); return; }
+    if (v.nics[0].network === net || !confirm(`Move ${v.name} to ${net}? Its network changes at once, even while running.`)) { drawTopology(); return; }
+    try { await topoMove(v.uuid, [{ ...v.nics[0], network: net }]); } catch (err) { fail(err); drawTopology(); }
+  });
+  const cancelDrag = () => {
+    const d = ntopo.drag;
+    if (d && ntopo.edit && !d.handle && !d.link) {
+      if (d.savedLayout) ntopo.edit.layout[d.key] = d.savedLayout; else delete ntopo.edit.layout[d.key];
+    }
+    ntopo.drag = null;
+    drawTopology();
+  };
+  svg.addEventListener("pointercancel", cancelDrag);
+  svg.addEventListener("lostpointercapture", () => { if (ntopo.drag) cancelDrag(); });
+  $("#topo-panel").addEventListener("change", (e) => {
+    if (e.target.matches("[data-topo-link-network]")) {
+      if (ntopo.edit) topoChangeLink(ntopo.link, e.target.value).catch(fail);
+      else if (canOperate() && !ntopo.changing && ntopo.link) ntopo.link.target = e.target.value;
+      return;
+    }
+    const select = e.target.closest("[data-topo-nic]");
+    if (!select || !ntopo.edit || ntopo.edit.saving || !canOperate()) return;
+    const vm = ntopo.edit.vms.find((v) => `vm:${v.uuid}` === ntopo.sel);
+    if (!vm) return;
+    vm.nics[Number(select.dataset.topoNic)].network = select.value;
+    drawTopology();
   });
   $("#topo-panel").addEventListener("click", async (e) => {
+    if (ntopo.edit?.saving || ntopo.changing || !canOperate()) return;
     const save = e.target.closest("[data-topo-save]");
     const delBtn = e.target.closest("[data-topo-del]");
     try {
+      if (e.target.closest("[data-topo-disconnect]")) { await topoDisconnect(); return; }
+      if (e.target.closest("[data-topo-link-move]")) { await topoChangeLink(ntopo.link, $("[data-topo-link-network]", $("#topo-panel")).value); return; }
       if (save) {
-        const v = state.vms.find((x) => x.uuid === save.dataset.topoSave);
+        const v = topoData().vms.find((x) => x.uuid === save.dataset.topoSave);
         const nics = v.nics.map((n, i) => ({ ...n, network: $(`[data-topo-nic="${i}"]`, $("#topo-panel")).value }));
-        await topoMove(v.uuid, nics);
+        if (ntopo.edit) { v.nics = nics; drawTopology(); } else await topoMove(v.uuid, nics);
       }
-      if (delBtn && confirm(`Remove network ${delBtn.dataset.topoDel}?`)) {
-        await del(`/networks/${enc(delBtn.dataset.topoDel)}`);
-        ntopo.sel = null;
-        await refresh("network");
+      if (delBtn && isAdmin()) {
+        if (ntopo.edit) { topoRemoveSwitch(delBtn.dataset.topoDel); return; }
+        if (confirm(`Remove network ${delBtn.dataset.topoDel}?`)) {
+          await del(`/networks/${enc(delBtn.dataset.topoDel)}`);
+          ntopo.sel = null; await refresh("network");
+        }
       }
     } catch (err) { fail(err); }
   });
-  $("#topo-refresh").addEventListener("click", () => { ntopo.nics = {}; refresh("network"); });
+  document.addEventListener("keydown", (e) => {
+    if (!ntopo.edit || ntopo.edit.saving || currentPage() !== "network" || !["Delete", "Backspace"].includes(e.key) || e.target.closest("input, select, textarea, button, a, [contenteditable], dialog")) return;
+    if (ntopo.sel === "link") { e.preventDefault(); topoDisconnect().catch(fail); }
+    else if (ntopo.sel?.startsWith("net:")) { e.preventDefault(); topoRemoveSwitch(ntopo.sel.slice(4)); }
+  });
+  $("#topo-edit").addEventListener("click", topoStartEdit);
+  $("#topo-edit-save").addEventListener("click", () => topoSaveEdit().catch(fail));
+  $("#topo-edit-cancel").addEventListener("click", () => {
+    if (ntopo.edit?.saving || (topoDirty() && !confirm("Discard all pending topology changes? Completed API operations cannot be undone."))) return;
+    topoEndEdit(); renderTopology();
+  });
+  $("#topo-auto-layout").addEventListener("click", () => {
+    if (!ntopo.edit || ntopo.edit.saving) return;
+    ntopo.edit.layout = {}; drawTopology();
+  });
+  const switchForm = $("#topo-switch-form");
+  const openSwitchForm = (at = null) => {
+    if (!ntopo.edit || ntopo.edit.saving || !isAdmin()) return;
+    ntopo.newSwitchAt = at;
+    switchForm.reset(); switchForm.hidden = false;
+    $("#topo-switch-error").textContent = "";
+    switchForm.elements.name.focus();
+  };
+  $("#topo-add-switch").addEventListener("click", () => openSwitchForm());
+  $("#topo-add-switch").addEventListener("dragstart", (e) => {
+    if (!ntopo.edit || ntopo.edit.saving || !isAdmin()) { e.preventDefault(); return; }
+    e.dataTransfer.setData("application/x-ibhics-switch", "switch");
+    e.dataTransfer.effectAllowed = "copy";
+  });
+  svg.addEventListener("dragover", (e) => {
+    if (ntopo.edit && !ntopo.edit.saving && isAdmin() && [...e.dataTransfer.types].includes("application/x-ibhics-switch")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }
+  });
+  svg.addEventListener("drop", (e) => {
+    if (!ntopo.edit || !isAdmin() || e.dataTransfer.getData("application/x-ibhics-switch") !== "switch") return;
+    e.preventDefault(); openSwitchForm(svgPoint(svg, e));
+  });
+  $("#topo-switch-cancel").addEventListener("click", () => { switchForm.hidden = true; });
+  switchForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const edit = ntopo.edit;
+    if (!edit || edit.saving || !isAdmin() || !switchForm.reportValidity()) return;
+    const name = switchForm.elements.name.value, vlan = Number(switchForm.elements.vlan.value);
+    // Do not permit delete/recreate of an existing name or VLAN in the same batch.
+    const error = topoValidateSwitch(name, vlan, [...edit.networks, ...edit.base.networks.filter((n) => !edit.networks.some((x) => x.name === n.name))]);
+    if (error) { $("#topo-switch-error").textContent = error; return; }
+    edit.networks.push({ name, vlan, nodes: computeMembers().map((n) => n.name), bridge: "Pending" });
+    if (ntopo.newSwitchAt) edit.layout[`net:${name}`] = { x: Math.max(85, ntopo.newSwitchAt.x), y: Math.max(35, ntopo.newSwitchAt.y) };
+    switchForm.hidden = true; ntopo.sel = `net:${name}`; drawTopology();
+  });
+  $("#topo-refresh").addEventListener("click", () => { if (ntopo.edit) return; ntopo.nics = {}; refresh("network").catch(fail); });
 }
 
 function renderNetworks() {
@@ -1822,8 +2247,13 @@ function isoOptions(selected = "", none = "None") {
 }
 
 function renderIsos() {
+  fillIsoDest();
+  const dest = $("#iso-dest").value;
+  const [node, pool] = dest.split("|");
+  const isos = state.isos.filter((i) => dest ? i.pool === pool && (!i.node || i.node === node) : !i.pool);
+  $("#iso-location").textContent = `Install media for new VMs and the CD/DVD drive, kept in ${dest ? `${pool} / iso on ${node}` : "/var/lib/ibhics/iso"}`;
   const users = (path) => state.vms.filter((v) => v.iso === path).map((v) => v.name);
-  $("#isos").innerHTML = state.isos.length ? state.isos.map((i) => {
+  $("#isos").innerHTML = isos.length ? isos.map((i) => {
     const own = !i.pool && i.name !== "ibHiCS guest tools";
     const where = i.pool ? `${i.pool}${i.folder ? ` / ${i.folder}` : ""}` : own ? "System disk" : "Built in";
     return `<tr>
@@ -1833,8 +2263,7 @@ function renderIsos() {
       <td>${esc(users(i.path).join(", ") || "–")}</td>
       <td><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
     </tr>`;
-  }).join("") : empty(5, "No ISOs yet: upload one to install a new VM from it");
-  fillIsoDest();
+  }).join("") : empty(5, "No ISOs in this storage yet: upload one to install a new VM from it");
 }
 
 // Where "Upload ISO" saves: the system disk's ISO library, or the iso folder of a
@@ -1843,13 +2272,14 @@ function fillIsoDest() {
   const sel = $("#iso-dest");
   if (!sel) return;
   const was = sel.value;
+  const initialized = sel.options.length > 0;
   const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
   sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
     `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(p.node)} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
-  if (sel.dataset.touched && [...sel.options].some((o) => o.value === was)) sel.value = was;
+  if (initialized && [...sel.options].some((o) => o.value === was)) sel.value = was;
   else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
 }
-$("#iso-dest").addEventListener("change", (e) => { e.target.dataset.touched = "1"; });
+$("#iso-dest").addEventListener("change", () => renderIsos());
 async function isoUploadUrl(file, input) {
   const dest = input.closest("#page-storage") ? $("#iso-dest").value : "";
   if (!dest) return `/api/v1/isos/${enc(file.name)}`;
@@ -2483,10 +2913,110 @@ document.addEventListener("click", async (e) => {
 
 // ---------- one VM ----------
 
+function guestToolsPlan(osText, selectedPm = null) {
+  const text = String(osText || "");
+  if (/windows/i.test(text)) return { family: "windows", pm: null, install: null, remove: null };
+  let pm = null;
+  if (/ubuntu|debian/i.test(text)) pm = "apt";
+  else if (/suse/i.test(text)) pm = "zypper";
+  else if (/rhel|red\s*hat|alma\s*linux|rocky|centos|oracle|fedora/i.test(text)) {
+    const legacy = text.match(/(?:centos|rhel|red\s*hat)[^\d]*(\d+)/i);
+    pm = legacy && Number(legacy[1]) <= 7 ? "yum" : "dnf";
+  }
+  if (["dnf", "yum", "apt", "zypper"].includes(selectedPm)) pm = selectedPm;
+  const install = {
+    dnf: "dnf install -y qemu-guest-agent",
+    yum: "yum install -y qemu-guest-agent",
+    apt: "apt-get update && apt-get install -y qemu-guest-agent",
+    zypper: "zypper --non-interactive install qemu-guest-agent",
+  }[pm];
+  const remove = {
+    dnf: "dnf remove -y open-vm-tools", yum: "yum remove -y open-vm-tools",
+    apt: "apt-get remove -y open-vm-tools", zypper: "zypper --non-interactive remove open-vm-tools",
+  }[pm] || null;
+  // AlmaLinux 8 changed its signing key in 2024: older installs (e.g. 8.8 appliances)
+  // reject current packages with "GPG check FAILED" until the new key is imported.
+  const almaKey = pm === "dnf" && /alma\s*linux[^\d]*8/i.test(text)
+    ? "rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux && " : "";
+  return { family: "linux", pm, install: install ? `${almaKey}${install} && systemctl enable --now qemu-guest-agent` : null, remove };
+}
+
+function renderGuestTools(vm, g, selectedPm = null) {
+  const card = $("#vm-guest-tools");
+  card.hidden = vm.state !== "running" || Boolean(g?.agent);
+  card.innerHTML = "";
+  if (card.hidden) return;
+  const osText = g?.os_name || state.guests[vm.uuid]?.os_name || vm.os_type;
+  const detected = guestToolsPlan(osText);
+  const insert = canOperate() ? `<button class="small" data-vm="tools" data-id="${esc(vm.uuid)}" data-name="${esc(vm.name)}">Insert guest tools CD</button>` : "";
+  const check = `<button class="small" id="guest-tools-check">Check again</button>`;
+  const code = (id, command) => `<div class="guest-tools-command"><pre><code id="${id}">${esc(command)}</code></pre><button class="small" data-guest-tools-copy="${id}">Copy</button></div>`;
+  let body;
+  if (detected.family === "windows") {
+    body = `<ol><li>Insert the ibHiCS guest tools CD using the button below or the ⋯ menu.</li>
+      <li>Open the CD drive inside Windows.</li><li>Run <code>virtio-win-guest-tools.exe</code> and complete the installer to install the QEMU guest agent and virtio drivers.</li></ol>
+      ${insert}<p class="hint">After installation, check again to detect the guest agent.</p>${check}`;
+  } else {
+    const plan = guestToolsPlan(osText, detected.pm || selectedPm || "dnf");
+    body = `<p class="hint">Run these commands as root inside the guest VM.</p>
+      ${!detected.pm ? `<p class="hint">Distribution not detected. Choose the guest's package manager:</p><div class="tabs guest-tools-tabs" aria-label="Package manager">${["dnf", "yum", "apt", "zypper"].map((pm) => `<button class="${pm === plan.pm ? "active" : ""}" aria-pressed="${pm === plan.pm}" data-guest-tools-pm="${pm}">${pm}</button>`).join("")}</div>` : ""}
+      <h4>From the internet</h4>${code("guest-tools-install", plan.install)}
+      <h4>From the ibHiCS guest tools CD</h4>${insert}
+      ${code("guest-tools-cd", "mount /dev/sr0 /mnt && sh /mnt/linux/install.sh; umount /mnt")}
+      <p class="hint">The CD installer still needs access to your distribution's package repositories.</p>
+      <p class="hint guest-tools-vmware">Moved from VMware? Remove VMware Tools: <code>${esc(plan.remove)}</code></p>
+      <div class="guest-tools-check"><span>Check: <code>systemctl status qemu-guest-agent</code></span>${check}</div>`;
+  }
+  card.innerHTML = `<h3>Install guest tools</h3><div class="guest-tools-body">${body}</div>`;
+}
+
+async function copyGuestToolsCommand(code) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(code.textContent);
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    // Leave the command selected for manual copying if the legacy API is unavailable.
+    try { document.execCommand("copy"); } catch { /* selection remains available */ }
+  }
+  toast("Copied");
+}
+
+$("#vm-guest").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-guest-tools-link]")) return;
+  e.preventDefault();
+  const card = $("#vm-guest-tools");
+  card.focus({ preventScroll: true });
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("#vm-guest-tools").addEventListener("click", async (e) => {
+  const button = e.target.closest("button");
+  if (!button) return;
+  try {
+    if (button.dataset.guestToolsCopy) await copyGuestToolsCommand(document.getElementById(button.dataset.guestToolsCopy));
+    if (button.dataset.guestToolsPm) {
+      const vm = state.vms.find((v) => v.uuid === vmFromHash());
+      if (vm) renderGuestTools(vm, state.guests[vm.uuid], button.dataset.guestToolsPm);
+    }
+    if (button.id === "guest-tools-check") {
+      button.disabled = true;
+      try { await load("guests"); await renderVMDetail(); }
+      finally { button.disabled = false; }
+    }
+    if (button.dataset.vm === "tools" && canOperate()) await vmAction(e);
+  } catch (err) { fail(err); }
+});
+
 async function renderVMDetail() {
   const uuid = vmFromHash();
   const vm = state.vms.find((v) => v.uuid === uuid);
   if (!vm) {
+    $("#vm-guest-tools").hidden = true;
+    $("#vm-guest-tools").innerHTML = "";
     $("#vm-title").textContent = "VM not found";
     $("#vm-crumb").textContent = uuid;
     $("#vm-subtitle").textContent = "It may have been deleted, or moved and renamed.";
@@ -2495,6 +3025,7 @@ async function renderVMDetail() {
   }
   let g = null;
   if (vm.state === "running") g = await api(`/vms/${uuid}/guest`).catch(() => null);
+  if (g) state.guests[uuid] = g;
   const os = osName(vm, g), ips = ipList(g);
   const host = state.hosts[vm.node];
   const usage = diskUsage(vm, g);
@@ -2526,7 +3057,6 @@ async function renderVMDetail() {
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
     ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
     vm.driver_iso && ["Driver CD", `<span class="mono">${esc(vm.driver_iso)}</span>`],
-    vm.linked_to && ["Linked clone of", (() => { const t = state.templates.find((x) => x.uuid === vm.linked_to); return t ? `<a href="#templates">${esc(t.name)}</a> (template)` : `<span class="mono">${esc(vm.linked_to)}</span>`; })()],
     ["Description", vm.description ? esc(vm.description) : dash],
     ["UUID", `<span class="mono">${esc(vm.uuid)}</span>`],
   ]);
@@ -2534,7 +3064,7 @@ async function renderVMDetail() {
   const agentText = g?.agent
     ? `<span class="dot ok"></span> Running`
     : vm.state === "running"
-      ? `<span class="dot warn"></span> Not detected <span class="vm-sub">Use ⋯ → Insert guest tools CD and run it in the guest to see its OS, hostname and IP addresses. Windows VMs imported with ibHiCS 0.2 or later get it automatically; on Linux, run linux/install.sh from the CD.</span>`
+      ? `<span class="dot warn"></span> Not detected <a class="vm-sub" href="#vm-guest-tools" data-guest-tools-link>Install guest tools</a>`
       : `<span class="dot"></span> VM is powered off`;
   $("#vm-guest").innerHTML = kv([
     ["Guest agent", agentText],
@@ -2544,6 +3074,7 @@ async function renderVMDetail() {
     ["Hostname", g?.hostname ? esc(g.hostname) : dash],
     ["IP addresses", ips.length ? ips.map((ip) => `<span class="mono">${esc(ip)}</span>`).join("<br>") : dash],
   ]);
+  renderGuestTools(vm, g);
 
   const ifaces = g?.interfaces || [];
   const byMac = (mac) => ifaces.find((i) => mac && i.mac.toLowerCase() === mac.toLowerCase());
@@ -2582,7 +3113,7 @@ async function renderVMDetail() {
 
 async function renderVMBackups(vm) {
   const tbody = $("#vm-backups");
-  if (!state.targets.length) { tbody.innerHTML = empty(6, "Add a backup target first (Backup → Targets)"); return; }
+  if (!state.targets.length) { tbody.innerHTML = empty(6, "Add a backup repository first (Backup → Repositories)"); return; }
   const lists = await Promise.all(state.targets.map((t) =>
     api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
   const points = lists.flat().filter((b) => b.vm_name === vm.name).sort((a, b) => b.created.localeCompare(a.created));
@@ -2633,18 +3164,20 @@ async function renderVMSnapshots(vm) {
     </li>`).join("") : `<li class="hint snap-empty">No snapshots yet.${why ? " " + esc(why) : " Take one before an upgrade or a risky change."}</li>`) ;
   if (snaps.length) box.insertAdjacentHTML("afterbegin", here);
 }
-$("#vm-snap-take").addEventListener("click", () => {
-  const vm = state.vms.find((v) => v.uuid === vmFromHash());
+$("#vm-snap-take").addEventListener("click", () => openSnapshot(vmFromHash()));
+function openSnapshot(uuid) {
+  const vm = state.vms.find((v) => v.uuid === uuid);
   if (!vm) return;
   const d = new Date(), p = (n) => String(n).padStart(2, "0");
   openDialog("snap-dialog", { uuid: vm.uuid }, { name: `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` });
   $("#snap-form .snap-mem").textContent = vm.state === "running"
     ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
     : "The VM is off: the snapshot holds its disks.";
-});
+}
 handlers["snap-dialog"] = async (f, ctx) => {
   await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description") });
   toast(`Snapshot taken: ${f.get("name").trim()}`);
+  if (currentPage() !== "vm") return;
   selectTab("vm-tabs", "vm-snapshots");
   await refresh("vm");
   selectTab("vm-tabs", "vm-snapshots");
@@ -2732,13 +3265,10 @@ $("#vmimport-vms").addEventListener("click", async (e) => {
     try { await del(`/migrate/uploads/${enc(rm.dataset.updel)}`); await listUploaded(); } catch (err) { fail(err); }
   }
   if (imp) {
-    const vm = uploadedVMs[Number(imp.dataset.upimport)];
     $("#vmimport-dialog").close();
-    await load("pools", "networks").catch(() => {});
-    openDialog("import-dialog", { source: "uploads", vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
-    $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
-    $("#import-hib").hidden = true;
-    renderImportNets(vm);
+    // The migration wizard, for the one uploaded VM picked here.
+    sourceVMs = [...uploadedVMs]; sourceVMsFor = "uploads";
+    await openImportWizard([Number(imp.dataset.upimport)]).catch(fail);
   }
 });
 
@@ -2800,13 +3330,13 @@ function renderTargets() {
     <td class="vm-sub" style="display:table-cell">${esc(t.source)}</td>
     <td>${t.on_demand ? '<span class="badge waiting">Attached only during jobs</span>' : '<span class="badge online">Always available</span>'}</td>
     <td><div class="actions">${admin ? `<button class="small danger" data-target="${esc(t.name)}">Remove</button>` : ""}</div></td>
-  </tr>`).join("") : empty(5, "No backup targets. Add one to start protecting VMs.");
+  </tr>`).join("") : empty(5, "No backup repositories. Add one to start protecting VMs.");
 }
 
 async function renderBackups() {
   const target = $("#browse-target").value || state.targets[0]?.name;
   const tbody = $("#backups");
-  if (!target) { tbody.innerHTML = empty(6, "Add a backup target first"); return; }
+  if (!target) { tbody.innerHTML = empty(6, "Add a backup repository first"); return; }
   const op = canOperate(), admin = isAdmin();
   try {
     const backups = await api(`/backup/targets/${enc(target)}/backups`);
@@ -2887,11 +3417,12 @@ $("#page-backup").addEventListener("click", async (e) => {
 
 handlers["target-dialog"] = async (f, ctx) => {
   const FIELDS = {
-    local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
+    pool: [], local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
     usb: ["device"], iscsi: ["host", "iqn"], fc: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
   };
   const body = { name: f.get("name"), type: f.get("type") };
   for (const key of FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
+  if (body.type === "pool") Object.assign(body, { type: "local", pool: f.get("pool"), quota_gb: Number(f.get("quota_gb")) });
   if (body.type === "iscsi") body.lun = Number(f.get("lun"));
   if (body.type === "iscsi" || body.type === "fc") {
     body.confirm_wipe = f.get("confirm_wipe") === "on";
@@ -2901,11 +3432,11 @@ handlers["target-dialog"] = async (f, ctx) => {
   const after = ctx?.backupAfter;
   if (after) {
     await post(`/vms/${after.id}/backup`, { target: body.name });
-    toast(`Target ${body.name} added. Backing up ${after.name} now; progress is under Backup → Jobs.`);
+    toast(`Repository ${body.name} added. Backing up ${after.name} now; progress is under Backup → Jobs.`);
     await load("targets");
     return;
   }
-  toast(`Target ${body.name} added`);
+  toast(`Repository ${body.name} added`);
   await refresh("backup");
 };
 
@@ -2960,7 +3491,7 @@ const policyWiz = wizard("policy-dialog", {
       if (f.mode.value === "every" && !(Number(f.every_hours.value) >= 1 && Number(f.every_hours.value) <= 168)) throw new Error("Hours must be 1 to 168.");
       if (!(Number(f.keep_last.value) >= 1)) throw new Error("Keep at least 1 backup.");
     }
-    if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup target first (Backup → Targets).");
+    if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup repository first (Backup → Repositories).");
     if (step === 4 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the schedule with letters, digits, '-', '_' or '.'.");
     if (step === 4 && state.policies.some((p) => p.name === f.name.value)) throw new Error(`A schedule named ${f.name.value} already exists.`);
   },
@@ -3040,7 +3571,7 @@ function rsRenderVms() {
     return `<tr data-vm="${esc(n)}" class="${on ? "sel" : ""}"><td><input type="radio" ${on ? "checked" : ""} aria-label="${esc(n)}"></td>
       <td class="vm-name">${esc(n)}</td><td>${pts.length}</td><td>${esc(when(pts[0].created))}</td>
       <td>${rsVmGone(n) ? `<span class="badge failed">Deleted</span>` : `<span class="badge online">Yes</span>`}</td></tr>`;
-  }).join("") : empty(5, state.targets.length ? (rs.points.length ? "No VM matches" : "No restore points yet") : "Add a backup target first");
+  }).join("") : empty(5, state.targets.length ? (rs.points.length ? "No VM matches" : "No restore points yet") : "Add a backup repository first");
 }
 function rsRenderPoints() {
   $(".rs-vm-title", rsForm).textContent = `Restore points of ${rs.vm}, newest first`;
@@ -3140,43 +3671,86 @@ function renderSources() {
       <td><span class="badge info plain">${esc(SOURCE_TYPES[s.type] || s.type)}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(where)}</td>
       <td>${esc(st.username || "–")}</td>
-      <td><div class="actions">${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
+      <td><div class="actions">${canOperate() ? `<button class="small" data-source-test="${esc(s.name)}">Test</button>` : ""}${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
     </tr>`;
   }).join("") : empty(5, "No sources yet. Add an ESXi host, a vCenter or a folder of exports.");
 }
 
 let sourceVMs = [];
 let sourceVMsFor = null;  // the source the list above was read from
+const migratePicked = new Set();
+let sourceReadGeneration = 0;
+function migrateSelection() {
+  $("#migrate-selected").disabled = !canOperate() || !migratePicked.size || !sourceVMsFor;
+  $("#migrate-selected").textContent = `Migrate selected (${migratePicked.size})`;
+  const all = $("#migrate-select-all");
+  all.checked = sourceVMs.length > 0 && migratePicked.size === sourceVMs.length;
+  all.indeterminate = migratePicked.size > 0 && !all.checked;
+}
+function connectionChecks(result) {
+  return `<ol>${result.checks.map((c) => `<li class="${c.ok ? "check-ok" : "check-failed"}"><strong>${c.ok ? "✓" : "✗"} ${esc(c.step)}</strong><div>${esc(c.detail)}</div>${c.hint ? `<p>${esc(c.hint)}</p>` : ""}</li>`).join("")}</ol>`;
+}
+async function runSourceTest(name, box) {
+  box.innerHTML = "Testing connection…";
+  try {
+    const result = await post(`/migrate/sources/${enc(name)}/test`, {});
+    box.innerHTML = connectionChecks(result);
+    return result;
+  } catch (err) { box.textContent = err.message; }
+}
 async function renderSourceVMs() {
   const name = $("#browse-source").value || state.sources[0]?.name;
-  const tbody = $("#source-vms");
-  if (!name) { tbody.innerHTML = empty(8, "Add a source first (Sources tab)"); return; }
-  // Reading ESXi or vCenter takes seconds, so the 10 s auto-refresh leaves this list
-  // alone; it reloads only on Refresh or when another source is picked.
-  tbody.innerHTML = empty(8, "Reading the source…");
+  const generation = ++sourceReadGeneration;
+  const tbody = $("#source-vms"), error = $("#source-error");
+  sourceVMs = []; sourceVMsFor = null; migratePicked.clear(); migrateSelection();
+  error.hidden = true;
+  if (!name) { tbody.innerHTML = empty(9, "Add a source first (Sources tab)"); return; }
+  tbody.innerHTML = empty(9, "Reading the source…");
   try {
-    sourceVMs = await api(`/migrate/sources/${enc(name)}/vms`);
-    sourceVMsFor = name;
+    const found = await api(`/migrate/sources/${enc(name)}/vms`);
+    if (generation !== sourceReadGeneration) return;
+    sourceVMs = found; sourceVMsFor = name;
   } catch (err) {
-    sourceVMsFor = null;
-    tbody.innerHTML = empty(8, err.message);
+    if (generation !== sourceReadGeneration) return;
+    tbody.innerHTML = empty(9, "Source inventory unavailable");
+    error.hidden = false;
+    error.innerHTML = `<strong>Could not list VMs from ${esc(name)}</strong><p>Run the connection test to identify the failed step and how to fix it.</p><details><summary>Inventory error</summary><p>${esc(err.message)}</p></details><button type="button" data-source-test="${esc(name)}">Run connection test</button><div class="migrate-checks"></div>`;
+    // Diagnose separately: inventory failures may be DNS, TCP, TLS, login or listing.
+    if (canOperate()) {
+      const result = await runSourceTest(name, $(".migrate-checks", error));
+      if (generation !== sourceReadGeneration) return;
+      const failed = result?.checks.find((c) => !c.ok && c.step !== "TCP 902");
+      if (failed) $("strong", error).textContent = `${name}: ${failed.step} failed`;
+    }
     return;
   }
   const op = canOperate();
   tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => `<tr>
+    <td><input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${op ? "" : "disabled"}></td>
     <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip" title="${esc(vm.ref)}">${esc(vm.ref.split("/").pop())}</span></div></div></td>
-    <td>${vm.state ? `<span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state)}</span>` : "–"}</td>
+    <td>${vm.state ? `<span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state)}</span>` : "Unknown"}${vm.state === "running" ? '<span class="vm-sub">Power off at source first</span>' : ""}</td>
     <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td>
     <td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
     <td>${esc(vm.firmware.toUpperCase())}</td>
     <td>${esc(vm.guest_os || "–")}${vm.notes ? `<span class="vm-sub clip" title="${esc(vm.notes)}">${esc(vm.notes)}</span>` : ""}</td>
-    <td><div class="actions">${!op ? "" : vm.state === "running"
-      ? `<button class="small" disabled title="Power the VM off at the source first">Import</button>`
-      : `<button class="small primary" data-import="${i}">Import</button>`}${op && sourceVMsFor === "uploads"
+    <td><div class="actions">${op ? `<button class="small primary" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads"
       ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
-  </tr>`).join("") : empty(8, "No VMs found on this source");
+  </tr>`).join("") : empty(9, "No VMs found on this source");
 }
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
+$("#source-vms").addEventListener("change", (e) => {
+  const input = e.target.closest("[data-migrate-pick]");
+  if (!input) return;
+  const index = Number(input.dataset.migratePick);
+  if (input.checked) migratePicked.add(index); else migratePicked.delete(index);
+  migrateSelection();
+});
+$("#migrate-select-all").addEventListener("change", (e) => {
+  migratePicked.clear();
+  if (canOperate() && sourceVMsFor && e.target.checked) sourceVMs.forEach((v, i) => migratePicked.add(i));
+  $$("#source-vms [data-migrate-pick]").forEach((c) => { c.checked = migratePicked.has(Number(c.dataset.migratePick)); });
+  migrateSelection();
+});
 
 // Uploads stream straight to the node's disk; big exports take a while, so each file
 // shows its own progress bar.
@@ -3225,40 +3799,57 @@ $("#upload-files").addEventListener("change", async (e) => {
 });
 $("#refresh-source").addEventListener("click", () => renderSourceVMs());
 
+function importElapsed(j) {
+  const seconds = Math.max(0, Math.floor(((j.finished ? Date.parse(j.finished) : Date.now()) - Date.parse(j.created)) / 1000));
+  return Number.isFinite(seconds) ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : "–";
+}
 function renderImports() {
   $("#imports").innerHTML = state.imports.length ? state.imports.map((j) => `<tr>
     <td class="vm-sub" style="display:table-cell" title="${esc(j.vm)}">${esc(j.vm.split("/").pop())}</td><td>${esc(j.source)}</td>
-    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}</td>
+    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}<span class="vm-sub">Elapsed ${importElapsed(j)}</span></td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${esc(j.error || (j.state === "running" ? `${j.step || "Working"}${j.percent != null ? ` · ${j.percent}%` : ""}` : ""))}
+    <td class="vm-sub" style="display:table-cell">${esc(j.error || j.step || "")}
+      ${j.percent != null ? `<progress max="100" value="${Number(j.percent)}" aria-label="Migration progress"></progress> ${Number(j.percent)}%` : ""}
       <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button></td></tr>`).join("") : empty(7, "No imports yet");
 }
 
+async function openImportWizard(indices) {
+  if (!canOperate() || !sourceVMsFor || !indices.length) return;
+  const source = sourceVMsFor, vms = [...sourceVMs];
+  await load("vms", "pools", "networks");
+  openDialog("import-dialog", { source, vms, indices });
+}
+$("#migrate-selected").addEventListener("click", () => openImportWizard([...migratePicked]).catch(fail));
 $("#page-migrate").addEventListener("click", async (e) => {
   const imp = e.target.closest("button[data-import]");
   const rm = e.target.closest("button[data-source-del]");
+  const test = e.target.closest("button[data-source-test]");
   const upDel = e.target.closest("button[data-upload-del]");
+  if (test) {
+    test.disabled = true;
+    try {
+      const panel = test.closest("#source-error");
+      const box = panel ? $(".migrate-checks", panel) : $("#saved-source-test-results");
+      if (!panel) openDialog("source-test-dialog");
+      const result = await runSourceTest(test.dataset.sourceTest, box);
+      if (panel && result) {
+        const failed = result.checks.find((c) => !c.ok && c.step !== "TCP 902");
+        $("strong", panel).textContent = failed ? `${test.dataset.sourceTest}: ${failed.step} failed` : "Connection checks passed. Refresh the source inventory.";
+      }
+    } finally { test.disabled = false; }
+  }
   if (upDel) {
     if (!confirm(`Delete the uploaded file ${upDel.dataset.uploadDel}?`)) return;
     try { await del(`/migrate/uploads/${enc(upDel.dataset.uploadDel)}`); renderSourceVMs(); } catch (err) { fail(err); }
   }
-  if (imp) {
-    const vm = sourceVMs[Number(imp.dataset.import)];
-    if (vm.state === "running" && !confirm(`${vm.name} is running at the source. Its disks may change during the copy. Continue anyway?`)) return;
-    openDialog("import-dialog", { source: $("#browse-source").value, vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
-    $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
-    const src = state.sources.find((s) => s.name === $("#browse-source").value);
-    $("#import-hib").hidden = !src || !(src.type === "kvm" || (src.type === "vmware" && (src.settings?.transport || "ssh") === "ssh"));
-    renderImportNets(vm);
-    load("networks").then(() => renderImportNets(vm)).catch(() => {});
-  }
+  if (imp) { try { await openImportWizard([Number(imp.dataset.import)]); } catch (err) { fail(err); } }
   if (rm) {
     if (!confirm(`Remove source ${rm.dataset.sourceDel}?`)) return;
     try { await del(`/migrate/sources/${enc(rm.dataset.sourceDel)}`); await refresh("migrate"); } catch (err) { fail(err); }
   }
 });
 
-handlers["source-dialog"] = async (f) => {
+function sourceFormBody(f) {
   const type = f.get("type");
   const body = { name: f.get("name"), type };
   if (type === "vmware") {
@@ -3266,6 +3857,27 @@ handlers["source-dialog"] = async (f) => {
     if (f.get("vpath")) body.path = f.get("vpath");
   } else if (type === "kvm") Object.assign(body, { host: f.get("host"), username: "root", password: f.get("password") });
   else body.path = f.get("path");
+  return body;
+}
+let sourceTestVersion = 0;
+function clearSourceTest() { sourceTestVersion++; $("#source-test-results").replaceChildren(); }
+$("#source-dialog").addEventListener("close", clearSourceTest);
+$("#source-form").addEventListener("input", clearSourceTest);
+$("#source-form").addEventListener("change", clearSourceTest);
+$("#test-source-form").addEventListener("click", async (e) => {
+  const form = $("#source-form"), box = $("#source-test-results");
+  if (!form.reportValidity()) return;
+  const version = ++sourceTestVersion;
+  e.target.disabled = true; box.textContent = "Testing connection…";
+  try {
+    const result = await post("/migrate/sources/test", sourceFormBody(new FormData(form)));
+    if (version === sourceTestVersion) box.innerHTML = connectionChecks(result);
+  } catch (err) { if (version === sourceTestVersion) box.textContent = err.message; }
+  finally { e.target.disabled = false; }
+});
+
+handlers["source-dialog"] = async (f) => {
+  const body = sourceFormBody(f);
   await post("/migrate/sources", body);
   toast(`Source ${body.name} added`);
   await refresh("migrate");
@@ -3274,38 +3886,121 @@ handlers["source-dialog"] = async (f) => {
   await renderSourceVMs();
 };
 
-// One row per source NIC: where it was at the source, and which ibHiCS network it joins.
-// A network named like the source port group is picked by itself.
-function renderImportNets(vm) {
-  const box = $("#import-nets");
-  const count = Math.max(vm.nics || 1, (vm.networks || []).length, 1);
-  const was = $$("select", box).map((s) => s.value);
-  const slug = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-  box.innerHTML = `<span class="label">Network adapters</span>` + Array.from({ length: count }, (_, i) => {
-    const src = (vm.networks || [])[i] || "";
-    const match = state.networks.find((n) => slug(n.name) === slug(src) && src);
-    const pick = was[i] || match?.name || "default";
-    return `<div class="net-map"><span>Adapter ${i + 1}${src ? ` · at the source: <b>${esc(src)}</b>` : ""}</span>
-      <span class="arrow">→</span><select data-net-map="${i}">${netOptions(pick)}</select></div>`;
-  }).join("") + `<span class="vm-sub">Missing a VLAN? Add it under Storage → Networks first.</span>`;
+// Map the union of source networks, then rebuild each VM's NIC array in NIC order.
+const importForm = $("#import-form");
+const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() };
+function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
+function importNetworkKeys(vm) {
+  return Array.from({ length: Math.max(vm.nics || 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
 }
+function renderImportNets() {
+  const keys = [...new Set(importChosen().flatMap(importNetworkKeys))];
+  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  $("#import-nets").innerHTML = `<table><thead><tr><th>Source network</th><th>Target virtual switch</th></tr></thead><tbody>${keys.map((src, i) => {
+    const pick = importBatch.networks.get(src) || state.networks.find((n) => slug(n.name) === slug(src))?.name || "default";
+    importBatch.networks.set(src, pick);
+    return `<tr><td>${esc(src)}</td><td><select data-import-network="${i}" aria-label="Target for ${esc(src)}">${netOptions(pick)}</select></td></tr>`;
+  }).join("")}</tbody></table><p class="hint">Add missing virtual switches under Network first.</p>`;
+  $$("#import-nets select").forEach((select, i) => select.addEventListener("change", () => importBatch.networks.set(keys[i], select.value)));
+}
+function importCapacity() {
+  const f = importForm.elements;
+  const pool = state.pools.find((p) => p.node === f.node.value && p.name === f.pool.value && p.active);
+  const disks = importChosen().reduce((total, vm) => total + vm.disks_gb.reduce((a, b) => a + b, 0), 0);
+  const needed = disks * (["lvm", "iscsi"].includes(pool?.type) ? 2 : 1);
+  const unknown = importChosen().some((v) => !v.disks_gb.length || v.disks_gb.some((g) => !g));
+  $("#import-capacity").textContent = `${disks} GB total disks; ${needed} GB required including conversion space; ${pool ? `${Math.floor(pool.available_gb)} GB free` : "select an available pool"}.${unknown ? " Warning: some disk sizes are unknown; actual space may be higher." : ""}${pool && pool.available_gb < needed ? " Warning: insufficient free space. Choose a larger pool." : ""}`;
+  return { pool, needed };
+}
+function importTargetPools() {
+  const sel = importForm.elements.pool, was = sel.value;
+  const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
+  sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
+  if (pools.some((p) => p.name === was)) sel.value = was;
+  importCapacity();
+}
+const importWiz = wizard("import-dialog", {
+  steps: 4,
+  reset() {
+    const ctx = dialogContext;
+    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() });
+    $("#import-submit-status").textContent = "";
+    importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+    importTargetPools();
+  },
+  check(step) {
+    const chosen = importChosen();
+    if (!chosen.length) throw new Error("Select at least one VM.");
+    if (chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
+    if (step >= 2) {
+      const { pool, needed } = importCapacity();
+      if (!pool) throw new Error("Choose a healthy node and an available storage pool.");
+      if (pool.available_gb < needed) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
+      if (names.some((n) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters, digits, '-', '_' or '.'.");
+      if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
+      if (chosen.some((v) => {
+        const r = importBatch.resources.get(v.ref) || v;
+        return !Number.isInteger(r.vcpus) || r.vcpus < 1 || r.vcpus > 256 || !Number.isInteger(r.memory_mb) || r.memory_mb < 128;
+      })) throw new Error("Choose 1–256 vCPUs and at least 128 MB memory per VM.");
+      if (chosen.some((v, i) => !importBatch.submitted.has(v.ref) && (state.vms.some((vm) => vm.name === names[i]) || state.imports.some((j) => j.name === names[i] && ["queued", "running"].includes(j.state))))) throw new Error("A target name already exists or has a pending migration. Choose another name.");
+    }
+  },
+  show(step) {
+    if (step === 1) {
+      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" ? " — power off first" : ""}</td><td>${vm.disks_gb.map((g) => g ? `${g} GB` : "Unknown").join(", ")}</td></tr>`).join("");
+    }
+    if (step === 2) {
+      $("#import-names").innerHTML = `<table><thead><tr><th>Source VM</th><th>New name</th><th>vCPU</th><th>Memory (MB)</th></tr></thead><tbody>${importChosen().map((vm, i) => {
+        const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
+        importBatch.resources.set(vm.ref, r);
+        const lock = importBatch.submitted.has(vm.ref) ? "readonly" : "";
+        return `<tr><td>${esc(vm.name)}</td><td><input data-import-name="${i}" value="${esc(importBatch.names.get(vm.ref) ?? vm.name)}" ${lock} aria-label="New name for ${esc(vm.name)}"></td><td><input data-import-cpu="${i}" type="number" min="1" max="256" value="${r.vcpus}" ${lock} aria-label="vCPU for ${esc(vm.name)}"></td><td><input data-import-memory="${i}" type="number" min="128" step="128" value="${r.memory_mb}" ${lock} aria-label="Memory for ${esc(vm.name)}"></td></tr>`;
+      }).join("")}</tbody></table>`;
+      $$("#import-names [data-import-name]").forEach((input, i) => input.addEventListener("input", () => importBatch.names.set(importChosen()[i].ref, input.value)));
+      [["cpu", "vcpus"], ["memory", "memory_mb"]].forEach(([attr, key]) => {
+        $$(`#import-names [data-import-${attr}]`).forEach((input, i) => input.addEventListener("input", () => { importBatch.resources.get(importChosen()[i].ref)[key] = Number(input.value); }));
+      });
+      const source = state.sources.find((s) => s.name === importBatch.source);
+      $("#import-win").hidden = !importChosen().some((v) => /windows/i.test(v.guest_os));
+      $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings.transport || "ssh") === "ssh"));
+      importCapacity();
+    }
+    if (step === 3) renderImportNets();
+    if (step === 4) {
+      $("#import-summary").innerHTML = `<p>${esc(importBatch.source)} → ${esc(importForm.elements.node.value)} / ${esc(importForm.elements.pool.value)}</p><table><thead><tr><th>Source VM</th><th>New name</th><th>Disks</th><th>Network mapping</th></tr></thead><tbody>${importChosen().map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(importBatch.names.get(v.ref) ?? v.name)}</td><td>${v.disks_gb.reduce((a, b) => a + b, 0)} GB</td><td>${importNetworkKeys(v).map((k) => `${esc(k)} → ${esc(importBatch.networks.get(k) || "default")}`).join("<br>")}</td></tr>`).join("")}</tbody></table><p class="hint">Unknown disk sizes are not included. VMs must remain powered off at the source.</p>`;
+    }
+  },
+});
+$("#import-pick-vms").addEventListener("change", (e) => {
+  const input = e.target.closest("[data-wizard-vm]");
+  if (!input) return;
+  const ref = importBatch.vms[Number(input.dataset.wizardVm)].ref;
+  if (input.checked) importBatch.picked.add(ref); else importBatch.picked.delete(ref);
+});
+importForm.elements.node.addEventListener("change", importTargetPools);
+importForm.elements.pool.addEventListener("change", importCapacity);
 
-handlers["import-dialog"] = async (f, ctx) => {
-  const networks = $$("#import-nets select").map((s) => s.value);
-  const body = {
-    source: ctx.source, vm: ctx.vm.ref, name: f.get("name"), node: f.get("node") || null,
-    pool: f.get("pool") || "default", network: networks.length ? networks : "default", start: f.get("start") === "on",
-    clear_hibernation: f.get("clear_hibernation") === "on" && !$("#import-win").hidden && !$("#import-hib").hidden,
-  };
-  if (f.get("vcpus")) body.vcpus = Number(f.get("vcpus"));
-  if (f.get("memory_mb")) body.memory_mb = Number(f.get("memory_mb"));
-  const job = await post("/migrate/jobs", body);
-  if (currentPage() !== "migrate") {
-    toast(`Importing ${job.name} to ${job.node}. Follow it in Tasks.`);
-    await load("imports").then(renderTasks).catch(() => {});
-    return;
+handlers["import-dialog"] = async (f) => {
+  if (importWiz.step !== 4) throw new Error("Review the migration summary first.");
+  importWiz.check(4);
+  const chosen = importChosen();
+  for (const vm of chosen) {
+    if (importBatch.submitted.has(vm.ref)) continue;
+    try {
+      await post("/migrate/jobs", {
+        source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
+        node: f.get("node"), pool: f.get("pool"), vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k) => importBatch.networks.get(k) || "default"), start: f.get("start") === "on",
+        clear_hibernation: f.get("clear_hibernation") === "on" && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
+      });
+      importBatch.submitted.add(vm.ref);
+      $("#import-submit-status").textContent = `${importBatch.submitted.size} of ${chosen.length} jobs created.`;
+    } catch (err) {
+      $("#import-submit-status").textContent = `${importBatch.submitted.size} of ${chosen.length} jobs created. ${vm.name}: ${err.message}. Review Jobs before retrying; accepted jobs will be skipped in this wizard.`;
+      throw err;
+    }
   }
-  toast(`Importing ${job.name} to ${job.node}. Follow it under Jobs.`);
+  toast(`${chosen.length} migration jobs created.`);
   await refresh("migrate");
   selectTab("migrate-tabs", "imports");
 };
@@ -3402,3 +4097,101 @@ loadMe().then(show).catch(fail);
 setInterval(() => {
   if (!document.querySelector("dialog[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);
+
+
+// ---------- v0.7: virtual router, firewall, connectivity test ----------
+
+function renderEdge() {
+  const edge = state.edge || { routers: [], rules: [], router_node: "" };
+  const op = canOperate();
+  $("#edge-router-node").textContent = edge.router_node || "–";
+  $("#routers").innerHTML = edge.routers.length ? edge.routers.map((r) => `<tr>
+    <td><b>${esc(r.network)}</b></td><td class="mono">${esc(r.gateway)}</td>
+    <td>${r.nat ? "Yes" : "No (routed only)"}</td>
+    <td>${r.dhcp ? esc(r.dhcp_start && r.dhcp_end ? `${r.dhcp_start} – ${r.dhcp_end}` : "Automatic range") : "Off"}</td>
+    <td><div class="actions">${op ? `<button class="small" data-router-edit="${esc(r.network)}">Edit</button><button class="small danger" data-router-del="${esc(r.network)}">Remove</button>` : ""}</div></td>
+  </tr>`).join("") : empty(5, "No routers yet. VLANs are plain layer-2 switches until one gets a gateway.");
+  $("#fw-rules").innerHTML = edge.rules.length ? edge.rules.map((r, i) => `<tr class="${r.enabled ? "" : "muted"}">
+    <td>${i + 1}</td><td><b>${esc(r.name)}</b></td>
+    <td><span class="badge ${r.action === "allow" ? "done" : "failed"}">${r.action === "allow" ? "Allow" : "Deny"}</span></td>
+    <td>${esc(r.src)}</td><td>${esc(r.dst)}</td>
+    <td>${r.proto === "any" ? "Any" : esc(r.proto.toUpperCase())}${r.port ? ` ${r.port}` : ""}</td>
+    <td><div class="actions">${op ? `<button class="small" data-fw-up="${i}" ${i ? "" : "disabled"} title="Move up">↑</button>
+      <button class="small" data-fw-toggle="${i}">${r.enabled ? "Disable" : "Enable"}</button>
+      <button class="small" data-fw-edit="${i}">Edit</button><button class="small danger" data-fw-del="${i}">Delete</button>` : ""}</div></td>
+  </tr>`).join("") : empty(7, "No rules: everything is allowed.");
+  const nets = state.networks.map((n) => n.name);
+  $("#fw-ends").innerHTML = ["any", ...nets].map((n) => `<option value="${esc(n)}">`).join("");
+  const routed = edge.routers.map((r) => r.network);
+  $("#nettest-from").innerHTML = `<option value="">${esc(edge.router_node || "this node")} (its own address)</option>` +
+    routed.map((n) => `<option value="${esc(n)}">Gateway of ${esc(n)}</option>`).join("");
+}
+
+async function saveRules(rules) {
+  state.edge = await api("/edge/rules", { method: "PUT", body: JSON.stringify(rules) });
+  renderEdge();
+}
+
+function openRouter(network) {
+  const r = (state.edge?.routers || []).find((x) => x.network === network);
+  const vlans = state.networks.filter((n) => n.vlan);
+  if (!vlans.length) { toast("Add a virtual switch (VLAN) first: the LAN itself keeps its own gateway.", true); return; }
+  $("#router-net").innerHTML = vlans.map((n) => `<option value="${esc(n.name)}">${esc(n.name)} (VLAN ${n.vlan})</option>`).join("");
+  const { nat, dhcp, ...fields } = r || { network: vlans[0].name };
+  openDialog("router-dialog", { edit: Boolean(r) }, fields);
+  const f = $("#router-form");
+  f.elements.network.disabled = Boolean(r);
+  f.elements.nat.checked = r ? r.nat : true;
+  f.elements.dhcp.checked = r ? r.dhcp : true;
+}
+$("#router-add").addEventListener("click", () => openRouter(null));
+handlers["router-dialog"] = async (f) => {
+  const el = $("#router-form").elements, net = el.network.value;
+  const body = { gateway: f.get("gateway").trim(), nat: el.nat.checked, dhcp: el.dhcp.checked,
+    dhcp_start: (f.get("dhcp_start") || "").trim(), dhcp_end: (f.get("dhcp_end") || "").trim(), dns: (f.get("dns") || "").trim() };
+  state.edge = await api(`/edge/routers/${enc(net)}`, { method: "PUT", body: JSON.stringify(body) });
+  toast(`Router for ${net} saved: gateway ${body.gateway}`);
+  renderEdge();
+};
+$("#routers").addEventListener("click", async (e) => {
+  const ed = e.target.closest("[data-router-edit]"), rm = e.target.closest("[data-router-del]");
+  if (ed) openRouter(ed.dataset.routerEdit);
+  if (rm && confirm(`Remove the router of ${rm.dataset.routerDel}? Its VMs lose their gateway and DHCP.`)) {
+    try { state.edge = await api(`/edge/routers/${enc(rm.dataset.routerDel)}`, { method: "DELETE" }); renderEdge(); } catch (err) { fail(err); }
+  }
+});
+
+$("#fw-add").addEventListener("click", () => openDialog("fw-dialog", { index: null }));
+handlers["fw-dialog"] = async (f, ctx) => {
+  const rule = { name: f.get("name").trim(), action: f.get("action"), src: f.get("src").trim(), dst: f.get("dst").trim(),
+    proto: f.get("proto"), port: f.get("port") ? Number(f.get("port")) : null, enabled: true };
+  const rules = [...(state.edge?.rules || [])];
+  if (ctx.index == null) rules.push(rule); else rules[ctx.index] = { ...rules[ctx.index], ...rule };
+  await saveRules(rules);
+  toast(`Rule ${rule.name} saved on every node`);
+};
+$("#fw-rules").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const rules = [...(state.edge?.rules || [])];
+  try {
+    if (b.dataset.fwEdit != null) { const i = Number(b.dataset.fwEdit); openDialog("fw-dialog", { index: i }, { ...rules[i], port: rules[i].port ?? "" }); return; }
+    if (b.dataset.fwDel != null) { const i = Number(b.dataset.fwDel); if (!confirm(`Delete rule ${rules[i].name}?`)) return; rules.splice(i, 1); }
+    if (b.dataset.fwUp != null) { const i = Number(b.dataset.fwUp); [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; }
+    if (b.dataset.fwToggle != null) { const i = Number(b.dataset.fwToggle); rules[i] = { ...rules[i], enabled: !rules[i].enabled }; }
+    await saveRules(rules);
+  } catch (err) { fail(err); }
+});
+
+$("#nettest-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target), out = $("#nettest-out"), status = $("#nettest-status");
+  status.textContent = f.get("kind") === "ping" ? "Pinging…" : "Tracing… (up to a minute)";
+  out.hidden = true;
+  try {
+    const r = await post("/edge/test", { kind: f.get("kind"), target: f.get("target").trim(), network: f.get("network") });
+    status.textContent = `${r.ok ? "✓ Reachable" : "✗ No answer"} (from ${r.node})`;
+    out.textContent = r.output || "(no output)";
+    out.hidden = false;
+  } catch (err) { status.textContent = ""; fail(err); }
+});

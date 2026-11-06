@@ -12,6 +12,7 @@ import uvicorn
 from ..backup import NodeBackup
 from ..cluster import Cluster
 from ..hypervisor import load_driver
+from ..hypervisor.edge import restore_edge
 from .app import create_app
 from .auth import Auth
 from .backups import BackupManager
@@ -104,6 +105,7 @@ def main() -> None:
     driver = load_driver(args.driver, args.libvirt_uri)
     node_backup = NodeBackup(driver)
     node_backup.cleanup()  # detach backup targets a crash may have left attached
+    restore_edge(driver)
     cluster.add_local(args.node_name, driver, node_backup)
     cluster.load()
 
@@ -147,6 +149,7 @@ def main() -> None:
         imports=imports,
         groups=groups,
         recycle_days=args.recycle_days,
+        edge_state=Path("/var/lib/ibhics/edge.json") if args.driver == "libvirt" else None,
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")
