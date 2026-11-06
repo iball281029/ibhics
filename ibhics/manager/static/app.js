@@ -69,6 +69,7 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 
 // ---------- theme and user menu ----------
@@ -357,7 +358,7 @@ function allTasks() {
       step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
     })),
     ...state.jobs.map((j) => ({
-      kind: j.kind === "restore" ? "Restore" : "Backup", title: j.vm, sub: `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
+      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
       state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
@@ -563,7 +564,7 @@ async function refresh(page, auto = false) {
   if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
-  if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
+  if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
@@ -718,6 +719,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
       <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
+      <button data-vm="snapshots" data-id="${vm.uuid}">Restore snapshot…</button>
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
@@ -1144,6 +1146,7 @@ async function vmAction(e) {
   }
   if (act === "edit") { openEdit(id).catch(fail); return; }
   if (act === "snapshot") { openSnapshot(id); return; }
+  if (act === "snapshots") { location.hash = `vm/${id}`; setTimeout(() => selectTab("vm-tabs", "vm-snapshots"), 400); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
@@ -3157,10 +3160,10 @@ async function renderVMSnapshots(vm) {
         <div class="snap-head"><b>${esc(s.name)}</b>
           <span class="badge ${s.vm_state === "running" ? "running" : "plain"}">${s.vm_state === "running" ? "with memory" : "disks only"}</span>
           ${s.current ? `<span class="badge plain">current</span>` : ""}</div>
-        <span class="vm-sub">${esc(when(s.created))}${s.parent ? ` · after ${esc(s.parent)}` : ""}</span>
+        <span class="vm-sub">${esc(when(s.created))}${s.parent ? ` · after ${esc(s.parent)}` : ""} · stored inside the VM's disks in ${esc(snapPools(vm))}</span>
         ${s.description ? `<p>${esc(s.description)}</p>` : ""}
       </div>
-      ${op ? `<div class="actions"><button class="small" data-snap="revert" data-name="${esc(s.name)}" data-state="${esc(s.vm_state)}">Revert</button>
+      ${op ? `<div class="actions"><button class="small" data-snap="revert" data-name="${esc(s.name)}" data-state="${esc(s.vm_state)}">Restore</button>
         <button class="small danger" data-snap="delete" data-name="${esc(s.name)}">Delete</button></div>` : ""}
     </li>`).join("") : `<li class="hint snap-empty">No snapshots yet.${why ? " " + esc(why) : " Take one before an upgrade or a risky change."}</li>`) ;
   if (snaps.length) box.insertAdjacentHTML("afterbegin", here);
@@ -3185,7 +3188,8 @@ function snapshotName(vmName, d = new Date()) {
 }
 handlers["snap-dialog"] = async (f, ctx) => {
   const restart = !$("#snap-form .snap-restart").hidden && f.get("restart") === "on";
-  if (restart) toast("Taking the snapshot: the VM may shut down and start again first…");
+  toast(restart ? "Taking the snapshot: the VM may shut down and start again first… (see Tasks)" : "Taking the snapshot… (see Tasks)");
+  setTimeout(() => load("jobs").catch(() => {}), 800);
   await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description"), restart });
   toast(`Snapshot taken: ${f.get("name").trim()}`);
   if (currentPage() !== "vm") return;
@@ -3193,25 +3197,54 @@ handlers["snap-dialog"] = async (f, ctx) => {
   await refresh("vm");
   selectTab("vm-tabs", "vm-snapshots");
 };
+const snapPools = (vm) => [...new Set((vm.disks || []).map((d) => d.pool).filter(Boolean))].join(", ") || "its pool";
+// Restore or delete a snapshot; true when done. Shared by the VM page and Backup → Snapshots.
+async function snapAction(b, uuid, vmName) {
+  const name = b.dataset.name;
+  if (b.dataset.snap === "revert") {
+    const lose = `Everything that changed in ${vmName} since then is lost.`;
+    if (!confirm(`Restore ${vmName} to snapshot ${name}? ${lose}${b.dataset.state === "running" ? " The VM will be running, as it was." : " The VM will be off."}`)) return false;
+    b.disabled = true;
+    await post(`/vms/${uuid}/snapshots/${enc(name)}/revert`);
+    toast(`${vmName} is back at ${name}`);
+  } else {
+    if (!confirm(`Delete snapshot ${name} of ${vmName}? The VM itself does not change.`)) return false;
+    b.disabled = true;
+    await del(`/vms/${uuid}/snapshots/${enc(name)}`);
+    toast(`Snapshot ${name} deleted`);
+  }
+  return true;
+}
 $("#vm-snaps").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-snap]");
   if (!b) return;
-  const uuid = vmFromHash(), name = b.dataset.name, vm = state.vms.find((v) => v.uuid === uuid);
+  const uuid = vmFromHash(), vm = state.vms.find((v) => v.uuid === uuid);
   try {
-    if (b.dataset.snap === "revert") {
-      const lose = `Everything that changed in ${vm.name} since then is lost.`;
-      if (!confirm(`Revert ${vm.name} to ${name}? ${lose}${b.dataset.state === "running" ? " The VM will be running, as it was." : " The VM will be off."}`)) return;
-      b.disabled = true;
-      await post(`/vms/${uuid}/snapshots/${enc(name)}/revert`);
-      toast(`${vm.name} is back at ${name}`);
-    } else {
-      if (!confirm(`Delete snapshot ${name}? The VM itself does not change.`)) return;
-      b.disabled = true;
-      await del(`/vms/${uuid}/snapshots/${enc(name)}`);
-      toast(`Snapshot ${name} deleted`);
-    }
+    if (!(await snapAction(b, uuid, vm.name))) return;
     await refresh("vm");
     selectTab("vm-tabs", "vm-snapshots");
+  } catch (err) { b.disabled = false; fail(err); }
+});
+async function renderAllSnapshots() {
+  const box = $("#all-snaps");
+  const snaps = await api("/snapshots").catch((err) => { box.innerHTML = empty(6, esc(err.message)); return null; });
+  if (!snaps) return;
+  const op = canOperate();
+  box.innerHTML = snaps.length ? snaps.sort((a, b) => a.vm_name.localeCompare(b.vm_name) || b.created.localeCompare(a.created)).map((s) => `<tr>
+    <td><a href="#vm/${esc(s.vm_uuid)}">${esc(s.vm_name)}</a></td>
+    <td><b>${esc(s.name)}</b>${s.current ? ` <span class="badge plain">current</span>` : ""}${s.description ? `<div class="vm-sub">${esc(s.description)}</div>` : ""}</td>
+    <td>${esc(when(s.created))}</td>
+    <td>${s.vm_state === "running" ? "with memory" : "disks only"}</td>
+    <td>${esc(s.node)} · ${esc(s.stored_in || "-")}</td>
+    <td><div class="actions">${op ? `<button class="small" data-snap="revert" data-uuid="${esc(s.vm_uuid)}" data-vm="${esc(s.vm_name)}" data-name="${esc(s.name)}" data-state="${esc(s.vm_state)}">Restore</button>
+      <button class="small danger" data-snap="delete" data-uuid="${esc(s.vm_uuid)}" data-vm="${esc(s.vm_name)}" data-name="${esc(s.name)}">Delete</button>` : ""}</div></td>
+  </tr>`).join("") : empty(6, "No snapshots. Take one from a VM's menu (Snapshot).");
+}
+$("#all-snaps").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-snap]");
+  if (!b) return;
+  try {
+    if (await snapAction(b, b.dataset.uuid, b.dataset.vm)) await renderAllSnapshots();
   } catch (err) { b.disabled = false; fail(err); }
 });
 

@@ -230,3 +230,38 @@ def test_snapshots_through_manager_on_remote_node(tmp_path):
     assert api.delete(f"/api/v1/vms/{uuid}/snapshots/nope").status_code == 404
     assert api.delete(f"/api/v1/vms/{uuid}/snapshots/base-line").status_code == 204
     assert api.get(f"/api/v1/vms/{uuid}/snapshots").json() == []
+
+
+def test_snapshot_tasks_and_list_of_all_snapshots():
+    driver = FakeDriver(demo_console=False)
+    client = TestClient(create_app(driver))
+    vm = client.post("/api/v1/vms", json={"name": "web01", "disks": [{"size_gb": 1}]}).json()
+    assert client.post(f"/api/v1/vms/{vm['uuid']}/snapshots", json={"name": "s1"}).is_success
+    assert client.post(f"/api/v1/vms/{vm['uuid']}/snapshots/s1/revert").is_success
+    every = client.get("/api/v1/snapshots").json()
+    assert [(s["vm_name"], s["name"], s["stored_in"]) for s in every] == [
+        ("web01", "s1", "default")
+    ]
+    jobs = client.get("/api/v1/backup/jobs").json()
+    assert [(j["kind"], j["vm"], j["target"], j["state"]) for j in jobs][:2] == [
+        ("snapshot-restore", "web01", "s1", "done"),
+        ("snapshot", "web01", "s1", "done"),
+    ]
+    bad = client.post(f"/api/v1/vms/{vm['uuid']}/snapshots", json={"name": "s1"})
+    assert bad.status_code == 409
+    assert client.get("/api/v1/backup/jobs").json()[0]["state"] == "failed"
+
+
+def test_libvirt_waits_for_the_state_change_lock(monkeypatch):
+    monkeypatch.setattr(lv, "libvirt", types.SimpleNamespace(libvirtError=LibvirtError))
+    calls = []
+
+    def busy():
+        calls.append(1)
+        if len(calls) < 3:
+            raise LibvirtError("cannot acquire state change lock (held by monitor=qemu-event)")
+        return "ok"
+
+    assert lv._retry_locked(busy, wait=0) == "ok" and len(calls) == 3
+    with pytest.raises(LibvirtError):
+        lv._retry_locked(lambda: (_ for _ in ()).throw(LibvirtError("other")), wait=0)

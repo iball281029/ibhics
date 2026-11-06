@@ -95,6 +95,8 @@ class BackupManager:
         self._jobs: deque[Job] = deque(maxlen=200)
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
+        # One backup or snapshot task at a time per VM: QEMU takes one state change at a time.
+        self._vm_locks: dict[str, threading.Lock] = {}
         # A SAN LUN or USB disk holds an ordinary filesystem that only one node may mount
         # at a time, so work on such a target is serialised across the whole cluster.
         self._target_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
@@ -219,7 +221,7 @@ class BackupManager:
 
         def work() -> str:
             target = self.target(target_name)
-            with self._using(target, wait=True):
+            with self._using(target, wait=True), self.vm_busy(uuid):
                 info = member.backups.backup(uuid, target)
                 if keep_last:
                     member.backups.prune(target, vm_name, keep_last)
@@ -259,6 +261,27 @@ class BackupManager:
 
         self._submit(job, work)
         return job
+
+    def vm_busy(self, uuid: str) -> threading.Lock:
+        with self._lock:
+            return self._vm_locks.setdefault(uuid, threading.Lock())
+
+    def run_task(self, kind: str, detail: str, vm_name: str, node: str, uuid: str, work):
+        """Run a short VM task (snapshot, restore, delete snapshot) now, in this request,
+        after any backup or snapshot of the same VM; it is listed in Tasks like a job."""
+        job = self._new_job(kind, detail, vm_name, node, None)
+        job.state = "running"
+        try:
+            with self.vm_busy(uuid):
+                result = work()
+            job.state = "done"
+            return result
+        except Exception as exc:
+            job.error = f"{type(exc).__name__}: {exc}"
+            job.state = "failed"
+            raise
+        finally:
+            job.finished = self._clock().isoformat()
 
     def _new_job(self, kind, target, vm, node, policy) -> Job:
         job = Job(

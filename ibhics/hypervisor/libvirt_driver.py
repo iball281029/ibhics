@@ -1113,12 +1113,14 @@ class LibvirtDriver(HypervisorDriver):
             f"<target file={quoteattr(str(image))}/><driver type='raw'/></disk>"
             for d, image in zip(disks, images, strict=True)
         )
-        dom.backupBegin(f"<domainbackup mode='push'><disks>{entries}</disks></domainbackup>", None)
+        xml = f"<domainbackup mode='push'><disks>{entries}</disks></domainbackup>"
+        _retry_locked(lambda: dom.backupBegin(xml, None))
         while (
-            dom.jobStats(0).get("type", libvirt.VIR_DOMAIN_JOB_NONE) != libvirt.VIR_DOMAIN_JOB_NONE
+            _retry_locked(lambda: dom.jobStats(0)).get("type", libvirt.VIR_DOMAIN_JOB_NONE)
+            != libvirt.VIR_DOMAIN_JOB_NONE
         ):
             time.sleep(poll)
-        done = dom.jobStats(libvirt.VIR_DOMAIN_JOB_STATS_COMPLETED)
+        done = _retry_locked(lambda: dom.jobStats(libvirt.VIR_DOMAIN_JOB_STATS_COMPLETED))
         if done.get("type") != libvirt.VIR_DOMAIN_JOB_COMPLETED:
             raise RuntimeError(f"disk backup of {dom.name()} did not complete: {done}")
 
@@ -1190,6 +1192,18 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             pass
         return info
+
+
+def _retry_locked(call, tries: int = 10, wait: float = 15):
+    """libvirt answers "cannot acquire state change lock" while QEMU is busy with another
+    change of the VM (e.g. just after a snapshot with memory): wait and try again."""
+    for attempt in range(tries):
+        try:
+            return call()
+        except libvirt.libvirtError as exc:
+            if "state change lock" not in str(exc) or attempt == tries - 1:
+                raise
+            time.sleep(wait)
 
 
 def _nvram_is_qcow2(xml: str) -> bool:
