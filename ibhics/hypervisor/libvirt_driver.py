@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -15,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from . import customize, vmstats
+from . import customize, edge, vmstats
 from .base import (
     CloneSpec,
     DiskSpec,
@@ -688,6 +689,36 @@ class LibvirtDriver(HypervisorDriver):
         net.undefine()
         if vlan is not None:
             self._drop_vlan(vlan)
+
+    def _bridges(self) -> dict[str, str]:
+        return {n.name: n.bridge for n in self.list_networks()}
+
+    def apply_edge(self, config: dict, router: bool) -> None:
+        cfg = edge.EdgeConfig.from_dict(config)
+        bridges = self._bridges()
+        cfg.validate(set(bridges))
+        edge.apply(cfg, bridges, self.run, router)
+        state = Path(edge.EDGE_STATE)
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"config": cfg.to_dict(), "router": router}))
+
+    def restore_edge(self) -> None:
+        """Put the router and firewall back after a reboot, from the last config."""
+        state = Path(edge.EDGE_STATE)
+        if state.is_file():
+            data = json.loads(state.read_text())
+            self.apply_edge(data["config"], data["router"])
+
+    def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
+        def run(cmd: list[str]) -> tuple[int, str]:
+            try:
+                done = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                return 1, f"{cmd[0]}: no answer within 60 s"
+            return done.returncode, (done.stdout + done.stderr).strip()
+
+        source = self._bridges().get(network, "") if network else ""
+        return edge.net_test(kind, target, run, source)
 
     def _drop_vlan(self, vlan: int) -> None:
         try:

@@ -19,12 +19,14 @@ from .. import RELEASE_NAME, __version__, console
 from ..backup.targets import BackupTarget, TargetType
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNotFound, VMState
+from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
 from . import datastore
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .deploys import Deploy, DeployManager
+from .edge import EdgeManager
 from .errors import install_cluster_errors, install_driver_errors
 from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
@@ -39,6 +41,8 @@ from .schemas import (
     CloneIn,
     ClusterOut,
     DeployOut,
+    EdgeOut,
+    FirewallRuleIn,
     FolderIn,
     GroupMembersIn,
     GuestOut,
@@ -55,6 +59,7 @@ from .schemas import (
     MemberOut,
     MigrateRequest,
     MigrationOut,
+    NetTestIn,
     NetworkIn,
     NetworkOut,
     NodeJoin,
@@ -68,6 +73,7 @@ from .schemas import (
     RecycleBinOut,
     RecycledOut,
     RestoreRequest,
+    RouterIn,
     SnapshotIn,
     SnapshotOut,
     SourceIn,
@@ -197,6 +203,7 @@ def create_app(
     groups: VMGroups | None = None,
     deploys: DeployManager | None = None,
     recycle_days: int = 0,
+    edge_state: Path | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -221,6 +228,7 @@ def create_app(
     deploys = deploys or DeployManager(cluster)
     deploys.on_done = deployed
     recycle = RecycleBin(cluster, recycle_days, forget=groups.forget)
+    edge = EdgeManager(cluster, edge_state)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -528,6 +536,32 @@ def create_app(
         for member in cluster.compute_members():
             if any(n.name == name for n in member.driver.list_networks()):
                 member.driver.delete_network(name)
+
+    # Virtual router and distributed firewall (v0.7): one config for the cluster.
+
+    @api.get("/edge", response_model=EdgeOut)
+    def get_edge() -> EdgeOut:
+        return EdgeOut(**edge.view())
+
+    @api.put("/edge/routers/{network}", response_model=EdgeOut)
+    def set_router(network: str, body: RouterIn) -> EdgeOut:
+        return EdgeOut(**edge.set_router(RouterSpec(network=network, **body.model_dump())))
+
+    @api.delete("/edge/routers/{network}", response_model=EdgeOut)
+    def remove_router(network: str) -> EdgeOut:
+        return EdgeOut(**edge.remove_router(network))
+
+    @api.put("/edge/rules", response_model=EdgeOut)
+    def set_rules(body: list[FirewallRuleIn]) -> EdgeOut:
+        return EdgeOut(**edge.set_rules([FirewallRule(**r.model_dump()) for r in body]))
+
+    @api.put("/edge/router-node", response_model=EdgeOut)
+    def set_router_node(body: dict) -> EdgeOut:
+        return EdgeOut(**edge.set_router_node(str(body.get("node", ""))))
+
+    @api.post("/edge/test")
+    def net_test(body: NetTestIn) -> dict:
+        return edge.test(body.kind, body.target, body.network, body.node)
 
     # Storage pools live on each node. Shared storage (NFS, a shared LUN) is added
     # to every node that should reach it, under the same pool name.

@@ -11,6 +11,7 @@ import uvicorn
 from ..backup import NodeBackup
 from ..cluster.topology import NodeRole
 from ..hypervisor import load_driver
+from ..hypervisor.edge import restore_edge
 from .app import create_agent_app
 
 
@@ -44,6 +45,7 @@ def main() -> None:
         driver = load_driver(args.driver, args.libvirt_uri)
         backups = NodeBackup(driver)
         backups.cleanup()  # detach backup targets a crash may have left attached
+        restore_edge(driver)
     app = create_agent_app(args.name, role, token, driver, backups)
     uvicorn.run(app, host=args.host, port=args.port)
 

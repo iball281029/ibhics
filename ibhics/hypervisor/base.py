@@ -573,6 +573,15 @@ class HypervisorDriver(abc.ABC):
     def delete_network(self, name: str) -> None:
         raise NotImplementedError
 
+    def apply_edge(self, config: dict, router: bool) -> None:
+        """Set up the virtual router (when `router`) and the firewall from an
+        edge.EdgeConfig in dict form."""
+        raise NotImplementedError
+
+    def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
+        """Ping or trace `target` from this node, out of `network` when it has a router."""
+        raise NotImplementedError
+
     def list_local_disks(self) -> list:
         """Whole disks on this node that could become an LVM pool (disks.LocalDisk)."""
         return []

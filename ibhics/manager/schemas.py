@@ -143,6 +143,38 @@ class NetworkIn(BaseModel):
         return NetworkSpec(name=self.name, vlan=self.vlan)
 
 
+class RouterIn(BaseModel):
+    gateway: str = Field(description="router address with prefix, e.g. 192.168.50.1/24")
+    nat: bool = True
+    dhcp: bool = True
+    dhcp_start: str = ""
+    dhcp_end: str = ""
+    dns: str = ""
+
+
+class FirewallRuleIn(BaseModel):
+    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    action: str = Field(default="deny", pattern="^(allow|deny)$")
+    src: str = "any"
+    dst: str = "any"
+    proto: str = Field(default="any", pattern="^(any|tcp|udp|icmp)$")
+    port: int | None = Field(default=None, ge=1, le=65535)
+    enabled: bool = True
+
+
+class EdgeOut(BaseModel):
+    routers: list[dict]
+    rules: list[dict]
+    router_node: str
+
+
+class NetTestIn(BaseModel):
+    kind: str = Field(default="ping", pattern="^(ping|trace)$")
+    target: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
+    network: str = ""
+    node: str = ""
+
+
 class HostIfaceIn(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}$")
     kind: str = "ethernet"

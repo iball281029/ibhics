@@ -144,6 +144,15 @@ def create_agent_app(
         def delete_network(name: str) -> None:
             driver.delete_network(name)
 
+        @api.put("/edge", status_code=status.HTTP_204_NO_CONTENT)
+        def apply_edge(body: dict) -> None:
+            driver.apply_edge(body["config"], bool(body["router"]))
+
+        @api.post("/net-test")
+        def net_test(body: dict) -> dict:
+            ok, output = driver.net_test(body["kind"], body["target"], body.get("network", ""))
+            return {"ok": ok, "output": output}
+
         @api.get("/guests")
         def guests() -> dict:
             return {uuid: guest_to_json(g) for uuid, g in driver.list_guest_info().items()}
