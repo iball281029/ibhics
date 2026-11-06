@@ -28,7 +28,7 @@ and the words are ibHiCS's own.
 - Tasks page: every job with progress, duration, errors and logs; operations log ✅
 - Dashboard without the status header; theme in the user menu ✅
 - Windows VMs get the virtio driver CD as a second drive ✅
-- Clone VM (full and linked), VM templates (convert VM ⇄ template, deploy from template) ✅
+- Clone VM, VM templates (convert VM ⇄ template, Deploy VM with independent disk copies) ✅
 - Guest OS customization on deploy: cloud-init for Linux, sysprep answer file for Windows ✅
 - Snapshots (take, revert, delete) with a timeline on the VM page ✅
 - VM detail tabs: summary, hardware, snapshots, backups, tasks, alerts ✅

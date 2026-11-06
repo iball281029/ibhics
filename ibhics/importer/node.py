@@ -73,14 +73,15 @@ class NodeImport:
             self._driver.start_vm(created.uuid)
         return self._driver.get_vm(created.uuid)
 
-    def log(self, name: str, max_bytes: int = 65536) -> str:
-        """The end of virt-v2v's output for an import, while it runs and after."""
+    def log(self, name: str, max_bytes: int | None = None) -> str:
+        """virt-v2v's output for an import, while it runs and after."""
         log_dir = getattr(self._converter, "log_dir", None)
         path = Path(log_dir) / f"{name}.log" if log_dir else None
         if not path or not path.is_file():
             return ""
         with open(path, "rb") as f:
-            f.seek(max(0, path.stat().st_size - max_bytes))
+            if max_bytes is not None:
+                f.seek(max(0, path.stat().st_size - max_bytes))
             return f.read().decode(errors="replace")
 
     def _convert_and_create(

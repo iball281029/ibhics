@@ -786,3 +786,43 @@ def test_node_import_pins_nic_names_with_the_new_macs():
     win = SourceVM(ref="/w", name="w", nics=1, guest_os="Microsoft Windows Server 2019")
     NodeImport(driver, Pinning()).run(VMWARE, win, "w")
     assert len(calls) == 1 and calls[0][0]  # Linux only, with the MAC libvirt assigned
+
+
+def test_import_log_summary_download_and_missing_job(env, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from ibhics.manager.imports import ImportJob
+
+    client, imports, *_ = env
+    created = datetime.fromisoformat(imports._now())
+    job = ImportJob(
+        "preview",
+        "esx",
+        "Zabbix",
+        "Zabbix-new",
+        "node1",
+        created.isoformat(),
+        pool="hdd01",
+        state="failed",
+        finished=(created + timedelta(seconds=180)).isoformat(),
+        error="ConversionFailed: bad disk",
+    )
+    imports._jobs.append(job)
+    text = "[0] Inspecting the source\n[30] Copying disk 1/1\n▘ 47% [***---]\n"
+    monkeypatch.setattr(imports._cluster.member("node1").imports, "log", lambda name: text)
+    url = "/api/v1/migrate/jobs/preview/log"
+    assert client.get(url).json() == {"log": text}
+    summary = client.get(url + "?format=summary").json()
+    assert summary["duration"] == 180
+    assert summary["job"]["pool"] == "hdd01"
+    assert summary["job"]["vm"] == "Zabbix"
+    assert summary["progress"] == {"percent": 47, "step": "Copying disk 1/1"}
+    assert summary["errors"] == [job.error]
+    assert "47%" not in summary["raw"]
+    download = client.get(url + "?download=1")
+    assert download.text == text
+    assert download.headers["content-type"].startswith("text/plain")
+    assert 'filename="import-preview.log"' in download.headers["content-disposition"]
+    assert client.get(url + "?format=unknown").status_code == 422
+    for query in ("", "?format=summary", "?download=1"):
+        assert client.get("/api/v1/migrate/jobs/missing/log" + query).status_code == 404

@@ -6,6 +6,10 @@ set -e
 if command -v apt-get >/dev/null; then
     apt-get update && apt-get install -y qemu-guest-agent
 elif command -v dnf >/dev/null; then
+    # AlmaLinux 8 re-signed its packages in 2024; older installs need the new key.
+    if grep -qs 'AlmaLinux release 8' /etc/almalinux-release; then
+        rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux
+    fi
     dnf install -y qemu-guest-agent
 elif command -v yum >/dev/null; then
     yum install -y qemu-guest-agent

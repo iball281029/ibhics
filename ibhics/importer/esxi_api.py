@@ -27,7 +27,7 @@ def envelope(body: str) -> str:
     )
 
 
-def https_transport(source: Source) -> Transport:
+def https_transport(source: Source, timeout: float = 20) -> Transport:
     ctx = ssl.create_default_context()
     if not source.verify_tls:
         ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
@@ -41,7 +41,7 @@ def https_transport(source: Source) -> Transport:
         if cookie:
             req.add_header("Cookie", cookie)
         try:
-            with urllib.request.urlopen(req, context=ctx, timeout=20) as resp:
+            with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
                 got = resp.headers.get("Set-Cookie", "").split(";")[0] or cookie
                 return resp.status, resp.read().decode(), got
         except urllib.error.HTTPError as exc:  # SOAP faults come back as HTTP 500
@@ -58,6 +58,8 @@ class EsxiApi:
 
     def _request(self, body: str) -> ET.Element:
         status, text, self._cookie = self._call(body, self._cookie)
+        if status == 401:
+            raise EsxiApiError("HTTP 401: authentication failed")
         root = ET.fromstring(text)
         fault = root.find(".//s:Fault/faultstring", NS)
         if status != 200 or fault is not None:

@@ -39,8 +39,6 @@
   <symbol id="t-node" viewBox="0 0 56 56"><defs><linearGradient id="tg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3f5f8"/><stop offset="1" stop-color="#d5dae2"/></linearGradient></defs><rect x="8" y="6" width="40" height="13" rx="2.5" fill="url(#tg1)" stroke="#c3c9d3"/><rect x="8" y="21.5" width="40" height="13" rx="2.5" fill="url(#tg1)" stroke="#c3c9d3"/><rect x="8" y="37" width="40" height="13" rx="2.5" fill="url(#tg1)" stroke="#c3c9d3"/><g fill="#0b8cf5"><circle cx="14" cy="12.5" r="1.8"/><circle cx="14" cy="28" r="1.8"/><circle cx="14" cy="43.5" r="1.8"/></g><g stroke="#aab2bf" stroke-width="1.6"><path d="M30 12.5h13M30 28h13M30 43.5h13"/></g></symbol>
   <symbol id="t-storage" viewBox="0 0 56 56"><defs><linearGradient id="tg2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3f5f8"/><stop offset="1" stop-color="#d5dae2"/></linearGradient></defs><ellipse cx="28" cy="12" rx="19" ry="6" fill="#eef1f5" stroke="#c3c9d3"/><path d="M9 12v32c0 3.3 8.5 6 19 6s19-2.7 19-6V12c0 3.3-8.5 6-19 6S9 15.3 9 12Z" fill="url(#tg2)" stroke="#c3c9d3"/><path d="M9 23c0 3.3 8.5 6 19 6s19-2.7 19-6M9 34c0 3.3 8.5 6 19 6s19-2.7 19-6" fill="none" stroke="#c3c9d3"/><circle cx="40" cy="27" r="1.6" fill="#0b8cf5"/><circle cx="40" cy="38" r="1.6" fill="#0b8cf5"/></symbol>
   <symbol id="t-vm" viewBox="0 0 56 56"><circle cx="28" cy="28" r="22" fill="#fff" stroke="#dfe3ea" stroke-width="1.5"/><circle cx="28" cy="28" r="17" fill="none" stroke="#e8ebf0" stroke-width="5"/><circle cx="28" cy="28" r="9" fill="none" stroke="#0b8cf5" stroke-width="2.4"/></symbol>
-  <symbol id="t-backup" viewBox="0 0 56 56"><defs><linearGradient id="tg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f3f5f8"/><stop offset="1" stop-color="#d0d6df"/></linearGradient></defs><path d="M28 5 47 12v14c0 12-8 21-19 25C17 47 9 38 9 26V12Z" fill="url(#tg3)" stroke="#c3c9d3"/><path d="M20 28.5l5.5 5.5L37 22.5" fill="none" stroke="#0b8cf5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="t-users" viewBox="0 0 56 56"><rect x="8" y="10" width="40" height="36" rx="4" fill="#eef1f5" stroke="#c3c9d3"/><circle cx="22" cy="25" r="5" fill="#c3c9d3"/><path d="M13 39c1.5-5 5-7 9-7s7.5 2 9 7" fill="#c3c9d3"/><path d="M34 22h8M34 28h8M34 34h5" stroke="#c3c9d3" stroke-width="2.4" stroke-linecap="round"/></symbol>
   <symbol id="i-os-win" viewBox="0 0 24 24"><path fill="currentColor" d="M3 5.2 10.4 4v7.3H3zM11.4 3.9 21 2.5v8.8h-9.6zM3 12.6h7.4V20L3 18.8zM11.4 12.6H21v8.9l-9.6-1.4z"/></symbol>
   <symbol id="i-os-linux" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3c-2.2 0-3.4 1.8-3.4 4.2 0 1.4-.4 2.6-1.4 3.9C6 12.6 5 14.4 5 16.3c0 1.2.6 2 1.6 2.4M12 3c2.2 0 3.4 1.8 3.4 4.2 0 1.4.4 2.6 1.4 3.9 1.2 1.5 2.2 3.3 2.2 5.2 0 1.2-.6 2-1.6 2.4"/><path d="M6.5 18.5c.8 1.6 2.9 2.5 5.5 2.5s4.7-.9 5.5-2.5"/></g><circle cx="10.4" cy="7.6" r=".9" fill="currentColor"/><circle cx="13.6" cy="7.6" r=".9" fill="currentColor"/></symbol>
   <symbol id="i-cpu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></g></symbol>
@@ -214,6 +212,7 @@
             <div class="card"><h3>General</h3><dl class="kv" id="vm-general"></dl></div>
             <div class="card"><h3>Guest operating system</h3><dl class="kv" id="vm-guest"></dl></div>
           </div>
+          <div class="card wide" id="vm-guest-tools" tabindex="-1" hidden></div>
           <div class="card wide"><h3>Network</h3><div class="table-wrap"><table>
             <thead><tr><th>Adapter</th><th>Network</th><th>MAC address</th><th>IP addresses</th></tr></thead>
             <tbody id="vm-net"></tbody>
@@ -259,9 +258,9 @@
       </div>
       <div class="sheet" style="margin-top:18px">
         <div class="page-head">
-          <h1>ISO library</h1><span class="sub">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
+          <h1>ISO library</h1><span class="sub" id="iso-location">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
           <span class="spacer"></span>
-          <label class="inline operator-only">Save to <select id="iso-dest"></select></label>
+          <label class="inline">Storage <select id="iso-dest"></select></label>
           <label class="btn primary operator-only">Upload ISO<input type="file" class="iso-upload" accept=".iso" multiple hidden></label>
         </div>
         <div class="iso-progress"></div>
@@ -285,7 +284,30 @@
           <button data-tab="net-list">Virtual switches</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
+          <div class="topo-toolbar">
+            <button id="topo-edit" class="operator-only">Edit</button>
+            <div id="topo-edit-tools" hidden>
+              <button id="topo-edit-save" class="primary">Save</button>
+              <button id="topo-edit-cancel">Cancel</button>
+              <button id="topo-auto-layout">Auto layout</button>
+              <span id="topo-pending" role="status" aria-live="polite"></span>
+            </div>
+          </div>
           <div class="ntopo">
+            <aside id="topo-palette" hidden>
+              <h3>Components</h3>
+              <button id="topo-add-switch" class="admin-only" draggable="true">Virtual switch</button>
+              <button disabled>Router <small>v0.7</small></button>
+              <button disabled>Firewall <small>v0.7</small></button>
+              <p class="muted">Drag a virtual switch onto the canvas, or click to add.</p>
+              <form id="topo-switch-form" hidden>
+                <label>Name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" maxlength="63"></label>
+                <label>VLAN ID <input name="vlan" type="number" min="2" max="4094" required></label>
+                <button type="submit">Stage switch</button>
+                <button type="button" id="topo-switch-cancel">Cancel</button>
+                <p id="topo-switch-error" role="alert"></p>
+              </form>
+            </aside>
             <div class="topo-canvas"><svg id="topo-svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
             <aside class="topo-side">
               <div class="topo-stats" id="topo-stats"></div>
@@ -447,8 +469,10 @@
             <button id="refresh-source">Refresh</button>
           </div>
           <div id="uploads-progress"></div>
+          <div id="source-error" class="migrate-error" role="alert" hidden></div>
+          <button type="button" id="migrate-selected" class="primary operator-only" disabled>Migrate selected</button>
           <div class="table-wrap"><table>
-            <thead><tr><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
+            <thead><tr><th><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"></th><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
             <tbody id="source-vms"></tbody>
           </table></div>
         </div>
@@ -491,7 +515,7 @@
         <div class="tpl-intro">
           <div><b>1</b><span>Install and set up a VM the way new VMs should start: OS, updates, agents. For Linux add <code>cloud-init</code>; for Windows run <code>sysprep /generalize /oobe /shutdown</code> last.</span></div>
           <div><b>2</b><span>Shut it down, then in its menu choose <em>Convert to template</em>. A template cannot be powered on, so it stays as it is.</span></div>
-          <div><b>3</b><span>Deploy VMs from it: a <em>linked clone</em> is ready in seconds and shares the template's disks; a <em>full clone</em> is an independent copy.</span></div>
+          <div><b>3</b><span>Deploy VMs from it: each VM gets its own copy of the template's disks.</span></div>
         </div>
         <div class="tpl-grid" id="tpl-grid"></div>
       </div>
@@ -510,7 +534,7 @@
         <div class="subpage active" id="tab-task-jobs">
           <div class="toolbar">
             <div class="chips" id="task-state"><button type="button" data-v="" class="on">All</button><button type="button" data-v="active">Running</button><button type="button" data-v="done">Finished</button><button type="button" data-v="failed">Failed</button></div>
-            <select id="task-kind" style="width:auto"><option value="">All types</option><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy</option></select>
+            <select id="task-kind" style="width:auto"><option value="">All types</option><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy VM</option></select>
           </div>
           <div class="tasks-split">
             <div class="table-wrap"><table class="task-table">
@@ -1061,11 +1085,6 @@
         <label>New VM name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}" autocomplete="off" placeholder="web-01"></label>
         <label>Description (optional) <input name="description" maxlength="1024"></label>
       </div>
-      <p class="wiz-label">Clone type</p>
-      <div class="type-cards">
-        <label class="type-card small"><input type="radio" name="clone" value="linked"><svg><use href="#i-template"/></svg><span><b>Linked clone</b><em>Ready in seconds, takes little space. Shares the template's disks, so the template stays while the VM exists.</em></span></label>
-        <label class="type-card small"><input type="radio" name="clone" value="full" checked><svg><use href="#i-hdd"/></svg><span><b>Full clone</b><em>An independent copy of every disk. Takes as long as copying them.</em></span></label>
-      </div>
       <div class="form-grid deploy-pool" style="margin-top:12px">
         <label>Put the disks on <select name="pool"></select></label>
       </div>
@@ -1089,7 +1108,7 @@
       <p class="hint" data-for="windows">The VM gets a CD with an answer file that Windows reads when it first starts after sysprep: computer name, Administrator password and, if given, a local admin user. Time zone uses Windows names, e.g. <em>SE Asia Standard Time</em>.</p>
       <label class="check" style="margin-top:12px"><input type="checkbox" name="power_on" checked> Power on when deployed</label>
     </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Deploy</button></footer>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Deploy VM</button></footer>
   </form>
 </dialog>
 
@@ -1149,36 +1168,63 @@
       <label class="check" data-for="vmware"><input name="verify_tls" type="checkbox"> Verify the host's TLS certificate</label>
     </div>
     <p class="hint" style="padding:0 18px">Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Files from Hyper-V, Nutanix, Sangfor or Xen: export them and use Upload files.</p>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
+    <div id="source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
+    <footer><button type="button" id="test-source-form">Test connection</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
   </form>
 </dialog>
 
 <dialog id="log-dialog">
   <form method="dialog">
     <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate>×</button></header>
-    <pre class="log" id="log-text"></pre>
-    <footer><button value="cancel" formnovalidate>Close</button></footer>
+    <div id="import-log-body">
+      <div id="log-summary" aria-live="polite"></div>
+      <details id="log-raw"><summary>Raw log</summary>
+        <label><input type="checkbox" id="log-all"> Show all progress updates</label>
+        <pre class="log" id="log-text"></pre>
+      </details>
+      <p id="log-fetch-error" role="status"></p>
+    </div>
+    <footer><a id="log-download" class="button" download>Download</a><button value="cancel" formnovalidate>Close</button></footer>
   </form>
 </dialog>
 
-<dialog id="import-dialog">
+<dialog id="source-test-dialog">
+  <form method="dialog">
+    <header><h3>Source connection test</h3><button value="cancel" formnovalidate>×</button></header>
+    <div id="saved-source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
+    <footer><button value="cancel">Close</button></footer>
+  </form>
+</dialog>
+
+<dialog id="import-dialog" class="wizard migrate-wizard">
   <form method="dialog" id="import-form">
-    <header><h3>Import VM</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>Name in ibHiCS <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}"></label>
-      <label>Node <select name="node" class="node-list-auto"></select></label>
-      <label>Storage pool <select name="pool" class="pool-list" required></select></label>
-      <div class="wide import-nets" id="import-nets"></div>
-      <label>vCPU <input name="vcpus" type="number" min="1"></label>
-      <label>Memory (MB) <input name="memory_mb" type="number" min="128" step="128"></label>
-      <label class="check"><input name="start" type="checkbox"> Power on when done</label>
-    </div>
-    <p class="hint" style="padding:0 18px">Power the VM off at the source first so its disks don't change during the copy.</p>
-    <div class="edit-note win-note" id="import-win" hidden>
-      <p>Windows: in the VM at the source, run <code>powercfg /h off</code> as administrator, then shut it down fully (not Restart). With Fast Startup on, its disk is locked and the virtio drivers cannot be added.</p>
-      <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Can't do that? Clear hibernation on the copy instead. ibHiCS copies the disks first and discards the hibernated session (unsaved work in it is lost). VMware over SSH and Proxmox/KVM only.</label>
-    </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start import</button></footer>
+    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate>×</button></header>
+    <ol class="wiz-steps">
+      <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
+      <li data-step="3"><b>3</b>Network mapping</li><li data-step="4"><b>4</b>Summary</li>
+    </ol>
+    <section class="wiz-page body" data-page="1">
+      <p class="hint">Power off selected VMs at the source before migration. Running VMs cannot proceed.</p>
+      <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
+    </section>
+    <section class="wiz-page body" data-page="2" hidden>
+      <div class="form-grid">
+        <label>Node <select name="node" id="import-node" required></select></label>
+        <label>Storage pool <select name="pool" id="import-pool" required></select></label>
+        <div id="import-capacity" class="wide" role="status"></div>
+        <div id="import-names" class="wide"></div>
+        <label class="check"><input name="start" type="checkbox"> Power on when done</label>
+      </div>
+      <div class="edit-note win-note" id="import-win" hidden>
+        <p>Windows: run <code>powercfg /h off</code> at the source, then shut down fully. Fast Startup can lock the disk and prevent driver installation.</p>
+        <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Clear hibernation on copied Windows disks (SSH VMware / KVM only; unsaved sessions on the copy are discarded).</label>
+      </div>
+    </section>
+    <section class="wiz-page body" data-page="3" hidden><div id="import-nets"></div></section>
+    <section class="wiz-page body" data-page="4" hidden>
+      <div id="import-summary"></div><div id="import-submit-status" role="status" aria-live="polite"></div>
+    </section>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" class="wiz-back">Back</button><button type="button" class="primary wiz-next">Next</button><button class="primary wiz-ok" value="ok" hidden>Start migration</button></footer>
   </form>
 </dialog>
 
