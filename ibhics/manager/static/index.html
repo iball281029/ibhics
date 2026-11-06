@@ -46,6 +46,10 @@
   <symbol id="i-cpu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></g></symbol>
   <symbol id="i-mem" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2M5 17v3M19 17v3"/></g></symbol>
   <symbol id="i-hdd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M12 11h.01M6 17h3"/></g></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></g></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></g></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></g></symbol>
   <symbol id="i-nic" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v8H4z"/><path d="M8 17v3M16 17v3M8 9V6h8v3"/><path d="M8 13h.01M12 13h.01M16 13h.01"/></g></symbol>
   <symbol id="i-cd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 5.5a6.5 6.5 0 0 1 6.5 6.5"/></g></symbol>
   <symbol id="i-server" viewBox="0 0 56 56"><g fill="currentColor"><rect x="6" y="4" width="20" height="48" rx="3"/><rect x="30" y="4" width="20" height="48" rx="3" opacity=".75"/></g><g fill="#fff"><rect x="10" y="10" width="12" height="3" rx="1"/><rect x="10" y="17" width="12" height="3" rx="1"/><rect x="34" y="10" width="12" height="3" rx="1"/><rect x="34" y="17" width="12" height="3" rx="1"/><circle cx="16" cy="44" r="2.5"/><circle cx="40" cy="44" r="2.5"/></g></symbol>
@@ -131,16 +135,50 @@
         <div class="page-head">
           <h1>Virtual Machines</h1><span class="sub" id="vm-count"></span>
           <span class="spacer"></span>
-          <input class="search" id="vm-search" placeholder="Search">
-          <select id="vm-filter" style="width:auto">
-            <option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option>
-          </select>
-          <button class="primary operator-only" data-open="vm-dialog">+ Create VM</button>
+          <input class="search" id="vm-search" placeholder="Search by VM name, IP or OS">
+          <button class="primary operator-only" data-open="vm-dialog">+ New VM</button>
         </div>
-        <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>Name</th><th>Status</th><th>Operating system</th><th>IP address</th><th>Node</th><th>vCPU</th><th>Memory</th><th>Disks</th><th></th></tr></thead>
-          <tbody id="vms"></tbody>
-        </table></div>
+        <div class="vmp">
+          <aside class="vgroups">
+            <div class="vg-head"><span>Groups</span><button type="button" class="icon ghost operator-only" id="vg-add" title="New group">+</button></div>
+            <ul class="vg-tree" id="vg-tree"></ul>
+          </aside>
+          <div class="vmp-main">
+            <div class="vm-alert" id="vm-alert" hidden></div>
+            <div class="vmp-bar">
+              <div class="chips" id="vm-view"><button type="button" data-view="list" class="on" title="List">List</button><button type="button" data-view="panel" title="Panel">Panel</button></div>
+              <select id="vm-filter" style="width:auto">
+                <option value="">All states</option><option value="running">Running</option><option value="stopped">Stopped</option><option value="alert">Needs attention</option>
+              </select>
+              <span class="vm-picked" id="vm-picked"></span>
+              <span class="spacer"></span>
+              <div class="operator-only vm-batch" id="vm-batch">
+                <button type="button" data-batch="start">Power on</button>
+                <button type="button" data-batch="stop">Shut down</button>
+                <details class="more"><summary class="btn">More ▾</summary><div class="dropdown open">
+                  <button type="button" data-batch="restart">Restart</button>
+                  <button type="button" data-batch="poweroff">Power off</button>
+                  <button type="button" data-batch="group">Move to group…</button>
+                  <button type="button" data-batch="ungroup">Remove from group</button>
+                  <button type="button" class="danger" data-batch="delete">Delete</button>
+                </div></details>
+              </div>
+              <button type="button" class="icon ghost" id="vm-refresh" title="Refresh"><svg><use href="#i-refresh"/></svg></button>
+            </div>
+            <div class="tabs vm-metrics" id="vm-metrics">
+              <button data-metric="resources" class="active">Resources</button>
+              <button data-metric="basics">Basics</button>
+              <button data-metric="node">Node</button>
+              <button data-metric="throughput">Throughput</button>
+              <button data-metric="io">IO speed</button>
+            </div>
+            <div class="table-wrap" id="vm-list"><table class="vm-table">
+              <thead id="vm-thead"></thead>
+              <tbody id="vms"></tbody>
+            </table></div>
+            <div class="vm-panel" id="vm-panel" hidden></div>
+          </div>
+        </div>
       </div>
       <div class="sheet" id="moves-panel" style="margin-top:20px" hidden>
         <div class="toolbar"><h3>Live migrations</h3></div>
@@ -226,14 +264,31 @@
     <section class="page" id="page-network">
       <div class="sheet">
         <div class="page-head">
-          <h1>Networks</h1><span class="sub">The LAN (VLAN 1, native on br0) and tagged VLANs on it, on every compute node</span>
+          <h1>Network</h1><span class="sub">The LAN (VLAN 1, native on br0) and tagged VLANs on it, on every compute node</span>
           <span class="spacer"></span>
-          <button class="primary admin-only" data-open="net-dialog">+ Add VLAN network</button>
+          <button id="topo-refresh">Refresh</button>
+          <button class="primary admin-only" data-open="net-dialog">+ Add virtual switch (VLAN)</button>
         </div>
+        <div class="tabs" id="net-tabs">
+          <button data-tab="net-topology" class="active">Topology</button>
+          <button data-tab="net-list">Virtual switches</button>
+        </div>
+        <div class="subpage active" id="tab-net-topology">
+          <div class="ntopo">
+            <div class="topo-canvas"><svg id="topo-svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+            <aside class="topo-side">
+              <div class="topo-stats" id="topo-stats"></div>
+              <div class="topo-panel" id="topo-panel"></div>
+              <div class="topo-legend"><span><i class="l-native"></i>VLAN 1 (native)</span><span><i class="l-tagged"></i>Tagged VLAN</span><span><i class="l-up"></i>VM running</span><span><i class="l-down"></i>VM stopped</span></div>
+            </aside>
+          </div>
+        </div>
+        <div class="subpage" id="tab-net-list">
         <div class="table-wrap" style="margin-top:14px"><table>
           <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
           <tbody id="networks"></tbody>
         </table></div>
+        </div>
       </div>
     </section>
 
@@ -474,6 +529,7 @@
           <label>Version <input name="os_type" maxlength="64" list="os-names" placeholder="Windows Server 2022"></label>
           <label>Description (optional) <input name="description" maxlength="1024" placeholder="What this VM is for"></label>
         </div>
+        <p class="hint win-driver-note">Windows VMs get a second CD with the virtio drivers. When Windows Setup shows no disk, click <b>Load driver</b>: it finds the disk driver on that CD by itself.</p>
       </section>
 
       <section class="wiz-page" data-page="2">
@@ -562,6 +618,29 @@
       </div>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save</button></footer>
+  </form>
+</dialog>
+
+<dialog id="group-dialog">
+  <form method="dialog">
+    <header><h3 class="gd-title">New group</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Name <input name="name" required maxlength="64" placeholder="Production"></label>
+      <label>Inside <select name="parent" class="gd-parent"></select></label>
+      <label class="wide">Description <input name="description" maxlength="200" placeholder="Optional"></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save</button></footer>
+  </form>
+</dialog>
+
+<dialog id="move-dialog">
+  <form method="dialog">
+    <header><h3>Move to group</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <p class="hint wide md-what"></p>
+      <label class="wide">Group <select name="group" class="md-group"></select></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Move</button></footer>
   </form>
 </dialog>
 

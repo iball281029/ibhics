@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
+from . import vmstats
 from .base import (
     DiskSpec,
     Firmware,
@@ -37,6 +38,7 @@ from .base import (
     VMNotFound,
     VMSpec,
     VMState,
+    VMStats,
 )
 from .domain_xml import (
     DISK_DEVS,
@@ -83,6 +85,29 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(f"{cmd[0]} failed: {result.stderr.strip() or result.returncode}")
 
 
+APPARMOR_LOCAL = Path("/etc/apparmor.d/local/abstractions/libvirt-qemu")
+COVERED = ("/var/lib/ibhics/pools/", "/mnt/ibhics/")
+
+
+def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
+    """Let QEMU open disk images under a folder pool outside the usual roots.
+
+    Disks are <source pool volume>, which Debian's virt-aa-helper does not add to a
+    VM's AppArmor profile; the installer allows the default roots, and this adds a
+    custom folder. Profiles are rebuilt at each VM start, so no reload is needed."""
+    path = os.path.realpath(path).rstrip("/")
+    if any((path + "/").startswith(root) for root in COVERED) or not rules.parent.parent.is_dir():
+        return False
+    line = f"{path}/** rwk,"
+    text = rules.read_text() if rules.exists() else ""
+    if line in text.splitlines():
+        return False
+    rules.parent.mkdir(parents=True, exist_ok=True)
+    with rules.open("a") as f:
+        f.write(("" if not text or text.endswith("\n") else "\n") + line + "\n")
+    return True
+
+
 class LibvirtDriver(HypervisorDriver):
     # Backups copy disks here before they are chunked; it needs room for the largest VM
     # (raw images are sparse, so only the data actually written counts).
@@ -99,6 +124,8 @@ class LibvirtDriver(HypervisorDriver):
         if libvirt is None:
             raise RuntimeError("libvirt-python is not installed: pip install 'ibhics[libvirt]'")
         self._conn = libvirt.open(uri)
+        self._samples: dict[str, vmstats.Sample] = {}
+        self._balloon_asked: set[str] = set()
 
     def host_info(self) -> HostInfo:
         _model, memory_mb, cpus, *_ = self._conn.getInfo()
@@ -314,6 +341,16 @@ class LibvirtDriver(HypervisorDriver):
             dom.shutdown()
         return self._info(dom)
 
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        dom = self._lookup(uuid)
+        if not dom.isActive():
+            raise InvalidState("VM is not running")
+        if force:
+            dom.reset(0)
+        else:
+            dom.reboot(0)
+        return self._info(dom)
+
     def delete_vm(self, uuid: str) -> None:
         dom = self._lookup(uuid)
         if dom.isActive():
@@ -414,6 +451,8 @@ class LibvirtDriver(HypervisorDriver):
             if session is not None:
                 _undefine(session)
             raise
+        if spec.type == PoolType.DIR and spec.path:
+            allow_qemu_path(spec.path)
         return next(p for p in self.list_pools() if p.name == spec.name)
 
     def list_networks(self) -> list[NetworkInfo]:
@@ -634,6 +673,49 @@ class LibvirtDriver(HypervisorDriver):
                 vol.delete(0)
             raise
         return created
+
+    def _raw_stats(self) -> list[tuple[str, dict]]:
+        flags = (
+            libvirt.VIR_DOMAIN_STATS_CPU_TOTAL
+            | libvirt.VIR_DOMAIN_STATS_BALLOON
+            | libvirt.VIR_DOMAIN_STATS_VCPU
+            | libvirt.VIR_DOMAIN_STATS_INTERFACE
+            | libvirt.VIR_DOMAIN_STATS_BLOCK
+        )
+        records = self._conn.getAllDomainStats(
+            flags, libvirt.VIR_CONNECT_GET_ALL_DOMAINS_STATS_ACTIVE
+        )
+        result = []
+        for dom, raw in records:
+            uuid = dom.UUIDString()
+            if "balloon.available" not in raw and uuid not in self._balloon_asked:
+                # The balloon driver reports guest memory use only when asked to.
+                self._balloon_asked.add(uuid)
+                try:
+                    dom.setMemoryStatsPeriod(5, libvirt.VIR_DOMAIN_AFFECT_LIVE)
+                except libvirt.libvirtError:
+                    pass
+            result.append((uuid, raw))
+        return result
+
+    def list_vm_stats(self) -> dict[str, VMStats]:
+        now = time.monotonic()
+        raw = self._raw_stats()
+        if any(uuid not in self._samples for uuid, _ in raw):
+            # A rate needs two samples: take a first one for VMs seen for the first time.
+            for uuid, r in raw:
+                self._samples.setdefault(uuid, vmstats.sample(r, now))
+            time.sleep(0.5)
+            now = time.monotonic()
+            raw = self._raw_stats()
+        result = {}
+        for uuid, r in raw:
+            cur = vmstats.sample(r, now)
+            result[uuid] = vmstats.rates(self._samples.get(uuid), cur)
+            self._samples[uuid] = cur
+        for gone in set(self._samples) - set(result):
+            del self._samples[gone]
+        return result
 
     def guest_info(self, uuid: str) -> GuestInfo:
         dom = self._lookup(uuid)
@@ -918,7 +1000,10 @@ def _spec_from_xml(xml: str) -> VMSpec:
         for iface in root.findall("./devices/interface")
         if iface.get("type") in ("network", "bridge") and iface.find("source") is not None
     ]
-    cdrom = root.find("./devices/disk[@device='cdrom']/source")
+    # The first drive is the one ISOs go into; a second one holds drivers (Windows).
+    drives = [d.find("source") for d in root.findall("./devices/disk[@device='cdrom']")]
+    cdrom = drives[0] if drives else None
+    driver_cd = drives[1] if len(drives) > 1 else None
     os_el = root.find("os")
     firmware = (
         Firmware.UEFI if os_el is not None and os_el.get("firmware") == "efi" else Firmware.BIOS
@@ -931,6 +1016,7 @@ def _spec_from_xml(xml: str) -> VMSpec:
         disks=disks,
         nics=nics,
         iso=cdrom.get("file") if cdrom is not None else None,
+        driver_iso=driver_cd.get("file") if driver_cd is not None else None,
         description=root.findtext("description", ""),
         os_type=root.findtext(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}os", ""),
         boot=[b.get("dev") for b in root.findall("os/boot")] or None,

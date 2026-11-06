@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import shutil
 import socket
 import tempfile
 import threading
+import time
 import uuid as uuidlib
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -35,6 +37,7 @@ from .base import (
     VMNotFound,
     VMSpec,
     VMState,
+    VMStats,
 )
 
 # Fake disks hold real bytes so backup and restore can be tested; keep them small.
@@ -148,6 +151,13 @@ class FakeDriver(HypervisorDriver):
             vm.state = VMState.STOPPED
             vm.restart_needed = False
             return copy.deepcopy(vm)
+
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                raise InvalidState("VM is not running")
+            return copy.deepcopy(vm)  # a reboot keeps the same QEMU: pending changes wait
 
     def delete_vm(self, uuid: str) -> None:
         with self._lock:
@@ -264,6 +274,27 @@ class FakeDriver(HypervisorDriver):
             LocalDisk("/dev/sde", 3726.0, "ST4000NM0035", "ZC1A", "sata", media="hdd"),
             LocalDisk("/dev/sdf", 3726.0, "ST4000NM0035", "ZC1B", "sata", media="hdd"),
         ]
+
+    def list_vm_stats(self) -> dict[str, VMStats]:
+        """Pretend load that drifts over time, steady enough to read."""
+        t = time.time() / 30
+        result = {}
+        with self._lock:
+            vms = [vm for vm in self._vms.values() if vm.state == VMState.RUNNING]
+        for vm in vms:
+            seed = sum(vm.spec.name.encode())
+            wave = (math.sin(t + seed) + 1) / 2
+            cpu = 3 + (seed % 7) * 9 + wave * 18
+            mem = vm.spec.memory_mb * (0.3 + (seed % 5) * 0.12 + wave * 0.08)
+            result[vm.uuid] = VMStats(
+                cpu_pct=round(min(cpu, 100), 1),
+                mem_used_mb=int(min(mem, vm.spec.memory_mb)),
+                disk_read_bps=wave * (seed % 9) * 400_000,
+                disk_write_bps=wave * (seed % 4) * 250_000,
+                net_rx_bps=wave * (seed % 6) * 90_000,
+                net_tx_bps=wave * (seed % 3) * 60_000,
+            )
+        return result
 
     def guest_info(self, uuid: str) -> GuestInfo:
         """A pretend guest agent: running VMs answer, as if qemu-guest-agent were installed."""

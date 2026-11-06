@@ -144,6 +144,10 @@ def create_agent_app(
         def guests() -> dict:
             return {uuid: guest_to_json(g) for uuid, g in driver.list_guest_info().items()}
 
+        @api.get("/stats")
+        def stats() -> dict:
+            return {uuid: asdict(s) for uuid, s in driver.list_vm_stats().items()}
+
         @api.get("/vms/{uuid}/guest")
         def guest(uuid: str) -> dict:
             return guest_to_json(driver.guest_info(uuid))
@@ -167,6 +171,10 @@ def create_agent_app(
         @api.post("/vms/{uuid}/stop", response_model=VMOut)
         def stop_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
             return VMOut.from_info(driver.stop_vm(uuid, force=bool(body and body.force)))
+
+        @api.post("/vms/{uuid}/restart", response_model=VMOut)
+        def restart_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
+            return VMOut.from_info(driver.restart_vm(uuid, force=bool(body and body.force)))
 
         @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_vm(uuid: str) -> None:

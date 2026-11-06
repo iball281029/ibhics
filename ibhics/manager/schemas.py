@@ -60,6 +60,9 @@ class VMCreate(BaseModel):
     disks: list[DiskIn] = Field(default_factory=lambda: [DiskIn(size_gb=20)])
     nics: list[NicIn] = Field(default_factory=lambda: [NicIn()])
     iso: str | None = None
+    # Second CD drive. None: the guest tools CD for a Windows guest (its installer needs
+    # the virtio drivers to see the disk), nothing otherwise. "" for none at all.
+    driver_iso: str | None = None
     description: str = Field(default="", max_length=1024)
     os_type: str = Field(default="", max_length=64)
     # Manager only: which compute node to place the VM on. Empty picks automatically.
@@ -74,6 +77,7 @@ class VMCreate(BaseModel):
             disks=[DiskSpec(**d.model_dump()) for d in self.disks],
             nics=[NicSpec(**n.model_dump()) for n in self.nics],
             iso=self.iso,
+            driver_iso=self.driver_iso or None,
             description=self.description,
             os_type=self.os_type,
         )
@@ -89,6 +93,7 @@ class VMOut(BaseModel):
     disks: list[DiskOut]
     nics: list[NicOut]
     iso: str | None
+    driver_iso: str | None = None
     description: str
     os_type: str = ""
     boot: list[str] | None = None
@@ -113,6 +118,7 @@ class VMOut(BaseModel):
             ],
             nics=[NicOut(network=n.network, model=n.model, mac=n.mac) for n in spec.nics],
             iso=spec.iso,
+            driver_iso=spec.driver_iso,
             description=spec.description,
             os_type=spec.os_type,
             boot=spec.boot,
@@ -211,6 +217,45 @@ class GuestInterfaceOut(BaseModel):
     name: str
     mac: str
     ips: list[str]
+
+
+class VMStatsOut(BaseModel):
+    uuid: str
+    cpu_pct: float | None = None
+    mem_used_mb: int | None = None
+    disk_read_bps: float = 0
+    disk_write_bps: float = 0
+    net_rx_bps: float = 0
+    net_tx_bps: float = 0
+
+
+class VMGroupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    parent: str = ""
+    description: str = Field("", max_length=200)
+
+
+class VMGroupUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=64)
+    parent: str | None = None
+    description: str | None = Field(None, max_length=200)
+
+
+class VMGroupOut(BaseModel):
+    id: str
+    name: str
+    parent: str
+    description: str
+
+
+class VMGroupsOut(BaseModel):
+    groups: list[VMGroupOut]
+    members: dict[str, str]  # VM uuid -> group id
+
+
+class GroupMembersIn(BaseModel):
+    vms: list[str] = Field(min_length=1)
+    group: str = ""  # "" takes the VMs out of every group
 
 
 class GuestOut(BaseModel):

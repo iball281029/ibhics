@@ -60,6 +60,9 @@ class VMSpec:
     disks: list[DiskSpec] = field(default_factory=list)
     nics: list[NicSpec] = field(default_factory=list)
     iso: str | None = None
+    # A second CD drive, e.g. the virtio drivers a Windows installer needs to see the
+    # disk, so the install disc can stay in the first drive.
+    driver_iso: str | None = None
     description: str = ""
     os_type: str = ""  # what the admin says the guest runs, e.g. "Windows Server 2022"
     # Boot devices in order: "hd", "cdrom", "network". None: the CD first when an ISO is
@@ -280,6 +283,20 @@ class GuestInterface:
 
 
 @dataclass
+class VMStats:
+    """How busy a running VM is right now. CPU is a percentage of all its vCPUs;
+    rates are averaged since the previous sample. None means not known (yet): memory
+    use needs the balloon driver in the guest."""
+
+    cpu_pct: float | None = None
+    mem_used_mb: int | None = None
+    disk_read_bps: float = 0.0
+    disk_write_bps: float = 0.0
+    net_rx_bps: float = 0.0
+    net_tx_bps: float = 0.0
+
+
+@dataclass
 class GuestInfo:
     """What the guest itself reports through qemu-guest-agent. Without an agent only
     `agent=False` (and, for NAT networks, DHCP lease addresses) is known."""
@@ -348,6 +365,10 @@ class HypervisorDriver(abc.ABC):
 
     @abc.abstractmethod
     def stop_vm(self, uuid: str, force: bool = False) -> VMInfo: ...
+
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        """Reboot a running VM: through the guest (ACPI), or a hard reset with force."""
+        raise NotImplementedError
 
     @abc.abstractmethod
     def delete_vm(self, uuid: str) -> None: ...
@@ -434,6 +455,10 @@ class HypervisorDriver(abc.ABC):
                 except (VMNotFound, InvalidState):
                     continue
         return result
+
+    def list_vm_stats(self) -> dict[str, VMStats]:
+        """VMStats for every running VM on this node, keyed by uuid."""
+        return {}
 
     def console_address(self, uuid: str) -> tuple[str, int]:
         """Host and TCP port of the running VM's VNC display, reachable from this node."""

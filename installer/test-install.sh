@@ -88,7 +88,7 @@ echo ">> The big disk is untouched; ibHiCS went on the small one"
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
 sudo modprobe nbd max_part=16
 sudo qemu-nbd -c /dev/nbd0 disk.qcow2
-trap 'sudo umount -q mnt 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
+trap 'sudo umount -q mnt/var/lib/ibhics 2>/dev/null; sudo umount -q mnt 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
 sleep 2
 sudo vgscan -q >/dev/null
 sudo vgchange -q -ay ibhics
@@ -97,7 +97,10 @@ sudo mount /dev/ibhics/root mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
 test -f mnt/usr/share/virtio-win/viostor/2k19/amd64/viostor.sys \
     || { echo "!! virtio-win drivers are missing: Windows imports would fail"; exit 1; }
-test -s mnt/usr/share/ibhics/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
+# /var/lib/ibhics is its own volume (data), not part of root.
+sudo mount /dev/ibhics/data mnt/var/lib/ibhics
+test -s mnt/var/lib/ibhics/tools/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
+sudo umount mnt/var/lib/ibhics
 for exe in rhsrvany.exe pnp_wait.exe; do
     test -s "mnt/usr/share/virt-tools/$exe" \
         || { echo "!! $exe is missing: virt-v2v cannot convert Windows guests"; exit 1; }
@@ -140,7 +143,7 @@ echo
 
 echo ">> 4/4 Checks"
 python3 - "$API" "$ADMIN_PASSWORD" <<'EOF'
-import json, ssl, sys, urllib.request
+import json, ssl, sys, urllib.error, urllib.request
 
 api, password = sys.argv[1], sys.argv[2]
 ctx = ssl._create_unverified_context()  # the node's certificate is self-signed
@@ -156,7 +159,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.4", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.5", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -184,6 +187,17 @@ vm = call("POST", "/vms", {"name": "smoke", "vcpus": 1, "memory_mb": 512,
                            "disks": [{"size_gb": 1}]}, token=token)
 assert vm["state"] == "stopped", vm
 print("ok  libvirt defines a VM with a disk in the default pool")
+# Powering on is where AppArmor, disk permissions and the domain XML really meet QEMU.
+try:
+    started = call("POST", f"/vms/{vm['uuid']}/start", token=token)
+    assert started["state"] == "running", started
+    print("ok  the VM powers on (QEMU opens its disk)")
+    call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
+except urllib.error.HTTPError as exc:
+    detail = exc.read().decode(errors="replace")
+    if "Permission denied" in detail or "kvm" not in detail.lower():
+        raise SystemExit(f"!! the VM did not power on: {exc.code} {detail}")
+    print("--  no nested KVM on this runner, power-on not tested:", detail[:200])
 call("DELETE", f"/vms/{vm['uuid']}", token=token)
 print("ok  and deletes it")
 EOF

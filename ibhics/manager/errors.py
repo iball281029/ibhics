@@ -33,12 +33,21 @@ def install_driver_errors(app: FastAPI) -> None:
     app.add_exception_handler(SourceNotFound, _handler(404, "migrate source not found: "))
     # Validation the driver does beyond the request schema.
     app.add_exception_handler(ValueError, _handler(422))
+    try:
+        import libvirt
+    except ImportError:
+        pass
+    else:
+        # What libvirt or QEMU refused, e.g. a disk image QEMU may not open, instead of a
+        # bare "Internal Server Error". 409 also travels from an agent to the manager.
+        app.add_exception_handler(libvirt.libvirtError, _handler(409))
 
 
 def install_cluster_errors(app: FastAPI) -> None:
     from ..cluster import MembershipError, NodeUnavailable, NoQuorum
     from .auth import AuthError, Forbidden, UserNotFound
     from .backups import PolicyNotFound, TargetNotFound
+    from .vmgroups import GroupNotFound
 
     app.add_exception_handler(AuthError, _handler(401))
     app.add_exception_handler(Forbidden, _handler(403))
@@ -46,6 +55,7 @@ def install_cluster_errors(app: FastAPI) -> None:
 
     app.add_exception_handler(TargetNotFound, _handler(404, "backup target not found: "))
     app.add_exception_handler(PolicyNotFound, _handler(404, "backup policy not found: "))
+    app.add_exception_handler(GroupNotFound, _handler(404, "VM group not found: "))
     app.add_exception_handler(NoQuorum, _handler(503))
     app.add_exception_handler(NodeUnavailable, _handler(503))
     app.add_exception_handler(MembershipError, _handler(400))

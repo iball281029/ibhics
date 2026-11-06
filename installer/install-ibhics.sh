@@ -38,7 +38,7 @@ if [ -d "$SRC/virtio-win" ]; then
     cp -r "$SRC/virtio-win/." /usr/share/virtio-win/
 fi
 if [ -f "$SRC/guest-tools.iso" ]; then
-    install -D -m 0644 "$SRC/guest-tools.iso" /usr/share/ibhics/guest-tools.iso
+    install -D -m 0644 "$SRC/guest-tools.iso" /var/lib/ibhics/tools/guest-tools.iso
 fi
 if [ -d "$SRC/virt-tools" ]; then
     # Where virt-v2v looks for its Windows first-boot helpers.
@@ -49,6 +49,8 @@ install -d -m 0755 /etc/ibhics /var/lib/ibhics/pools/default /var/lib/ibhics/iso
 install -m 0644 "$SRC"/systemd/*.service /etc/systemd/system/
 systemctl enable ibhics-firstboot.service
 systemctl enable libvirtd.service
+# QEMU may open the disk images in ibHiCS pools (virt-aa-helper skips pool volumes).
+install -D -m 0644 "$SRC/apparmor-libvirt-qemu" /etc/apparmor.d/local/abstractions/libvirt-qemu
 
 cp "$SRC/VERSION" /etc/ibhics/version
 rm -rf "$SRC"

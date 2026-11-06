@@ -1,0 +1,6 @@
+# ibHiCS: installed as /etc/apparmor.d/local/abstractions/libvirt-qemu.
+# VM disks are libvirt pool volumes (<source pool volume>). Debian's virt-aa-helper does
+# not turn those into per-VM AppArmor rules, so without this QEMU is denied its own disk
+# image ("Could not open ...qcow2: Permission denied") and the VM does not start.
+/var/lib/ibhics/pools/** rwk,
+/mnt/ibhics/** rwk,

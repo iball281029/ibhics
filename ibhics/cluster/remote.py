@@ -24,6 +24,7 @@ from ..hypervisor import (
     VMInfo,
     VMNotFound,
     VMSpec,
+    VMStats,
     host,
 )
 from ..hypervisor.serialize import edit_to_json, guest_from_json, info_from_json, spec_to_json
@@ -117,6 +118,10 @@ class RemoteDriver(HypervisorDriver):
         resp = self._client.request("POST", f"/vms/{uuid}/stop", json={"force": force})
         return info_from_json(self._ok(resp, uuid).json())
 
+    def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/restart", json={"force": force})
+        return info_from_json(self._ok(resp, uuid).json())
+
     def delete_vm(self, uuid: str) -> None:
         self._ok(self._client.request("DELETE", f"/vms/{uuid}"), uuid)
 
@@ -146,6 +151,10 @@ class RemoteDriver(HypervisorDriver):
     def list_guest_info(self) -> dict[str, GuestInfo]:
         data = self._ok(self._client.request("GET", "/guests")).json()
         return {uuid: guest_from_json(g) for uuid, g in data.items()}
+
+    def list_vm_stats(self) -> dict[str, VMStats]:
+        data = self._ok(self._client.request("GET", "/stats")).json()
+        return {uuid: VMStats(**s) for uuid, s in data.items()}
 
     def list_networks(self) -> list[NetworkInfo]:
         return [NetworkInfo(**n) for n in self._ok(self._client.request("GET", "/networks")).json()]

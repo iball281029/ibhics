@@ -17,6 +17,7 @@ from .auth import Auth
 from .backups import BackupManager
 from .imports import ImportManager
 from .migrations import TRANSPORTS, MigrationManager
+from .vmgroups import VMGroups
 
 
 def main() -> None:
@@ -73,6 +74,12 @@ def main() -> None:
         help="append-only record of every change and sign-in",
     )
     parser.add_argument(
+        "--groups-file",
+        type=Path,
+        default=Path(os.environ.get("IBHICS_GROUPS_FILE", "/var/lib/ibhics/vm-groups.json")),
+        help="where the VM groups (the folders of the VM list) are saved",
+    )
+    parser.add_argument(
         "--migrate-state-file",
         type=Path,
         default=Path(os.environ.get("IBHICS_MIGRATE_STATE_FILE", "/var/lib/ibhics/migrate.json")),
@@ -121,6 +128,9 @@ def main() -> None:
     imports = ImportManager(cluster, state_path=args.migrate_state_file)
     imports.load()
 
+    groups = VMGroups(state_path=args.groups_file)
+    groups.load()
+
     app = create_app(
         cluster,
         heartbeat_interval=args.heartbeat,
@@ -129,6 +139,7 @@ def main() -> None:
         migrations=migrations,
         auth=auth,
         imports=imports,
+        groups=groups,
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")

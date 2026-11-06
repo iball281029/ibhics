@@ -32,6 +32,7 @@ from .schemas import (
     CdromRequest,
     ClusterOut,
     FolderIn,
+    GroupMembersIn,
     GuestOut,
     HostNetworkIn,
     HostOut,
@@ -67,13 +68,20 @@ from .schemas import (
     UserUpdate,
     VMCreate,
     VMEditIn,
+    VMGroupIn,
+    VMGroupOut,
+    VMGroupsOut,
+    VMGroupUpdate,
     VMOut,
+    VMStatsOut,
 )
+from .vmgroups import VMGroups
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "ibhics_session"
 API = "/api/v1"
-GUEST_TOOLS_ISO = "/usr/share/ibhics/guest-tools.iso"
+# Not under /usr: AppArmor's virt-aa-helper will not let a running VM open files there.
+GUEST_TOOLS_ISO = "/var/lib/ibhics/tools/guest-tools.iso"
 # Install media for new VMs, uploaded from the browser (Storage > ISO library).
 ISO_DIR = Path("/var/lib/ibhics/iso")
 
@@ -160,12 +168,14 @@ def create_app(
     auth: Auth | None = None,
     imports: ImportManager | None = None,
     iso_dir: Path = ISO_DIR,
+    groups: VMGroups | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
     if isinstance(cluster, HypervisorDriver):
         cluster = Cluster.standalone(socket.gethostname(), cluster)
     backups = backups or BackupManager(cluster)
+    groups = groups or VMGroups()
 
     def backing_up(vm_name: str) -> bool:
         return any(
@@ -563,6 +573,9 @@ def create_app(
         if any(vm.spec.name == body.name for _, vm in cluster.all_vms()):
             raise VMExists(f"VM named {body.name!r} already exists in the cluster")
         member = cluster.member(body.node) if body.node else cluster.pick_node(body.memory_mb)
+        if body.driver_iso is None and "windows" in body.os_type.lower():
+            if Path(GUEST_TOOLS_ISO).is_file():
+                body.driver_iso = GUEST_TOOLS_ISO
         return VMOut.from_info(member.driver.create_vm(body.to_spec()), member.name)
 
     # Inventory: what the guests report about themselves (qemu-guest-agent).
@@ -578,6 +591,54 @@ def create_app(
                 continue
             result.extend(GuestOut(uuid=uuid, **guest_to_json(g)) for uuid, g in guests.items())
         return result
+
+    # Live load of running VMs, for the CPU and memory columns of the VM list.
+
+    @api.get("/vms/stats", response_model=list[VMStatsOut])
+    def vm_stats() -> list[VMStatsOut]:
+        result = []
+        for member in cluster.compute_members():
+            try:
+                stats = member.driver.list_vm_stats()
+            except NodeUnavailable as exc:
+                member.last_error = str(exc)
+                continue
+            result.extend(VMStatsOut(uuid=uuid, **asdict(s)) for uuid, s in stats.items())
+        return result
+
+    # VM groups: the folder tree beside the VM list.
+
+    def groups_out() -> VMGroupsOut:
+        return VMGroupsOut(
+            groups=[VMGroupOut(**asdict(g)) for g in groups.groups()], members=groups.members()
+        )
+
+    @api.get("/vm-groups", response_model=VMGroupsOut)
+    def list_groups() -> VMGroupsOut:
+        return groups_out()
+
+    @api.post("/vm-groups", response_model=VMGroupOut, status_code=status.HTTP_201_CREATED)
+    def create_group(body: VMGroupIn) -> VMGroupOut:
+        return VMGroupOut(**asdict(groups.create(body.name, body.parent, body.description)))
+
+    @api.put("/vm-groups/members", response_model=VMGroupsOut)
+    def move_to_group(body: GroupMembersIn) -> VMGroupsOut:
+        known = {vm.uuid for _, vm in cluster.all_vms()}
+        missing = [u for u in body.vms if u not in known]
+        if missing:
+            raise VMNotFound(missing[0])
+        groups.assign(body.vms, body.group)
+        return groups_out()
+
+    @api.patch("/vm-groups/{group_id}", response_model=VMGroupOut)
+    def update_group(group_id: str, body: VMGroupUpdate) -> VMGroupOut:
+        return VMGroupOut(
+            **asdict(groups.update(group_id, body.name, body.parent, body.description))
+        )
+
+    @api.delete("/vm-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_group(group_id: str) -> None:
+        groups.delete(group_id)
 
     @api.get("/vms/{uuid}/guest", response_model=GuestOut)
     def vm_guest(uuid: str) -> GuestOut:
@@ -630,11 +691,19 @@ def create_app(
         vm = member.driver.stop_vm(uuid, force=bool(body and body.force))
         return VMOut.from_info(vm, member.name)
 
+    @api.post("/vms/{uuid}/restart", response_model=VMOut)
+    def restart_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        vm = member.driver.restart_vm(uuid, force=bool(body and body.force))
+        return VMOut.from_info(vm, member.name)
+
     @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_vm(uuid: str) -> None:
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         member.driver.delete_vm(uuid)
+        groups.forget(uuid)
 
     # Live migration. Moving a VM changes where it runs, so it needs quorum like any change.
 

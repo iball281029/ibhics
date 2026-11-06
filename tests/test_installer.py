@@ -79,7 +79,7 @@ def test_console_banner_says_where_to_go():
     assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
-    assert "beta version 0.4" in issue
+    assert "beta version 0.5" in issue
 
 
 def test_apply_manager(tmp_path):
@@ -339,3 +339,26 @@ def test_boot_menu_title_names_the_release():
     menu = (INSTALLER / "boot/isolinux.cfg").read_text()
     assert "menu title ibHiCS @VERSION@ beta installer" in menu
     assert "s/@VERSION@/$SHORT/g" in (INSTALLER / "build-iso.sh").read_text()
+
+
+def test_apparmor_lets_qemu_open_pool_volumes():
+    rules = (INSTALLER / "apparmor-libvirt-qemu").read_text()
+    assert "/var/lib/ibhics/pools/** rwk," in rules
+    assert "/mnt/ibhics/** rwk," in rules  # NFS pools
+    target = "/etc/apparmor.d/local/abstractions/libvirt-qemu"
+    for script in ("install-ibhics.sh", "upgrade.sh"):
+        text = (INSTALLER / script).read_text()
+        assert '"$SRC/apparmor-libvirt-qemu"' in text and target in text
+    assert '"$HERE/apparmor-libvirt-qemu"' in (INSTALLER / "build-iso.sh").read_text()
+
+
+def test_custom_folder_pool_added_to_apparmor(tmp_path):
+    from ibhics.hypervisor.libvirt_driver import allow_qemu_path
+
+    rules = tmp_path / "apparmor.d/local/abstractions/libvirt-qemu"
+    rules.parent.mkdir(parents=True)
+    rules.write_text("/var/lib/ibhics/pools/** rwk,\n")
+    assert allow_qemu_path("/data/vms/", rules)
+    assert not allow_qemu_path("/data/vms", rules)  # once only
+    assert not allow_qemu_path("/var/lib/ibhics/pools/big", rules)  # already covered
+    assert rules.read_text().splitlines()[-1] == "/data/vms/** rwk,"
