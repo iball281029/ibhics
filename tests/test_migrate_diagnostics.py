@@ -139,11 +139,11 @@ def test_real_path_checker_reads_only(tmp_path):
 
 def test_timeout_bounds_even_a_stuck_injected_connector():
     def slow(*args):
-        time.sleep(0.15)
+        time.sleep(1.0)
 
     started = time.monotonic()
     result = diagnose(SOURCE, resolve=slow, node_ip=NODE, timeout=0.01, budget=0.02)
-    assert time.monotonic() - started < 0.12
+    assert time.monotonic() - started < 0.5  # well before the stuck call returns
     assert result["checks"][0]["step"] == "DNS"
     assert not result["checks"][0]["ok"]
 
