@@ -46,4 +46,10 @@ def test_legacy_windows_gets_sata_disks_and_e1000():
     client = TestClient(create_app(FakeDriver(demo_console=False)))
     body = {"name": "w7", "disks": [{"size_gb": 1, "bus": "sata"}], "nics": [{"model": "e1000"}]}
     assert client.post("/api/v1/vms", json=body).status_code == 201
+    assert (
+        client.post(
+            "/api/v1/vms", json={**body, "name": "w12", "nics": [{"model": "e1000e"}]}
+        ).status_code
+        == 201
+    )
     assert client.post("/api/v1/vms", json={**body, "nics": [{"model": "rtl"}]}).status_code == 422

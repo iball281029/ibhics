@@ -1463,20 +1463,30 @@ const vmWiz = wizard("vm-dialog", {
     }
   },
 });
-// Firmware and devices that suit a guest OS. Windows 7 / Server 2008 R2 and older have no
-// driver in today's virtio-win, so they get SATA disks and an e1000 NIC instead.
+// Firmware and devices that suit a guest OS. Windows with no driver in the bundled virtio-win
+// (Server 2012 non-R2, Windows 8, Windows 7 / Server 2008 R2 and older) get SATA disks and
+// an Intel NIC that Windows has a driver for (e1000e from Windows 8 / 2012, e1000 before).
 function osProfile(family, ver) {
-  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp/.test(ver);
+  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp|server 2012(?! r2)|windows 8(?!\.1)/.test(ver);
+  const nic = !legacy ? "virtio" : /2012|windows 8/.test(ver) ? "e1000e" : "e1000";
   const uefi = !legacy && ((family === "windows" && !/2012|2016|windows 8/.test(ver))
     || /2025|enterprise linux (9|10)|rocky linux (9|10)|almalinux (9|10)|oracle linux 9|stream 9|2[2-4]\.04|debian 1[23]|leap 15|suse linux enterprise 15|fedora|freebsd 1[34]/.test(ver));
-  return { uefi, legacy };
+  return { uefi, legacy, nic, folder: virtioFolder(family, ver) };
+}
+// The folder for this Windows on the virtio driver CD (only these are bundled).
+function virtioFolder(family, ver) {
+  if (family !== "windows") return "";
+  const map = [[/2025/, "2k25"], [/2022/, "2k22"], [/2019/, "2k19"], [/2016/, "2k16"], [/2012 r2|windows 8\.1/, "2k12R2"], [/windows 11/, "w11"], [/windows 10/, "w10"]];
+  return (map.find(([re]) => re.test(ver)) || [null, ""])[1];
 }
 function vmWizOs(form) {
   const f = form.elements, family = f.os_family.value, ver = f.os_type.value.toLowerCase();
-  const { uefi, legacy } = osProfile(family, ver);
+  const { uefi, legacy, nic, folder } = osProfile(family, ver);
   f.firmware.value = uefi ? "uefi" : "bios";
-  $(".fw-hint", form).textContent = legacy ? "This older Windows gets BIOS, SATA disks and an Intel e1000 network card: it has no virtio driver."
+  $(".fw-hint", form).textContent = legacy ? `This Windows has no virtio driver on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
     : uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "BIOS suits this OS.";
+  $(".win-driver-note", form).innerHTML = legacy ? "No driver CD needed: Windows has its own SATA and Intel network drivers."
+    : `Windows VMs get a second CD with the virtio drivers. When Windows Setup shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;
   f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
   $(".win-driver-note", form).hidden = family !== "windows";
 }
@@ -1506,7 +1516,7 @@ function vmWizOs(form) {
 handlers["vm-dialog"] = async (f) => {
   const form = $("#vm-form");
   vmWiz.check(1); vmWiz.check(2);
-  const { legacy } = osProfile(f.get("os_family"), (f.get("os_type") || "").toLowerCase());
+  const { legacy, nic } = osProfile(f.get("os_family"), (f.get("os_type") || "").toLowerCase());
   const body = {
     name: f.get("name"),
     vcpus: Number(f.get("vcpus")),
@@ -1515,7 +1525,7 @@ handlers["vm-dialog"] = async (f) => {
     os_type: f.get("os_type").trim() || (f.get("os_family") === "windows" ? "Windows" : ""),
     description: f.get("description").trim(),
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default", bus: legacy ? "sata" : "virtio" })),
-    nics: [{ network: f.get("network") || "default", model: legacy ? "e1000" : "virtio" }],
+    nics: [{ network: f.get("network") || "default", model: nic }],
     node: f.get("node") || null,
   };
   if (f.get("iso")) body.iso = f.get("iso");
