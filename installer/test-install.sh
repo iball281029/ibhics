@@ -89,19 +89,25 @@ echo ">> 2/4 Writing an answers file so first boot runs without the console wiza
 sudo modprobe nbd max_part=16
 sudo qemu-nbd -c /dev/nbd0 disk.qcow2
 # The test VM's volume group is called ibhics, like the host's when the test runs on an
-# ibHiCS node: find it by UUID and give it a name of its own while it is mounted here.
+# ibHiCS node. LVM here sees only the test disk, and the VG gets a name of its own while
+# mounted (its device-mapper names would clash with the host's), then its own name back.
 TVG=ibhicstest
+lvm_nbd() { sudo "$@" --config 'devices { filter = [ "a|^/dev/nbd0|", "r|.*|" ] use_devicesfile = 0 }'; }
 put_back() {
-    sudo vgchange -q -an "$TVG" >/dev/null 2>&1
-    [ -n "${VG_UUID:-}" ] && sudo vgrename -q "$VG_UUID" ibhics >/dev/null 2>&1
+    lvm_nbd vgchange -q -an "$TVG" >/dev/null 2>&1 || true
+    lvm_nbd vgrename -q "$TVG" ibhics >/dev/null 2>&1 || true
 }
-trap 'sudo umount -q mnt/var/lib/ibhics 2>/dev/null; sudo umount -q mnt 2>/dev/null; put_back; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
+release_disk() {
+    sync
+    sudo umount -q mnt/var/lib/ibhics 2>/dev/null || true
+    sudo umount mnt 2>/dev/null || { sleep 2; sudo umount -l mnt 2>/dev/null; } || true
+    put_back
+    sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true
+}
+trap release_disk EXIT
 sleep 2
-sudo pvscan -q --cache >/dev/null 2>&1 || true
-VG_UUID=$(sudo pvs --noheadings -o pv_name,vg_uuid 2>/dev/null | awk '$1 ~ /^\/dev\/nbd0/ {print $2; exit}')
-[ -n "$VG_UUID" ] || { echo "!! no LVM volume group on the installed disk"; exit 1; }
-sudo vgrename -q "$VG_UUID" "$TVG"
-sudo vgchange -q -ay "$TVG"
+lvm_nbd vgrename -q ibhics "$TVG" || { echo "!! no ibhics volume group on the installed disk"; exit 1; }
+lvm_nbd vgchange -q -ay "$TVG"
 mkdir -p mnt
 sudo mount "/dev/$TVG/root" mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
@@ -132,11 +138,8 @@ ADMIN_PASSWORD=$ADMIN_PASSWORD
 EOF
 sudo chmod 600 mnt/etc/ibhics/answers.conf
 cat mnt/etc/ibhics/version
-sudo umount mnt
-put_back
-VG_UUID=
-sudo qemu-nbd -d /dev/nbd0
 trap - EXIT
+release_disk
 
 echo ">> 3/4 First boot"
 # SeaBIOS tries only the first hard disk (the big, empty one), as a server's firmware
