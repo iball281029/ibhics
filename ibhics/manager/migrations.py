@@ -78,6 +78,18 @@ class MigrationManager:
         host = self._local_host if member.local else urlparse(member.address).hostname
         return TRANSPORTS[self._transport].format(host=host)
 
+    def migration_address(self, member: Member) -> str:
+        """The node's address on an interface marked for VM migration, or "" (then the
+        data goes the same way as the libvirt connection)."""
+        try:
+            net = member.driver.host_system().network()
+        except Exception:
+            return ""
+        for iface in net.interfaces:
+            if "migration" in iface.roles and iface.method == "static" and iface.address:
+                return iface.address.split("/")[0]
+        return ""
+
     # Planning
 
     def plan(self, uuid: str, node: str | None = None, copy_storage: bool | None = None) -> Plan:
@@ -203,7 +215,11 @@ class MigrationManager:
         job.state = "running"
         try:
             plan.source.driver.migrate_vm(
-                job.uuid, self.uri(plan.target), plan.copy_storage, bandwidth_mib
+                job.uuid,
+                self.uri(plan.target),
+                plan.copy_storage,
+                bandwidth_mib,
+                self.migration_address(plan.target),
             )
         except Exception as exc:  # the job records every failure; nothing else is waiting
             job.state, job.error = "failed", str(exc) or type(exc).__name__

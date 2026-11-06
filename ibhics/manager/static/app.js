@@ -2688,7 +2688,7 @@ async function renderNodeDetail(auto = false) {
   const name = nodeFromHash();
   const m = state.cluster.members.find((x) => x.name === name);
   $("#node-crumb").textContent = name;
-  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-ifaces", "#node-net-banner"].forEach((id) => { $(id).innerHTML = ""; });
+  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-vms", "#node-ifaces", "#node-net-banner"].forEach((id) => { $(id).innerHTML = ""; });
   if (!m || m.role !== "compute") {
     $("#node-title").textContent = m ? name : "Node not found";
     $("#node-subtitle").textContent = m ? "A witness only votes for quorum; it has no host details to show." : "It may have been removed from the cluster.";
@@ -2754,6 +2754,11 @@ async function renderNodeDetail(auto = false) {
     <td>${speedText(n.speed_mbps)}</td><td>${used(n)}</td>
     <td>${n.addresses.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>") || '<span class="muted">–</span>'}</td></tr>`).join("") : empty(5, "No network ports found");
   const pools = state.pools.filter((p) => p.node === name);
+  $("#node-vms").innerHTML = vms.length ? [...vms].sort((a, b) => a.name.localeCompare(b.name)).map((v) => `<tr>
+    <td><a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a></td>
+    <td><span class="badge ${v.state === "running" ? "running" : "plain"}">${esc(v.state)}</span></td>
+    <td>${v.vcpus}</td><td>${gbText(v.memory_mb)}</td><td>${esc(v.os_type || "")}</td>
+  </tr>`).join("") : empty(5, "No VMs on this node.");
   $("#node-pools").innerHTML = pools.length ? pools.map((p) => `<tr>
     <td><span class="vm-name">${esc(p.name)}</span></td><td>${esc(p.type)}</td>
     <td>${num(p.allocation_gb)} GB / ${num(p.capacity_gb)} GB ${usageBar({ used: p.allocation_gb, total: p.capacity_gb || 1, from: "of the pool" })}</td>
@@ -2859,6 +2864,7 @@ function openIface(name, kind) {
   form.elements.auto.checked = cfg ? cfg.auto : true;
   $$('input[name="roles"]', form).forEach((c) => { c.checked = (cfg?.roles || []).includes(c.value); });
   form.elements.routes.value = (cfg?.routes || []).join("\n");
+  form.elements.flow_control.value = cfg?.flow_control || "";
   form.elements.bond_mode.value = cfg?.bond_mode || "active-backup";
   // Ports this one may use: free ones, its own, and for a bridge also bonds.
   const own = cfg?.ports || [];
@@ -2902,6 +2908,7 @@ handlers["iface-dialog"] = async (f) => {
     gateway: f.get("method") === "static" ? f.get("gateway").trim() : "",
     mtu: f.get("mtu") ? Number(f.get("mtu")) : null,
     roles: f.getAll("roles"),
+    flow_control: kind === "ethernet" ? f.get("flow_control") || "" : "",
     routes: f.get("routes").split("\n").map((r) => r.trim().replace(/\s+/g, " ")).filter(Boolean),
   });
   if (kind !== "ethernet") {

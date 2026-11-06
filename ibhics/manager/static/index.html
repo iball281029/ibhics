@@ -386,6 +386,10 @@
             <thead><tr><th>Pool</th><th>Type</th><th>Used</th><th>Free</th></tr></thead>
             <tbody id="node-pools"></tbody>
           </table></div></div>
+          <div class="card wide"><h3>Virtual machines on this node</h3><div class="table-wrap"><table>
+            <thead><tr><th>VM</th><th>State</th><th>vCPU</th><th>Memory</th><th>OS</th></tr></thead>
+            <tbody id="node-vms"></tbody>
+          </table></div></div>
         </div>
         <div class="subpage" id="tab-node-network">
           <div id="node-net-banner"></div>
@@ -967,6 +971,9 @@
       </label>
       <label>MTU
         <select name="mtu"><option value="">Default (1500)</option><option value="1500">1500</option><option value="9000">9000 (jumbo frames)</option></select>
+      </label>
+      <label data-kind="ethernet">Flow control
+        <select name="flow_control"><option value="">Leave as it is</option><option value="on">On (pause frames)</option><option value="off">Off</option></select>
       </label>
       <label data-for="static">Address with prefix <input name="address" placeholder="10.0.0.11/24"></label>
       <label data-for="static">Gateway (blank = none) <input name="gateway" placeholder="none"></label>

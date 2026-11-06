@@ -349,6 +349,7 @@ class FakeDriver(HypervisorDriver):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
         dest = self.peers.get(urlparse(dest_uri).hostname or "")
         if dest is None:

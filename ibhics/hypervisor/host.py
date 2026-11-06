@@ -182,6 +182,7 @@ class IfaceConfig:
     # v0.9: static routes ("10.20.0.0/16 via 10.0.0.1") and what the interface is used for.
     routes: list[str] = field(default_factory=list)
     roles: list[str] = field(default_factory=list)  # management, migration, storage, vm
+    flow_control: str = ""  # ports only: "on" or "off" (ethernet pause frames); "" = as is
 
 
 ROLES = ("management", "migration", "storage", "vm")
@@ -233,6 +234,10 @@ class HostNetwork:
                 if port in used:
                     raise ValueError(f"{port} is already a port of {used[port]}")
                 used[port] = i.name
+            if i.flow_control not in ("", "on", "off"):
+                raise ValueError(f"{i.name}: flow control is on, off or left as it is")
+            if i.flow_control and i.kind != "ethernet":
+                raise ValueError(f"{i.name}: flow control is set on the network ports")
             for role in i.roles:
                 if role not in ROLES:
                     raise ValueError(f"{i.name}: a role is one of {', '.join(ROLES)}")
@@ -386,6 +391,8 @@ def parse_interfaces(text: str) -> HostNetwork:
                 current.bond_mode = value[0]
             elif key == "up" and value[:3] == ["ip", "route", "add"] and len(value) >= 6:
                 current.routes.append(f"{value[3]} via {value[5]}")
+            elif key == "post-up" and value[:2] == ["ethtool", "-A"] and "rx" in value:
+                current.flow_control = value[value.index("rx") + 1]
             elif key == "down" and value[:3] == ["ip", "route", "del"]:
                 pass  # written again from the route
             elif norm in ("bridge-stp", "bridge-fd", "bond-miimon", "bond-master"):
@@ -443,6 +450,9 @@ def render_interfaces(net: HostNetwork, node: str = "") -> str:
                 "    bridge_stp off",
                 "    bridge_fd 0",
             ]
+        if i.flow_control:
+            fc = i.flow_control
+            out.append(f"    post-up ethtool -A {i.name} autoneg off rx {fc} tx {fc} || true")
         for route in i.routes:
             net, _via, gw = route.split()
             out.append(f"    up ip route add {net} via {gw} dev {i.name}")

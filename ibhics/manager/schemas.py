@@ -196,6 +196,7 @@ class HostIfaceIn(BaseModel):
     options: list[str] = Field(default_factory=list)
     routes: list[str] = Field(default_factory=list, description="e.g. 10.20.0.0/16 via 10.0.0.1")
     roles: list[str] = Field(default_factory=list, description="management, migration, ...")
+    flow_control: str = Field(default="", pattern="^(|on|off)$")
 
 
 class HostNetworkIn(BaseModel):
@@ -446,6 +447,7 @@ class AgentMigrate(BaseModel):
     dest_uri: str = Field(pattern=r"^qemu\+(tls|ssh|tcp)://[^\s/]+/system$")
     copy_storage: bool = False
     bandwidth_mib: int | None = Field(default=None, ge=1)
+    data_address: str = Field(default="", pattern=r"^([0-9]{1,3}\.){3}[0-9]{1,3}$|^$")
 
 
 class NodeJoin(BaseModel):

@@ -189,8 +189,14 @@ class RemoteDriver(HypervisorDriver):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
-        body = {"dest_uri": dest_uri, "copy_storage": copy_storage, "bandwidth_mib": bandwidth_mib}
+        body = {
+            "dest_uri": dest_uri,
+            "copy_storage": copy_storage,
+            "bandwidth_mib": bandwidth_mib,
+            "data_address": data_address,
+        }
         resp = self._client.request("POST", f"/vms/{uuid}/migrate", json=body, timeout=None)
         detail = str(resp.json().get("detail", "")) if resp.content else ""
         if resp.status_code == 502:

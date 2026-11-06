@@ -517,8 +517,11 @@ class HypervisorDriver(abc.ABC):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
-        """Move the VM to the node whose libvirt daemon is at `dest_uri`.
+        """Move the VM to the node whose libvirt daemon is at `dest_uri`. With
+        `data_address` the VM's memory and disks travel to that address of the destination
+        (its migration interface), while libvirt still talks over `dest_uri`.
 
         A running VM keeps running (live migration); a stopped one is moved by definition
         only, which needs shared storage. With `copy_storage` the disks are copied to the

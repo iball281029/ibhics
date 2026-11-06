@@ -56,6 +56,7 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v0.9 — Nodes ⏳
+Beta 2 (0.9.0b2) ✅: VM migration data over the migration interface, flow control per port, VMs listed on the node summary
 Beta 1 (0.9.0b1) ✅: maintenance mode (no VMs placed/started/moved here, evacuate first), interface roles (management, migration, storage, VM uplink), static routes, system disk health (SMART, wear, temperature)
 
 Still to do:

@@ -929,6 +929,7 @@ class LibvirtDriver(HypervisorDriver):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
         dom = self._lookup(uuid)
         # Peer-to-peer: this node's libvirtd connects to the destination's itself, over TLS
@@ -954,6 +955,11 @@ class LibvirtDriver(HypervisorDriver):
         params = {}
         if bandwidth_mib:
             params[libvirt.VIR_MIGRATE_PARAM_BANDWIDTH] = bandwidth_mib
+        if data_address:
+            # Memory and disk data over the destination's migration interface.
+            params[libvirt.VIR_MIGRATE_PARAM_URI] = f"tcp://{data_address}"
+            if copy_storage:
+                params[libvirt.VIR_MIGRATE_PARAM_DISKS_URI] = f"tcp://{data_address}"
         precreated = []
         try:
             if copy_storage:

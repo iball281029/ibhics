@@ -106,3 +106,40 @@ def test_disk_metadata_survives_a_hand_edited_device_name():
     xml = xml.replace("https://ibhics.org/xmlns/vm", META_NS)
     root = ET.fromstring(xml)
     assert disk_source(root, root.find("devices/disk")) == ("SSD01", "EX-disk0.qcow2")
+
+
+def test_flow_control_round_trip():
+    net = HostNetwork(
+        [
+            IfaceConfig("br0", "bridge", "static", "10.0.0.11/24", ports=["eno1"]),
+            IfaceConfig("eno1", flow_control="off"),
+        ]
+    )
+    net.validate({"eno1"})
+    text = render_interfaces(net)
+    assert "post-up ethtool -A eno1 autoneg off rx off tx off || true" in text
+    assert parse_interfaces(text).get("eno1").flow_control == "off"
+    net.interfaces[0].flow_control = "on"
+    with pytest.raises(ValueError, match="network ports"):
+        net.validate({"eno1"})
+
+
+def test_migration_data_goes_over_the_migration_interface(tmp_path):
+    from types import SimpleNamespace
+
+    from ibhics.manager.migrations import MigrationManager
+
+    env = Env(tmp_path)
+    mm = MigrationManager(env.cluster)
+    net = HostNetwork(
+        [
+            IfaceConfig("br0", "bridge", "static", "10.0.0.12/24", ports=["eno1"]),
+            IfaceConfig("eno2", method="static", address="10.9.0.12/24", roles=["migration"]),
+        ]
+    )
+    member = SimpleNamespace(
+        driver=SimpleNamespace(host_system=lambda: SimpleNamespace(network=lambda: net))
+    )
+    assert mm.migration_address(member) == "10.9.0.12"
+    net.interfaces[1].roles = []
+    assert mm.migration_address(member) == ""
