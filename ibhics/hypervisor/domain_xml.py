@@ -23,7 +23,9 @@ def volume_name(vm_name: str, index: int, disk: DiskSpec) -> str:
     return f"{vm_name}-disk{index}{suffix}"
 
 
-def build_volume_xml(vm_name: str, index: int, disk: DiskSpec) -> str:
+def build_volume_xml(vm_name: str, index: int, disk: DiskSpec, backing: str | None = None) -> str:
+    """Volume XML for a new disk; with `backing`, a qcow2 overlay on that image (a linked
+    clone's disk: reads fall through to the template's, writes stay in the overlay)."""
     vol = ET.Element("volume")
     ET.SubElement(vol, "name").text = volume_name(vm_name, index, disk)
     ET.SubElement(vol, "capacity", unit="GiB").text = str(disk.size_gb)
@@ -32,6 +34,12 @@ def build_volume_xml(vm_name: str, index: int, disk: DiskSpec) -> str:
         ET.SubElement(vol, "allocation").text = "0"
         target = ET.SubElement(vol, "target")
         ET.SubElement(target, "format", type="qcow2")
+        if backing:
+            store = ET.SubElement(vol, "backingStore")
+            ET.SubElement(store, "path").text = backing
+            ET.SubElement(store, "format", type="qcow2")
+    elif backing:
+        raise ValueError("linked clones need qcow2 disks (a folder, thin disk or NFS pool)")
     return ET.tostring(vol, encoding="unicode")
 
 
@@ -76,6 +84,48 @@ def nic_element(nic: NicSpec) -> ET.Element:
     return iface
 
 
+def vm_meta(root: ET.Element) -> ET.Element:
+    """The domain's <ibhics:vm> metadata element, created when missing."""
+    metadata = root.find("metadata")
+    if metadata is None:
+        metadata = ET.SubElement(root, "metadata")
+    meta = metadata.find(f"{{{META_NS}}}vm")
+    if meta is None:
+        meta = ET.SubElement(metadata, f"{{{META_NS}}}vm")
+    return meta
+
+
+def set_template_flag(meta: ET.Element, template: bool) -> None:
+    for el in meta.findall(f"{{{META_NS}}}template"):
+        meta.remove(el)
+    if template:
+        ET.SubElement(meta, f"{{{META_NS}}}template")
+
+
+def set_recycled_mark(meta: ET.Element, at: str) -> None:
+    for el in meta.findall(f"{{{META_NS}}}recycled"):
+        meta.remove(el)
+    if at:
+        ET.SubElement(meta, f"{{{META_NS}}}recycled", at=at)
+
+
+def recycled_at(root: ET.Element) -> str:
+    el = root.find(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}recycled")
+    return el.get("at", "") if el is not None else ""
+
+
+def template_facts(root: ET.Element) -> tuple[bool, str]:
+    """(is a template, uuid of the template a linked clone is based on) from domain XML."""
+    meta = root.find(f"metadata/{{{META_NS}}}vm")
+    if meta is None:
+        return False, ""
+    linked = meta.find(f"{{{META_NS}}}linked")
+    return (
+        meta.find(f"{{{META_NS}}}template") is not None,
+        linked.get("template", "") if linked is not None else "",
+    )
+
+
 def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     spec.validate()
     if len(spec.disks) > len(DISK_DEVS):
@@ -90,6 +140,10 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     meta = ET.SubElement(ET.SubElement(dom, "metadata"), f"{{{META_NS}}}vm")
     if spec.os_type:
         ET.SubElement(meta, f"{{{META_NS}}}os").text = spec.os_type
+    set_template_flag(meta, spec.template)
+    if spec.linked_to:
+        ET.SubElement(meta, f"{{{META_NS}}}linked", template=spec.linked_to)
+    set_recycled_mark(meta, spec.recycled)
     ET.SubElement(dom, "memory", unit="MiB").text = str(spec.memory_mb)
     ET.SubElement(dom, "vcpu", placement="static").text = str(spec.vcpus)
 

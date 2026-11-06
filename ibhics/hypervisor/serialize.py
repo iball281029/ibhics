@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from .base import (
+    CloneSpec,
+    Customization,
     DiskEdit,
     DiskSpec,
     Firmware,
@@ -32,6 +34,9 @@ def spec_from_json(data: dict) -> VMSpec:
         os_type=data.get("os_type", ""),
         boot=data.get("boot"),
         autostart=data.get("autostart", False),
+        template=data.get("template", False),
+        linked_to=data.get("linked_to", ""),
+        recycled=data.get("recycled", ""),
     )
 
 
@@ -74,6 +79,9 @@ def spec_to_json(spec: VMSpec) -> dict:
         "os_type": spec.os_type,
         "boot": spec.boot,
         "autostart": spec.autostart,
+        "template": spec.template,
+        "linked_to": spec.linked_to,
+        "recycled": spec.recycled,
     }
 
 
@@ -102,3 +110,14 @@ def guest_from_json(data: dict) -> GuestInfo:
         fs_used_gb=data.get("fs_used_gb"),
         fs_total_gb=data.get("fs_total_gb"),
     )
+
+
+def clone_to_json(clone: CloneSpec) -> dict:
+    return asdict(clone)
+
+
+def clone_from_json(data: dict) -> CloneSpec:
+    data = dict(data)
+    if data.get("customization") is not None:
+        data["customization"] = Customization(**data["customization"])
+    return CloneSpec(**data)

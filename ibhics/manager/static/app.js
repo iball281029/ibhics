@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [] };
+const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -88,8 +88,7 @@ document.addEventListener("click", (e) => {
   }
   const menu = e.target.closest("#user-menu");
   $("#user-dropdown").classList.toggle("open", Boolean(menu) && !e.target.closest(".dropdown"));
-  const tasks = e.target.closest("#tasks-menu");
-  if (!tasks || !e.target.closest(".dropdown")) $("#tasks-panel").classList.toggle("open", Boolean(tasks) && !$("#tasks-panel").classList.contains("open"));
+  if (e.target.closest("#tasks-menu")) location.hash = "tasks"; // the Tasks page, with every detail
   $$("details.more[open]").forEach((d) => { if (!d.contains(e.target)) d.removeAttribute("open"); });
   const link = e.target.closest("[data-tab-link]");
   if (link) setTimeout(() => selectTab("system-tabs", link.dataset.tabLink), 0);
@@ -122,7 +121,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -134,7 +133,7 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 function show() {
   const page = currentPage();
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  const section = { vm: "compute", node: "nodes" }[page] || page;
+  const section = { vm: "compute", node: "nodes", recycle: "compute" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
@@ -318,7 +317,13 @@ async function loadCluster() {
   state.hosts = Object.fromEntries(hosts);
 }
 const loaders = {
-  vms: async () => { state.vms = await api("/vms"); },
+  vms: async () => {
+    const all = await api("/vms");
+    state.vms = all.filter((v) => !v.template && !v.recycled);
+    state.templates = all.filter((v) => v.template && !v.recycled);
+  },
+  deploys: async () => { state.deploys = await api("/deploys"); },
+  recycle: async () => { state.recycle = await api("/recycle-bin"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
   stats: async () => { state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s])); },
   groups: async () => { state.groups = await api("/vm-groups"); },
@@ -343,15 +348,20 @@ function allTasks() {
   const tasks = [
     ...state.imports.map((j) => ({
       kind: "Import", title: j.name, sub: `from ${j.source} to ${j.node}`, state: j.state,
-      step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id,
+      step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
     })),
     ...state.jobs.map((j) => ({
       kind: j.kind === "restore" ? "Restore" : "Backup", title: j.vm, sub: `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
-      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error,
+      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
       kind: m.live ? "Live migration" : "Move", title: m.vm, sub: `${m.source} → ${m.target || "auto"}`,
-      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error,
+      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
+    })),
+    ...state.deploys.map((d) => ({
+      kind: "Deploy", title: d.vm, sub: `${d.linked ? "linked clone" : "full clone"} of ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
+      state: d.state, step: d.linked ? "Creating the disks" : "Copying the disks", percent: null, created: d.created, finished: d.finished,
+      error: d.error, id: d.id, result: d.result ? `VM ${d.result}${d.power_on ? ", powered on" : ""}` : "",
     })),
   ];
   return tasks.sort((a, b) => String(b.created).localeCompare(String(a.created)));
@@ -375,6 +385,74 @@ function renderTasks() {
     ? `<div class="tasks-title">Tasks</div>${tasks.slice(0, 15).map(row).join("")}`
     : `<p class="hint" style="padding:10px">Nothing has run yet.</p>`;
 }
+// ---------- Tasks page ----------
+
+const tp = { state: "", kind: "", sel: "" };
+const taskKey = (t) => `${t.kind}|${t.id}`;
+function duration(t) {
+  if (!t.created) return "";
+  const s = Math.max(0, ((t.finished ? new Date(t.finished) : new Date()) - new Date(t.created)) / 1000);
+  if (s < 60) return `${Math.round(s)} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+function renderTaskPage() {
+  const q = $("#task-search").value.trim().toLowerCase();
+  const all = allTasks();
+  const tasks = all.filter((t) => (!tp.kind || t.kind === tp.kind)
+    && (!tp.state || (tp.state === "active" ? isActive(t) : t.state === tp.state))
+    && (!q || [t.title, t.sub, t.kind, t.error].join(" ").toLowerCase().includes(q)));
+  const running = all.filter(isActive).length, failed = all.filter((t) => t.state === "failed").length;
+  $("#tasks-sum").textContent = `${all.length} total · ${running} running · ${failed} failed`;
+  $$("#task-state button").forEach((b) => b.classList.toggle("on", b.dataset.v === tp.state));
+  if (!tasks.some((t) => taskKey(t) === tp.sel)) tp.sel = tasks[0] ? taskKey(tasks[0]) : "";
+  $("#task-rows").innerHTML = tasks.length ? tasks.map((t) => `<tr data-key="${esc(taskKey(t))}" class="${taskKey(t) === tp.sel ? "picked" : ""}">
+      <td><span class="badge plain t-kind k-${esc(t.kind.split(" ")[0].toLowerCase())}">${esc(t.kind)}</span></td>
+      <td class="vm-name">${esc(t.title)}</td>
+      <td class="muted">${esc(t.sub)}</td>
+      <td><span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span>
+        ${isActive(t) ? `<div class="bar${t.percent == null ? " busy" : ""}" style="margin-top:6px"><i style="width:${t.percent ?? 30}%"></i></div>` : ""}</td>
+      <td>${esc(when(t.created))}</td><td>${esc(duration(t))}</td></tr>`).join("")
+    : empty(6, all.length ? "No tasks match" : "Nothing has run yet. Backups, restores, migrations, imports and deploys show up here.");
+  renderTaskDetail(tasks.find((t) => taskKey(t) === tp.sel));
+}
+async function renderTaskDetail(t) {
+  const box = $("#task-detail");
+  if (!t) { box.innerHTML = `<p class="hint">Pick a task to see its details.</p>`; return; }
+  const step = isActive(t) ? esc(t.step || (t.state === "queued" ? "Waiting for a free slot" : "Working")) + (t.percent != null ? ` · ${t.percent}%` : "") : "";
+  const rows = [["Type", esc(t.kind)], ["Object", esc(t.title)], ["Details", esc(t.sub)],
+    ["Status", `<span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span>`],
+    ["Current step", step], ["Started", esc(when(t.created))], ["Finished", t.finished ? esc(when(t.finished)) : ""],
+    ["Duration", esc(duration(t))], ["Result", esc(t.result || "")], ["Task ID", `<span class="mono">${esc(t.id)}</span>`]].filter(([, v]) => v);
+  box.innerHTML = `<h3>${esc(t.kind)} · ${esc(t.title)}</h3><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    ${t.error ? `<p class="wiz-label">Error</p><pre class="task-err">${esc(t.error)}</pre>` : ""}
+    ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><pre class="task-log" id="task-log">Loading…</pre>` : ""}`;
+  if (t.log) {
+    const { log } = await api(`/migrate/jobs/${enc(t.log)}/log`).catch((err) => ({ log: err.message }));
+    const pre = $("#task-log");
+    if (pre) { pre.textContent = (log || "No output yet.").split("\n").slice(-40).join("\n"); pre.scrollTop = pre.scrollHeight; }
+  }
+}
+async function renderOps() {
+  const ops = await api("/audit?limit=300"); // newest first
+  $("#task-ops").innerHTML = ops.length ? ops.map((o) => `<tr>
+    <td>${esc(when(o.time))}</td><td>${esc(o.user)}</td><td>${esc(o.action)}</td><td class="mono">${esc(o.target)}</td>
+    <td><span class="badge ${o.result < 400 ? "done" : "failed"}">${o.result < 400 ? "OK" : esc(o.result)}</span></td><td class="muted">${esc(o.address)}</td></tr>`).join("")
+    : empty(6, "No operations recorded yet");
+}
+{
+  $("#task-rows").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-key]");
+    if (tr) { tp.sel = tr.dataset.key; renderTaskPage(); }
+  });
+  $("#task-state").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-v]");
+    if (b) { tp.state = b.dataset.v; renderTaskPage(); }
+  });
+  $("#task-kind").addEventListener("change", (e) => { tp.kind = e.target.value; renderTaskPage(); });
+  $("#task-search").addEventListener("input", () => renderTaskPage());
+}
+
 let logTimer = null;
 async function showLog(id, title) {
   $("#log-title").textContent = `Import log: ${title}`;
@@ -398,22 +476,28 @@ document.addEventListener("click", (e) => {
 // While something runs, keep the tasks fresh every few seconds, whatever page is open.
 setInterval(async () => {
   if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
-  try { await load("imports", "jobs", "moves"); renderTasks(); } catch { /* next tick */ }
+  try {
+    await load("imports", "jobs", "moves", "deploys"); renderTasks();
+    if (currentPage() === "tasks") renderTaskPage();
+  } catch { /* next tick */ }
 }, 3000);
 
 async function refresh(page, auto = false) {
   await loadCluster();
-  await load("imports", "jobs", "moves").then(renderTasks).catch(() => {});
+  await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
-  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
-  if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
+  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
+  if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
   if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
-  if (page === "activity") { await load("jobs", "moves", "imports"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
+  if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
+  if (page === "recycle") { await load("recycle"); renderRecycle(); }
+  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
+  if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();
 }
@@ -441,6 +525,7 @@ function activities() {
     ...state.jobs.map((j) => ({ kind: j.kind === "backup" ? "Backup" : "Restore", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
     ...state.moves.map((m) => ({ kind: "Live migration", icon: "i-migrate", what: m.vm, where: `${m.source} → ${m.target || "?"}`, state: m.state, created: m.created, error: m.error })),
     ...state.imports.map((j) => ({ kind: "Import", icon: "i-compute", what: j.name, where: j.source, state: j.state, created: j.created, error: j.error })),
+    ...state.deploys.map((d) => ({ kind: "Deploy", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
   ];
   return items.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
 }
@@ -467,7 +552,7 @@ function renderHome() {
   if (!c.quorum) mood = ["bad", "Cluster Has ", "Lost Quorum"];
   else if (offline.length) mood = ["warn", `${offline.length} Node${offline.length > 1 ? "s" : ""} `, "Offline"];
   else if (storagePct >= 85 || failed.length) mood = ["warn", "Needs ", "Attention"];
-  $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
+  if ($("#health")) $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
 
   const cs = $("#cluster-state");
   cs.textContent = c.quorum ? (c.ha_capable ? "Highly available" : "Healthy") : "No quorum";
@@ -564,6 +649,8 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
+      ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
+        <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
       ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
     </div></details>`;
 }
@@ -727,6 +814,7 @@ function renderVMs() {
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#vm-count").textContent = `${state.vms.length} total · ${running} running`;
   renderGroupTree();
+  $("#vg-bin-n").textContent = state.recycle.vms.length || "";
   renderVMAlert();
   $$("#vm-view button").forEach((b) => b.classList.toggle("on", b.dataset.view === vmp.view));
   $$("#vm-metrics button").forEach((b) => b.classList.toggle("active", b.dataset.metric === vmp.metric));
@@ -949,7 +1037,7 @@ async function batch(act) {
   const label = { start: "Power on", stop: "Shut down", poweroff: "Power off", restart: "Restart", delete: "Delete" }[act];
   if (!todo.length) { toast(`${label}: none of the selected VMs ${act === "start" ? "is stopped" : act === "delete" ? "is stopped (shut down first)" : "is running"}`, true); return; }
   const names = todo.map((v) => v.name).join(", ");
-  if (act === "delete" && !confirm(`Delete ${todo.length} VM${todo.length === 1 ? "" : "s"} and all their disks?\n\n${names}`)) return;
+  if (act === "delete" && !confirm(`Delete ${todo.length} VM${todo.length === 1 ? "" : "s"}?${binNote()}\n\n${names}`)) return;
   if (["poweroff", "restart"].includes(act) && !confirm(`${label} ${names}?${act === "poweroff" ? " Unsaved work in the guests is lost." : ""}`)) return;
   const call = (v) => ({
     start: () => post(`/vms/${v.uuid}/start`), stop: () => post(`/vms/${v.uuid}/stop`),
@@ -983,6 +1071,7 @@ async function vmAction(e) {
     return;
   }
   if (act === "edit") { openEdit(id).catch(fail); return; }
+  if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "backup") {
     if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
     openDialog("backup-dialog", { id, name });
@@ -1004,10 +1093,17 @@ async function vmAction(e) {
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
     }
     if (act === "eject") await post(`/vms/${id}/cdrom`, { iso: null });
+    if (act === "totemplate") {
+      if (!confirm(`Convert ${name} to a template? A template cannot be powered on; new VMs are deployed from it. You can convert it back later.`)) return;
+      await post(`/vms/${id}/template`, { template: true });
+      toast(`${name} is now a template`);
+      location.hash = "templates";
+      return;
+    }
     if (act === "delete") {
-      if (!confirm(`Delete ${name} and all its disks?`)) return;
+      if (!confirm(`Delete ${name}?${binNote()}`)) return;
       await del(`/vms/${id}`);
-      toast(`${name} deleted`);
+      toast(state.recycle.days ? `${name} moved to the recycle bin` : `${name} deleted`);
       if (currentPage() === "vm") { location.hash = "compute"; return; }
     }
     await refresh(currentPage());
@@ -1015,6 +1111,120 @@ async function vmAction(e) {
 }
 $("#vms").addEventListener("click", vmAction);
 $("#vm-actions").addEventListener("click", vmAction);
+$("#vm-panel").addEventListener("click", vmAction);
+
+// ---------- templates ----------
+// VMware-style: a stopped VM becomes a template that cannot run; new VMs are deployed
+// from it as linked clones (overlays on its disks) or full copies, optionally customized.
+
+const linkedOf = (t) => state.vms.filter((v) => v.linked_to === t.uuid);
+const canLink = (t) => t.disks.length > 0 && t.disks.every((d) => d.backend === "file");
+function renderTemplates() {
+  const q = $("#tpl-search").value.trim().toLowerCase();
+  const list = [...state.templates].sort((a, b) => a.name.localeCompare(b.name))
+    .filter((t) => !q || [t.name, t.os_type, t.description, t.node].join(" ").toLowerCase().includes(q));
+  $("#tpl-count").textContent = `${state.templates.length} template${state.templates.length === 1 ? "" : "s"}`;
+  const busy = new Set(state.deploys.filter(isActive).map((j) => j.source_uuid));
+  $("#tpl-grid").innerHTML = list.length ? list.map((t) => {
+    const clones = linkedOf(t), disk = t.disks.reduce((s, d) => s + d.size_gb, 0);
+    const win = /windows/i.test(t.os_type);
+    return `<article class="tpl-card">
+      <div class="tpl-top"><span class="tpl-icon ${win ? "win" : "lin"}"><svg><use href="#i-os-${win ? "win" : "linux"}"/></svg></span>
+        <div class="tpl-name"><b>${esc(t.name)}</b><span class="vm-sub">${esc(t.os_type || "OS not set")}</span></div>
+        ${busy.has(t.uuid) ? `<span class="badge running">Deploying</span>` : ""}</div>
+      ${t.description ? `<p class="tpl-desc">${esc(t.description)}</p>` : ""}
+      <div class="tpl-specs">
+        <span><svg><use href="#i-cpu"/></svg>${t.vcpus} vCPU</span>
+        <span><svg><use href="#i-mem"/></svg>${num(t.memory_mb / 1024)} GB</span>
+        <span><svg><use href="#i-hdd"/></svg>${num(disk)} GB · ${esc([...new Set(t.disks.map((d) => d.pool))].join(", ") || "no disk")}</span>
+        <span><svg><use href="#i-nodes"/></svg>${esc(t.node || "")}</span>
+      </div>
+      <div class="tpl-foot">
+        <span class="muted">${clones.length ? `${clones.length} linked clone${clones.length === 1 ? "" : "s"}` : canLink(t) ? "Linked clones possible" : "Full clones only (block storage)"}</span>
+        <span class="spacer"></span>
+        ${canOperate() ? `<button class="primary small" data-tpl="deploy" data-id="${t.uuid}">Deploy VM</button>
+        <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
+          <button data-tpl="edit" data-id="${t.uuid}">Settings</button>
+          <button data-tpl="tovm" data-id="${t.uuid}" data-name="${esc(t.name)}">Convert to VM</button>
+          <button class="danger" data-tpl="delete" data-id="${t.uuid}" data-name="${esc(t.name)}">Delete</button>
+        </div></details>` : ""}
+      </div>
+      ${clones.length ? `<div class="tpl-clones">${clones.map((v) => `<a href="#vm/${v.uuid}">${esc(v.name)}</a>`).join("")}</div>` : ""}
+    </article>`;
+  }).join("") : `<div class="empty-card"><svg><use href="#i-template"/></svg><p>${state.templates.length ? "No template matches." : "No templates yet. In Virtual Machines, shut a VM down and choose <b>Convert to template</b> from its ⋯ menu."}</p></div>`;
+}
+$("#tpl-search").addEventListener("input", renderTemplates);
+$("#tpl-grid").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-tpl]");
+  if (!b) return;
+  b.closest("details")?.removeAttribute("open");
+  const { tpl: act, id, name } = b.dataset;
+  try {
+    if (act === "deploy") return openDeploy(id);
+    if (act === "edit") return openEdit(id);
+    if (act === "tovm") {
+      if (!confirm(`Convert ${name} back to a VM? It can then be powered on and changed.`)) return;
+      await post(`/vms/${id}/template`, { template: false });
+      toast(`${name} is a VM again`);
+    }
+    if (act === "delete") {
+      if (!confirm(`Delete template ${name}?${binNote()}`)) return;
+      await del(`/vms/${id}`);
+      toast(`${name} deleted`);
+    }
+    await refresh(currentPage());
+  } catch (err) { fail(err); }
+});
+
+function openDeploy(uuid) {
+  const src = [...state.templates, ...state.vms].find((v) => v.uuid === uuid);
+  if (!src) return;
+  const isTpl = src.template;
+  let name = src.name.replace(/[-_.]?(tpl|template)$/i, "") || src.name;
+  const taken = new Set([...state.vms, ...state.templates].map((v) => v.name));
+  let n = 1; while (taken.has(`${name}-${String(n).padStart(2, "0")}`)) n++;
+  const win = /windows/i.test(src.os_type);
+  openDialog("deploy-dialog", { uuid, name: src.name }, {
+    name: `${name}-${String(n).padStart(2, "0")}`,
+    custom: isTpl ? (win ? "windows" : "linux") : "none",
+  });
+  const form = $("#deploy-form");
+  $("#deploy-title").textContent = isTpl ? "Deploy VM from template" : `Clone ${src.name}`;
+  $("#deploy-src").innerHTML = `<svg><use href="#i-${isTpl ? "template" : "compute"}"/></svg><div><b>${esc(src.name)}</b>
+    <span class="vm-sub">${src.vcpus} vCPU · ${num(src.memory_mb / 1024)} GB · ${src.disks.length} disk${src.disks.length === 1 ? "" : "s"} · ${esc(src.node || "")}</span></div>`;
+  const linked = form.querySelector("input[value=linked]");
+  linked.disabled = !isTpl || !canLink(src);
+  linked.closest(".type-card").title = !isTpl ? "Linked clones are made from templates" : !canLink(src) ? "The template's disks are on block storage (LVM/iSCSI): only full clones" : "";
+  (linked.disabled ? form.querySelector("input[value=full]") : linked).checked = true;
+  const pools = state.pools.filter((p) => p.node === src.node && p.active);
+  form.elements.pool.innerHTML = `<option value="">Same pool as the ${isTpl ? "template" : "VM"}</option>`
+    + pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} · ${num(p.available_gb)} GB free</option>`).join("");
+  syncDeploy();
+  syncSwitch(form);
+}
+function syncDeploy() {
+  const form = $("#deploy-form");
+  $(".deploy-pool", form).hidden = form.elements.clone.value === "linked";
+}
+$("#deploy-form").addEventListener("change", (e) => { if (e.target.name === "clone") syncDeploy(); });
+handlers["deploy-dialog"] = async (f, ctx) => {
+  const linked = f.get("clone") === "linked", custom = f.get("custom");
+  const body = { name: f.get("name"), linked, power_on: f.get("power_on") === "on" };
+  if (f.get("description")) body.description = f.get("description");
+  if (!linked && f.get("pool")) body.pool = f.get("pool");
+  if (custom !== "none") {
+    body.customization = {
+      os: custom, hostname: f.get("hostname"), username: f.get("username"), password: f.get("password"),
+      timezone: f.get("timezone"),
+      ssh_keys: custom === "linux" ? f.get("ssh_keys").split("\n").map((k) => k.trim()).filter(Boolean) : [],
+      user_data: custom === "linux" ? f.get("user_data") : "",
+    };
+  }
+  await post(`/vms/${ctx.uuid}/clone`, body);
+  toast(`Deploying ${body.name} from ${ctx.name}. Follow it in Tasks.`);
+  await load("deploys").then(renderTasks).catch(() => {});
+  if (currentPage() === "templates") renderTemplates();
+};
 
 // ---------- edit VM ----------
 // A list of the VM's parts on the left, the selected part's settings on the right.
@@ -2272,7 +2482,7 @@ async function renderVMDetail() {
     $("#vm-title").textContent = "VM not found";
     $("#vm-crumb").textContent = uuid;
     $("#vm-subtitle").textContent = "It may have been deleted, or moved and renamed.";
-    ["#vm-actions", "#vm-stats", "#vm-general", "#vm-guest", "#vm-net", "#vm-hw", "#vm-backups", "#vm-feed"].forEach((id) => { $(id).innerHTML = ""; });
+    ["#vm-actions", "#vm-stats", "#vm-general", "#vm-guest", "#vm-net", "#vm-hw", "#vm-backups", "#vm-feed", "#vm-snaps", "#vm-alerts"].forEach((id) => { $(id).innerHTML = ""; });
     return;
   }
   let g = null;
@@ -2308,6 +2518,7 @@ async function renderVMDetail() {
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
     ["CD/DVD", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : "Empty"],
     vm.driver_iso && ["Driver CD", `<span class="mono">${esc(vm.driver_iso)}</span>`],
+    vm.linked_to && ["Linked clone of", (() => { const t = state.templates.find((x) => x.uuid === vm.linked_to); return t ? `<a href="#templates">${esc(t.name)}</a> (template)` : `<span class="mono">${esc(vm.linked_to)}</span>`; })()],
     ["Description", vm.description ? esc(vm.description) : dash],
     ["UUID", `<span class="mono">${esc(vm.uuid)}</span>`],
   ]);
@@ -2357,7 +2568,8 @@ async function renderVMDetail() {
     <span class="badge ${esc(a.state)}">${JOB_STATE[a.state] || esc(a.state)}</span>
     <span class="when">${esc(ago(a.created))}</span></li>`).join("") : `<li class="hint">No backups, restores or migrations for this VM yet.</li>`;
 
-  await renderVMBackups(vm);
+  renderVMAlerts(vm);
+  await Promise.all([renderVMSnapshots(vm), renderVMBackups(vm)]);
 }
 
 async function renderVMBackups(vm) {
@@ -2386,6 +2598,190 @@ $("#vm-backup-now").addEventListener("click", () => {
   if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
   openDialog("backup-dialog", { id: vm.uuid, name: vm.name });
 });
+
+// ---------- VM snapshots and alerts ----------
+
+async function renderVMSnapshots(vm) {
+  const box = $("#vm-snaps");
+  const snaps = await api(`/vms/${vm.uuid}/snapshots`).catch((err) => { box.innerHTML = `<li class="hint">${esc(err.message)}</li>`; return null; });
+  if (!snaps) return;
+  $("#vm-snap-n").textContent = snaps.length || "";
+  const block = vm.disks.some((d) => d.backend === "block");
+  const why = vm.template ? "Templates do not take snapshots." : block ? "This VM has a disk on block storage (LVM/iSCSI): snapshots need qcow2 disks. Use Back up now instead." : "";
+  $("#vm-snap-take").disabled = Boolean(why);
+  $("#vm-snap-take").title = why;
+  const op = canOperate() && !vm.template;
+  const here = `<li class="snap here"><span class="snap-dot"></span><div><b>You are here</b><span class="vm-sub">The VM as it is now${snaps.some((s) => s.current) ? `, changed since ${esc(snaps.find((s) => s.current).name)}` : ""}</span></div></li>`;
+  box.innerHTML = (snaps.length ? [...snaps].reverse().map((s) => `<li class="snap${s.current ? " current" : ""}">
+      <span class="snap-dot"><svg><use href="#i-camera"/></svg></span>
+      <div class="snap-body">
+        <div class="snap-head"><b>${esc(s.name)}</b>
+          <span class="badge ${s.vm_state === "running" ? "running" : "plain"}">${s.vm_state === "running" ? "with memory" : "disks only"}</span>
+          ${s.current ? `<span class="badge plain">current</span>` : ""}</div>
+        <span class="vm-sub">${esc(when(s.created))}${s.parent ? ` · after ${esc(s.parent)}` : ""}</span>
+        ${s.description ? `<p>${esc(s.description)}</p>` : ""}
+      </div>
+      ${op ? `<div class="actions"><button class="small" data-snap="revert" data-name="${esc(s.name)}" data-state="${esc(s.vm_state)}">Revert</button>
+        <button class="small danger" data-snap="delete" data-name="${esc(s.name)}">Delete</button></div>` : ""}
+    </li>`).join("") : `<li class="hint snap-empty">No snapshots yet.${why ? " " + esc(why) : " Take one before an upgrade or a risky change."}</li>`) ;
+  if (snaps.length) box.insertAdjacentHTML("afterbegin", here);
+}
+$("#vm-snap-take").addEventListener("click", () => {
+  const vm = state.vms.find((v) => v.uuid === vmFromHash());
+  if (!vm) return;
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  openDialog("snap-dialog", { uuid: vm.uuid }, { name: `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` });
+  $("#snap-form .snap-mem").textContent = vm.state === "running"
+    ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
+    : "The VM is off: the snapshot holds its disks.";
+});
+handlers["snap-dialog"] = async (f, ctx) => {
+  await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description") });
+  toast(`Snapshot taken: ${f.get("name").trim()}`);
+  selectTab("vm-tabs", "vm-snapshots");
+  await refresh("vm");
+  selectTab("vm-tabs", "vm-snapshots");
+};
+$("#vm-snaps").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-snap]");
+  if (!b) return;
+  const uuid = vmFromHash(), name = b.dataset.name, vm = state.vms.find((v) => v.uuid === uuid);
+  try {
+    if (b.dataset.snap === "revert") {
+      const lose = `Everything that changed in ${vm.name} since then is lost.`;
+      if (!confirm(`Revert ${vm.name} to ${name}? ${lose}${b.dataset.state === "running" ? " The VM will be running, as it was." : " The VM will be off."}`)) return;
+      b.disabled = true;
+      await post(`/vms/${uuid}/snapshots/${enc(name)}/revert`);
+      toast(`${vm.name} is back at ${name}`);
+    } else {
+      if (!confirm(`Delete snapshot ${name}? The VM itself does not change.`)) return;
+      b.disabled = true;
+      await del(`/vms/${uuid}/snapshots/${enc(name)}`);
+      toast(`Snapshot ${name} deleted`);
+    }
+    await refresh("vm");
+    selectTab("vm-tabs", "vm-snapshots");
+  } catch (err) { b.disabled = false; fail(err); }
+});
+
+const ALERT_HELP = [
+  [/^CPU/, "i-cpu", "The guest uses almost all its processors. Add vCPUs in Settings, or find what keeps it busy."],
+  [/^Memory/, "i-mem", "The guest uses almost all its memory. Add memory in Settings before it starts swapping."],
+  [/^Disk/, "i-hdd", "The disks are nearly full. Enlarge a disk in Settings, then extend the partition in the guest."],
+  [/^No guest agent/, "i-alert", "Install the guest tools (⋯ → Insert guest tools CD) so ibHiCS sees IPs, disk use and can shut it down cleanly."],
+  [/^Restart/, "i-refresh", "Processor, memory or boot order changes wait for the next power off and on."],
+];
+function renderVMAlerts(vm) {
+  const alerts = vmAlerts(vm);
+  $("#vm-alert-n").textContent = alerts.length || "";
+  $("#vm-alerts").innerHTML = alerts.length ? alerts.map((a) => {
+    const [, icon, help] = ALERT_HELP.find(([re]) => re.test(a)) || [null, "i-alert", ""];
+    return `<li><span class="al-icon"><svg><use href="#${icon}"/></svg></span><div><b>${esc(a)}</b><span class="vm-sub">${esc(help)}</span></div></li>`;
+  }).join("") : `<li class="ok"><span class="al-icon"><svg><use href="#i-power"/></svg></span><div><b>No alerts</b><span class="vm-sub">CPU, memory, disks and the guest agent look fine.</span></div></li>`;
+}
+
+// ---------- import a VM from files (the uploads source of ibHiCS Migrate) ----------
+
+let uploadedVMs = [];
+async function listUploaded() {
+  const tbody = $("#vmimport-vms");
+  uploadedVMs = await api("/migrate/sources/uploads/vms").catch((err) => { tbody.innerHTML = empty(6, err.message); return null; });
+  if (!uploadedVMs) return;
+  tbody.innerHTML = uploadedVMs.length ? uploadedVMs.map((vm, i) => `<tr>
+    <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip">${esc(vm.ref.split("/").pop())}</span></div></div></td>
+    <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td><td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
+    <td>${esc(vm.firmware.toUpperCase())}</td>
+    <td><div class="actions"><button type="button" class="small primary" data-upimport="${i}">Import</button>
+      <button type="button" class="small danger" data-updel="${esc(vm.ref.split("/").pop())}">Delete file</button></div></td>
+  </tr>`).join("") : empty(6, "Nothing uploaded yet");
+}
+$("#vm-import-open").addEventListener("click", () => {
+  openDialog("vmimport-dialog");
+  $("#vmimport-progress").innerHTML = "";
+  listUploaded();
+});
+$("#vmimport-files").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  for (const file of files) {
+    const row = document.createElement("div");
+    row.className = "upload-row";
+    row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
+    $("#vmimport-progress").append(row);
+    try {
+      await uploadFile(file, row);
+      $(".pct", row).textContent = "Uploaded";
+    } catch (err) {
+      row.classList.add("failed");
+      $(".pct", row).textContent = err.message;
+    }
+  }
+  await listUploaded();
+});
+$("#vmimport-vms").addEventListener("click", async (e) => {
+  const imp = e.target.closest("button[data-upimport]"), rm = e.target.closest("button[data-updel]");
+  if (rm) {
+    if (!confirm(`Delete the uploaded file ${rm.dataset.updel}?`)) return;
+    try { await del(`/migrate/uploads/${enc(rm.dataset.updel)}`); await listUploaded(); } catch (err) { fail(err); }
+  }
+  if (imp) {
+    const vm = uploadedVMs[Number(imp.dataset.upimport)];
+    $("#vmimport-dialog").close();
+    await load("pools", "networks").catch(() => {});
+    openDialog("import-dialog", { source: "uploads", vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
+    $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
+    $("#import-hib").hidden = true;
+    renderImportNets(vm);
+  }
+});
+
+// ---------- recycle bin ----------
+
+function renderRecycle() {
+  const { days, vms } = state.recycle;
+  $("#rb-sub").textContent = days ? `Deleted VMs are kept ${days} days with their disks, then deleted for good` : "Off: deleting a VM removes it at once";
+  $("#rb-empty").disabled = !vms.length;
+  $("#rb-rows").innerHTML = vms.length ? vms.map(({ vm, expires }) => `<tr>
+    <td><div class="name-cell">${avatar(vm.template ? "i-template" : osIcon(vm))}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub">${esc(vm.os_type || (vm.template ? "Template" : ""))}</span></div></div></td>
+    <td>${esc(vm.node || "")}</td>
+    <td>${vm.vcpus} vCPU · ${gbText(vm.memory_mb)}</td>
+    <td>${num(diskTotal(vm))} GB <span class="vm-sub">${esc([...new Set(vm.disks.map((d) => d.pool))].join(", "))}</span></td>
+    <td>${esc(when(vm.recycled))}</td>
+    <td>${expires ? `${esc(when(expires))}<span class="vm-sub">${esc(leftUntil(expires))}</span>` : "–"}</td>
+    <td><div class="actions">${canOperate() ? `<button class="small" data-rb="restore" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Restore</button>
+      <button class="small danger" data-rb="purge" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete now</button>` : ""}</div></td>
+  </tr>`).join("") : empty(7, "The recycle bin is empty.");
+}
+$("#rb-rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-rb]");
+  if (!b) return;
+  const { rb, id, name } = b.dataset;
+  try {
+    if (rb === "restore") {
+      await post(`/recycle-bin/${id}/restore`);
+      toast(`${name} restored. It is off; power it on when you need it.`);
+    } else {
+      if (!confirm(`Delete ${name} and its disks for good? This cannot be undone.`)) return;
+      await del(`/recycle-bin/${id}`);
+      toast(`${name} deleted for good`);
+    }
+    await refresh("recycle");
+  } catch (err) { fail(err); }
+});
+$("#rb-empty").addEventListener("click", async () => {
+  const vms = state.recycle.vms;
+  if (!vms.length || !confirm(`Delete ${vms.length} VM${vms.length === 1 ? "" : "s"} and their disks for good? This cannot be undone.\n\n${vms.map((r) => r.vm.name).join(", ")}`)) return;
+  const results = await Promise.allSettled(vms.map((r) => del(`/recycle-bin/${r.vm.uuid}`)));
+  const failed = results.filter((r) => r.status === "rejected");
+  toast(failed.length ? `${failed.length} could not be deleted: ${failed.map((r) => r.reason.message).join("; ")}` : "Recycle bin emptied", failed.length > 0);
+  await refresh("recycle");
+});
+function leftUntil(iso) {
+  const h = (new Date(iso) - Date.now()) / 3600000;
+  if (h <= 1) return "within the hour";
+  return h < 48 ? `in ${Math.round(h)} hours` : `in ${Math.round(h / 24)} days`;
+}
+const binNote = () => (state.recycle.days ? ` It goes to the recycle bin for ${state.recycle.days} days and can be restored.` : " This cannot be undone.");
 
 // ---------- backup ----------
 
@@ -2890,6 +3286,11 @@ handlers["import-dialog"] = async (f, ctx) => {
   if (f.get("vcpus")) body.vcpus = Number(f.get("vcpus"));
   if (f.get("memory_mb")) body.memory_mb = Number(f.get("memory_mb"));
   const job = await post("/migrate/jobs", body);
+  if (currentPage() !== "migrate") {
+    toast(`Importing ${job.name} to ${job.node}. Follow it in Tasks.`);
+    await load("imports").then(renderTasks).catch(() => {});
+    return;
+  }
   toast(`Importing ${job.name} to ${job.node}. Follow it under Jobs.`);
   await refresh("migrate");
   selectTab("migrate-tabs", "imports");

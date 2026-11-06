@@ -15,8 +15,9 @@ from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from . import vmstats
+from . import customize, vmstats
 from .base import (
+    CloneSpec,
     DiskSpec,
     Firmware,
     GuestInfo,
@@ -32,6 +33,8 @@ from .base import (
     PoolNotFound,
     PoolSpec,
     PoolType,
+    SnapshotInfo,
+    SnapshotNotFound,
     VMEdit,
     VMExists,
     VMInfo,
@@ -39,6 +42,9 @@ from .base import (
     VMSpec,
     VMState,
     VMStats,
+    check_snapshot_name,
+    clone_spec,
+    snapshot_allowed,
 )
 from .domain_xml import (
     DISK_DEVS,
@@ -48,6 +54,11 @@ from .domain_xml import (
     cdrom_element,
     disk_element,
     nic_element,
+    recycled_at,
+    set_recycled_mark,
+    set_template_flag,
+    template_facts,
+    vm_meta,
     volume_name,
 )
 from .net_xml import build_network_xml, render_vlan_iface, vlan_bridge, vlan_iface_file, vlan_of
@@ -61,6 +72,7 @@ from .pool_xml import (
 
 GIB = 1024**3
 SCRATCH_DIR = "/var/lib/ibhics/scratch"
+SEED_DIR = "/var/lib/ibhics/seeds"  # guest customization CDs of deployed VMs
 
 try:
     import libvirt
@@ -112,6 +124,7 @@ class LibvirtDriver(HypervisorDriver):
     # Backups copy disks here before they are chunked; it needs room for the largest VM
     # (raw images are sparse, so only the data actually written counts).
     scratch_dir = SCRATCH_DIR
+    seed_dir = SEED_DIR
     run = staticmethod(_run)
 
     @staticmethod
@@ -144,6 +157,7 @@ class LibvirtDriver(HypervisorDriver):
 
     def create_vm(self, spec: VMSpec) -> VMInfo:
         spec.validate()
+        spec.linked_to = ""  # new disks are never overlays; only clone_vm makes those
         try:
             self._conn.lookupByName(spec.name)
         except libvirt.libvirtError:
@@ -327,6 +341,14 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if dom.isActive():
             raise InvalidState("VM is already running")
+        root = ET.fromstring(dom.XMLDesc(0))
+        if template_facts(root)[0]:
+            raise InvalidState(
+                "this is a template, which does not run: deploy a VM from it, or convert it "
+                "back to a VM first"
+            )
+        if recycled_at(root):
+            raise InvalidState("this VM is in the recycle bin: restore it first")
         dom.create()
         return self._info(dom)
 
@@ -355,12 +377,175 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if dom.isActive():
             raise InvalidState("stop the VM before deleting it")
+        self._refuse_if_linked(uuid, "deleting the template")
         root = ET.fromstring(dom.XMLDesc(0))
+        seed = Path(self.seed_dir) / f"{dom.name()}-seed.iso"
+        seed.unlink(missing_ok=True)
         for disk in root.findall("./devices/disk[@device='disk']"):
             pool, volume = disk_source(root, disk)
             if volume:
                 self._conn.storagePoolLookupByName(pool).storageVolLookupByName(volume).delete(0)
-        dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+        # Internal snapshots live in the images just deleted; drop libvirt's record of them.
+        dom.undefineFlags(
+            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+        )
+
+    # Snapshots: internal qcow2 snapshots, with the memory of a running VM.
+
+    def list_snapshots(self, uuid: str) -> list[SnapshotInfo]:
+        dom = self._lookup(uuid)
+        snaps = [_snapshot_info(s) for s in dom.listAllSnapshots(0)]
+        return sorted(snaps, key=lambda s: s.created)
+
+    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+        check_snapshot_name(name)
+        dom = self._lookup(uuid)
+        info = self._info(dom)
+        root = ET.fromstring(dom.XMLDesc(0))
+        backends = []
+        for el in root.findall("./devices/disk[@device='disk']"):
+            driver = el.find("driver")
+            backends.append(
+                "file" if driver is not None and driver.get("type") == "qcow2" else "block"
+            )
+        snapshot_allowed(info.spec, backends)
+        if info.spec.firmware == Firmware.UEFI and dom.isActive():
+            raise InvalidState(
+                "QEMU cannot save the memory of a running UEFI VM in a snapshot: shut it down "
+                "and take the snapshot then"
+            )
+        if any(s.getName() == name for s in dom.listAllSnapshots(0)):
+            raise InvalidState(f"{info.spec.name} already has a snapshot named {name!r}")
+        xml = f"<domainsnapshot><name>{escape(name)}</name>"
+        if description:
+            xml += f"<description>{escape(description)}</description>"
+        xml += "</domainsnapshot>"
+        return _snapshot_info(dom.snapshotCreateXML(xml, 0))
+
+    def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
+        dom = self._lookup(uuid)
+        if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
+            raise InvalidState("a template's snapshots cannot be reverted to")
+        dom.revertToSnapshot(self._snapshot(dom, name), 0)
+        return self._info(dom)
+
+    def delete_snapshot(self, uuid: str, name: str) -> None:
+        dom = self._lookup(uuid)
+        self._snapshot(dom, name).delete(0)
+
+    @staticmethod
+    def _snapshot(dom, name: str):
+        try:
+            return dom.snapshotLookupByName(name, 0)
+        except libvirt.libvirtError:
+            raise SnapshotNotFound(name) from None
+
+    # Templates and deploying from them.
+
+    def set_template(self, uuid: str, template: bool) -> VMInfo:
+        dom = self._lookup(uuid)
+        if template and dom.isActive():
+            raise InvalidState("shut the VM down before converting it to a template")
+        if not template:
+            self._refuse_if_linked(uuid, "converting the template back to a VM")
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        set_template_flag(vm_meta(root), template)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        dom = self._lookup(uuid)
+        if template:
+            dom.setAutostart(0)
+        return self._info(dom)
+
+    def set_recycled(self, uuid: str, at: str) -> VMInfo:
+        dom = self._lookup(uuid)
+        if at and dom.isActive():
+            raise InvalidState("shut the VM down before deleting it")
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        set_recycled_mark(vm_meta(root), at)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        dom = self._lookup(uuid)
+        if at:
+            dom.setAutostart(0)
+        return self._info(dom)
+
+    def linked_clones(self, uuid: str) -> list[str]:
+        """Names of the VMs whose disks are overlays on this template's."""
+        names = []
+        for dom in self._conn.listAllDomains():
+            try:
+                if template_facts(ET.fromstring(dom.XMLDesc(0)))[1] == uuid:
+                    names.append(dom.name())
+            except libvirt.libvirtError:
+                continue
+        return sorted(names)
+
+    def _refuse_if_linked(self, uuid: str, what: str) -> None:
+        clones = self.linked_clones(uuid)
+        if clones:
+            raise InvalidState(
+                f"linked clones are based on this template ({', '.join(clones)}); delete them "
+                f"before {what}"
+            )
+
+    def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
+        clone.validate()
+        try:
+            self._conn.lookupByName(clone.name)
+        except libvirt.libvirtError:
+            pass
+        else:
+            raise VMExists(f"VM named {clone.name!r} already exists")
+        src = self._lookup(uuid)
+        if src.isActive():
+            raise InvalidState("shut the VM down before cloning it, so its disks are consistent")
+        source = self._info(src)
+        if clone.linked and not source.spec.template:
+            raise InvalidState("linked clones are made from templates: convert the VM first")
+        spec = clone_spec(source.spec, clone, uuid)
+        root = ET.fromstring(src.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        new_uuid = str(uuidlib.uuid4())
+        created, seed = [], None
+        try:
+            for index, (disk, el) in enumerate(
+                zip(spec.disks, root.findall("./devices/disk[@device='disk']"), strict=True)
+            ):
+                base = self._volume(el)
+                pool = self._pool(disk.pool)
+                disk.backend = _backend(pool)
+                if clone.linked:
+                    driver = el.find("driver")
+                    if disk.backend != "file" or (
+                        driver is not None and driver.get("type") != "qcow2"
+                    ):
+                        raise InvalidState(
+                            "linked clones need the template's disks in qcow2 (a folder, thin "
+                            "disk or NFS pool); deploy a full clone instead"
+                        )
+                    xml = build_volume_xml(spec.name, index, disk, backing=base.path())
+                    created.append(pool.createXML(xml, 0))
+                    continue
+                vol = pool.createXML(build_volume_xml(spec.name, index, disk), 0)
+                created.append(vol)
+                driver = el.find("driver")
+                src_fmt = driver.get("type", "qcow2") if driver is not None else "qcow2"
+                dst_fmt = "raw" if disk.backend == "block" else "qcow2"
+                self.run(
+                    ["qemu-img", "convert", "-n", "-f", src_fmt, "-O", dst_fmt]
+                    + [base.path(), vol.path()]
+                )
+            if clone.customization:
+                seed = Path(self.seed_dir) / f"{spec.name}-seed.iso"
+                files = customize.seed_files(clone.customization, spec.name, new_uuid)
+                customize.build_iso(files, seed, run=self.run)
+                spec.iso = str(seed)
+            dom = self._conn.defineXML(build_domain_xml(spec, new_uuid))
+        except Exception:
+            for vol in created:
+                vol.delete(0)
+            if seed:
+                seed.unlink(missing_ok=True)
+            raise
+        return self._info(dom)
 
     def list_pools(self) -> list[PoolInfo]:
         pools = self._conn.listAllStoragePools()
@@ -886,6 +1071,24 @@ class LibvirtDriver(HypervisorDriver):
         return info
 
 
+def _snapshot_info(snap) -> SnapshotInfo:
+    root = ET.fromstring(snap.getXMLDesc(0))
+    created = int(root.findtext("creationTime", "0") or 0)
+    try:
+        parent = snap.getParent(0).getName()
+    except libvirt.libvirtError:
+        parent = ""
+    state = root.findtext("state", "")
+    return SnapshotInfo(
+        name=snap.getName(),
+        created=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(created)),
+        vm_state="running" if state in ("running", "paused") else "stopped",
+        description=root.findtext("description", ""),
+        parent=parent,
+        current=bool(snap.isCurrent(0)),
+    )
+
+
 def stable_device(device: str, by_id: str = "/dev/disk/by-id") -> str:
     """A /dev/disk/by-id name for device, preferring the WWN; device itself if none."""
     if device.startswith("/dev/disk/"):
@@ -1004,6 +1207,7 @@ def _spec_from_xml(xml: str) -> VMSpec:
     drives = [d.find("source") for d in root.findall("./devices/disk[@device='cdrom']")]
     cdrom = drives[0] if drives else None
     driver_cd = drives[1] if len(drives) > 1 else None
+    template, linked_to = template_facts(root)
     os_el = root.find("os")
     firmware = (
         Firmware.UEFI if os_el is not None and os_el.get("firmware") == "efi" else Firmware.BIOS
@@ -1020,4 +1224,7 @@ def _spec_from_xml(xml: str) -> VMSpec:
         description=root.findtext("description", ""),
         os_type=root.findtext(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}os", ""),
         boot=[b.get("dev") for b in root.findall("os/boot")] or None,
+        template=template,
+        linked_to=linked_to,
+        recycled=recycled_at(root),
     )

@@ -143,7 +143,7 @@ echo
 
 echo ">> 4/4 Checks"
 python3 - "$API" "$ADMIN_PASSWORD" <<'EOF'
-import json, ssl, sys, urllib.error, urllib.request
+import json, ssl, sys, time, urllib.error, urllib.request
 
 api, password = sys.argv[1], sys.argv[2]
 ctx = ssl._create_unverified_context()  # the node's certificate is self-signed
@@ -159,7 +159,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.5", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.6", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -188,17 +188,55 @@ vm = call("POST", "/vms", {"name": "smoke", "vcpus": 1, "memory_mb": 512,
 assert vm["state"] == "stopped", vm
 print("ok  libvirt defines a VM with a disk in the default pool")
 # Powering on is where AppArmor, disk permissions and the domain XML really meet QEMU.
+kvm = True
 try:
     started = call("POST", f"/vms/{vm['uuid']}/start", token=token)
     assert started["state"] == "running", started
     print("ok  the VM powers on (QEMU opens its disk)")
+    snap = call("POST", f"/vms/{vm['uuid']}/snapshots", {"name": "smoke-snap"}, token=token)
+    assert snap["vm_state"] == "running", snap
     call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
+    back = call("POST", f"/vms/{vm['uuid']}/snapshots/smoke-snap/revert", token=token)
+    assert back["state"] == "running", back
+    print("ok  a snapshot with memory is taken, and reverting brings the VM back running")
+    call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
+    call("DELETE", f"/vms/{vm['uuid']}/snapshots/smoke-snap", token=token)
+    assert call("GET", f"/vms/{vm['uuid']}/snapshots", token=token) == []
 except urllib.error.HTTPError as exc:
     detail = exc.read().decode(errors="replace")
     if "Permission denied" in detail or "kvm" not in detail.lower():
         raise SystemExit(f"!! the VM did not power on: {exc.code} {detail}")
     print("--  no nested KVM on this runner, power-on not tested:", detail[:200])
-call("DELETE", f"/vms/{vm['uuid']}", token=token)
-print("ok  and deletes it")
+    kvm = False
+
+# Templates: a linked clone is a qcow2 overlay on the template's disk, and its
+# customization CD is built with xorriso; powering it on proves QEMU may open both.
+tpl = call("POST", f"/vms/{vm['uuid']}/template", {"template": True}, token=token)
+assert tpl["template"], tpl
+custom = {"hostname": "smoke2", "username": "ops", "password": "Smoke-pass1"}
+job = call("POST", f"/vms/{vm['uuid']}/clone", {"name": "smoke-clone", "linked": True,
+           "power_on": kvm, "customization": custom}, token=token)
+for _ in range(90):
+    job = next(j for j in call("GET", "/deploys", token=token) if j["id"] == job["id"])
+    if job["state"] in ("done", "failed"):
+        break
+    time.sleep(2)
+assert job["state"] == "done", job
+clone = call("GET", f"/vms/{job['result']}", token=token)
+assert clone["linked_to"] == vm["uuid"] and clone["iso"].endswith("smoke-clone-seed.iso"), clone
+print("ok  a linked clone with a customization CD deploys from the template")
+if kvm:
+    assert clone["state"] == "running", clone
+    print("ok  and powers on (QEMU opens the overlay, its template disk and the CD)")
+    call("POST", f"/vms/{clone['uuid']}/stop", {"force": True}, token=token)
+call("DELETE", f"/vms/{clone['uuid']}", token=token)
+bin_ = call("GET", "/recycle-bin", token=token)
+assert bin_["days"] == 7 and [r["vm"]["name"] for r in bin_["vms"]] == ["smoke-clone"], bin_
+call("POST", f"/recycle-bin/{clone['uuid']}/restore", token=token)
+print("ok  a deleted VM goes to the recycle bin and can be restored")
+call("DELETE", f"/vms/{clone['uuid']}?permanent=true", token=token)
+call("DELETE", f"/vms/{vm['uuid']}?permanent=true", token=token)
+assert call("GET", "/vms", token=token) == []
+print("ok  and deletes them for good")
 EOF
 echo ">> All checks passed"

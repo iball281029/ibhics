@@ -172,6 +172,8 @@ class BackupManager:
             self._save()
         jobs = []
         for member, vm in self._cluster.all_vms():
+            if vm.spec.recycled or vm.spec.template:
+                continue  # deleted, or never changes
             if not policy.vms or vm.spec.name in policy.vms:
                 jobs.append(
                     self._backup_job(

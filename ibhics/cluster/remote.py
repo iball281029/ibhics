@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict
+from urllib.parse import quote
 
 import httpx
 
 from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
 from ..hypervisor import (
+    CloneSpec,
     GuestInfo,
     HostInfo,
     HypervisorDriver,
@@ -19,6 +21,8 @@ from ..hypervisor import (
     PoolInfo,
     PoolNotFound,
     PoolSpec,
+    SnapshotInfo,
+    SnapshotNotFound,
     VMEdit,
     VMExists,
     VMInfo,
@@ -27,7 +31,13 @@ from ..hypervisor import (
     VMStats,
     host,
 )
-from ..hypervisor.serialize import edit_to_json, guest_from_json, info_from_json, spec_to_json
+from ..hypervisor.serialize import (
+    clone_to_json,
+    edit_to_json,
+    guest_from_json,
+    info_from_json,
+    spec_to_json,
+)
 
 TOKEN_HEADER = "X-Ibhics-Token"
 
@@ -124,6 +134,52 @@ class RemoteDriver(HypervisorDriver):
 
     def delete_vm(self, uuid: str) -> None:
         self._ok(self._client.request("DELETE", f"/vms/{uuid}"), uuid)
+
+    def list_snapshots(self, uuid: str) -> list[SnapshotInfo]:
+        resp = self._client.request("GET", f"/vms/{uuid}/snapshots")
+        return [SnapshotInfo(**s) for s in self._ok(resp, uuid).json()]
+
+    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+        # Saving a running VM's memory takes as long as writing it: no timeout.
+        body = {"name": name, "description": description}
+        resp = self._client.request("POST", f"/vms/{uuid}/snapshots", json=body, timeout=None)
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        return SnapshotInfo(**self._ok(resp, uuid).json())
+
+    def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
+        resp = self._client.request(
+            "POST", f"/vms/{uuid}/snapshots/{quote(name)}/revert", timeout=None
+        )
+        return info_from_json(self._snap_ok(resp, uuid, name).json())
+
+    def delete_snapshot(self, uuid: str, name: str) -> None:
+        resp = self._client.request("DELETE", f"/vms/{uuid}/snapshots/{quote(name)}", timeout=None)
+        self._snap_ok(resp, uuid, name)
+
+    def _snap_ok(self, resp: httpx.Response, uuid: str, name: str) -> httpx.Response:
+        if resp.status_code == 404 and "snapshot not found" in resp.json().get("detail", ""):
+            raise SnapshotNotFound(name)
+        return self._ok(resp, uuid)
+
+    def set_recycled(self, uuid: str, at: str) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/recycled", json={"at": at})
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def set_template(self, uuid: str, template: bool) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/template", json={"template": template})
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
+        # A full clone copies every disk on the node: no timeout.
+        resp = self._client.request(
+            "POST", f"/vms/{uuid}/clone", json=clone_to_json(clone), timeout=None
+        )
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        if resp.status_code == 404 and "storage pool" in resp.json().get("detail", ""):
+            raise PoolNotFound(resp.json()["detail"].removeprefix("storage pool not found: "))
+        return info_from_json(self._ok(resp, uuid).json())
 
     def migrate_vm(
         self,

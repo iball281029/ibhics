@@ -1,4 +1,6 @@
 from .base import (
+    CloneSpec,
+    Customization,
     DiskEdit,
     DiskSpec,
     Firmware,
@@ -16,6 +18,8 @@ from .base import (
     PoolNotFound,
     PoolSpec,
     PoolType,
+    SnapshotInfo,
+    SnapshotNotFound,
     VMEdit,
     VMExists,
     VMInfo,
@@ -39,6 +43,8 @@ def load_driver(name: str, libvirt_uri: str = "qemu:///system") -> HypervisorDri
 
 
 __all__ = [
+    "CloneSpec",
+    "Customization",
     "DiskEdit",
     "DiskSpec",
     "Firmware",
@@ -57,6 +63,8 @@ __all__ = [
     "PoolNotFound",
     "PoolSpec",
     "PoolType",
+    "SnapshotInfo",
+    "SnapshotNotFound",
     "VMExists",
     "VMInfo",
     "VMNotFound",

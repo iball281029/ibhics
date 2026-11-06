@@ -80,6 +80,12 @@ def main() -> None:
         help="where the VM groups (the folders of the VM list) are saved",
     )
     parser.add_argument(
+        "--recycle-days",
+        type=int,
+        default=int(os.environ.get("IBHICS_RECYCLE_DAYS", "7")),
+        help="keep deleted VMs (stopped, with their disks) this many days; 0 deletes at once",
+    )
+    parser.add_argument(
         "--migrate-state-file",
         type=Path,
         default=Path(os.environ.get("IBHICS_MIGRATE_STATE_FILE", "/var/lib/ibhics/migrate.json")),
@@ -140,6 +146,7 @@ def main() -> None:
         auth=auth,
         imports=imports,
         groups=groups,
+        recycle_days=args.recycle_days,
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")

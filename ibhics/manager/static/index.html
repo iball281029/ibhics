@@ -13,14 +13,15 @@
     <linearGradient id="g-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
     <linearGradient id="g-left" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0ea5e9"/><stop offset="1" stop-color="#2563eb"/></linearGradient>
     <linearGradient id="g-right" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#4338ca"/></linearGradient>
+    <linearGradient id="ib-a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22e4f5"/><stop offset=".55" stop-color="#2f80ed"/><stop offset="1" stop-color="#8b3dff"/></linearGradient>
+    <linearGradient id="ib-b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1fb6f0"/><stop offset=".5" stop-color="#4f6ef7"/><stop offset="1" stop-color="#9b4dff"/></linearGradient>
+    <linearGradient id="ib-c" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#20e8f8"/><stop offset="1" stop-color="#1d7ff0"/></linearGradient>
   </defs>
   <symbol id="logo" viewBox="0 0 64 64">
-    <path d="M32 4 56 18 32 32 8 18Z" fill="url(#g-top)"/>
-    <path d="M8 18 32 32V60L8 46Z" fill="url(#g-left)"/>
-    <path d="M56 18 32 32V60L56 46Z" fill="url(#g-right)"/>
-    <path d="M32 12.5 41.5 18 32 23.5 22.5 18Z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>
-    <path d="M13 30.5 27 38.6M13 37.5 27 45.6" stroke="#fff" stroke-opacity=".85" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="44" cy="39" r="3" fill="#fff" fill-opacity=".85"/>
+    <path fill="url(#ib-b)" d="M27 15 59 31.5V49L29 62 5 51.5 13 47.5 29 54.5 51 45V35.5L27 23.5Z"/>
+  <rect x="5" y="9" width="9" height="8" fill="url(#ib-c)"/>
+  <path fill="url(#ib-c)" d="M5 21h9v30.5H5Z"/>
+  <path fill="url(#ib-a)" d="M18 9 27 4.5V54.5L18 50.5Z"/>
   </symbol>
   <symbol id="i-home" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
   <symbol id="i-compute" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></g></symbol>
@@ -30,7 +31,6 @@
   <symbol id="i-system" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></g></symbol>
   <symbol id="i-migrate" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13l-3-3M20 17H7l3 3"/></g></symbol>
   <symbol id="i-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></g></symbol>
-  <symbol id="logo-white" viewBox="0 0 64 64"><g fill="#fff"><path d="M32 4 56 18 32 32 8 18Z"/><path d="M8 18 32 32V60L8 46Z" opacity=".75"/><path d="M56 18 32 32V60L56 46Z" opacity=".55"/></g><path d="M32 12.5 41.5 18 32 23.5 22.5 18Z" fill="none" stroke="#0b8cf5" stroke-width="2.4" stroke-linejoin="round"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 21h4"/></symbol>
   <symbol id="i-help" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5h.01"/></g></symbol>
   <symbol id="i-chev" viewBox="0 0 10 10"><path d="M1.5 3.5 5 7l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
@@ -47,6 +47,9 @@
   <symbol id="i-mem" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2M5 17v3M19 17v3"/></g></symbol>
   <symbol id="i-hdd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M12 11h.01M6 17h3"/></g></symbol>
   <symbol id="i-power" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></g></symbol>
+  <symbol id="i-template" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 3 7.5 12 12l9-4.5z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></g></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></g></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></g></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></g></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></g></symbol>
@@ -57,10 +60,11 @@
 </svg>
 
 <aside class="rail">
-  <a class="logo" href="#home" aria-label="ibHiCS home" data-label="ibHiCS"><svg><use href="#logo-white"/></svg></a>
+  <a class="logo" href="#home" aria-label="ibHiCS home" data-label="ibHiCS"><svg><use href="#logo"/></svg></a>
   <nav id="menu">
     <a href="#home" data-page="home" data-label="Dashboard"><svg><use href="#i-home"/></svg></a>
     <a href="#compute" data-page="compute" data-label="Virtual Machines"><svg><use href="#i-compute"/></svg></a>
+    <a href="#templates" data-page="templates" data-label="Templates"><svg><use href="#i-template"/></svg></a>
     <a href="#storage" data-page="storage" data-label="Storage"><svg><use href="#i-storage"/></svg></a>
     <a href="#network" data-page="network" data-label="Network"><svg><use href="#i-nic"/></svg></a>
     <a href="#nodes" data-page="nodes" data-label="Nodes"><svg><use href="#i-nodes"/></svg></a>
@@ -85,6 +89,10 @@
         <a href="#system" data-tab-link="account">My account</a>
         <a href="#activity">Activity</a>
         <a href="#system">Settings</a>
+        <div class="theme-switch menu-theme">Theme
+          <button type="button" class="icon" data-theme-set="light" title="Light"><svg><use href="#i-sun"/></svg></button>
+          <button type="button" class="icon" data-theme-set="dark" title="Dark"><svg><use href="#i-moon"/></svg></button>
+        </div>
         <a href="/docs" target="_blank">API reference</a>
         <button id="logout">Sign out</button>
       </div>
@@ -94,13 +102,6 @@
   <main>
     <section class="page" id="page-home">
       <div class="sheet">
-        <div class="health">
-          <h2 id="health">Checking the cluster…</h2>
-          <div class="theme-switch">Theme
-            <button class="icon" data-theme-set="light" title="Light"><svg><use href="#i-sun"/></svg></button>
-            <button class="icon" data-theme-set="dark" title="Dark"><svg><use href="#i-moon"/></svg></button>
-          </div>
-        </div>
         <div class="overview">
           <div>
             <div class="block-title">Cluster: <span class="val" id="cluster-state">…</span></div>
@@ -108,7 +109,6 @@
           </div>
           <div>
             <div class="block-title">Infrastructure: <span class="val" id="infra-state">…</span>
-              <span class="legend"><span><i class="dot ok"></i>Good</span><span><i class="dot warn"></i>Fair</span><span><i class="dot bad"></i>Poor</span></span>
             </div>
             <div class="topology" id="topology-strip"></div>
           </div>
@@ -136,12 +136,14 @@
           <h1>Virtual Machines</h1><span class="sub" id="vm-count"></span>
           <span class="spacer"></span>
           <input class="search" id="vm-search" placeholder="Search by VM name, IP or OS">
+          <button class="operator-only" id="vm-import-open" title="OVA, VMDK, VHD/VHDX, QCOW2 or raw disk images exported from any platform">Import VM</button>
           <button class="primary operator-only" data-open="vm-dialog">+ New VM</button>
         </div>
         <div class="vmp">
           <aside class="vgroups">
             <div class="vg-head"><span>Groups</span><button type="button" class="icon ghost operator-only" id="vg-add" title="New group">+</button></div>
             <ul class="vg-tree" id="vg-tree"></ul>
+            <a class="vg-bin" href="#recycle"><svg><use href="#i-trash"/></svg>Recycle bin <span class="vg-n" id="vg-bin-n"></span></a>
           </aside>
           <div class="vmp-main">
             <div class="vm-alert" id="vm-alert" hidden></div>
@@ -202,8 +204,10 @@
         <div class="tabs" id="vm-tabs">
           <button data-tab="vm-summary" class="active">Summary</button>
           <button data-tab="vm-hardware">Hardware</button>
+          <button data-tab="vm-snapshots">Snapshots <span class="tab-n" id="vm-snap-n"></span></button>
           <button data-tab="vm-backups">Backups</button>
-          <button data-tab="vm-activity">Activity</button>
+          <button data-tab="vm-activity">Tasks</button>
+          <button data-tab="vm-alerts">Alerts <span class="tab-n warn" id="vm-alert-n"></span></button>
         </div>
         <div class="subpage active" id="tab-vm-summary">
           <div class="cards">
@@ -230,6 +234,13 @@
         </div>
         <div class="subpage" id="tab-vm-activity">
           <ul class="feed section" id="vm-feed"></ul>
+        </div>
+        <div class="subpage" id="tab-vm-snapshots">
+          <div class="toolbar"><span class="hint" id="vm-snap-hint">Go back to how the VM was before a change. A snapshot of a running VM includes its memory, so reverting resumes it.</span><span class="spacer"></span><button class="primary operator-only" id="vm-snap-take">Take snapshot</button></div>
+          <ol class="snap-line" id="vm-snaps"></ol>
+        </div>
+        <div class="subpage" id="tab-vm-alerts">
+          <ul class="alert-list" id="vm-alerts"></ul>
         </div>
       </div>
     </section>
@@ -452,6 +463,67 @@
           <div class="table-wrap" style="margin-top:8px"><table>
             <thead><tr><th>VM</th><th>Source</th><th>New name</th><th>Node</th><th>Started</th><th>Status</th><th>Details</th></tr></thead>
             <tbody id="imports"></tbody>
+          </table></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-recycle">
+      <div class="crumb"><a href="#compute">Virtual Machines</a><svg><use href="#i-chev"/></svg><span>Recycle bin</span></div>
+      <div class="sheet">
+        <div class="page-head"><h1>Recycle bin</h1><span class="sub" id="rb-sub"></span>
+          <span class="spacer"></span>
+          <button class="danger operator-only" id="rb-empty">Empty recycle bin</button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>VM</th><th>Node</th><th>Hardware</th><th>Disks</th><th>Deleted</th><th>Deleted for good</th><th></th></tr></thead>
+          <tbody id="rb-rows"></tbody>
+        </table></div>
+      </div>
+    </section>
+
+    <section class="page" id="page-templates">
+      <div class="sheet">
+        <div class="page-head"><h1>Templates</h1><span class="sub" id="tpl-count"></span>
+          <span class="spacer"></span>
+          <input class="search" id="tpl-search" placeholder="Search templates">
+        </div>
+        <div class="tpl-intro">
+          <div><b>1</b><span>Install and set up a VM the way new VMs should start: OS, updates, agents. For Linux add <code>cloud-init</code>; for Windows run <code>sysprep /generalize /oobe /shutdown</code> last.</span></div>
+          <div><b>2</b><span>Shut it down, then in its menu choose <em>Convert to template</em>. A template cannot be powered on, so it stays as it is.</span></div>
+          <div><b>3</b><span>Deploy VMs from it: a <em>linked clone</em> is ready in seconds and shares the template's disks; a <em>full clone</em> is an independent copy.</span></div>
+        </div>
+        <div class="tpl-grid" id="tpl-grid"></div>
+      </div>
+    </section>
+
+    <section class="page" id="page-tasks">
+      <div class="sheet">
+        <div class="page-head"><h1>Tasks</h1><span class="sub" id="tasks-sum"></span>
+          <span class="spacer"></span>
+          <input class="search" id="task-search" placeholder="Search by VM, node or target">
+        </div>
+        <div class="tabs" id="tasks-tabs">
+          <button data-tab="task-jobs" class="active">Jobs</button>
+          <button data-tab="task-ops" class="admin-only">Operations log</button>
+        </div>
+        <div class="subpage active" id="tab-task-jobs">
+          <div class="toolbar">
+            <div class="chips" id="task-state"><button type="button" data-v="" class="on">All</button><button type="button" data-v="active">Running</button><button type="button" data-v="done">Finished</button><button type="button" data-v="failed">Failed</button></div>
+            <select id="task-kind" style="width:auto"><option value="">All types</option><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy</option></select>
+          </div>
+          <div class="tasks-split">
+            <div class="table-wrap"><table class="task-table">
+              <thead><tr><th>Type</th><th>Object</th><th>Details</th><th>Status</th><th>Started</th><th>Duration</th></tr></thead>
+              <tbody id="task-rows"></tbody>
+            </table></div>
+            <aside class="task-detail" id="task-detail"></aside>
+          </div>
+        </div>
+        <div class="subpage" id="tab-task-ops">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>User</th><th>Operation</th><th>Object</th><th>Result</th><th>From</th></tr></thead>
+            <tbody id="task-ops"></tbody>
           </table></div>
         </div>
       </div>
@@ -942,6 +1014,78 @@
       <button type="button" class="primary wiz-next">Next</button>
       <button class="primary wiz-ok" value="ok">Restore</button>
     </footer>
+  </form>
+</dialog>
+
+<dialog id="vmimport-dialog" class="wide-dialog">
+  <form method="dialog" id="vmimport-form">
+    <header><h3>Import VM</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <label class="drop-zone"><input type="file" id="vmimport-files" multiple accept=".ova,.ovf,.vmdk,.vhdx,.vhd,.qcow2,.img,.raw" hidden>
+        <svg><use href="#i-migrate"/></svg><b>Choose the VM's files</b>
+        <span class="vm-sub">An OVA, or an OVF with its VMDKs; VHD/VHDX from Hyper-V; QCOW2 or raw images. Large files upload straight to the node.</span></label>
+      <div id="vmimport-progress"></div>
+      <p class="wiz-label">Ready to import</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>VM</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th></th></tr></thead>
+        <tbody id="vmimport-vms"></tbody>
+      </table></div>
+      <p class="hint">To bring VMs over from VMware ESXi/vCenter or Proxmox directly, use <a href="#migrate">Migrate</a>.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Close</button></footer>
+  </form>
+</dialog>
+
+<dialog id="snap-dialog">
+  <form method="dialog" id="snap-form">
+    <header><h3>Take snapshot</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label class="wide">Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, digits and _ . - (no spaces)" autocomplete="off"></label>
+      <label class="wide">Description (optional) <input name="description" maxlength="1024" placeholder="e.g. before installing updates"></label>
+      <p class="hint wide snap-mem"></p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Take snapshot</button></footer>
+  </form>
+</dialog>
+
+<dialog id="deploy-dialog" class="wide-dialog">
+  <form method="dialog" id="deploy-form">
+    <header><h3 id="deploy-title">Deploy VM from template</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <div class="deploy-src" id="deploy-src"></div>
+      <div class="form-grid">
+        <label>New VM name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}" autocomplete="off" placeholder="web-01"></label>
+        <label>Description (optional) <input name="description" maxlength="1024"></label>
+      </div>
+      <p class="wiz-label">Clone type</p>
+      <div class="type-cards">
+        <label class="type-card small"><input type="radio" name="clone" value="linked"><svg><use href="#i-template"/></svg><span><b>Linked clone</b><em>Ready in seconds, takes little space. Shares the template's disks, so the template stays while the VM exists.</em></span></label>
+        <label class="type-card small"><input type="radio" name="clone" value="full" checked><svg><use href="#i-hdd"/></svg><span><b>Full clone</b><em>An independent copy of every disk. Takes as long as copying them.</em></span></label>
+      </div>
+      <div class="form-grid deploy-pool" style="margin-top:12px">
+        <label>Put the disks on <select name="pool"></select></label>
+      </div>
+      <p class="wiz-label">Guest OS customization</p>
+      <div class="form-grid">
+        <label>Customize <select name="custom" data-switch>
+          <option value="none">Don't customize</option>
+          <option value="linux">Linux (cloud-init)</option>
+          <option value="windows">Windows (sysprep answer file)</option>
+        </select></label>
+        <label data-for="linux windows">Computer name <input name="hostname" maxlength="63" pattern="[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?" placeholder="Same as the VM name"></label>
+        <label data-for="linux windows">Admin user <input name="username" maxlength="32" pattern="[a-z_][a-z0-9_-]*" autocomplete="off" placeholder="e.g. ops"></label>
+        <label data-for="linux windows">Password <input name="password" type="password" maxlength="128" autocomplete="new-password"></label>
+        <label data-for="linux windows">Time zone <input name="timezone" maxlength="64" class="tz-hint" placeholder="Asia/Bangkok"></label>
+        <label data-for="linux" class="wide">SSH public keys (one per line) <textarea name="ssh_keys" rows="2" placeholder="ssh-ed25519 AAAA... you@laptop"></textarea></label>
+        <details data-for="linux" class="wide"><summary>Advanced: own cloud-config</summary>
+          <textarea name="user_data" rows="6" placeholder="#cloud-config&#10;packages: [nginx]"></textarea>
+          <p class="hint">Used as it is, instead of the fields above.</p></details>
+      </div>
+      <p class="hint" data-for="linux">The VM gets a small CD that cloud-init reads on its first boot: host name, the admin user with sudo, password and SSH keys. The template needs cloud-init installed.</p>
+      <p class="hint" data-for="windows">The VM gets a CD with an answer file that Windows reads when it first starts after sysprep: computer name, Administrator password and, if given, a local admin user. Time zone uses Windows names, e.g. <em>SE Asia Standard Time</em>.</p>
+      <label class="check" style="margin-top:12px"><input type="checkbox" name="power_on" checked> Power on when deployed</label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Deploy</button></footer>
   </form>
 </dialog>
 

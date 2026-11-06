@@ -9,6 +9,8 @@ ovmf
 virt-v2v
 guestfs-tools
 ntfs-3g
+# xorriso: guest customization CDs for VMs deployed from templates
+xorriso
 # ibHiCS runs on the system Python
 python3
 python3-venv
