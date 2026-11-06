@@ -33,6 +33,8 @@ from ..manager.schemas import (
     NetworkIn,
     PoolCreate,
     PoolOut,
+    SnapshotIn,
+    SnapshotOut,
     StopRequest,
     TemplateRequest,
     VMCreate,
@@ -181,6 +183,22 @@ def create_agent_app(
         @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_vm(uuid: str) -> None:
             driver.delete_vm(uuid)
+
+        @api.get("/vms/{uuid}/snapshots", response_model=list[SnapshotOut])
+        def list_snapshots(uuid: str) -> list[SnapshotOut]:
+            return [SnapshotOut(**asdict(s)) for s in driver.list_snapshots(uuid)]
+
+        @api.post("/vms/{uuid}/snapshots", response_model=SnapshotOut)
+        def create_snapshot(uuid: str, body: SnapshotIn) -> SnapshotOut:
+            return SnapshotOut(**asdict(driver.create_snapshot(uuid, body.name, body.description)))
+
+        @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
+        def revert_snapshot(uuid: str, name: str) -> VMOut:
+            return VMOut.from_info(driver.revert_snapshot(uuid, name))
+
+        @api.delete("/vms/{uuid}/snapshots/{name}", status_code=status.HTTP_204_NO_CONTENT)
+        def delete_snapshot(uuid: str, name: str) -> None:
+            driver.delete_snapshot(uuid, name)
 
         @api.post("/vms/{uuid}/template", response_model=VMOut)
         def set_template(uuid: str, body: TemplateRequest) -> VMOut:

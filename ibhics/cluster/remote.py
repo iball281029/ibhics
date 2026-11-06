@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import asdict
+from urllib.parse import quote
 
 import httpx
 
@@ -20,6 +21,8 @@ from ..hypervisor import (
     PoolInfo,
     PoolNotFound,
     PoolSpec,
+    SnapshotInfo,
+    SnapshotNotFound,
     VMEdit,
     VMExists,
     VMInfo,
@@ -131,6 +134,33 @@ class RemoteDriver(HypervisorDriver):
 
     def delete_vm(self, uuid: str) -> None:
         self._ok(self._client.request("DELETE", f"/vms/{uuid}"), uuid)
+
+    def list_snapshots(self, uuid: str) -> list[SnapshotInfo]:
+        resp = self._client.request("GET", f"/vms/{uuid}/snapshots")
+        return [SnapshotInfo(**s) for s in self._ok(resp, uuid).json()]
+
+    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+        # Saving a running VM's memory takes as long as writing it: no timeout.
+        body = {"name": name, "description": description}
+        resp = self._client.request("POST", f"/vms/{uuid}/snapshots", json=body, timeout=None)
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        return SnapshotInfo(**self._ok(resp, uuid).json())
+
+    def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
+        resp = self._client.request(
+            "POST", f"/vms/{uuid}/snapshots/{quote(name)}/revert", timeout=None
+        )
+        return info_from_json(self._snap_ok(resp, uuid, name).json())
+
+    def delete_snapshot(self, uuid: str, name: str) -> None:
+        resp = self._client.request("DELETE", f"/vms/{uuid}/snapshots/{quote(name)}", timeout=None)
+        self._snap_ok(resp, uuid, name)
+
+    def _snap_ok(self, resp: httpx.Response, uuid: str, name: str) -> httpx.Response:
+        if resp.status_code == 404 and "snapshot not found" in resp.json().get("detail", ""):
+            raise SnapshotNotFound(name)
+        return self._ok(resp, uuid)
 
     def set_template(self, uuid: str, template: bool) -> VMInfo:
         resp = self._client.request("POST", f"/vms/{uuid}/template", json={"template": template})

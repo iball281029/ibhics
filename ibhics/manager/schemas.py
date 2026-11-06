@@ -292,6 +292,20 @@ class StopRequest(BaseModel):
     force: bool = False
 
 
+class SnapshotIn(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,62}$")
+    description: str = Field(default="", max_length=1024)
+
+
+class SnapshotOut(BaseModel):
+    name: str
+    created: str
+    vm_state: str
+    description: str = ""
+    parent: str = ""
+    current: bool = False
+
+
 class TemplateRequest(BaseModel):
     template: bool = True  # false: convert the template back to a VM
 

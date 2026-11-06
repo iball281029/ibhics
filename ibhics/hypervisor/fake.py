@@ -33,6 +33,8 @@ from .base import (
     PoolNotFound,
     PoolSpec,
     PoolType,
+    SnapshotInfo,
+    SnapshotNotFound,
     VMEdit,
     VMExists,
     VMInfo,
@@ -40,7 +42,9 @@ from .base import (
     VMSpec,
     VMState,
     VMStats,
+    check_snapshot_name,
     clone_spec,
+    snapshot_allowed,
 )
 
 # Fake disks hold real bytes so backup and restore can be tested; keep them small.
@@ -66,6 +70,8 @@ class FakeDriver(HypervisorDriver):
         self.peers: dict[str, FakeDriver] = {}
         # The files each deployed VM's customization CD would hold, keyed by VM name.
         self.seeds: dict[str, dict[str, str]] = {}
+        # Per VM: (info, spec, disk contents, state) for each snapshot, oldest first.
+        self._snaps: dict[str, list[tuple[SnapshotInfo, VMSpec, list[bytearray], VMState]]] = {}
         self._lock = threading.Lock()
 
     def host_info(self) -> HostInfo:
@@ -178,7 +184,72 @@ class FakeDriver(HypervisorDriver):
             self._refuse_if_linked(uuid, "deleting the template")
             del self._vms[uuid]
             del self._disks[uuid]
+            self._snaps.pop(uuid, None)
             self.seeds.pop(vm.spec.name, None)
+
+    # Snapshots
+
+    def list_snapshots(self, uuid: str) -> list[SnapshotInfo]:
+        with self._lock:
+            self._get(uuid)
+            return [copy.deepcopy(s[0]) for s in self._snaps.get(uuid, [])]
+
+    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+        check_snapshot_name(name)
+        with self._lock:
+            vm = self._get(uuid)
+            snapshot_allowed(vm.spec, [self._pools[d.pool][0].disk_backend for d in vm.spec.disks])
+            snaps = self._snaps.setdefault(uuid, [])
+            if any(s[0].name == name for s in snaps):
+                raise InvalidState(f"{vm.spec.name} already has a snapshot named {name!r}")
+            parent = next((s[0].name for s in snaps if s[0].current), "")
+            for s in snaps:
+                s[0].current = False
+            info = SnapshotInfo(
+                name=name,
+                created=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                vm_state=str(vm.state),
+                description=description,
+                parent=parent,
+                current=True,
+            )
+            disks = [bytearray(d) for d in self._disks[uuid]]
+            snaps.append((info, copy.deepcopy(vm.spec), disks, vm.state))
+            return copy.deepcopy(info)
+
+    def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.spec.template:
+                raise InvalidState("a template's snapshots cannot be reverted to")
+            snaps = self._snaps.get(uuid, [])
+            match = next((s for s in snaps if s[0].name == name), None)
+            if match is None:
+                raise SnapshotNotFound(name)
+            info, spec, disks, state = match
+            vm.spec = copy.deepcopy(spec)
+            self._disks[uuid] = [bytearray(d) for d in disks]
+            vm.state = state
+            vm.restart_needed = False
+            for s in snaps:
+                s[0].current = s[0].name == name
+            return copy.deepcopy(vm)
+
+    def delete_snapshot(self, uuid: str, name: str) -> None:
+        with self._lock:
+            self._get(uuid)
+            snaps = self._snaps.get(uuid, [])
+            match = next((s for s in snaps if s[0].name == name), None)
+            if match is None:
+                raise SnapshotNotFound(name)
+            snaps.remove(match)
+            for s in snaps:  # children now follow the deleted one's parent
+                if s[0].parent == name:
+                    s[0].parent = match[0].parent
+            if match[0].current and match[0].parent:
+                for s in snaps:
+                    if s[0].name == match[0].parent:
+                        s[0].current = True
 
     def set_template(self, uuid: str, template: bool) -> VMInfo:
         with self._lock:

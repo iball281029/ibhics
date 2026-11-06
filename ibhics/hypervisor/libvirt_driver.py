@@ -33,6 +33,8 @@ from .base import (
     PoolNotFound,
     PoolSpec,
     PoolType,
+    SnapshotInfo,
+    SnapshotNotFound,
     VMEdit,
     VMExists,
     VMInfo,
@@ -40,7 +42,9 @@ from .base import (
     VMSpec,
     VMState,
     VMStats,
+    check_snapshot_name,
     clone_spec,
+    snapshot_allowed,
 )
 from .domain_xml import (
     DISK_DEVS,
@@ -376,7 +380,60 @@ class LibvirtDriver(HypervisorDriver):
             pool, volume = disk_source(root, disk)
             if volume:
                 self._conn.storagePoolLookupByName(pool).storageVolLookupByName(volume).delete(0)
-        dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+        # Internal snapshots live in the images just deleted; drop libvirt's record of them.
+        dom.undefineFlags(
+            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+        )
+
+    # Snapshots: internal qcow2 snapshots, with the memory of a running VM.
+
+    def list_snapshots(self, uuid: str) -> list[SnapshotInfo]:
+        dom = self._lookup(uuid)
+        snaps = [_snapshot_info(s) for s in dom.listAllSnapshots(0)]
+        return sorted(snaps, key=lambda s: s.created)
+
+    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+        check_snapshot_name(name)
+        dom = self._lookup(uuid)
+        info = self._info(dom)
+        root = ET.fromstring(dom.XMLDesc(0))
+        backends = []
+        for el in root.findall("./devices/disk[@device='disk']"):
+            driver = el.find("driver")
+            backends.append(
+                "file" if driver is not None and driver.get("type") == "qcow2" else "block"
+            )
+        snapshot_allowed(info.spec, backends)
+        if info.spec.firmware == Firmware.UEFI and dom.isActive():
+            raise InvalidState(
+                "QEMU cannot save the memory of a running UEFI VM in a snapshot: shut it down "
+                "and take the snapshot then"
+            )
+        if any(s.getName() == name for s in dom.listAllSnapshots(0)):
+            raise InvalidState(f"{info.spec.name} already has a snapshot named {name!r}")
+        xml = f"<domainsnapshot><name>{escape(name)}</name>"
+        if description:
+            xml += f"<description>{escape(description)}</description>"
+        xml += "</domainsnapshot>"
+        return _snapshot_info(dom.snapshotCreateXML(xml, 0))
+
+    def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
+        dom = self._lookup(uuid)
+        if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
+            raise InvalidState("a template's snapshots cannot be reverted to")
+        dom.revertToSnapshot(self._snapshot(dom, name), 0)
+        return self._info(dom)
+
+    def delete_snapshot(self, uuid: str, name: str) -> None:
+        dom = self._lookup(uuid)
+        self._snapshot(dom, name).delete(0)
+
+    @staticmethod
+    def _snapshot(dom, name: str):
+        try:
+            return dom.snapshotLookupByName(name, 0)
+        except libvirt.libvirtError:
+            raise SnapshotNotFound(name) from None
 
     # Templates and deploying from them.
 
@@ -995,6 +1052,24 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             pass
         return info
+
+
+def _snapshot_info(snap) -> SnapshotInfo:
+    root = ET.fromstring(snap.getXMLDesc(0))
+    created = int(root.findtext("creationTime", "0") or 0)
+    try:
+        parent = snap.getParent(0).getName()
+    except libvirt.libvirtError:
+        parent = ""
+    state = root.findtext("state", "")
+    return SnapshotInfo(
+        name=snap.getName(),
+        created=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(created)),
+        vm_state="running" if state in ("running", "paused") else "stopped",
+        description=root.findtext("description", ""),
+        parent=parent,
+        current=bool(snap.isCurrent(0)),
+    )
 
 
 def stable_device(device: str, by_id: str = "/dev/disk/by-id") -> str:

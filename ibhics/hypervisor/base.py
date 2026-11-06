@@ -178,6 +178,17 @@ def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpe
     )
 
 
+def snapshot_allowed(spec: VMSpec, backends: list[str]) -> None:
+    """Shared rules: snapshots live inside qcow2 images, and never on templates."""
+    if spec.template:
+        raise InvalidState("templates do not take snapshots: linked clones depend on their disks")
+    if any(b != "file" for b in backends):
+        raise InvalidState(
+            "snapshots need qcow2 disks (a folder, thin disk or NFS pool); this VM has a disk "
+            "on block storage (LVM/iSCSI), so back it up instead"
+        )
+
+
 class PoolType(StrEnum):
     DIR = "dir"  # directory on a local filesystem
     NFS = "nfs"
@@ -265,6 +276,33 @@ class PoolInfo:
 
 class PoolNotFound(LookupError):
     pass
+
+
+SNAPSHOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,62}$")
+
+
+@dataclass
+class SnapshotInfo:
+    """A point-in-time copy of a VM's disks (and, taken while it ran, its memory) that the
+    VM can go back to."""
+
+    name: str
+    created: str  # ISO 8601
+    vm_state: str  # "running" when memory is included: reverting resumes the VM
+    description: str = ""
+    parent: str = ""  # the snapshot this one was taken after
+    current: bool = False  # the VM's disks are based on this one (VMware's "You are here")
+
+
+class SnapshotNotFound(LookupError):
+    pass
+
+
+def check_snapshot_name(name: str) -> None:
+    if not SNAPSHOT_NAME_RE.match(name):
+        raise ValueError(
+            "snapshot name: letters, digits, spaces and '_.:-', starting with a letter or digit"
+        )
 
 
 @dataclass
@@ -500,6 +538,22 @@ class HypervisorDriver(abc.ABC):
     def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:
         """Deploy a new VM from a template or a stopped VM: a full copy of its disks, or for
         templates on qcow2 pools a linked clone. The new VM is left stopped."""
+        raise NotImplementedError
+
+    def list_snapshots(self, uuid: str) -> list[SnapshotInfo]:
+        """The VM's snapshots, oldest first."""
+        return []
+
+    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+        """Snapshot the VM's disks; a running VM's memory too (it pauses briefly)."""
+        raise NotImplementedError
+
+    def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
+        """Put the VM back as it was at the snapshot: running if memory was included."""
+        raise NotImplementedError
+
+    def delete_snapshot(self, uuid: str, name: str) -> None:
+        """Remove a snapshot; the VM itself is unchanged."""
         raise NotImplementedError
 
     def list_networks(self) -> list[NetworkInfo]:

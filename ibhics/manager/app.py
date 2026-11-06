@@ -61,6 +61,8 @@ from .schemas import (
     PoolOut,
     PowerIn,
     RestoreRequest,
+    SnapshotIn,
+    SnapshotOut,
     SourceIn,
     SourceOut,
     SourceVMOut,
@@ -720,6 +722,35 @@ def create_app(
             raise InvalidState(f"a VM is being deployed from {vm.spec.name!r}; wait for it")
         member.driver.delete_vm(uuid)
         groups.forget(uuid)
+
+    # Snapshots: go back to how a VM was before a change.
+
+    @api.get("/vms/{uuid}/snapshots", response_model=list[SnapshotOut])
+    def list_snapshots(uuid: str) -> list[SnapshotOut]:
+        member, _ = cluster.find_vm(uuid)
+        return [SnapshotOut(**asdict(s)) for s in member.driver.list_snapshots(uuid)]
+
+    @api.post(
+        "/vms/{uuid}/snapshots", response_model=SnapshotOut, status_code=status.HTTP_201_CREATED
+    )
+    def create_snapshot(uuid: str, body: SnapshotIn) -> SnapshotOut:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return SnapshotOut(
+            **asdict(member.driver.create_snapshot(uuid, body.name, body.description))
+        )
+
+    @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
+    def revert_snapshot(uuid: str, name: str) -> VMOut:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(member.driver.revert_snapshot(uuid, name), member.name)
+
+    @api.delete("/vms/{uuid}/snapshots/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_snapshot(uuid: str, name: str) -> None:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        member.driver.delete_snapshot(uuid, name)
 
     # Templates: convert a stopped VM, and deploy new VMs from it (VMware-style).
 
