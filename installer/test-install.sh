@@ -193,7 +193,15 @@ try:
     started = call("POST", f"/vms/{vm['uuid']}/start", token=token)
     assert started["state"] == "running", started
     print("ok  the VM powers on (QEMU opens its disk)")
+    snap = call("POST", f"/vms/{vm['uuid']}/snapshots", {"name": "smoke snap"}, token=token)
+    assert snap["vm_state"] == "running", snap
     call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
+    back = call("POST", f"/vms/{vm['uuid']}/snapshots/smoke%20snap/revert", token=token)
+    assert back["state"] == "running", back
+    print("ok  a snapshot with memory is taken, and reverting brings the VM back running")
+    call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
+    call("DELETE", f"/vms/{vm['uuid']}/snapshots/smoke%20snap", token=token)
+    assert call("GET", f"/vms/{vm['uuid']}/snapshots", token=token) == []
 except urllib.error.HTTPError as exc:
     detail = exc.read().decode(errors="replace")
     if "Permission denied" in detail or "kvm" not in detail.lower():
@@ -222,7 +230,13 @@ if kvm:
     print("ok  and powers on (QEMU opens the overlay, its template disk and the CD)")
     call("POST", f"/vms/{clone['uuid']}/stop", {"force": True}, token=token)
 call("DELETE", f"/vms/{clone['uuid']}", token=token)
-call("DELETE", f"/vms/{vm['uuid']}", token=token)
-print("ok  and deletes them")
+bin_ = call("GET", "/recycle-bin", token=token)
+assert bin_["days"] == 7 and [r["vm"]["name"] for r in bin_["vms"]] == ["smoke-clone"], bin_
+call("POST", f"/recycle-bin/{clone['uuid']}/restore", token=token)
+print("ok  a deleted VM goes to the recycle bin and can be restored")
+call("DELETE", f"/vms/{clone['uuid']}?permanent=true", token=token)
+call("DELETE", f"/vms/{vm['uuid']}?permanent=true", token=token)
+assert call("GET", "/vms", token=token) == []
+print("ok  and deletes them for good")
 EOF
 echo ">> All checks passed"

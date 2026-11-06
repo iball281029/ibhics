@@ -2680,6 +2680,61 @@ function renderVMAlerts(vm) {
   }).join("") : `<li class="ok"><span class="al-icon"><svg><use href="#i-power"/></svg></span><div><b>No alerts</b><span class="vm-sub">CPU, memory, disks and the guest agent look fine.</span></div></li>`;
 }
 
+// ---------- import a VM from files (the uploads source of ibHiCS Migrate) ----------
+
+let uploadedVMs = [];
+async function listUploaded() {
+  const tbody = $("#vmimport-vms");
+  uploadedVMs = await api("/migrate/sources/uploads/vms").catch((err) => { tbody.innerHTML = empty(6, err.message); return null; });
+  if (!uploadedVMs) return;
+  tbody.innerHTML = uploadedVMs.length ? uploadedVMs.map((vm, i) => `<tr>
+    <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip">${esc(vm.ref.split("/").pop())}</span></div></div></td>
+    <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td><td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
+    <td>${esc(vm.firmware.toUpperCase())}</td>
+    <td><div class="actions"><button type="button" class="small primary" data-upimport="${i}">Import</button>
+      <button type="button" class="small danger" data-updel="${esc(vm.ref.split("/").pop())}">Delete file</button></div></td>
+  </tr>`).join("") : empty(6, "Nothing uploaded yet");
+}
+$("#vm-import-open").addEventListener("click", () => {
+  openDialog("vmimport-dialog");
+  $("#vmimport-progress").innerHTML = "";
+  listUploaded();
+});
+$("#vmimport-files").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  e.target.value = "";
+  for (const file of files) {
+    const row = document.createElement("div");
+    row.className = "upload-row";
+    row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
+    $("#vmimport-progress").append(row);
+    try {
+      await uploadFile(file, row);
+      $(".pct", row).textContent = "Uploaded";
+    } catch (err) {
+      row.classList.add("failed");
+      $(".pct", row).textContent = err.message;
+    }
+  }
+  await listUploaded();
+});
+$("#vmimport-vms").addEventListener("click", async (e) => {
+  const imp = e.target.closest("button[data-upimport]"), rm = e.target.closest("button[data-updel]");
+  if (rm) {
+    if (!confirm(`Delete the uploaded file ${rm.dataset.updel}?`)) return;
+    try { await del(`/migrate/uploads/${enc(rm.dataset.updel)}`); await listUploaded(); } catch (err) { fail(err); }
+  }
+  if (imp) {
+    const vm = uploadedVMs[Number(imp.dataset.upimport)];
+    $("#vmimport-dialog").close();
+    await load("pools", "networks").catch(() => {});
+    openDialog("import-dialog", { source: "uploads", vm }, { name: vm.name, vcpus: vm.vcpus, memory_mb: vm.memory_mb });
+    $("#import-win").hidden = !/windows/i.test(vm.guest_os || "");
+    $("#import-hib").hidden = true;
+    renderImportNets(vm);
+  }
+});
+
 // ---------- recycle bin ----------
 
 function renderRecycle() {
@@ -3231,6 +3286,11 @@ handlers["import-dialog"] = async (f, ctx) => {
   if (f.get("vcpus")) body.vcpus = Number(f.get("vcpus"));
   if (f.get("memory_mb")) body.memory_mb = Number(f.get("memory_mb"));
   const job = await post("/migrate/jobs", body);
+  if (currentPage() !== "migrate") {
+    toast(`Importing ${job.name} to ${job.node}. Follow it in Tasks.`);
+    await load("imports").then(renderTasks).catch(() => {});
+    return;
+  }
   toast(`Importing ${job.name} to ${job.node}. Follow it under Jobs.`);
   await refresh("migrate");
   selectTab("migrate-tabs", "imports");

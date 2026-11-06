@@ -136,6 +136,7 @@
           <h1>Virtual Machines</h1><span class="sub" id="vm-count"></span>
           <span class="spacer"></span>
           <input class="search" id="vm-search" placeholder="Search by VM name, IP or OS">
+          <button class="operator-only" id="vm-import-open" title="OVA, VMDK, VHD/VHDX, QCOW2 or raw disk images exported from any platform">Import VM</button>
           <button class="primary operator-only" data-open="vm-dialog">+ New VM</button>
         </div>
         <div class="vmp">
@@ -1013,6 +1014,25 @@
       <button type="button" class="primary wiz-next">Next</button>
       <button class="primary wiz-ok" value="ok">Restore</button>
     </footer>
+  </form>
+</dialog>
+
+<dialog id="vmimport-dialog" class="wide-dialog">
+  <form method="dialog" id="vmimport-form">
+    <header><h3>Import VM</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <label class="drop-zone"><input type="file" id="vmimport-files" multiple accept=".ova,.ovf,.vmdk,.vhdx,.vhd,.qcow2,.img,.raw" hidden>
+        <svg><use href="#i-migrate"/></svg><b>Choose the VM's files</b>
+        <span class="vm-sub">An OVA, or an OVF with its VMDKs; VHD/VHDX from Hyper-V; QCOW2 or raw images. Large files upload straight to the node.</span></label>
+      <div id="vmimport-progress"></div>
+      <p class="wiz-label">Ready to import</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>VM</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th></th></tr></thead>
+        <tbody id="vmimport-vms"></tbody>
+      </table></div>
+      <p class="hint">To bring VMs over from VMware ESXi/vCenter or Proxmox directly, use <a href="#migrate">Migrate</a>.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Close</button></footer>
   </form>
 </dialog>
 
