@@ -168,6 +168,17 @@ def session_token(headers, cookies) -> str | None:
     return cookies.get(SESSION_COOKIE)
 
 
+class ConsoleFiles(StaticFiles):
+    """The web console. Browsers must check for a newer copy on every load (a cheap 304
+    when unchanged): after an upgrade, a cached app.js from the old release next to the
+    new index.html breaks the whole console."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def create_app(
     cluster: Cluster | HypervisorDriver,
     heartbeat_interval: float = 0,
@@ -1073,5 +1084,5 @@ def create_app(
 
     app.include_router(public)
     app.include_router(api)
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="console")
+    app.mount("/", ConsoleFiles(directory=STATIC_DIR, html=True), name="console")
     return app

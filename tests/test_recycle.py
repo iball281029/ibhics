@@ -72,3 +72,9 @@ def test_bin_off_deletes_at_once():
     assert api.delete(f"/api/v1/vms/{vm.uuid}").status_code == 204
     assert d.list_vms() == []
     assert api.get("/api/v1/recycle-bin").json() == {"days": 0, "vms": []}
+
+
+def test_console_files_are_revalidated():
+    client = TestClient(create_app(FakeDriver(demo_console=False)))
+    resp = client.get("/app.js")
+    assert resp.status_code == 200 and resp.headers["cache-control"] == "no-cache"
