@@ -1,0 +1,688 @@
+"""Containers (v1.0): system containers with LXC, beside the VMs.
+
+A container shares the node's kernel, so it starts in a second and uses only the memory
+its programs use. ibHiCS keeps them simple, like VMs: pick a template, CPU, memory, disk
+and network; the root file system is an image file in a storage pool (so it has a real
+size limit and moves with the pool), the network is a port on the same virtual switch as
+VMs, and they are unprivileged by default (root in the container is nobody on the node).
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import re
+import shlex
+import time
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field, replace
+from pathlib import Path
+
+from .base import InvalidState
+
+CT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")  # also its host name: DNS-safe
+SNAP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+
+
+class ContainerNotFound(LookupError):
+    pass
+
+
+# Templates: distribution images from images.linuxcontainers.org (lxc "download"), and
+# app templates that are a distribution plus a first-boot script.
+DISTROS = {
+    "debian-13": ("debian", "trixie", "Debian 13"),
+    "debian-12": ("debian", "bookworm", "Debian 12"),
+    "ubuntu-24.04": ("ubuntu", "noble", "Ubuntu 24.04 LTS"),
+    "ubuntu-22.04": ("ubuntu", "jammy", "Ubuntu 22.04 LTS"),
+    "rockylinux-9": ("rockylinux", "9", "Rocky Linux 9"),
+    "almalinux-9": ("almalinux", "9", "AlmaLinux 9"),
+    "alpine-3.20": ("alpine", "3.20", "Alpine Linux 3.20"),
+}
+APPS = {
+    "nginx": ("debian-13", "Nginx web server", "apt-get update && apt-get install -y nginx"),
+    "mariadb": (
+        "debian-13",
+        "MariaDB database",
+        "apt-get update && apt-get install -y mariadb-server",
+    ),
+    "docker": (
+        "debian-13",
+        "Docker host (nesting on)",
+        "apt-get update && apt-get install -y docker.io docker-compose",
+    ),
+    "zabbix-agent": (
+        "debian-13",
+        "Zabbix agent",
+        "apt-get update && apt-get install -y zabbix-agent2",
+    ),
+    "wordpress": (
+        "debian-13",
+        "WordPress (Apache, PHP, MariaDB)",
+        "apt-get update && apt-get install -y apache2 php php-mysql mariadb-server wordpress",
+    ),
+}
+
+
+def catalog() -> list[dict]:
+    out = [
+        {"id": k, "kind": "os", "title": title, "distro": d, "release": r}
+        for k, (d, r, title) in DISTROS.items()
+    ]
+    for k, (base, title, _script) in APPS.items():
+        d, r, os_title = DISTROS[base]
+        out.append(
+            {
+                "id": f"app:{k}",
+                "kind": "app",
+                "title": title,
+                "distro": d,
+                "release": r,
+                "base": os_title,
+            }
+        )
+    return out
+
+
+@dataclass
+class ContainerSpec:
+    name: str
+    template: str = "debian-13"
+    vcpus: int = 1
+    memory_mb: int = 512
+    swap_mb: int = 512
+    disk_gb: int = 8
+    pool: str = "default"
+    network: str = "default"
+    ip: str = "dhcp"  # "dhcp" or an address with prefix, e.g. 10.0.0.50/24
+    gateway: str = ""
+    dns: str = ""
+    password: str = ""  # root password; empty: none (SSH key or console only)
+    ssh_key: str = ""
+    unprivileged: bool = True
+    nesting: bool = False  # lets Docker and the like run inside
+    autostart: bool = False
+    description: str = ""
+
+    def validate(self) -> None:
+        if not CT_NAME_RE.match(self.name):
+            raise ValueError(
+                "container names use small letters, digits and '-' (it is the host name too)"
+            )
+        if self.template not in DISTROS and self.template.removeprefix("app:") not in APPS:
+            raise ValueError(f"unknown template {self.template!r}")
+        if not 1 <= self.vcpus <= 256 or self.memory_mb < 64 or not 1 <= self.disk_gb <= 65536:
+            raise ValueError("1-256 vCPU, at least 64 MB of memory and 1 GB of disk")
+        if self.swap_mb < 0:
+            raise ValueError("swap cannot be negative")
+        if self.ip != "dhcp":
+            try:
+                iface = ipaddress.IPv4Interface(self.ip)
+            except ValueError:
+                msg = "IP is 'dhcp' or an address with prefix, e.g. 10.0.0.50/24"
+                raise ValueError(msg) from None
+            if "/" not in self.ip:
+                raise ValueError("write the IP with its prefix, e.g. 10.0.0.50/24")
+            if self.gateway and ipaddress.IPv4Address(self.gateway) not in iface.network:
+                raise ValueError(f"the gateway must be inside {iface.network}")
+        for server in self.dns.split():
+            ipaddress.ip_address(server)
+        if self.ssh_key and not re.match(r"^(ssh-|ecdsa-)\S+ \S+", self.ssh_key.strip()):
+            raise ValueError("the SSH key is one line starting with ssh-ed25519, ssh-rsa, ...")
+        if "\n" in self.password:
+            raise ValueError("the password is one line")
+        if self.template.removeprefix("app:") == "docker":
+            self.nesting = True
+
+    @property
+    def distro(self) -> tuple[str, str]:
+        key = APPS[self.template[4:]][0] if self.template.startswith("app:") else self.template
+        return DISTROS[key][0], DISTROS[key][1]
+
+    def public(self) -> dict:
+        data = asdict(self)
+        data.pop("password")
+        return data
+
+
+@dataclass
+class ContainerInfo:
+    spec: ContainerSpec
+    state: str = "stopped"  # running, stopped
+    addresses: list[str] = field(default_factory=list)
+    cpu_seconds: float = 0.0
+    memory_used_mb: int = 0
+    disk_used_gb: float = 0.0
+    snapshots: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            **self.spec.public(),
+            "state": self.state,
+            "addresses": self.addresses,
+            "cpu_seconds": self.cpu_seconds,
+            "memory_used_mb": self.memory_used_mb,
+            "disk_used_gb": self.disk_used_gb,
+            "snapshots": self.snapshots,
+            "kind": "container",
+        }
+
+
+def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str) -> str:
+    """The container's LXC config, after the distribution's own includes."""
+    lines = [
+        "# Written by ibHiCS: change the container in the web console.",
+        "lxc.include = /usr/share/lxc/config/common.conf",
+    ]
+    if spec.unprivileged:
+        lines += [
+            "lxc.include = /usr/share/lxc/config/userns.conf",
+            "lxc.idmap = u 0 100000 65536",
+            "lxc.idmap = g 0 100000 65536",
+        ]
+    lines += [
+        f"lxc.uts.name = {spec.name}",
+        f"lxc.rootfs.path = loop:{rootfs}",
+        "lxc.net.0.type = veth",
+        f"lxc.net.0.link = {bridge}",
+        "lxc.net.0.flags = up",
+        "lxc.net.0.name = eth0",
+        f"lxc.cgroup2.memory.max = {spec.memory_mb}M",
+        f"lxc.cgroup2.memory.swap.max = {spec.swap_mb}M",
+        f"lxc.cgroup2.cpu.max = {spec.vcpus * 100000} 100000",
+        f"lxc.start.auto = {1 if spec.autostart else 0}",
+        "lxc.apparmor.profile = generated",
+        f"lxc.apparmor.allow_nesting = {1 if spec.nesting else 0}",
+    ]
+    if spec.ip != "dhcp":
+        lines.append(f"lxc.net.0.ipv4.address = {spec.ip}")
+        if spec.gateway:
+            lines.append(f"lxc.net.0.ipv4.gateway = {spec.gateway}")
+    if spec.nesting:
+        lines.append("lxc.include = /usr/share/lxc/config/nesting.conf")
+    return "\n".join(lines) + "\n"
+
+
+def first_boot_script(spec: ContainerSpec) -> str:
+    """Run once inside the new container: host name, DNS, root access, the app."""
+    q = shlex.quote
+    steps = ["set -e", f"echo {q(spec.name)} > /etc/hostname"]
+    if spec.dns:
+        resolv = "".join(f"nameserver {s}\n" for s in spec.dns.split())
+        steps.append(f"printf %s {q(resolv)} > /etc/resolv.conf")
+    if spec.password:
+        steps.append(f"echo root:{q(spec.password)} | chpasswd")
+    if spec.ssh_key:
+        steps += [
+            "mkdir -p /root/.ssh && chmod 700 /root/.ssh",
+            f"echo {q(spec.ssh_key.strip())} >> /root/.ssh/authorized_keys",
+            "chmod 600 /root/.ssh/authorized_keys",
+        ]
+    if spec.template.startswith("app:"):
+        steps.append("export DEBIAN_FRONTEND=noninteractive")
+        steps.append(APPS[spec.template[4:]][2])
+    return "\n".join(steps) + "\n"
+
+
+EXEC_TIMEOUT = 120
+
+
+class LxcContainers:
+    """Containers on this node, with the lxc-* tools. Each lives in <pool>/containers/<name>
+    (config, image file), and ibHiCS keeps its settings in ibhics.json beside them."""
+
+    def __init__(
+        self,
+        pool_path: Callable[[str], str | None],
+        bridge_of: Callable[[str], str],
+        run: Callable[[list[str]], tuple[int, str]],
+        pools: Callable[[], list[str]],
+    ) -> None:
+        self._pool_path = pool_path
+        self._bridge_of = bridge_of
+        self._run = run
+        self._pools = pools
+
+    def _dir(self, pool: str) -> Path:
+        path = self._pool_path(pool)
+        if not path:
+            raise InvalidState(f"containers need a folder or file-system pool; {pool!r} is not")
+        return Path(path) / "containers"
+
+    def _find(self, name: str) -> tuple[Path, ContainerSpec]:
+        for pool in self._pools():
+            try:
+                meta = self._dir(pool) / name / "ibhics.json"
+            except InvalidState:
+                continue
+            if meta.is_file():
+                return meta.parent.parent, ContainerSpec(**json.loads(meta.read_text()))
+        raise ContainerNotFound(name)
+
+    def _lxc(self, cmd: str, lxcpath: Path, name: str, *args: str, check: bool = True) -> str:
+        code, out = self._run([f"lxc-{cmd}", "-P", str(lxcpath), "-n", name, *args])
+        if check and code:
+            raise InvalidState(f"lxc-{cmd} failed: {out.strip()[-500:]}")
+        return out
+
+    def list(self) -> list[ContainerInfo]:
+        out = []
+        for pool in self._pools():
+            try:
+                base = self._dir(pool)
+            except InvalidState:
+                continue
+            if not base.is_dir():
+                continue
+            for meta in sorted(base.glob("*/ibhics.json")):
+                out.append(self._info(base, ContainerSpec(**json.loads(meta.read_text()))))
+        return out
+
+    def get(self, name: str) -> ContainerInfo:
+        base, spec = self._find(name)
+        return self._info(base, spec)
+
+    def _info(self, base: Path, spec: ContainerSpec) -> ContainerInfo:
+        info = ContainerInfo(spec)
+        code, text = self._run(["lxc-info", "-P", str(base), "-n", spec.name, "-H"])
+        if code == 0:
+            for line in text.splitlines():
+                key, _, value = line.partition(":")
+                value = value.strip()
+                if key == "State":
+                    info.state = "running" if value == "RUNNING" else "stopped"
+                elif key == "IP":
+                    info.addresses.append(value)
+                elif key == "CPU use" and value:
+                    info.cpu_seconds = round(int(value) / 1e9, 1)
+                elif key == "Memory use" and value:
+                    info.memory_used_mb = int(value) // 2**20
+        image = base / spec.name / "rootfs.img"
+        if image.exists():
+            info.disk_used_gb = round(image.stat().st_blocks * 512 / 2**30, 2)
+        snaps = base / spec.name / "snaps"
+        if snaps.is_dir():
+            info.snapshots = sorted(p.name for p in snaps.iterdir() if p.is_dir())
+        return info
+
+    def create(self, spec: ContainerSpec) -> ContainerInfo:
+        spec.validate()
+        try:
+            self._find(spec.name)
+        except ContainerNotFound:
+            pass
+        else:
+            raise InvalidState(f"a container named {spec.name!r} already exists")
+        bridge = self._bridge_of(spec.network)
+        base = self._dir(spec.pool)
+        home = base / spec.name
+        home.mkdir(parents=True, exist_ok=True)
+        image = home / "rootfs.img"
+        distro, release = spec.distro
+        conf = home / "create.conf"
+        conf.write_text(lxc_config(spec, bridge, str(image)))
+        try:
+            self._lxc(
+                "create",
+                base,
+                spec.name,
+                "-f",
+                str(conf),
+                "-B",
+                "loop",
+                "--fssize",
+                f"{spec.disk_gb}G",
+                "-t",
+                "download",
+                "--",
+                "-d",
+                distro,
+                "-r",
+                release,
+                "-a",
+                "amd64",
+            )
+            (home / "config").write_text(
+                _keep_template_lines(home / "config", lxc_config(spec, bridge, str(image)))
+            )
+            (home / "ibhics.json").write_text(json.dumps(asdict(replace(spec, password=""))))
+            self._lxc("start", base, spec.name)
+            self._wait_running(base, spec.name)
+            self.exec(spec.name, first_boot_script(spec), timeout=1800)
+        except Exception:
+            self._lxc("stop", base, spec.name, "-k", check=False)
+            self._lxc("destroy", base, spec.name, check=False)
+            raise
+        return self._info(base, spec)
+
+    def _wait_running(self, base: Path, name: str, timeout: float = 30) -> None:
+        self._lxc("wait", base, name, "-s", "RUNNING", "-t", str(int(timeout)), check=False)
+        time.sleep(2)  # let the network come up before the first-boot script
+
+    def action(self, name: str, act: str) -> ContainerInfo:
+        base, spec = self._find(name)
+        if act == "start":
+            self._lxc("start", base, name)
+        elif act == "stop":
+            self._lxc("stop", base, name, "-t", "60")
+        elif act == "kill":
+            self._lxc("stop", base, name, "-k")
+        elif act == "restart":
+            self._lxc("stop", base, name, "-t", "60", check=False)
+            self._lxc("start", base, name)
+        else:
+            raise ValueError("action is start, stop, kill or restart")
+        return self._info(base, spec)
+
+    def update(
+        self,
+        name: str,
+        vcpus: int | None,
+        memory_mb: int | None,
+        disk_gb: int | None,
+        autostart: bool | None,
+        description: str | None,
+    ) -> ContainerInfo:
+        base, spec = self._find(name)
+        new = replace(
+            spec,
+            vcpus=vcpus or spec.vcpus,
+            memory_mb=memory_mb or spec.memory_mb,
+            disk_gb=disk_gb or spec.disk_gb,
+            autostart=spec.autostart if autostart is None else autostart,
+            description=spec.description if description is None else description,
+        )
+        new.validate()
+        if new.disk_gb < spec.disk_gb:
+            raise InvalidState("a container's disk can grow, not shrink")
+        info = self._info(base, spec)
+        home = base / name
+        if info.state == "running":  # CPU and memory change live
+            self._lxc("cgroup", base, name, "memory.max", f"{new.memory_mb}M")
+            self._lxc("cgroup", base, name, "cpu.max", f"{new.vcpus * 100000} 100000")
+        if new.disk_gb > spec.disk_gb:
+            image = str(home / "rootfs.img")
+            code, out = self._run(["truncate", "-s", f"{new.disk_gb}G", image])
+            if code:
+                raise InvalidState(f"could not grow the disk: {out.strip()}")
+            if info.state == "running":
+                self._run(["sh", "-c", f"losetup -c $(losetup -j {shlex.quote(image)} -nO NAME)"])
+                self._lxc("attach", base, name, "--", "resize2fs", "/dev/root", check=False)
+                code, out = self._run(
+                    ["sh", "-c", f"resize2fs $(losetup -j {shlex.quote(image)} -nO NAME)"]
+                )
+            else:
+                self._run(["e2fsck", "-fy", image])
+                code, out = self._run(["resize2fs", image])
+            if code:
+                raise InvalidState(f"the disk grew, but its file system did not: {out.strip()}")
+        bridge = self._bridge_of(new.network)
+        cfg = home / "config"
+        cfg.write_text(_keep_template_lines(cfg, lxc_config(new, bridge, str(home / "rootfs.img"))))
+        (home / "ibhics.json").write_text(json.dumps(asdict(new)))
+        return self._info(base, new)
+
+    def delete(self, name: str) -> None:
+        base, _spec = self._find(name)
+        self._lxc("stop", base, name, "-k", check=False)
+        self._lxc("destroy", base, name, "-s")
+
+    def exec(self, name: str, script: str, timeout: int = EXEC_TIMEOUT) -> tuple[int, str]:
+        base, _spec = self._find(name)
+        code, out = self._run(
+            [
+                "timeout",
+                str(timeout),
+                "lxc-attach",
+                "-P",
+                str(base),
+                "-n",
+                name,
+                "--clear-env",
+                "--",
+                "/bin/sh",
+                "-c",
+                script,
+            ]
+        )
+        return code, out
+
+    def snapshot(self, name: str, snap: str) -> ContainerInfo:
+        if not SNAP_RE.match(snap):
+            raise ValueError("snapshot names use letters, digits and '_.-'")
+        base, spec = self._find(name)
+        self._lxc("snapshot", base, name, "-N", snap)
+        return self._info(base, spec)
+
+    def restore(self, name: str, snap: str) -> ContainerInfo:
+        base, spec = self._find(name)
+        running = self._info(base, spec).state == "running"
+        if running:
+            self._lxc("stop", base, name, "-t", "60")
+        self._lxc("snapshot", base, name, "-r", snap, "-N", name)
+        if running:
+            self._lxc("start", base, name)
+        return self._info(base, spec)
+
+    def delete_snapshot(self, name: str, snap: str) -> ContainerInfo:
+        base, spec = self._find(name)
+        self._lxc("snapshot", base, name, "-d", snap)
+        return self._info(base, spec)
+
+
+def _keep_template_lines(path: Path, ours: str) -> str:
+    """The distribution's include line from lxc-create, then ours (without duplicates)."""
+    theirs = path.read_text().splitlines() if path.exists() else []
+    ours_too = ("common.conf", "userns.conf", "nesting.conf")
+    keep = [
+        ln
+        for ln in theirs
+        if ln.startswith("lxc.include")
+        and "/usr/share/lxc/config/" in ln
+        and ln.split("/")[-1] not in ours_too
+    ]
+    return "\n".join(keep + ours.splitlines()) + "\n"
+
+
+class FakeContainers:
+    """In memory, for tests and the demo console."""
+
+    def __init__(self, networks: Callable[[], set[str]], pools: Callable[[], set[str]]) -> None:
+        self._cts: dict[str, ContainerInfo] = {}
+        self._networks = networks
+        self._pools = pools
+
+    def list(self) -> list[ContainerInfo]:
+        return list(self._cts.values())
+
+    def get(self, name: str) -> ContainerInfo:
+        if name not in self._cts:
+            raise ContainerNotFound(name)
+        return self._cts[name]
+
+    def create(self, spec: ContainerSpec) -> ContainerInfo:
+        spec.validate()
+        if spec.name in self._cts:
+            raise InvalidState(f"a container named {spec.name!r} already exists")
+        if spec.network not in self._networks():
+            raise InvalidState(f"no network named {spec.network!r}")
+        if spec.pool not in self._pools():
+            raise InvalidState(f"no storage pool named {spec.pool!r}")
+        ip = spec.ip.split("/")[0] if spec.ip != "dhcp" else "10.0.0.123"
+        info = ContainerInfo(replace(spec, password=""), "running", [ip], 0.5, 40, 0.6)
+        self._cts[spec.name] = info
+        return info
+
+    def action(self, name: str, act: str) -> ContainerInfo:
+        info = self.get(name)
+        if act not in ("start", "stop", "kill", "restart"):
+            raise ValueError("action is start, stop, kill or restart")
+        info.state = "stopped" if act in ("stop", "kill") else "running"
+        return info
+
+    def update(self, name, vcpus, memory_mb, disk_gb, autostart, description) -> ContainerInfo:
+        info = self.get(name)
+        if disk_gb and disk_gb < info.spec.disk_gb:
+            raise InvalidState("a container's disk can grow, not shrink")
+        info.spec = replace(
+            info.spec,
+            vcpus=vcpus or info.spec.vcpus,
+            memory_mb=memory_mb or info.spec.memory_mb,
+            disk_gb=disk_gb or info.spec.disk_gb,
+            autostart=info.spec.autostart if autostart is None else autostart,
+            description=info.spec.description if description is None else description,
+        )
+        info.spec.validate()
+        return info
+
+    def delete(self, name: str) -> None:
+        self.get(name)
+        del self._cts[name]
+
+    def exec(self, name: str, script: str, timeout: int = EXEC_TIMEOUT) -> tuple[int, str]:
+        info = self.get(name)
+        if info.state != "running":
+            raise InvalidState(f"{name} is not running")
+        return 0, f"(fake container {name}) {script}"
+
+    def snapshot(self, name: str, snap: str) -> ContainerInfo:
+        if not SNAP_RE.match(snap):
+            raise ValueError("snapshot names use letters, digits and '_.-'")
+        info = self.get(name)
+        if snap in info.snapshots:
+            raise InvalidState(f"{name} already has a snapshot named {snap!r}")
+        info.snapshots.append(snap)
+        return info
+
+    def restore(self, name: str, snap: str) -> ContainerInfo:
+        info = self.get(name)
+        if snap not in info.snapshots:
+            raise InvalidState(f"{name} has no snapshot {snap!r}")
+        return info
+
+    def delete_snapshot(self, name: str, snap: str) -> ContainerInfo:
+        info = self.get(name)
+        if snap not in info.snapshots:
+            raise InvalidState(f"{name} has no snapshot {snap!r}")
+        info.snapshots.remove(snap)
+        return info
+
+
+def info_from_dict(data: dict) -> ContainerInfo:
+    names = {f for f in ContainerSpec.__dataclass_fields__ if f != "password"}
+    spec = ContainerSpec(**{k: v for k, v in data.items() if k in names})
+    extra = {k: data[k] for k in ContainerInfo.__dataclass_fields__ if k != "spec" and k in data}
+    return ContainerInfo(spec, **extra)
+
+
+class RemoteContainers:
+    """A node's containers, through its agent."""
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def _call(self, method: str, path: str = "", timeout: float = 120, **kwargs):
+        resp = self._client.request(method, f"/containers{path}", timeout=timeout, **kwargs)
+        detail = resp.json().get("detail", "") if resp.content and resp.status_code >= 400 else ""
+        if resp.status_code == 404:
+            raise ContainerNotFound(str(detail).removeprefix("container not found: "))
+        if resp.status_code == 409:
+            raise InvalidState(detail or "invalid state")
+        if resp.status_code == 422:
+            raise ValueError(str(detail))
+        if resp.status_code >= 400:
+            from ..cluster.remote import NodeUnavailable
+
+            raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code} {detail}")
+        return resp.json() if resp.content else None
+
+    def list(self) -> list[ContainerInfo]:
+        return [info_from_dict(d) for d in self._call("GET")]
+
+    def get(self, name: str) -> ContainerInfo:
+        return info_from_dict(self._call("GET", f"/{name}"))
+
+    def create(self, spec: ContainerSpec) -> ContainerInfo:
+        return info_from_dict(self._call("POST", json=asdict(spec), timeout=3600))
+
+    def action(self, name: str, act: str) -> ContainerInfo:
+        return info_from_dict(self._call("POST", f"/{name}/action", json={"action": act}))
+
+    def update(self, name, vcpus, memory_mb, disk_gb, autostart, description) -> ContainerInfo:
+        body = {
+            "vcpus": vcpus,
+            "memory_mb": memory_mb,
+            "disk_gb": disk_gb,
+            "autostart": autostart,
+            "description": description,
+        }
+        return info_from_dict(self._call("PATCH", f"/{name}", json=body, timeout=600))
+
+    def delete(self, name: str) -> None:
+        self._call("DELETE", f"/{name}")
+
+    def exec(self, name: str, script: str, timeout: int = EXEC_TIMEOUT) -> tuple[int, str]:
+        data = self._call("POST", f"/{name}/exec", json={"command": script}, timeout=timeout + 30)
+        return data["code"], data["output"]
+
+    def snapshot(self, name: str, snap: str) -> ContainerInfo:
+        return info_from_dict(
+            self._call("POST", f"/{name}/snapshots", json={"name": snap}, timeout=1800)
+        )
+
+    def restore(self, name: str, snap: str) -> ContainerInfo:
+        return info_from_dict(self._call("POST", f"/{name}/snapshots/{snap}/restore", timeout=1800))
+
+    def delete_snapshot(self, name: str, snap: str) -> ContainerInfo:
+        return info_from_dict(self._call("DELETE", f"/{name}/snapshots/{snap}", timeout=600))
+
+
+def install_agent_routes(api, get_containers) -> None:
+    """The agent's /containers endpoints over this node's containers."""
+
+    @api.get("/containers")
+    def ct_list() -> list[dict]:
+        return [c.to_dict() for c in get_containers().list()]
+
+    @api.post("/containers")
+    def ct_create(body: dict) -> dict:
+        names = ContainerSpec.__dataclass_fields__
+        return (
+            get_containers()
+            .create(ContainerSpec(**{k: v for k, v in body.items() if k in names}))
+            .to_dict()
+        )
+
+    @api.get("/containers/{name}")
+    def ct_get(name: str) -> dict:
+        return get_containers().get(name).to_dict()
+
+    @api.post("/containers/{name}/action")
+    def ct_action(name: str, body: dict) -> dict:
+        return get_containers().action(name, str(body.get("action", ""))).to_dict()
+
+    @api.patch("/containers/{name}")
+    def ct_update(name: str, body: dict) -> dict:
+        keys = ("vcpus", "memory_mb", "disk_gb", "autostart", "description")
+        return get_containers().update(name, *(body.get(k) for k in keys)).to_dict()
+
+    @api.delete("/containers/{name}", status_code=204)
+    def ct_delete(name: str) -> None:
+        get_containers().delete(name)
+
+    @api.post("/containers/{name}/exec")
+    def ct_exec(name: str, body: dict) -> dict:
+        code, out = get_containers().exec(name, str(body.get("command", "")))
+        return {"code": code, "output": out}
+
+    @api.post("/containers/{name}/snapshots")
+    def ct_snapshot(name: str, body: dict) -> dict:
+        return get_containers().snapshot(name, str(body.get("name", ""))).to_dict()
+
+    @api.post("/containers/{name}/snapshots/{snap}/restore")
+    def ct_restore(name: str, snap: str) -> dict:
+        return get_containers().restore(name, snap).to_dict()
+
+    @api.delete("/containers/{name}/snapshots/{snap}")
+    def ct_delete_snapshot(name: str, snap: str) -> dict:
+        return get_containers().delete_snapshot(name, snap).to_dict()

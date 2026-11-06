@@ -422,6 +422,15 @@ class FakeDriver(HypervisorDriver):
             if self._networks.pop(name, None) is None:
                 raise InvalidState(f"no network named {name!r}")
 
+    def containers(self):
+        from .containers import FakeContainers
+
+        if getattr(self, "_containers", None) is None:
+            self._containers = FakeContainers(
+                lambda: {n.name for n in self.list_networks()}, lambda: set(self._pools)
+            )
+        return self._containers
+
     def host_system(self):
         from .host import FakeHost
 

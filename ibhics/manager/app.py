@@ -165,6 +165,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
     ("POST", f"{API}/nodes/{{name}}/terminal"),
+    ("POST", f"{API}/containers/{{name}}/exec"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
 SELF_ROUTES = {f"{API}/auth/me", f"{API}/auth/logout", f"{API}/auth/password"}
@@ -1256,6 +1257,10 @@ def create_app(
     )
     def run_policy(name: str) -> list[JobOut]:
         return [JobOut(**job.__dict__) for job in backups.run_policy(name)]
+
+    from . import containers_api
+
+    containers_api.install(api, cluster, backups)
 
     app.include_router(public)
     app.include_router(api)

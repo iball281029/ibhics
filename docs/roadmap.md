@@ -55,6 +55,15 @@ Still to do:
 - Shared disks between VMs (clusters), iSCSI target serving VM disks
 - Storage policy per VM disk (thin/thick, cache)
 
+## v1.0 — Containers ⏳
+Beta 1 (1.0.0b1) ✅: LXC system containers beside VMs: one-click template catalog (Debian, Ubuntu, Rocky, Alma, Alpine) and app templates (Nginx, MariaDB, Docker host, Zabbix agent, WordPress), 3-step wizard (template → CPU/RAM/disk/network with IP at create → root password/SSH key), unprivileged by default, disk as an image file in any folder pool, live resize of CPU/memory/disk (grow), console (commands as root, admins), snapshots/restore, everything in Tasks
+
+Still to do:
+- Backup and restore of containers with the VM backup repositories and policies
+- Clone, convert to template, migrate to another node
+- OCI images from a registry (Docker Hub) as containers
+- Interactive console (full TTY), live CPU/memory charts, firewall per container, topology view
+
 ## v0.9 — Nodes ⏳
 Beta 2 (0.9.0b2) ✅: VM migration data over the migration interface, flow control per port, VMs listed on the node summary
 Beta 1 (0.9.0b1) ✅: maintenance mode (no VMs placed/started/moved here, evacuate first), interface roles (management, migration, storage, VM uplink), static routes, system disk health (SMART, wear, temperature)

@@ -248,6 +248,11 @@ class RemoteDriver(HypervisorDriver):
     def host_system(self) -> RemoteHost:
         return RemoteHost(self._client)
 
+    def containers(self):
+        from ..hypervisor.containers import RemoteContainers
+
+        return RemoteContainers(self._client)
+
     def list_local_disks(self):
         from ..hypervisor.disks import LocalDisk
 

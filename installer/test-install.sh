@@ -159,7 +159,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.9", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 1.0", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -182,6 +182,13 @@ print("ok  the big disk is listed as free, ready to add as a pool")
 pools = call("GET", "/pools", token=token)
 assert any(p["name"] == "default" for p in pools), pools
 print("ok  default storage pool exists")
+
+import shutil, subprocess
+assert shutil.which("lxc-create") and shutil.which("newuidmap"), "lxc/uidmap missing"
+assert "root:100000:65536" in open("/etc/subuid").read()
+assert call("GET", "/containers", token=token) == []
+assert any(t["id"] == "app:nginx" for t in call("GET", "/containers/templates", token=token))
+print("ok  LXC is installed and the containers API answers")
 
 vm = call("POST", "/vms", {"name": "smoke", "vcpus": 1, "memory_mb": 512,
                            "disks": [{"size_gb": 1}]}, token=token)

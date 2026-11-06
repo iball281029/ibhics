@@ -153,6 +153,10 @@ def create_agent_app(
             code, output = driver.run_command(str(body.get("command", "")))
             return {"code": code, "output": output}
 
+        from ..hypervisor.containers import install_agent_routes
+
+        install_agent_routes(api, driver.containers)
+
         @api.post("/net-test")
         def net_test(body: dict) -> dict:
             ok, output = driver.net_test(body["kind"], body["target"], body.get("network", ""))

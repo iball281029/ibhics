@@ -1,7 +1,7 @@
 #!/bin/sh
 # Upgrade an installed ibHiCS node in place from this ISO, like a firmware upgrade:
 #
-#   mount -o loop,ro ibhics-0.9.0b2.iso /mnt && sh /mnt/ibhics/upgrade.sh
+#   mount -o loop,ro ibhics-1.0.0b1.iso /mnt && sh /mnt/ibhics/upgrade.sh
 #
 # VMs keep running. Kept as they are: /etc/ibhics (config, TLS, users), /var/lib/ibhics,
 # libvirt VMs, storage pools and networks, /root/.ssh. Replaced: the ibHiCS program in
@@ -143,6 +143,9 @@ if [ -f "$SRC/apparmor-libvirt-qemu" ]; then
         [ -f "$prof" ] && apparmor_parser -r "$prof" 2>/dev/null || true
     done
 fi
+# Unprivileged containers: root may map container ids to 100000-165535 on this node.
+grep -q '^root:100000:65536' /etc/subuid 2>/dev/null || echo root:100000:65536 >> /etc/subuid
+grep -q '^root:100000:65536' /etc/subgid 2>/dev/null || echo root:100000:65536 >> /etc/subgid
 if ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
     # Nodes set up by 0.1/0.2 had no DNS (ifupdown's dns-nameservers needs resolvconf).
     dns=$(sed -n 's/^[[:space:]]*dns-nameservers[[:space:]]*//p' /etc/network/interfaces | head -n1)

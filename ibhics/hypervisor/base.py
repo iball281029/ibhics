@@ -605,6 +605,10 @@ class HypervisorDriver(abc.ABC):
         when this process can reach it; None for LVM pools and pools on other nodes."""
         return None
 
+    def containers(self):
+        """This node's LXC containers (containers.LxcContainers and alike)."""
+        raise NotImplementedError
+
     def host_system(self):
         """The node itself: its summary, network ports and settings (host.HostSystem)."""
         raise NotImplementedError

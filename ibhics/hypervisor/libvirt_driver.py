@@ -826,6 +826,30 @@ class LibvirtDriver(HypervisorDriver):
             pass
         Path(vlan_iface_file(vlan)).unlink(missing_ok=True)
 
+    def containers(self):
+        from .containers import LxcContainers
+
+        def run(cmd: list[str]) -> tuple[int, str]:
+            try:
+                done = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=3600, stdin=subprocess.DEVNULL
+                )
+            except subprocess.TimeoutExpired:
+                return 124, f"{cmd[0]}: no answer within an hour"
+            except FileNotFoundError:
+                return 127, f"{cmd[0]}: not installed on this node (package lxc)"
+            return done.returncode, done.stdout + done.stderr
+
+        def bridge(network: str) -> str:
+            bridges = self._bridges()
+            if network not in bridges:
+                raise InvalidState(f"no network named {network!r}")
+            return bridges[network]
+
+        return LxcContainers(
+            self.pool_path, bridge, run, lambda: [p.name for p in self.list_pools()]
+        )
+
     def host_system(self):
         from .host import LinuxHost
 

@@ -69,7 +69,10 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot" };
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot",
+  "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
+  "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
+  "container-delete": "Delete container" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 
 // ---------- theme and user menu ----------
@@ -122,7 +125,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -343,6 +346,8 @@ const loaders = {
   sources: async () => { state.sources = await api("/migrate/sources"); },
   isos: async () => { state.isos = await api("/isos"); },
   imports: async () => { state.imports = await api("/migrate/jobs"); },
+  containers: async () => { state.containers = await api("/containers"); },
+  ctTemplates: async () => { if (!state.ctTemplates?.length) state.ctTemplates = await api("/containers/templates"); },
   users: async () => { state.users = isAdmin() && state.me ? await api("/users") : []; },
 };
 const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
@@ -358,7 +363,7 @@ function allTasks() {
       step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
     })),
     ...state.jobs.map((j) => ({
-      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
+      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind.startsWith("container") ? `container · ${j.target}` : j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
       state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
@@ -569,6 +574,7 @@ async function refresh(page, auto = false) {
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
+  if (page === "containers") { await load("containers", "ctTemplates", "pools", "networks"); renderContainers(); }
   if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
@@ -4331,4 +4337,125 @@ $("#term-form").addEventListener("submit", async (e) => {
   } finally {
     term.busy = false; input.disabled = false; input.focus();
   }
+});
+
+// Containers (v1.0): LXC system containers beside the VMs.
+const CT_ICONS = { debian: "🌀", ubuntu: "🟠", rockylinux: "🟢", almalinux: "🔵", alpine: "🏔️" };
+function renderContainers() {
+  const tpls = state.ctTemplates || [];
+  $("#ct-catalog").innerHTML = tpls.map((t) => `<button class="ct-tpl" data-tpl="${esc(t.id)}">
+    <span class="ct-ico">${CT_ICONS[t.distro] || "📦"}</span><b>${esc(t.title)}</b><span class="muted">${t.kind === "app" ? `app · ${esc(t.base)}` : "operating system"}</span></button>`).join("");
+  const cts = [...(state.containers || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const title = (id) => tpls.find((t) => t.id === id)?.title || id;
+  $("#ct-rows").innerHTML = cts.length ? cts.map((c) => {
+    const on = c.state === "running";
+    return `<tr>
+    <td><b>${esc(c.name)}</b>${c.description ? `<br><span class="muted">${esc(c.description)}</span>` : ""}</td>
+    <td><span class="badge ${on ? "running" : "plain"}">${esc(c.state)}</span></td>
+    <td>${esc(c.node)}</td><td>${esc(title(c.template))}${c.unprivileged ? "" : ` <span class="badge plain">privileged</span>`}</td>
+    <td>${c.vcpus}</td><td>${on ? `${gbText(c.memory_used_mb)} / ` : ""}${gbText(c.memory_mb)}</td>
+    <td>${c.disk_used_gb} / ${c.disk_gb} GB</td><td class="mono">${esc((c.addresses || []).join(" ") || (c.ip === "dhcp" ? "" : c.ip))}</td>
+    <td>${(c.snapshots || []).length}</td>
+    <td class="actions" data-ct="${esc(c.name)}">
+      ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
+      ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
+      <button class="small" data-act="edit">Settings</button>
+      <button class="small danger" data-act="delete">Delete</button>
+    </td></tr>`;
+  }).join("") : empty(10, "No containers yet. Pick a template above to create one in a minute.");
+}
+function openCtWizard(tpl = "debian-13") {
+  const opts = (state.ctTemplates || []).map((t) => `<option value="${esc(t.id)}">${esc(t.title)}${t.kind === "app" ? ` (${esc(t.base)})` : ""}</option>`).join("");
+  $("#ct-template").innerHTML = opts;
+  openDialog("ct-dialog", null, { template: tpl });
+  $("#ct-form").elements.nesting.checked = tpl === "app:docker";
+}
+$("#ct-new").addEventListener("click", () => openCtWizard());
+$("#ct-catalog").addEventListener("click", (e) => { const b = e.target.closest("[data-tpl]"); if (b) openCtWizard(b.dataset.tpl); });
+handlers["ct-dialog"] = async (f) => {
+  const num = (k) => Number(f.get(k));
+  const r = await post("/containers", {
+    name: f.get("name").trim(), template: f.get("template"), node: f.get("node") || "",
+    vcpus: num("vcpus"), memory_mb: num("memory_mb"), disk_gb: num("disk_gb"), pool: f.get("pool"),
+    network: f.get("network"), ip: f.get("ip").trim() || "dhcp", gateway: f.get("gateway").trim(), dns: f.get("dns").trim(),
+    password: f.get("password"), ssh_key: f.get("ssh_key").trim(), nesting: f.get("nesting") === "on",
+    autostart: f.get("autostart") === "on", unprivileged: f.get("unprivileged") === "on",
+  });
+  toast(`Creating ${r.name} on ${r.node}… it appears when ready (see Tasks)`);
+  setTimeout(() => load("jobs").then(renderTasks).catch(() => {}), 800);
+};
+let ctCurrent = null;
+function ctSnaps(c) {
+  $("#ct-snaps").innerHTML = (c.snapshots || []).length ? c.snapshots.map((s) => `<tr><td class="mono">${esc(s)}</td>
+    <td class="actions" data-snap="${esc(s)}"><button type="button" class="small" data-sact="restore">Restore</button><button type="button" class="small danger" data-sact="delete">Delete</button></td></tr>`).join("")
+    : `<tr><td class="muted">No snapshots.</td></tr>`;
+}
+$("#ct-rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const name = b.closest("[data-ct]").dataset.ct, act = b.dataset.act;
+  const c = state.containers.find((x) => x.name === name);
+  try {
+    if (act === "edit") {
+      ctCurrent = name;
+      openDialog("ct-edit-dialog", { name }, { vcpus: c.vcpus, memory_mb: c.memory_mb, disk_gb: c.disk_gb, description: c.description });
+      $("#ct-edit-form").elements.autostart.checked = c.autostart;
+      $("#ct-edit-title").textContent = `Container ${name}`;
+      ctSnaps(c);
+      return;
+    }
+    if (act === "console") {
+      ctCurrent = name;
+      $("#ct-console-title").textContent = `Console: ${name}`;
+      $("#ct-prompt").textContent = `root@${name} #`;
+      $("#ct-out").textContent = "";
+      $("#ct-console-dialog").showModal();
+      $("#ct-input").focus();
+      return;
+    }
+    if (act === "delete" && !confirm(`Delete container ${name} and its disk and snapshots? This cannot be undone.`)) return;
+    b.disabled = true;
+    if (act === "delete") await del(`/containers/${enc(name)}`);
+    else await post(`/containers/${enc(name)}/action`, { action: act });
+    toast(`${name}: ${act} done`);
+    await refresh("containers");
+  } catch (err) { fail(err); } finally { b.disabled = false; }
+});
+handlers["ct-edit-dialog"] = async (f, ctx) => {
+  await patch(`/containers/${enc(ctx.name)}`, {
+    vcpus: Number(f.get("vcpus")), memory_mb: Number(f.get("memory_mb")), disk_gb: Number(f.get("disk_gb")),
+    autostart: f.get("autostart") === "on", description: f.get("description"),
+  });
+  toast(`${ctx.name} changed`);
+  await refresh("containers");
+};
+$("#ct-snap-take").addEventListener("click", async () => {
+  const name = ctCurrent, snap = prompt("Snapshot name", snapshotName(name));
+  if (!snap) return;
+  try { const c = await post(`/containers/${enc(name)}/snapshots`, { name: snap.trim() }); ctSnaps(c); toast(`Snapshot taken: ${snap}`); } catch (err) { fail(err); }
+});
+$("#ct-snaps").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-sact]");
+  if (!b) return;
+  const snap = b.closest("[data-snap]").dataset.snap, name = ctCurrent;
+  if (!confirm(b.dataset.sact === "restore" ? `Restore ${name} to ${snap}? Changes since then are lost.` : `Delete snapshot ${snap}?`)) return;
+  try {
+    const c = b.dataset.sact === "restore" ? await post(`/containers/${enc(name)}/snapshots/${enc(snap)}/restore`) : await del(`/containers/${enc(name)}/snapshots/${enc(snap)}`);
+    ctSnaps(c); toast(b.dataset.sact === "restore" ? `${name} restored to ${snap}` : `Snapshot ${snap} deleted`);
+  } catch (err) { fail(err); }
+});
+$("#ct-input").addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const input = e.target, line = input.value.trim(), out = $("#ct-out");
+  if (!line) return;
+  input.value = "";
+  if (line === "clear") { out.textContent = ""; return; }
+  out.textContent += `root@${ctCurrent} # ${line}\n`;
+  input.disabled = true;
+  try {
+    const r = await post(`/containers/${enc(ctCurrent)}/exec`, { command: line });
+    out.textContent += (r.output || "").replace(/\n?$/, "\n") + (r.code ? `(exit ${r.code})\n` : "");
+  } catch (err) { out.textContent += `${err.message || err}\n`; }
+  finally { input.disabled = false; input.focus(); out.parentElement.scrollTop = out.parentElement.scrollHeight; }
 });
