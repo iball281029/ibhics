@@ -42,10 +42,11 @@ and the words are ibHiCS's own.
 - Test connectivity (ping/trace between two VMs or a VM and an address)
 
 ## v0.8 — Storage, part 2 ⏳
-Beta 1 (0.8.0b1) ✅
+Beta 1–2 (0.8.0b1, 0.8.0b2) ✅
 - Terminal page: run diagnostic commands on a node (ping, traceroute, ip, ss, DNS, …), admins only, audited; replaces Network → Test connectivity
 - Snapshots of running UEFI VMs; default snapshot name is the VM's name and the time
-- Backups of running VMs fixed (QEMU may write the scratch folder)
+- Backups of running VMs fixed (QEMU may write the scratch folder; waits while QEMU is busy)
+- Snapshots: listed per VM and on Backup → Snapshots, restore any of them, shown in Tasks; one backup or snapshot at a time per VM
 
 Still to do:
 - Physical disks page: health (SMART), SSD wear, which pool uses each disk, blink LED

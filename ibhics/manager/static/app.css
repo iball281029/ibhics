@@ -862,3 +862,5 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 .term .term-cmd { color: #7fd18b; }
 .term .term-err { color: #ff9b8f; }
 .term .term-dim { color: #8a94a3; }
+.t-kind.k-snapshot { color: #0e7490; background: color-mix(in srgb, #06b6d4 12%, transparent); }
+.t-kind.k-delete { color: #b45309; background: color-mix(in srgb, #f59e0b 12%, transparent); }

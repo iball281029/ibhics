@@ -345,6 +345,13 @@ class SnapshotOut(BaseModel):
     current: bool = False
 
 
+class VMSnapshotOut(SnapshotOut):
+    vm_uuid: str
+    vm_name: str
+    node: str
+    stored_in: str = ""  # the pools of the VM's disks: snapshots live inside its qcow2 images
+
+
 class RecycledOut(BaseModel):
     vm: VMOut
     expires: str | None  # when it is deleted for good; None: kept until emptied by hand

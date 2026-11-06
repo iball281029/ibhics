@@ -237,7 +237,7 @@
           <ul class="feed section" id="vm-feed"></ul>
         </div>
         <div class="subpage" id="tab-vm-snapshots">
-          <div class="toolbar"><span class="hint" id="vm-snap-hint">Go back to how the VM was before a change. A snapshot of a running VM includes its memory, so reverting resumes it.</span><span class="spacer"></span><button class="primary operator-only" id="vm-snap-take">Take snapshot</button></div>
+          <div class="toolbar"><span class="hint" id="vm-snap-hint">Go back to how the VM was before a change. A snapshot of a running VM includes its memory, so restoring resumes it. The VM pauses while its memory is written (a few seconds per GB of RAM). Snapshots are stored inside the VM's disk images.</span><span class="spacer"></span><button class="primary operator-only" id="vm-snap-take">Take snapshot</button></div>
           <ol class="snap-line" id="vm-snaps"></ol>
         </div>
         <div class="subpage" id="tab-vm-alerts">
@@ -428,6 +428,7 @@
         <div class="tabs" id="backup-tabs">
           <button data-tab="backups" class="active">Restore points</button>
           <button data-tab="policies">Schedules</button>
+          <button data-tab="bk-snaps">Snapshots</button>
           <button data-tab="targets">Repositories</button>
           <button data-tab="jobs">Jobs</button>
         </div>
@@ -439,6 +440,13 @@
           <div class="table-wrap"><table>
             <thead><tr><th>VM</th><th>Created</th><th>Node</th><th>Size</th><th>New data</th><th></th></tr></thead>
             <tbody id="backups"></tbody>
+          </table></div>
+        </div>
+        <div class="subpage" id="tab-bk-snaps">
+          <div class="toolbar"><span class="hint">Snapshots of every VM. A snapshot lives inside the VM's own disk images (qcow2) in its storage pool, so it is quick to take and restore, but it is not a backup: it goes when the disk goes.</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>VM</th><th>Snapshot</th><th>Taken</th><th>Holds</th><th>Node · stored in</th><th></th></tr></thead>
+            <tbody id="all-snaps"></tbody>
           </table></div>
         </div>
         <div class="subpage" id="tab-policies">
