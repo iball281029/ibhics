@@ -28,16 +28,20 @@ from ..hypervisor import (
 )
 from ..hypervisor.host import HostNetwork, IfaceConfig, SettingsEdit
 
+# VM names: letters (English or Thai), digits, '_', '.', '-'; see hypervisor.base.VM_NAME_RE.
+VM_NAME_PATTERN = r"^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$"
+
 
 class DiskIn(BaseModel):
     size_gb: int = Field(ge=1, le=65536)
     backend: str = Field(default="file", pattern="^(file|block)$")
     pool: str = "default"
+    bus: str = Field(default="virtio", pattern="^(virtio|sata)$")  # sata: no virtio driver
 
 
 class NicIn(BaseModel):
     network: str = "default"
-    model: str = "virtio"
+    model: str = Field(default="virtio", pattern="^(virtio|e1000e|e1000)$")
     mac: str | None = Field(default=None, pattern="^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
 
 
@@ -55,7 +59,7 @@ class NicOut(BaseModel):
 
 
 class VMCreate(BaseModel):
-    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    name: str = Field(pattern=VM_NAME_PATTERN)
     vcpus: int = Field(default=1, ge=1, le=256)
     memory_mb: int = Field(default=1024, ge=128)
     firmware: Firmware = Firmware.BIOS
@@ -380,7 +384,7 @@ class CustomizationIn(BaseModel):
 
 
 class CloneIn(BaseModel):
-    name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    name: str = Field(pattern=VM_NAME_PATTERN)
     linked: bool = False
     pool: str | None = None
     description: str | None = Field(default=None, max_length=1024)
@@ -602,7 +606,7 @@ class BackupRequest(BaseModel):
 
 
 class RestoreRequest(BaseModel):
-    name: str | None = Field(default=None, pattern=NAME_PATTERN, description="default: original")
+    name: str | None = Field(default=None, pattern=VM_NAME_PATTERN, description="default: original")
     node: str | None = Field(default=None, description="shared targets: where to restore")
     pool: str | None = Field(default=None, description="put every disk in this pool")
     source_node: str | None = Field(default=None, description="local targets: node holding it")
@@ -652,7 +656,7 @@ class AgentBackupList(BaseModel):
 class AgentRestore(BaseModel):
     target: dict
     backup_id: str
-    name: str | None = Field(default=None, pattern=NAME_PATTERN)
+    name: str | None = Field(default=None, pattern=VM_NAME_PATTERN)
     pool: str | None = None
 
 
@@ -747,7 +751,7 @@ class SourceIn(BaseModel):
 
 
 class CdromRequest(BaseModel):
-    iso: str | None = Field(default=None, pattern=r"^/.+\.iso$")
+    iso: str | None = Field(default=None, pattern=r"^/.+\.[iI][sS][oO]$")
 
 
 class IsoOut(BaseModel):
@@ -809,7 +813,7 @@ class SourceVMOut(BaseModel):
 class ImportRequest(BaseModel):
     source: str
     vm: str = Field(description="the ref from GET /migrate/sources/{name}/vms")
-    name: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+    name: str | None = Field(default=None, pattern=VM_NAME_PATTERN)
     node: str | None = None
     pool: str = "default"
     network: str | list[str] = Field(

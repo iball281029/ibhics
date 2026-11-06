@@ -15,7 +15,7 @@ async function api(path, opts = {}) {
   const r = await fetch(`/api/v1${path}`, { headers: { "Content-Type": "application/json" }, ...opts });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    const detail = Array.isArray(body.detail) ? body.detail.map((d) => d.msg).join(", ") : body.detail;
+    const detail = Array.isArray(body.detail) ? body.detail.map((d) => `${(d.loc || []).filter((x) => x !== "body").join(".") || "request"}: ${d.msg}`).join("; ") : body.detail;
     if (r.status === 401 || (r.status === 403 && /initial password/.test(detail || ""))) return toLogin();
     throw new Error(detail || r.statusText);
   }
@@ -1443,7 +1443,7 @@ const vmWiz = wizard("vm-dialog", {
   },
   check(step) {
     const f = $("#vm-form").elements;
-    if (step === 1 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the VM with letters, digits, '-', '_' or '.' (no spaces).");
+    if (step === 1 && !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the VM with letters (English or Thai), digits, '-', '_' or '.' (no spaces).");
     if (step === 1 && state.vms.some((v) => v.name === f.name.value)) throw new Error(`A VM named ${f.name.value} already exists.`);
     if (step === 2) {
       if (!(Number(f.vcpus.value) >= 1)) throw new Error("Give the VM at least 1 vCPU.");
@@ -1463,11 +1463,30 @@ const vmWiz = wizard("vm-dialog", {
     }
   },
 });
+// Firmware and devices that suit a guest OS. Windows with no driver in the bundled virtio-win
+// (Server 2012 non-R2, Windows 8, Windows 7 / Server 2008 R2 and older) get SATA disks and
+// an Intel NIC that Windows has a driver for (e1000e from Windows 8 / 2012, e1000 before).
+function osProfile(family, ver) {
+  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp|server 2012(?! r2)|windows 8(?!\.1)/.test(ver);
+  const nic = !legacy ? "virtio" : /2012|windows 8/.test(ver) ? "e1000e" : "e1000";
+  const uefi = !legacy && ((family === "windows" && !/2012|2016|windows 8/.test(ver))
+    || /2025|enterprise linux (9|10)|rocky linux (9|10)|almalinux (9|10)|oracle linux 9|stream 9|2[2-4]\.04|debian 1[23]|leap 15|suse linux enterprise 15|fedora|freebsd 1[34]/.test(ver));
+  return { uefi, legacy, nic, folder: virtioFolder(family, ver) };
+}
+// The folder for this Windows on the virtio driver CD (only these are bundled).
+function virtioFolder(family, ver) {
+  if (family !== "windows") return "";
+  const map = [[/2025/, "2k25"], [/2022/, "2k22"], [/2019/, "2k19"], [/2016/, "2k16"], [/2012 r2|windows 8\.1/, "2k12R2"], [/windows 11/, "w11"], [/windows 10/, "w10"]];
+  return (map.find(([re]) => re.test(ver)) || [null, ""])[1];
+}
 function vmWizOs(form) {
   const f = form.elements, family = f.os_family.value, ver = f.os_type.value.toLowerCase();
-  const uefi = (family === "windows" && !/2012|2016|windows 7|windows 8/.test(ver)) || /2025|red hat enterprise linux 9|24\.04/.test(ver);
+  const { uefi, legacy, nic, folder } = osProfile(family, ver);
   f.firmware.value = uefi ? "uefi" : "bios";
-  $(".fw-hint", form).textContent = uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "";
+  $(".fw-hint", form).textContent = legacy ? `This Windows has no virtio driver on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
+    : uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "BIOS suits this OS.";
+  $(".win-driver-note", form).innerHTML = legacy ? "No driver CD needed: Windows has its own SATA and Intel network drivers."
+    : `Windows VMs get a second CD with the virtio drivers. When Windows Setup shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;
   f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
   $(".win-driver-note", form).hidden = family !== "windows";
 }
@@ -1476,7 +1495,7 @@ function vmWizOs(form) {
   $$('input[name="os_family"]', form).forEach((r) => r.addEventListener("change", () => vmWizOs(form)));
   form.elements.os_type.addEventListener("change", () => {
     const v = form.elements.os_type.value.toLowerCase();
-    const fam = /windows/.test(v) ? "windows" : /ubuntu|debian|linux|rhel|rocky|alma|suse|centos|fedora/.test(v) ? "linux" : null;
+    const fam = /windows/.test(v) ? "windows" : /ubuntu|debian|linux|rhel|rocky|alma|suse|centos|fedora/.test(v) ? "linux" : /bsd|pfsense|opnsense|esxi|other/.test(v) ? "other" : null;
     if (fam) form.elements.os_family.value = fam;
     vmWizOs(form);
   });
@@ -1497,6 +1516,7 @@ function vmWizOs(form) {
 handlers["vm-dialog"] = async (f) => {
   const form = $("#vm-form");
   vmWiz.check(1); vmWiz.check(2);
+  const { legacy, nic } = osProfile(f.get("os_family"), (f.get("os_type") || "").toLowerCase());
   const body = {
     name: f.get("name"),
     vcpus: Number(f.get("vcpus")),
@@ -1504,8 +1524,8 @@ handlers["vm-dialog"] = async (f) => {
     firmware: f.get("firmware"),
     os_type: f.get("os_type").trim() || (f.get("os_family") === "windows" ? "Windows" : ""),
     description: f.get("description").trim(),
-    disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default" })),
-    nics: [{ network: f.get("network") || "default" }],
+    disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default", bus: legacy ? "sata" : "virtio" })),
+    nics: [{ network: f.get("network") || "default", model: nic }],
     node: f.get("node") || null,
   };
   if (f.get("iso")) body.iso = f.get("iso");
@@ -3664,7 +3684,7 @@ const restoreWiz = wizard("restore-dialog", {
     if (step === 2 && !rs.point) throw new Error("Pick a restore point.");
     if (step === 3) {
       const n = rsForm.elements.name.value;
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(n)) throw new Error("Name the VM with letters, digits, '-', '_' or '.'.");
+      if (!/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(n)) throw new Error("Name the VM with letters (English or Thai), digits, '-', '_' or '.'.");
       if (state.vms.some((v) => v.name === n)) throw new Error(`A VM named ${n} already exists.`);
     }
   },
@@ -3981,7 +4001,7 @@ const importWiz = wizard("import-dialog", {
       if (!pool) throw new Error("Choose a healthy node and an available storage pool.");
       if (pool.available_gb < needed) throw new Error("Insufficient space for the selected VMs and conversion files.");
       const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
-      if (names.some((n) => !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters, digits, '-', '_' or '.'.");
+      if (names.some((n) => !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters (English or Thai), digits, '-', '_' or '.'.");
       if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
       if (chosen.some((v) => {
         const r = importBatch.resources.get(v.ref) || v;

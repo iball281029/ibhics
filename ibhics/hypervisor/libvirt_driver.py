@@ -54,6 +54,7 @@ from .domain_xml import (
     build_volume_xml,
     cdrom_element,
     disk_element,
+    file_name,
     nic_element,
     recycled_at,
     set_recycled_mark,
@@ -307,7 +308,15 @@ class LibvirtDriver(HypervisorDriver):
         used = {t.get("dev") for t in devices.findall("disk/target")}
         for d in (d for d in edit.disks if d.index is None):
             pool = self._pool(d.pool)
-            disk = DiskSpec(size_gb=d.size_gb, pool=d.pool, backend=_backend(pool))
+            bus = next(
+                (t.get("bus") for t in devices.findall("disk[@device='disk']/target")), "virtio"
+            )
+            disk = DiskSpec(
+                size_gb=d.size_gb,
+                pool=d.pool,
+                backend=_backend(pool),
+                bus="sata" if bus == "sata" else "virtio",
+            )
             n = 0
             while True:  # a volume name nobody uses yet, also not a detached disk's
                 try:
@@ -315,7 +324,8 @@ class LibvirtDriver(HypervisorDriver):
                 except libvirt.libvirtError:
                     break
                 n += 1
-            dev = next(f"vd{c}" for c in DISK_DEVS if f"vd{c}" not in used)
+            pre, devs = ("vd", DISK_DEVS) if disk.bus == "virtio" else ("sd", DISK_DEVS[2:])
+            dev = next(f"{pre}{c}" for c in devs if f"{pre}{c}" not in used)
             used.add(dev)
             created.append(pool.createXML(build_volume_xml(name, n, disk), 0))
             el = disk_element(disk, volume_name(name, n, disk), dev)
@@ -390,7 +400,7 @@ class LibvirtDriver(HypervisorDriver):
             raise InvalidState("stop the VM before deleting it")
         self._refuse_if_linked(uuid, "deleting the template")
         root = ET.fromstring(dom.XMLDesc(0))
-        seed = Path(self.seed_dir) / f"{dom.name()}-seed.iso"
+        seed = Path(self.seed_dir) / f"{file_name(dom.name())}-seed.iso"
         seed.unlink(missing_ok=True)
         for disk in root.findall("./devices/disk[@device='disk']"):
             pool, volume = disk_source(root, disk)
@@ -601,7 +611,7 @@ class LibvirtDriver(HypervisorDriver):
                     + [base.path(), vol.path()]
                 )
             if clone.customization:
-                seed = Path(self.seed_dir) / f"{spec.name}-seed.iso"
+                seed = Path(self.seed_dir) / f"{file_name(spec.name)}-seed.iso"
                 files = customize.seed_files(clone.customization, spec.name, new_uuid)
                 customize.build_iso(files, seed, run=self.run)
                 spec.iso = str(seed)
