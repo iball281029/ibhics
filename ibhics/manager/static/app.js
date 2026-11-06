@@ -641,12 +641,14 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
     ${vm.state === "running"
       ? `<button class="small${compact ? " sq" : ""}" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Open console">${compact ? `<svg><use href="#i-compute"/></svg>` : "Console"}</button>`
       : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="Power on">${compact ? `<svg><use href="#i-power"/></svg>` : "Power on"}</button>`}
+    ${compact || vm.template ? "" : `<button class="small" data-vm="snapshot" data-id="${vm.uuid}" title="Take a snapshot">Snapshot</button>`}
     <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
+      <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
@@ -1072,6 +1074,7 @@ async function vmAction(e) {
     return;
   }
   if (act === "edit") { openEdit(id).catch(fail); return; }
+  if (act === "snapshot") { openSnapshot(id); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
@@ -2633,18 +2636,20 @@ async function renderVMSnapshots(vm) {
     </li>`).join("") : `<li class="hint snap-empty">No snapshots yet.${why ? " " + esc(why) : " Take one before an upgrade or a risky change."}</li>`) ;
   if (snaps.length) box.insertAdjacentHTML("afterbegin", here);
 }
-$("#vm-snap-take").addEventListener("click", () => {
-  const vm = state.vms.find((v) => v.uuid === vmFromHash());
+$("#vm-snap-take").addEventListener("click", () => openSnapshot(vmFromHash()));
+function openSnapshot(uuid) {
+  const vm = state.vms.find((v) => v.uuid === uuid);
   if (!vm) return;
   const d = new Date(), p = (n) => String(n).padStart(2, "0");
   openDialog("snap-dialog", { uuid: vm.uuid }, { name: `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` });
   $("#snap-form .snap-mem").textContent = vm.state === "running"
     ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
     : "The VM is off: the snapshot holds its disks.";
-});
+}
 handlers["snap-dialog"] = async (f, ctx) => {
   await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description") });
   toast(`Snapshot taken: ${f.get("name").trim()}`);
+  if (currentPage() !== "vm") return;
   selectTab("vm-tabs", "vm-snapshots");
   await refresh("vm");
   selectTab("vm-tabs", "vm-snapshots");
