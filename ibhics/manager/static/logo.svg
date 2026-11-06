@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 236 64" role="img" aria-label="ibHiCS">
+  <defs>
+    <linearGradient id="lg-top" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="lg-left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="lg-right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+    <linearGradient id="lg-word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#818cf8"/>
+    </linearGradient>
+  </defs>
+  <path d="M32 4 56 18 32 32 8 18Z" fill="url(#lg-top)"/>
+  <path d="M8 18 32 32V60L8 46Z" fill="url(#lg-left)"/>
+  <path d="M56 18 32 32V60L56 46Z" fill="url(#lg-right)"/>
+  <path d="M32 12.5 41.5 18 32 23.5 22.5 18Z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M13 30.5 27 38.6M13 37.5 27 45.6" stroke="#fff" stroke-opacity=".85" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="44" cy="39" r="3" fill="#fff" fill-opacity=".85"/>
+  <text x="70" y="44" font-family="'Segoe UI', 'Inter', system-ui, sans-serif" font-size="34" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="currentColor">ib</tspan><tspan fill="url(#lg-word)">HiCS</tspan>
+  </text>
+</svg>

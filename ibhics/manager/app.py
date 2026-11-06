@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import socket
+from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Request, Response, WebSocket, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, WebSocket, status
 from fastapi.staticfiles import StaticFiles
 
-from .. import __version__, console
+from .. import RELEASE_NAME, __version__, console
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMNotFound, VMState
+from ..hypervisor.serialize import guest_to_json
+from ..importer import SourceNotFound
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
 from .errors import install_cluster_errors, install_driver_errors
-from .imports import ImportManager
+from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
 from .schemas import (
     AuditOut,
@@ -24,37 +28,78 @@ from .schemas import (
     BackupRequest,
     BackupTargetIn,
     BackupTargetOut,
+    CdromRequest,
     ClusterOut,
+    GuestOut,
+    HostNetworkIn,
     HostOut,
+    HostSettingsIn,
     ImportJobOut,
     ImportRequest,
+    IsoOut,
     JobOut,
+    LocalDiskOut,
     LoginOut,
     LoginRequest,
     MemberOut,
     MigrateRequest,
     MigrationOut,
+    NetworkIn,
+    NetworkOut,
     NodeJoin,
     PasswordChange,
     PolicyIn,
     PolicyOut,
     PoolCreate,
     PoolOut,
+    PowerIn,
     RestoreRequest,
     SourceIn,
     SourceOut,
     SourceVMOut,
     StopRequest,
+    UploadOut,
     UserIn,
     UserOut,
     UserUpdate,
     VMCreate,
+    VMEditIn,
     VMOut,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
 SESSION_COOKIE = "ibhics_session"
 API = "/api/v1"
+GUEST_TOOLS_ISO = "/usr/share/ibhics/guest-tools.iso"
+# Install media for new VMs, uploaded from the browser (Storage > ISO library).
+ISO_DIR = Path("/var/lib/ibhics/iso")
+
+
+def iso_path(folder: Path, filename: str) -> Path:
+    """Where an uploaded ISO goes; refuses names that could leave the folder."""
+    name = Path(filename).name
+    if name != filename or name.startswith(".") or not name:
+        raise ValueError("file name must not contain a path")
+    if not name.lower().endswith(".iso") or not re.fullmatch(r"[\w.+\- ()]+", name):
+        raise ValueError("upload an .iso file named with letters, digits, spaces, . _ - + ( )")
+    return folder / name
+
+
+async def receive_file(request: Request, target: Path) -> int:
+    """Stream a request body to `target` through a hidden partial file; returns its size."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.partial")
+    size = 0
+    try:
+        with open(partial, "wb") as f:
+            async for chunk in request.stream():
+                await asyncio.to_thread(f.write, chunk)
+                size += len(chunk)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
+    return size
+
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
@@ -63,6 +108,11 @@ ADMIN_ROUTES = {
     ("POST", f"{API}/nodes/{{name}}/pools"),
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("POST", f"{API}/nodes/{{name}}/evacuate"),
+    ("PUT", f"{API}/nodes/{{name}}/network"),
+    ("POST", f"{API}/nodes/{{name}}/network/confirm"),
+    ("POST", f"{API}/nodes/{{name}}/network/undo"),
+    ("PUT", f"{API}/nodes/{{name}}/settings"),
+    ("POST", f"{API}/nodes/{{name}}/power"),
     ("POST", f"{API}/backup/targets"),
     ("DELETE", f"{API}/backup/targets/{{name}}"),
     ("DELETE", f"{API}/backup/targets/{{name}}/backups/{{backup_id}}"),
@@ -74,6 +124,8 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
     ("POST", f"{API}/migrate/sources"),
+    ("POST", f"{API}/networks"),
+    ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
@@ -103,6 +155,7 @@ def create_app(
     migrations: MigrationManager | None = None,
     auth: Auth | None = None,
     imports: ImportManager | None = None,
+    iso_dir: Path = ISO_DIR,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -190,7 +243,12 @@ def create_app(
 
     @public.get("/health")
     def health() -> dict:
-        return {"status": "ok", "version": __version__, "auth": auth is not None}
+        return {
+            "status": "ok",
+            "version": __version__,
+            "release": RELEASE_NAME,
+            "auth": auth is not None,
+        }
 
     # Sign-in. Browsers get an HttpOnly, SameSite=Strict cookie, which other sites can
     # neither read nor make the browser send; scripts use the returned bearer token.
@@ -318,6 +376,106 @@ def create_app(
     def node_host(name: str) -> HostOut:
         return HostOut.from_info(cluster.member(name).driver.host_info())
 
+    @api.get("/nodes/{name}/disks", response_model=list[LocalDiskOut])
+    def node_disks(name: str) -> list[LocalDiskOut]:
+        """Whole disks on the node that a new LVM pool could use."""
+        return [LocalDiskOut(**asdict(d)) for d in cluster.member(name).driver.list_local_disks()]
+
+    # The node itself: Nodes > node > Summary, Network and Settings.
+
+    def host_of(name: str):
+        return cluster.member(name).driver.host_system()
+
+    @api.get("/nodes/{name}/summary")
+    def node_summary(name: str) -> dict:
+        return asdict(host_of(name).summary())
+
+    @api.get("/nodes/{name}/nics")
+    def node_nics(name: str) -> list[dict]:
+        return [asdict(n) for n in host_of(name).nics()]
+
+    @api.get("/nodes/{name}/network")
+    def node_network(name: str) -> dict:
+        return asdict(host_of(name).network())
+
+    @api.put("/nodes/{name}/network")
+    def apply_node_network(name: str, body: HostNetworkIn) -> dict:
+        """Applies at once; put back by itself unless confirmed within two minutes."""
+        return asdict(host_of(name).apply_network(body.to_network(), name))
+
+    @api.get("/nodes/{name}/network/state")
+    def node_network_state(name: str) -> dict:
+        return asdict(host_of(name).network_state())
+
+    @api.post("/nodes/{name}/network/confirm")
+    def confirm_node_network(name: str) -> dict:
+        return asdict(host_of(name).confirm_network())
+
+    @api.post("/nodes/{name}/network/undo")
+    def undo_node_network(name: str) -> dict:
+        return asdict(host_of(name).undo_network())
+
+    @api.get("/nodes/{name}/settings")
+    def node_settings(name: str) -> dict:
+        return asdict(host_of(name).settings())
+
+    @api.put("/nodes/{name}/settings")
+    def update_node_settings(name: str, body: HostSettingsIn) -> dict:
+        return asdict(host_of(name).update_settings(body.to_edit()))
+
+    @api.get("/nodes/{name}/timezones")
+    def node_timezones(name: str) -> list[str]:
+        return host_of(name).timezones()
+
+    @api.post("/nodes/{name}/power", status_code=status.HTTP_202_ACCEPTED)
+    def node_power(name: str, body: PowerIn) -> None:
+        member = cluster.member(name)
+        running = [vm.spec.name for vm in member.driver.list_vms() if vm.state != VMState.STOPPED]
+        if running and not body.force:
+            raise InvalidState(
+                f"{len(running)} VM(s) still run on {name} ({', '.join(running[:3])}): "
+                "shut them down or move them first"
+            )
+        member.driver.host_system().power(body.action)
+
+    # VM networks: the LAN (default) and VLANs on it, the same on every compute node so
+    # VMs can move between them.
+
+    @api.get("/networks", response_model=list[NetworkOut])
+    def list_networks() -> list[NetworkOut]:
+        found: dict[str, NetworkOut] = {}
+        for member in cluster.compute_members():
+            for net in member.driver.list_networks():
+                out = found.setdefault(net.name, NetworkOut(**asdict(net)))
+                out.nodes.append(member.name)
+        return sorted(found.values(), key=lambda n: (n.vlan or 0, n.name))
+
+    @api.post("/networks", response_model=NetworkOut, status_code=status.HTTP_201_CREATED)
+    def create_network(body: NetworkIn) -> NetworkOut:
+        cluster.require_quorum()
+        done = []
+        try:
+            for member in cluster.compute_members():
+                member.driver.create_network(body.to_spec())
+                done.append(member)
+        except Exception:
+            for member in done:  # all nodes or none, so VMs never land where it is missing
+                try:
+                    member.driver.delete_network(body.name)
+                except Exception:
+                    pass
+            raise
+        return NetworkOut(
+            name=body.name, bridge=f"ibr{body.vlan}", vlan=body.vlan, nodes=[m.name for m in done]
+        )
+
+    @api.delete("/networks/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_network(name: str) -> None:
+        cluster.require_quorum()
+        for member in cluster.compute_members():
+            if any(n.name == name for n in member.driver.list_networks()):
+                member.driver.delete_network(name)
+
     # Storage pools live on each node. Shared storage (NFS, a shared LUN) is added
     # to every node that should reach it, under the same pool name.
 
@@ -359,10 +517,57 @@ def create_app(
         member = cluster.member(body.node) if body.node else cluster.pick_node(body.memory_mb)
         return VMOut.from_info(member.driver.create_vm(body.to_spec()), member.name)
 
+    # Inventory: what the guests report about themselves (qemu-guest-agent).
+
+    @api.get("/vms/guests", response_model=list[GuestOut])
+    def vm_guests() -> list[GuestOut]:
+        result = []
+        for member in cluster.compute_members():
+            try:
+                guests = member.driver.list_guest_info()
+            except NodeUnavailable as exc:
+                member.last_error = str(exc)
+                continue
+            result.extend(GuestOut(uuid=uuid, **guest_to_json(g)) for uuid, g in guests.items())
+        return result
+
+    @api.get("/vms/{uuid}/guest", response_model=GuestOut)
+    def vm_guest(uuid: str) -> GuestOut:
+        member, _ = cluster.find_vm(uuid)
+        return GuestOut(uuid=uuid, **guest_to_json(member.driver.guest_info(uuid)))
+
     @api.get("/vms/{uuid}", response_model=VMOut)
     def get_vm(uuid: str) -> VMOut:
         member, vm = cluster.find_vm(uuid)
         return VMOut.from_info(vm, member.name)
+
+    @api.post("/vms/{uuid}/cdrom", response_model=VMOut)
+    def insert_cdrom(uuid: str, body: CdromRequest) -> VMOut:
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(member.driver.insert_cdrom(uuid, body.iso), member.name)
+
+    @api.patch("/vms/{uuid}", response_model=VMOut)
+    def update_vm(uuid: str, body: VMEditIn) -> VMOut:
+        """Change CPU, memory, disks, NICs, boot order and options."""
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
+
+    @api.post("/vms/{uuid}/guest-tools", response_model=VMOut)
+    def insert_guest_tools(uuid: str) -> VMOut:
+        """The guest tools CD (virtio drivers and guest agent) in the VM's drive."""
+        cluster.require_quorum()
+        member, _ = cluster.find_vm(uuid)
+        try:
+            return VMOut.from_info(member.driver.insert_cdrom(uuid, GUEST_TOOLS_ISO), member.name)
+        except ValueError as exc:
+            if "is not on node" not in str(exc):
+                raise
+            raise InvalidState(
+                f"the guest tools CD is missing on {member.name}: run the upgrade from the "
+                "ibHiCS ISO on that node again, which puts it in place"
+            ) from None
 
     @api.post("/vms/{uuid}/start", response_model=VMOut)
     def start_vm(uuid: str) -> VMOut:
@@ -422,6 +627,66 @@ def create_app(
         cluster.require_quorum()
         imports.remove_source(name)
 
+    # ISO library: install media for new VMs and the CD/DVD drive, kept on the manager.
+
+    @api.get("/isos", response_model=list[IsoOut])
+    def list_isos() -> list[IsoOut]:
+        files = sorted(iso_dir.iterdir()) if iso_dir.is_dir() else []
+        isos = [
+            IsoOut(name=p.name, path=str(p), size_bytes=p.stat().st_size)
+            for p in files
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() == ".iso"
+        ]
+        tools = Path(GUEST_TOOLS_ISO)
+        if tools.is_file():
+            isos.append(
+                IsoOut(name="ibHiCS guest tools", path=str(tools), size_bytes=tools.stat().st_size)
+            )
+        return isos
+
+    @api.put("/isos/{filename}", response_model=IsoOut)
+    async def upload_iso(filename: str, request: Request) -> IsoOut:
+        target = iso_path(iso_dir, filename)
+        size = await receive_file(request, target)
+        return IsoOut(name=target.name, path=str(target), size_bytes=size)
+
+    @api.delete("/isos/{filename}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_iso(filename: str) -> None:
+        target = iso_path(iso_dir, filename)
+        if not target.is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"no ISO named {filename!r}")
+        in_use = [vm.spec.name for _, vm in cluster.all_vms() if vm.spec.iso == str(target)]
+        if in_use:
+            names = ", ".join(in_use)
+            raise ValueError(f"{filename} is in the CD/DVD drive of {names}; eject it first")
+        target.unlink()
+
+    # Files uploaded from the browser (OVA, VMDK, VHD/VHDX, QCOW2, raw): for VMs from any
+    # platform that can export them. They appear under the built-in "uploads" source.
+
+    @api.get("/migrate/uploads", response_model=list[UploadOut])
+    def list_uploads() -> list[UploadOut]:
+        folder = imports.upload_dir
+        files = sorted(folder.iterdir()) if folder.is_dir() else []
+        return [
+            UploadOut(name=p.name, size_bytes=p.stat().st_size)
+            for p in files
+            if p.is_file() and not p.name.startswith(".")
+        ]
+
+    @api.put("/migrate/uploads/{filename}", response_model=UploadOut)
+    async def upload(filename: str, request: Request) -> UploadOut:
+        target = upload_path(imports.upload_dir, filename)
+        size = await receive_file(request, target)
+        return UploadOut(name=target.name, size_bytes=size)
+
+    @api.delete("/migrate/uploads/{filename}", status_code=status.HTTP_204_NO_CONTENT)
+    def delete_upload(filename: str) -> None:
+        target = upload_path(imports.upload_dir, filename)
+        if not target.is_file():
+            raise SourceNotFound(f"uploads: no file {filename!r}")
+        target.unlink()
+
     @api.get("/migrate/sources/{name}/vms", response_model=list[SourceVMOut])
     def source_vms(name: str) -> list[SourceVMOut]:
         return [SourceVMOut(**vm.to_dict()) for vm in imports.source_vms(name)]
@@ -438,8 +703,13 @@ def create_app(
             body.vcpus,
             body.memory_mb,
             body.start,
+            clear_hibernation=body.clear_hibernation,
         )
         return ImportJobOut(**job.__dict__)
+
+    @api.get("/migrate/jobs/{job_id}/log")
+    def import_log(job_id: str) -> dict:
+        return {"log": imports.job_log(job_id)}
 
     @api.get("/migrate/jobs", response_model=list[ImportJobOut])
     def list_imports() -> list[ImportJobOut]:

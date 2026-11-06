@@ -67,14 +67,54 @@ document.getElementById("reconnect").addEventListener("click", connect);
 document.getElementById("full").addEventListener("click", () => {
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
 });
+// The VM sees key presses, not characters: QEMU turns each key into a scancode for a US
+// keyboard and ignores what character it was meant to be. So "$" has to be typed as
+// Shift+4, "A" as Shift+A, and so on.
+const US_KEYS = (() => {
+  const keys = {};
+  for (const c of "abcdefghijklmnopqrstuvwxyz") {
+    keys[c] = [`Key${c.toUpperCase()}`, false];
+    keys[c.toUpperCase()] = [`Key${c.toUpperCase()}`, true];
+  }
+  "0123456789".split("").forEach((d) => { keys[d] = [`Digit${d}`, false]; });
+  ")!@#$%^&*(".split("").forEach((c, d) => { keys[c] = [`Digit${d}`, true]; });
+  const pairs = [["-", "_", "Minus"], ["=", "+", "Equal"], ["[", "{", "BracketLeft"], ["]", "}", "BracketRight"],
+    ["\\", "|", "Backslash"], [";", ":", "Semicolon"], ["'", '"', "Quote"], ["`", "~", "Backquote"],
+    [",", "<", "Comma"], [".", ">", "Period"], ["/", "?", "Slash"]];
+  for (const [plain, shifted, code] of pairs) { keys[plain] = [code, false]; keys[shifted] = [code, true]; }
+  keys[" "] = ["Space", false];
+  keys["\n"] = ["Enter", false];
+  keys["\t"] = ["Tab", false];
+  return keys;
+})();
+const KEYSYM = { "\n": 0xff0d, "\t": 0xff09 };
+const SHIFT = 0xffe1;
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
 document.getElementById("paste").addEventListener("click", async () => {
   // Types the clipboard text as key presses, for guests without a clipboard agent.
   let text = "";
   try { text = await navigator.clipboard.readText(); } catch { text = prompt("Text to type into the VM") || ""; }
-  for (const ch of text) {
-    const code = ch === "\n" ? 0xff0d : ch.codePointAt(0);
-    rfb.sendKey(code < 0x100 || code === 0xff0d ? code : 0x01000000 + code);
+  text = text.replace(/\r\n?/g, "\n");
+  const button = document.getElementById("paste");
+  button.disabled = true;
+  let skipped = 0;
+  try {
+    for (const ch of text) {
+      const key = US_KEYS[ch];
+      if (!key || !rfb) { skipped += 1; continue; }
+      const [code, shift] = key;
+      const keysym = KEYSYM[ch] ?? ch.codePointAt(0);
+      if (shift) rfb.sendKey(SHIFT, "ShiftLeft", true);
+      rfb.sendKey(keysym, code, true);
+      rfb.sendKey(keysym, code, false);
+      if (shift) rfb.sendKey(SHIFT, "ShiftLeft", false);
+      await pause(ch === "\n" ? 60 : 12);  // a slow guest console drops or repeats keys sent in a burst
+    }
+  } finally {
+    button.disabled = !rfb;
   }
+  if (skipped) setStatus(`Typed the text; ${skipped} character(s) have no key on a US keyboard and were left out`, "wait");
   rfb.focus();
 });
 

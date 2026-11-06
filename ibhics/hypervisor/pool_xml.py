@@ -44,6 +44,19 @@ def build_nfs_pool_xml(spec: PoolSpec) -> str:
     return ET.tostring(pool, encoding="unicode")
 
 
+def build_disk_pool_xml(spec: PoolSpec) -> str:
+    # libvirt formats the disk on build and mounts it whenever the pool starts. The
+    # /dev/disk/by-id name keeps working when /dev/sdX letters move after a reboot.
+    pool = ET.Element("pool", type="fs")
+    ET.SubElement(pool, "name").text = spec.name
+    source = ET.SubElement(pool, "source")
+    ET.SubElement(source, "device", path=spec.device)
+    ET.SubElement(source, "format", type="xfs")
+    target = ET.SubElement(pool, "target")
+    ET.SubElement(target, "path").text = f"{DIR_ROOT}/{spec.name}"
+    return ET.tostring(pool, encoding="unicode")
+
+
 def build_iscsi_session_xml(spec: PoolSpec) -> str:
     pool = ET.Element("pool", type="iscsi")
     ET.SubElement(pool, "name").text = iscsi_session_name(spec.name)
@@ -77,6 +90,8 @@ def build_pool_xml(spec: PoolSpec) -> str:
         return build_nfs_pool_xml(spec)
     if spec.type == PoolType.LVM:
         return build_lvm_pool_xml(spec.name, spec.device)
+    if spec.type == PoolType.DISK:
+        return build_disk_pool_xml(spec)
     raise ValueError("iSCSI pools are built from the LUN device; use build_lvm_pool_xml")
 
 
@@ -97,6 +112,9 @@ def describe_pool_xml(xml: str, iscsi_sessions: dict[str, str]) -> tuple[PoolTyp
         return PoolType.NFS, f"{host.get('name') if host is not None else ''}:" + (
             export.get("path") if export is not None else ""
         )
+    if kind == "fs":
+        device = root.find("source/device")
+        return PoolType.DISK, device.get("path", "") if device is not None else ""
     if kind == "logical":
         device = root.find("source/device")
         dev = device.get("path", "") if device is not None else ""

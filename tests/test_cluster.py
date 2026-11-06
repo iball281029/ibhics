@@ -282,3 +282,21 @@ def test_backup_and_restore_on_remote_node(env, tmp_path):
 
     missing = client.post(url.replace("app@", "ghost@"), json={"source_node": "node2"}).json()
     assert missing["state"] == "failed" and "BackupNotFound" in missing["error"]
+
+
+def test_guest_inventory_from_remote_node(env):
+    client, *_ = env
+    build_two_node_witness(client)
+    body = {
+        "name": "far",
+        "vcpus": 1,
+        "memory_mb": 1024,
+        "node": "node2",
+        "disks": [{"size_gb": 10}],
+        "nics": [{"network": "default"}],
+    }
+    vm = client.post("/api/v1/vms", json=body).json()
+    client.post(f"/api/v1/vms/{vm['uuid']}/start")
+    (guest,) = client.get("/api/v1/vms/guests").json()
+    assert guest["uuid"] == vm["uuid"] and guest["hostname"] == "far"
+    assert client.get(f"/api/v1/vms/{vm['uuid']}/guest").json()["agent"] is True

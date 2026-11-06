@@ -2,23 +2,31 @@
 
 from __future__ import annotations
 
+import threading
+from dataclasses import asdict
+
 import httpx
 
 from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
 from ..hypervisor import (
+    GuestInfo,
     HostInfo,
     HypervisorDriver,
     InvalidState,
     MigrationFailed,
+    NetworkInfo,
+    NetworkSpec,
     PoolInfo,
     PoolNotFound,
     PoolSpec,
+    VMEdit,
     VMExists,
     VMInfo,
     VMNotFound,
     VMSpec,
+    host,
 )
-from ..hypervisor.serialize import info_from_json, spec_to_json
+from ..hypervisor.serialize import edit_to_json, guest_from_json, info_from_json, spec_to_json
 
 TOKEN_HEADER = "X-Ibhics-Token"
 
@@ -92,6 +100,14 @@ class RemoteDriver(HypervisorDriver):
             raise PoolNotFound(detail.removeprefix("storage pool not found: "))
         return info_from_json(self._ok(resp).json())
 
+    def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/cdrom", json={"iso": iso})
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def update_vm(self, uuid: str, edit: VMEdit) -> VMInfo:
+        resp = self._client.request("PATCH", f"/vms/{uuid}", json=edit_to_json(edit))
+        return info_from_json(self._ok(resp, uuid).json())
+
     def start_vm(self, uuid: str) -> VMInfo:
         return info_from_json(
             self._ok(self._client.request("POST", f"/vms/{uuid}/start"), uuid).json()
@@ -121,6 +137,33 @@ class RemoteDriver(HypervisorDriver):
         if resp.status_code == 422:
             raise ValueError(detail)
         self._ok(resp, uuid)
+
+    def guest_info(self, uuid: str) -> GuestInfo:
+        return guest_from_json(
+            self._ok(self._client.request("GET", f"/vms/{uuid}/guest"), uuid).json()
+        )
+
+    def list_guest_info(self) -> dict[str, GuestInfo]:
+        data = self._ok(self._client.request("GET", "/guests")).json()
+        return {uuid: guest_from_json(g) for uuid, g in data.items()}
+
+    def list_networks(self) -> list[NetworkInfo]:
+        return [NetworkInfo(**n) for n in self._ok(self._client.request("GET", "/networks")).json()]
+
+    def create_network(self, spec: NetworkSpec) -> NetworkInfo:
+        resp = self._client.request("POST", "/networks", json=asdict(spec))
+        return NetworkInfo(**self._ok(resp).json())
+
+    def delete_network(self, name: str) -> None:
+        self._ok(self._client.request("DELETE", f"/networks/{name}"))
+
+    def host_system(self) -> RemoteHost:
+        return RemoteHost(self._client)
+
+    def list_local_disks(self):
+        from ..hypervisor.disks import LocalDisk
+
+        return [LocalDisk(**d) for d in self._ok(self._client.request("GET", "/disks")).json()]
 
     def list_pools(self) -> list[PoolInfo]:
         return [_pool_info(p) for p in self._ok(self._client.request("GET", "/pools")).json()]
@@ -210,16 +253,22 @@ class RemoteImport:
     def __init__(self, client: AgentClient) -> None:
         self._client = client
 
+    def log(self, name: str) -> str:
+        resp = self._client.request("GET", f"/imports/{name}/log")
+        return resp.json().get("log", "") if resp.status_code < 400 else ""
+
     def run(
         self,
         source,
         vm,
         name: str,
         pool: str = "default",
-        network: str = "default",
+        network: str | list[str] = "default",
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
+        progress=None,
+        clear_hibernation: bool = False,
     ) -> VMInfo:
         body = {
             "source": source.to_dict(),
@@ -230,8 +279,25 @@ class RemoteImport:
             "vcpus": vcpus,
             "memory_mb": memory_mb,
             "start": start,
+            "clear_hibernation": clear_hibernation,
         }
-        resp = self._client.request("POST", "/imports/run", json=body, timeout=None)
+        done = threading.Event()
+        if progress:
+            # The conversion is one long request; ask the node how far along it is meanwhile.
+            def poll() -> None:
+                while not done.wait(3):
+                    try:
+                        got = self._client.request("GET", "/imports/progress").json().get(name)
+                    except Exception:  # noqa: BLE001 - progress is best effort
+                        continue
+                    if got:
+                        progress(*got)
+
+            threading.Thread(target=poll, daemon=True).start()
+        try:
+            resp = self._client.request("POST", "/imports/run", json=body, timeout=None)
+        finally:
+            done.set()
         if resp.status_code < 400:
             return info_from_json(resp.json())
         detail = str(resp.json().get("detail", "")) if resp.content else ""
@@ -246,3 +312,54 @@ class RemoteImport:
 
             raise ConversionFailed(detail.removeprefix("conversion failed: "))
         raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code} {detail}")
+
+
+class RemoteHost:
+    """A remote node's host.HostSystem, through its agent."""
+
+    def __init__(self, client: AgentClient) -> None:
+        self._client = client
+
+    def _call(self, method: str, path: str, **kwargs):
+        resp = self._client.request(method, f"/host{path}", **kwargs)
+        if resp.status_code == 409:
+            raise InvalidState(resp.json().get("detail", "invalid state"))
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        if resp.status_code >= 400:
+            raise NodeUnavailable(f"{self._client.address}: HTTP {resp.status_code}")
+        return resp.json() if resp.content else None
+
+    def summary(self) -> host.NodeSummary:
+        return host.NodeSummary(**self._call("GET", "/summary"))
+
+    def nics(self) -> list[host.HostNic]:
+        return [host.HostNic(**n) for n in self._call("GET", "/nics")]
+
+    def network(self) -> host.HostNetwork:
+        data = self._call("GET", "/network")
+        return host.HostNetwork([host.IfaceConfig(**i) for i in data["interfaces"]])
+
+    def apply_network(self, net: host.HostNetwork, node: str = "") -> host.NetworkState:
+        return host.NetworkState(**self._call("PUT", "/network", json=asdict(net)))
+
+    def network_state(self) -> host.NetworkState:
+        return host.NetworkState(**self._call("GET", "/network/state"))
+
+    def confirm_network(self) -> host.NetworkState:
+        return host.NetworkState(**self._call("POST", "/network/confirm"))
+
+    def undo_network(self) -> host.NetworkState:
+        return host.NetworkState(**self._call("POST", "/network/undo"))
+
+    def settings(self) -> host.HostSettings:
+        return host.HostSettings(**self._call("GET", "/settings"))
+
+    def update_settings(self, edit: host.SettingsEdit) -> host.HostSettings:
+        return host.HostSettings(**self._call("PUT", "/settings", json=asdict(edit)))
+
+    def timezones(self) -> list[str]:
+        return self._call("GET", "/timezones")
+
+    def power(self, action: str) -> None:
+        self._call("POST", f"/power/{action}")

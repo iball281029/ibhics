@@ -34,7 +34,9 @@ def test_standalone_cluster(client):
 def test_console_served(client):
     resp = client.get("/")
     assert resp.status_code == 200
-    assert "ibHiCS Console" in resp.text
+    assert "<title>ibHiCS</title>" in resp.text
+    for asset in ("app.js", "app.css", "login.html", "logo.svg"):
+        assert client.get(f"/{asset}").status_code == 200
 
 
 def test_vm_lifecycle(client):
@@ -42,7 +44,7 @@ def test_vm_lifecycle(client):
     assert resp.status_code == 201
     vm = resp.json()
     assert vm["state"] == "stopped"
-    assert vm["disks"] == [{"size_gb": 40, "backend": "file", "pool": "default"}]
+    assert vm["disks"] == [{"size_gb": 40, "backend": "file", "pool": "default", "used_gb": None}]
 
     assert client.post(f"/api/v1/vms/{vm['uuid']}/start").json()["state"] == "running"
     # Running VMs must be stopped before delete.
@@ -88,3 +90,24 @@ def test_start_twice_conflicts(client):
 
 def test_unknown_vm(client):
     assert client.post("/api/v1/vms/does-not-exist/start").status_code == 404
+
+
+def test_iso_library(tmp_path):
+    client = TestClient(create_app(FakeDriver(), iso_dir=tmp_path / "iso"))
+    assert client.get("/api/v1/isos").json() == []  # the folder appears with the first upload
+
+    resp = client.put("/api/v1/isos/debian-13.0.0-amd64-netinst.iso", content=b"x" * 10)
+    assert resp.status_code == 200, resp.text
+    path = str(tmp_path / "iso" / "debian-13.0.0-amd64-netinst.iso")
+    name = "debian-13.0.0-amd64-netinst.iso"
+    assert resp.json() == {"name": name, "path": path, "size_bytes": 10}
+    assert [i["path"] for i in client.get("/api/v1/isos").json()] == [path]
+    for bad in ("x.exe", ".hidden.iso", "a$b.iso"):
+        assert client.put(f"/api/v1/isos/{bad}", content=b"x").status_code == 422, bad
+
+    vm = create(client, iso=path).json()
+    resp = client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso")
+    assert resp.status_code == 422 and "web-01" in resp.json()["detail"]
+    client.post(f"/api/v1/vms/{vm['uuid']}/cdrom", json={"iso": None})
+    assert client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso").status_code == 204
+    assert client.delete("/api/v1/isos/debian-13.0.0-amd64-netinst.iso").status_code == 404

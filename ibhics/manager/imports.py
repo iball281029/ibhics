@@ -15,7 +15,9 @@ from pathlib import Path
 
 from ..cluster import Cluster
 from ..hypervisor import VMExists
+from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
+from ..importer.sources import IMAGE_SUFFIXES
 
 
 @dataclass
@@ -30,6 +32,51 @@ class ImportJob:
     finished: str | None = None
     result: str | None = None  # the new VM's uuid
     error: str | None = None
+    step: str = ""  # what the conversion is doing now
+    percent: int | None = None
+
+
+class NotEnoughSpace(ValueError):
+    pass
+
+
+def check_space(member, pool: str, vm: SourceVM) -> None:
+    """Refuse an import that cannot fit: the VM's disks may grow to their full size, and
+    the converted images wait on the same pool first. On an LVM pool that waiting room is a
+    logical volume of the full size; on a directory pool the images are sparse.
+    Sizes the source does not report (0) are not counted."""
+    disks = sum(vm.disks_gb)
+    if not disks:
+        return
+    info = next((p for p in member.driver.list_pools() if p.name == pool), None)
+    if info is None:
+        return
+    needed = disks * 2 if info.type in BLOCK_POOL_TYPES else disks
+    if info.available_gb >= needed:
+        return
+    room = f"{disks} GB of disks"
+    if needed > disks:
+        room = f"{needed} GB ({room} plus room to convert them)"
+    raise NotEnoughSpace(
+        f"{vm.name} needs {room}, but storage pool {pool!r} on {member.name} has "
+        f"only {info.available_gb:.0f} GB free. Pick a larger pool (for example an NFS or "
+        f"iSCSI pool under Storage) or free up space."
+    )
+
+
+UPLOAD_DIR = Path("/var/lib/ibhics/uploads")
+UPLOADS = "uploads"
+UPLOAD_SUFFIXES = (".ova", *IMAGE_SUFFIXES)
+
+
+def upload_path(folder: Path, filename: str) -> Path:
+    """Where an uploaded file goes; refuses names that could leave the folder."""
+    name = Path(filename).name
+    if name != filename or name.startswith(".") or not name:
+        raise ValueError("file name must not contain a path")
+    if Path(name).suffix.lower() not in UPLOAD_SUFFIXES:
+        raise ValueError(f"upload an OVA or a disk image ({', '.join(UPLOAD_SUFFIXES)})")
+    return folder / name
 
 
 class ImportManager:
@@ -40,8 +87,10 @@ class ImportManager:
         discover: Callable[[Source], list[SourceVM]] = list_vms,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         executor: Executor | None = None,
+        upload_dir: Path = UPLOAD_DIR,
     ) -> None:
         self._cluster = cluster
+        self.upload_dir = Path(upload_dir)
         self._state_path = state_path
         self._discover = discover
         self._clock = clock
@@ -54,11 +103,18 @@ class ImportManager:
 
     # Sources
 
+    @property
+    def uploads_source(self) -> Source:
+        return Source(UPLOADS, SourceType.UPLOAD, path=str(self.upload_dir))
+
     def sources(self) -> list[Source]:
         with self._lock:
-            return list(self._sources.values())
+            return [self.uploads_source, *self._sources.values()]
 
     def source(self, name: str) -> Source:
+        if name == UPLOADS:
+            self.upload_dir.mkdir(parents=True, exist_ok=True)
+            return self.uploads_source
         with self._lock:
             try:
                 return self._sources[name]
@@ -67,14 +123,18 @@ class ImportManager:
 
     def add_source(self, source: Source) -> Source:
         source.validate()
+        if source.type == SourceType.UPLOAD:
+            raise ValueError("uploaded files have their own built-in source")
         with self._lock:
-            if source.name in self._sources:
+            if source.name in self._sources or source.name == UPLOADS:
                 raise VMExists(f"a migrate source named {source.name!r} already exists")
             self._sources[source.name] = source
             self._save()
         return source
 
     def remove_source(self, name: str) -> None:
+        if name == UPLOADS:
+            raise ValueError("the uploads source is built in; delete the files instead")
         with self._lock:
             self.source(name)
             del self._sources[name]
@@ -98,10 +158,11 @@ class ImportManager:
         name: str | None = None,
         node: str | None = None,
         pool: str = "default",
-        network: str = "default",
+        network: str | list[str] = "default",
         vcpus: int | None = None,
         memory_mb: int | None = None,
         start: bool = False,
+        clear_hibernation: bool = False,
     ) -> ImportJob:
         self._cluster.require_quorum()
         source = self.source(source_name)
@@ -114,11 +175,20 @@ class ImportManager:
             taken |= {j.name for j in self._jobs if j.state in ("queued", "running")}
             if name in taken:
                 raise VMExists(f"a VM named {name!r} already exists; choose another name")
-            member = (
-                self._cluster.member(node)
-                if node
-                else self._cluster.pick_node(memory_mb or vm.memory_mb)
-            )
+            if source.type == SourceType.UPLOAD:
+                # Uploaded files are on the manager's own disk, so it converts them.
+                member = next((m for m in self._cluster.compute_members() if m.local), None)
+                if member is None or (node and node != member.name):
+                    raise ValueError(
+                        "uploaded files are imported on the node that runs the web console"
+                    )
+            else:
+                member = (
+                    self._cluster.member(node)
+                    if node
+                    else self._cluster.pick_node(memory_mb or vm.memory_mb)
+                )
+            check_space(member, pool, vm)
             job = ImportJob(
                 id=str(next(self._ids)),
                 source=source_name,
@@ -131,15 +201,37 @@ class ImportManager:
 
         def run() -> None:
             job.state = "running"
+
+            def progress(step: str, percent: int | None) -> None:
+                job.step, job.percent = step, percent
+
             try:
-                info = member.imports.run(source, vm, name, pool, network, vcpus, memory_mb, start)
-                job.result, job.state = info.uuid, "done"
+                extra = {"clear_hibernation": True} if clear_hibernation else {}
+                info = member.imports.run(
+                    source,
+                    vm,
+                    name,
+                    pool,
+                    network,
+                    vcpus,
+                    memory_mb,
+                    start,
+                    progress=progress,
+                    **extra,
+                )
+                job.result, job.state, job.step, job.percent = info.uuid, "done", "", 100
             except Exception as exc:  # recorded on the job; nobody else is waiting
                 job.error, job.state = f"{type(exc).__name__}: {exc}", "failed"
             job.finished = self._now()
 
         self._executor.submit(run)
         return job
+
+    def job_log(self, job_id: str) -> str:
+        job = next((j for j in self._jobs if j.id == job_id), None)
+        if job is None:
+            raise SourceNotFound(f"no import job {job_id}")
+        return self._cluster.member(job.node).imports.log(job.name)
 
     # Persistence: VMware passwords are kept, so the file is readable by root only.
 

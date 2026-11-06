@@ -30,8 +30,9 @@ class Recorder:
     def __init__(self):
         self.calls = []
 
-    def __call__(self, cmd, check=True, input=None, text=True):
+    def __call__(self, cmd, check=True, input=None, text=True, capture_output=False):
         self.calls.append((cmd, input))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
 
 
 @pytest.mark.parametrize(
@@ -75,10 +76,10 @@ def test_env_per_role():
 
 
 def test_console_banner_says_where_to_go():
-    assert "https://10.0.0.11:8006" in setup.render_issue(cfg())
+    assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
-    assert "beta version 0.1" in issue
+    assert "beta version 0.3" in issue
 
 
 def test_apply_manager(tmp_path):
@@ -87,6 +88,9 @@ def test_apply_manager(tmp_path):
 
     assert (tmp_path / "etc/hostname").read_text() == "node1\n"
     assert "10.0.0.11\tnode1" in (tmp_path / "etc/hosts").read_text()
+    # DNS works without resolvconf: apt can reach the Debian mirror after setup.
+    resolv = (tmp_path / "etc/resolv.conf").read_text()
+    assert "nameserver 10.0.0.1\nnameserver 1.1.1.1\n" in resolv
     env = tmp_path / "etc/ibhics/ibhics.env"
     assert env.stat().st_mode & 0o077 == 0  # the cluster token is secret
     assert (tmp_path / "etc/ibhics/configured").read_text() == "manager\n"
@@ -100,12 +104,28 @@ def test_apply_manager(tmp_path):
     openssl = next(c for c in cmds if c[0] == "openssl")
     assert "subjectAltName=DNS:node1,IP:10.0.0.11" in openssl
     assert ["systemctl", "enable", "--now", "ibhics-manager.service"] in cmds
+    # Root can sign in over SSH with the password from setup (Debian allows keys only).
+    sshd = (tmp_path / "etc/ssh/sshd_config.d/10-ibhics.conf").read_text()
+    assert "PermitRootLogin yes" in sshd
+    assert not (tmp_path / "root/.ssh/authorized_keys").exists()
 
     users = json.loads((tmp_path / "var/lib/ibhics/users.json").read_text())["users"]
     assert users[0]["name"] == "admin" and users[0]["must_change_password"] is False
     auth = Auth(state_path=tmp_path / "var/lib/ibhics/users.json")
     auth.load()
     assert auth.login("admin", "admin-pw-123").user == "admin"
+
+
+def test_apply_reports_failures_but_not_expected_ones(tmp_path):
+    class Failing(Recorder):
+        def __call__(self, cmd, **kwargs):
+            super().__call__(cmd, **kwargs)
+            fails = cmd[:2] in (["virsh", "net-destroy"], ["virsh", "net-start"])
+            return subprocess.CompletedProcess(cmd, int(fails), "", "network is not active")
+
+    # net-destroy fails on every fresh node and is ignored; net-start failing is real.
+    with pytest.raises(RuntimeError, match="virsh net-start default failed: network is not"):
+        setup.apply(cfg(), "root-pw-123", "admin-pw-123", root=tmp_path, run=Failing())
 
 
 def test_apply_witness_skips_libvirt(tmp_path):
@@ -139,6 +159,8 @@ def test_detect_interfaces(tmp_path):
         if physical:
             (tmp_path / name / "device").mkdir()
     assert setup.detect_interfaces(tmp_path) == ["eno1", "ens2f0"]
+    (tmp_path / "ens2f0" / "carrier").write_text("1\n")
+    assert setup.detect_interfaces(tmp_path) == ["ens2f0", "eno1"]  # the cabled port first
 
 
 def test_installer_files_agree():
@@ -146,13 +168,102 @@ def test_installer_files_agree():
     for menu in ("boot/isolinux.cfg", "boot/grub.cfg"):
         assert "preseed/file=/cdrom/ibhics/preseed.cfg" in (INSTALLER / menu).read_text()
     assert "/cdrom/ibhics /target/opt/ibhics-installer" in preseed
+    # The install needs no network: packages come from the repository on the ISO.
+    assert "d-i netcfg/enable boolean false" in preseed
+    assert "d-i apt-setup/use_mirror boolean false" in preseed
     assert "sh /opt/ibhics-installer/install-ibhics.sh" in preseed
-    for pkg in ("libvirt-daemon-system", "python3-libvirt", "open-iscsi", "bridge-utils"):
-        assert pkg in preseed
+    # "!" makes the installer stop and ask for a root password, so a real hash is given.
+    assert "root-password-crypted password $6$" in preseed and "passwd -l root" in preseed
+    packages = (INSTALLER / "packages.txt").read_text().split()
+    for pkg in ("libvirt-daemon-system", "python3-libvirt", "open-iscsi", "openssh-server"):
+        assert pkg in packages
     install = (INSTALLER / "install-ibhics.sh").read_text()
+    assert "file:$SRC/repo" in install and "packages.txt" in install
     for unit in (INSTALLER / "systemd").glob("*.service"):
         assert "/opt/ibhics/venv/bin/" in unit.read_text()
     assert "systemctl enable ibhics-firstboot.service" in install
-    for script in ("install-ibhics.sh", "build-iso.sh"):
-        shell = "bash" if script.endswith("iso.sh") else "sh"
+    for script in ("install-ibhics.sh", "build-iso.sh", "build-repo.sh", "test-install.sh"):
+        shell = "sh" if script == "install-ibhics.sh" else "bash"
         subprocess.run([shell, "-n", str(INSTALLER / script)], check=True)
+
+
+def test_answers_file():
+    text = """
+    # unattended install
+    ROLE=manager
+    HOSTNAME=node1
+    ADDRESS=10.0.2.15/24
+    GATEWAY=10.0.2.2
+    DNS=10.0.2.3
+    ROOT_PASSWORD=Root-pw-123
+    ADMIN_PASSWORD=Admin-pw-123
+    """
+    cfg, root_pw, admin_pw = setup.read_answers(text, ["ens3"])
+    assert (cfg.role, cfg.interface, cfg.address, cfg.dns) == (
+        "manager",
+        "ens3",
+        "10.0.2.15/24",
+        ["10.0.2.3"],
+    )
+    assert len(cfg.token) >= 24 and (root_pw, admin_pw) == ("Root-pw-123", "Admin-pw-123")
+    cfg.validate()
+    with pytest.raises(ValueError, match="TOKEN"):
+        setup.read_answers(text.replace("manager", "compute"), ["ens3"])
+    with pytest.raises(ValueError, match="KEY=value"):
+        setup.read_answers("ROLE manager", ["ens3"])
+
+
+def test_ssh_key_for_root(tmp_path):
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample admin@laptop"
+    setup.apply(cfg(ssh_key=key), "root-pw-123", "admin-pw-123", root=tmp_path, run=Recorder())
+    keys = tmp_path / "root/.ssh/authorized_keys"
+    assert keys.read_text() == key + "\n" and keys.stat().st_mode & 0o077 == 0
+    with pytest.raises(ValueError, match="SSH public key"):
+        cfg(ssh_key="not-a-key").validate()
+    # The wizard question can be skipped with Enter.
+    assert setup.ask("key", check=setup.check_ssh_key, reader=lambda _p: "", optional=True) == ""
+
+
+def test_pick_disk_prefers_small_internal_boot_drive(tmp_path):
+    """A server with a big RAID volume first and an M.2 boot drive: install on the M.2,
+    never on the USB stick the installer runs from or a small/removable disk."""
+    gib = 1024 * 1024 * 2  # sectors
+    disks = {
+        "sda": (12_000 * gib, "0", "/devices/pci0000:00/raid/host0"),  # RAID 5
+        "sdb": (16 * gib, "0", "/devices/pci0000:00/usb1/1-1"),  # the installer stick
+        "sdc": (64 * gib, "0", "/devices/pci0000:00/usb2/2-1"),  # another USB disk
+        "sdd": (8 * gib, "0", "/devices/pci0000:00/ata1"),  # SATADOM too small
+        "sde": (100 * gib, "1", "/devices/pci0000:00/sd"),  # removable
+        "nvme0n1": (240 * gib, "0", "/devices/pci0000:00/nvme0"),  # M.2 boot drive
+    }
+    sys_block = tmp_path / "block"
+    for name, (size, removable, device) in disks.items():
+        d = sys_block / name
+        d.mkdir(parents=True)
+        (d / "size").write_text(f"{size}\n")
+        (d / "removable").write_text(removable + "\n")
+        target = tmp_path / device.lstrip("/")
+        target.mkdir(parents=True, exist_ok=True)
+        (d / "device").symlink_to(target)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    listing = "\n".join(f"/dev/{n}" for n in disks)
+    (bin_dir / "list-devices").write_text(f"#!/bin/sh\nprintf '%s\\n' '{listing}'\n")
+    (bin_dir / "list-devices").chmod(0o755)
+    mounts = tmp_path / "mounts"
+    mounts.write_text("/dev/sdb1 /cdrom iso9660 ro 0 0\n")
+
+    def pick(**extra):
+        env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "SYS": str(sys_block), "MOUNTS": str(mounts)}
+        out = subprocess.run(
+            ["sh", str(INSTALLER / "pick-disk.sh")],
+            env={**env, **extra},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return out.stdout.strip()
+
+    assert pick() == "/dev/nvme0n1"
+    (sys_block / "nvme0n1" / "size").write_text("0\n")
+    assert pick() == "/dev/sda"  # no small drive: the RAID volume, never the USB stick

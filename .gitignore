@@ -16,6 +16,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# ...but not vendored web code: noVNC's pako lives in a lib/ folder.
+!ibhics/manager/static/**/lib/
 parts/
 sdist/
 var/

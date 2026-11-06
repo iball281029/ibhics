@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from test_cluster import TOKEN, Agents, Clock, join
 
 from ibhics.cluster import Cluster, NodeRole
-from ibhics.hypervisor import Firmware
+from ibhics.hypervisor import Firmware, PoolType
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.importer import (
     ConversionFailed,
@@ -76,7 +76,9 @@ def make_ova(path: Path, ovf: str = OVF) -> Path:
     return path
 
 
-VMWARE = Source("esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw")
+VMWARE = Source(
+    "esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw", transport="https"
+)
 
 
 # Sources
@@ -115,6 +117,15 @@ def test_parse_vmware_xml():
     assert vm.nics == 1
 
 
+def test_vmware_guest_os_names():
+    from ibhics.importer.sources import guest_os_name
+
+    assert guest_os_name("ubuntu-64") == "Ubuntu Linux (64-bit)"
+    assert guest_os_name("rhel9_64Guest") == "Red Hat Enterprise Linux 9 (64-bit)"
+    assert guest_os_name("windows9-64") == "Windows 10 (64-bit)"
+    assert guest_os_name("someNewOs") == "someNewOs"
+
+
 def test_parse_ovf_and_ova(tmp_path):
     vm = parse_ovf(OVF)
     assert (vm.name, vm.vcpus, vm.memory_mb, vm.nics) == ("web-01", 2, 4096, 2)
@@ -145,9 +156,27 @@ def test_list_vmware_vms():
         def close(self):
             Conn.closed = True
 
-    vms = list_vms(VMWARE, opener=lambda _s: Conn())
+    files = {
+        "/folder/win2019-db/win2019-db.vmdk": 'RW 83886080 VMFS "win2019-db-flat.vmdk"',
+        "/folder/win2019-db/win2019-db_1.vmdk": 'RW 2097152 VMFS "x-flat.vmdk"\nRW 1 VMFS',
+        "/folder/win2019-db/win2019-db.vmx": 'displayName = "x"\nguestOS = "windows2019srv-64"',
+    }
+    urls = []
+
+    def fetch(_source, url):
+        urls.append(url)
+        path = url.split("//", 1)[1].split("/", 1)[1].split("?")[0]
+        if "/" + path not in files:
+            raise OSError("404")
+        return files["/" + path]
+
+    vms = list_vms(VMWARE, opener=lambda _s: Conn(), fetch=fetch)
     assert [(v.name, v.state) for v in vms] == [("app", "stopped"), ("win2019-db", "running")]
     assert Conn.closed
+    db = vms[1]
+    assert db.disks_gb == [40, 2] and db.guest_os == "Windows Server 2019 (64-bit)"
+    assert "dcPath=ha-datacenter&dsName=ds1" in urls[0]
+    assert vms[0].disks_gb == [0, 0] and vms[0].guest_os == ""  # files missing: blanks
 
 
 def test_list_disk_images(tmp_path):
@@ -185,14 +214,15 @@ class FakeV2V:
         (out / f"{name}-sda").write_bytes(b"boot")
         (out / f"{name}-sdb").write_bytes(b"data")
         loader = "<loader type='pflash'/>" if self.efi else ""
-        (out / f"{name}.xml").write_text(f"<domain><os>{loader}</os></domain>")
+        nic = "<devices><interface><mac address='00:50:56:AB:CD:EF'/></interface></devices>"
+        (out / f"{name}.xml").write_text(f"<domain><os>{loader}</os>{nic}</domain>")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
 
 def test_v2v_from_vmware(tmp_path):
     run = FakeV2V(efi=True)
     vm = parse_vmware_xml(ESX_XML)
-    out = V2VConverter(run).convert(VMWARE, vm, "db", tmp_path)
+    out = V2VConverter(run, log_dir=tmp_path).convert(VMWARE, vm, "db", tmp_path)
     cmd = run.cmds[0]
     assert cmd[:3] == ["virt-v2v", "-ic", "esx://root@10.0.0.50/?no_verify=1"]
     assert cmd[-9:] == [
@@ -210,23 +240,223 @@ def test_v2v_from_vmware(tmp_path):
     assert not list(tmp_path.glob("v2v-*"))  # the password file is gone
     assert [p.name for p in out.images] == ["db-sda", "db-sdb"]
     assert out.firmware == Firmware.UEFI
+    assert out.macs == ["00:50:56:ab:cd:ef"]
+
+
+def test_node_import_keeps_mac_unless_source_still_runs():
+    class WithMac(FakeConverter):
+        def convert(self, source, vm, name, out_dir, progress=None):
+            done = super().convert(source, vm, name, out_dir)
+            return Converted(done.images, done.firmware, macs=["00:50:56:ab:cd:ef"])
+
+    driver = FakeDriver()
+    vm = SourceVM(ref="/x.ova", name="x", disks_gb=[1], nics=2)
+    info = NodeImport(driver, WithMac()).run(VMWARE, vm, "x")
+    assert info.spec.nics[0].mac == "00:50:56:ab:cd:ef"
+    assert len(info.spec.nics) == 2 and info.spec.nics[1].mac != info.spec.nics[0].mac
+
+    vm = SourceVM(ref="/y.ova", name="y", disks_gb=[1], nics=1, state="running")
+    info = NodeImport(driver, WithMac()).run(VMWARE, vm, "y")
+    assert info.spec.nics[0].mac != "00:50:56:ab:cd:ef"
+
+
+class FakeSSH:
+    """ssh/ssh-keygen stand-in: the ESXi host accepts the key once the password run added it."""
+
+    def __init__(self, port_open=True):
+        self.cmds, self.authorised, self.port_open = [], False, port_open
+        self.password_seen = None
+
+    def __call__(self, cmd, **kw):
+        self.cmds.append(cmd)
+        if cmd[0] == "ssh-keygen":
+            key = Path(cmd[cmd.index("-f") + 1])
+            key.write_text("private")
+            assert cmd[cmd.index("-t") + 1] == "rsa"  # ESXi (FIPS mode) refuses ed25519
+            key.with_suffix(".pub").write_text("ssh-rsa AAAA root@node1")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if not self.port_open:
+            return subprocess.CompletedProcess(cmd, 255, "", "connect to host: Connection refused")
+        if "BatchMode=yes" in cmd and cmd[-1].startswith("ls "):
+            return subprocess.CompletedProcess(
+                cmd, 0, "/vmfs/volumes/datastore1/Zabbix/zbx 7.vmx\n", ""
+            )
+        if "BatchMode=yes" in cmd:
+            return subprocess.CompletedProcess(cmd, 0 if self.authorised else 255, "", "denied")
+        askpass = kw["env"]["SSH_ASKPASS"]
+        self.password_seen = subprocess.run([askpass], capture_output=True, text=True).stdout
+        assert "keys-root/authorized_keys" in cmd[-1] and "ssh-rsa AAAA" in cmd[-1]
+        self.authorised = True
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+
+def test_v2v_over_ssh_sets_up_the_key_first(tmp_path):
+    from ibhics.importer.convert import EsxiSSH
+
+    ssh = FakeSSH()
+    run = FakeV2V()
+    source = Source("esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw")
+    assert source.transport == "ssh"  # the default: HTTPS fails on many ESXi versions
+    vm = SourceVM(ref="Zabbix", name="Zabbix", vmx="[datastore1] Zabbix/Zabbix.vmx")
+    converter = V2VConverter(run, log_dir=tmp_path, ssh=EsxiSSH(ssh, key=tmp_path / "k/id"))
+    converter.convert(source, vm, "zabbix", tmp_path / "out")
+    assert ssh.password_seen == "pw" and ssh.authorised
+    assert run.cmds[0][:6] == [
+        "virt-v2v",
+        "-i",
+        "vmx",
+        "-it",
+        "ssh",
+        "ssh://root@10.0.0.50/vmfs/volumes/datastore1/Zabbix/zbx%207.vmx",  # found by ls
+    ]
+    # Next time the key already works: no password is sent again.
+    ssh.cmds.clear()
+    converter.convert(source, vm, "zabbix", tmp_path / "out2")
+    assert len(ssh.cmds) == 2 and all("BatchMode=yes" in c for c in ssh.cmds)
+
+    # SSH off on the ESXi host: ibHiCS turns it on through the ESXi API, then goes on.
+    off = FakeSSH(port_open=False)
+
+    class Api:
+        def __init__(self, source):
+            pass
+
+        def start_ssh(self):
+            off.port_open = True
+
+    EsxiSSH(off, key=tmp_path / "k2/id", api=Api).ensure_access(source)
+    assert off.authorised
+
+    class Refused(Api):
+        def start_ssh(self):
+            raise OSError("connection refused")
+
+    closed = EsxiSSH(FakeSSH(port_open=False), key=tmp_path / "k3/id", api=Refused)
+    with pytest.raises(ConversionFailed, match="turning it on through the API failed"):
+        closed.ensure_access(source)
+
+
+VMX = """
+scsi0:0.present = "TRUE"
+scsi0:0.fileName = "Zabbix.vmdk"
+scsi0:1.present = "TRUE"
+scsi0:1.fileName = "/vmfs/volumes/ds2/Zabbix/Zabbix_1.vmdk"
+scsi0:2.present = "FALSE"
+scsi0:2.fileName = "old.vmdk"
+sata0:0.deviceType = "cdrom-image"
+sata0:0.fileName = "/vmfs/volumes/iso/alma.iso"
+sata0:1.fileName = "boot.vmdk"
+"""
+
+
+def test_vmx_disks_and_flat_files():
+    from ibhics.importer.convert import vmdk_flat_file, vmx_disk_files
+
+    assert vmx_disk_files(VMX) == [
+        "Zabbix.vmdk",
+        "/vmfs/volumes/ds2/Zabbix/Zabbix_1.vmdk",
+        "boot.vmdk",
+    ]
+    desc = 'createType="vmfs"\nRW 629145600 VMFS "Zabbix-flat.vmdk"\n'
+    assert vmdk_flat_file(desc, "Zabbix.vmdk") == "Zabbix-flat.vmdk"
+    snap = 'parentFileNameHint="Zabbix.vmdk"\nRW 629145600 SESPARSE "Zabbix-000001-sesparse.vmdk"\n'
+    with pytest.raises(ConversionFailed, match="snapshots"):
+        vmdk_flat_file(snap, "Zabbix-000001.vmdk")
+
+
+def test_clear_hibernation_copies_the_disks_and_fixes_ntfs(tmp_path):
+    from ibhics.importer.convert import EsxiSSH
+
+    ssh = FakeSSH()
+    ssh.authorised = True
+    answers = {
+        "zbx 7.vmx": 'scsi0:0.present = "TRUE"\nscsi0:0.fileName = "Zabbix.vmdk"\n',
+        "Zabbix.vmdk": 'RW 629145600 VMFS "Zabbix-flat.vmdk"\n',
+    }
+
+    def esxi(cmd, **kw):
+        if cmd[-1].startswith("cat "):
+            key = next(k for k in answers if cmd[-1].rstrip("'").endswith(k))
+            return subprocess.CompletedProcess(cmd, 0, answers[key], "")
+        return ssh(cmd, **kw)
+
+    v2v, calls = FakeV2V(), []
+
+    def run(cmd, **kw):
+        if cmd[0] == "virt-v2v":
+            return v2v(cmd, **kw)
+        calls.append(cmd)
+        out = {
+            "losetup": "/dev/loop3\n" if "--find" in cmd else "",
+            "lsblk": "/dev/loop3\n/dev/loop3p1\n/dev/loop3p2\n",
+            "blkid": "ntfs\n" if cmd[-1] == "/dev/loop3p2" else "vfat\n",
+        }.get(cmd[0], "")
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    source = Source("esx1", SourceType.VMWARE, host="10.0.0.50", username="root", password="pw")
+    vm = SourceVM(ref="Zabbix", name="Zabbix", vmx="[datastore1] Zabbix/Zabbix.vmx", disks_gb=[300])
+    converter = V2VConverter(run, log_dir=tmp_path, ssh=EsxiSSH(esxi, key=tmp_path / "k/id"))
+    converter.convert(source, vm, "win", tmp_path / "out", clear_hibernation=True)
+    copy = calls[0]
+    assert copy[:2] == ["bash", "-c"]
+    assert "dd if=/vmfs/volumes/datastore1/Zabbix/Zabbix-flat.vmdk" in copy[2]
+    assert "conv=sparse" in copy[2]
+    assert ["ntfsfix", "-d", "/dev/loop3p2"] in calls
+    assert not any(c[0] == "ntfsfix" and c[-1] == "/dev/loop3p1" for c in calls)
+    assert any(c[:4] == ["mount", "-t", "ntfs-3g", "-o"] and "remove_hiberfile" in c for c in calls)
+    assert calls[-1] == ["losetup", "-d", "/dev/loop3"]
+    assert v2v.cmds[0][:3] == ["virt-v2v", "-i", "libvirtxml"]
+    xml = Path(v2v.cmds[0][3]).read_text()
+    assert "disk0" in xml and 'type="raw"' in xml
+
+    with pytest.raises(ConversionFailed, match="ESXi over SSH"):
+        V2VConverter(run, log_dir=tmp_path).convert(
+            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "h", clear_hibernation=True
+        )
+
+
+def test_v2v_https_without_byte_ranges_says_what_to_do(tmp_path):
+    run = FakeV2V(
+        fail="nbdkit: curl[1]: error: server does not support 'range' (byte range) requests"
+    )
+    with pytest.raises(ConversionFailed, match="Transfer: SSH"):
+        V2VConverter(run, log_dir=tmp_path).convert(
+            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path
+        )
 
 
 def test_v2v_inputs_and_failure(tmp_path):
     run = FakeV2V()
     ova = SourceVM(ref="/mnt/exports/web.ova", name="web")
-    V2VConverter(run).convert(
+    V2VConverter(run, log_dir=tmp_path).convert(
         Source("o", SourceType.OVA, path="/mnt/exports"), ova, "web", tmp_path
     )
     assert run.cmds[0][:4] == ["virt-v2v", "-i", "ova", "/mnt/exports/web.ova"]
     disk = SourceVM(ref="/mnt/hv/dc01.vhdx", name="dc01")
-    V2VConverter(run).convert(Source("d", SourceType.DISK, path="/mnt/hv"), disk, "dc01", tmp_path)
+    V2VConverter(run, log_dir=tmp_path).convert(
+        Source("d", SourceType.DISK, path="/mnt/hv"), disk, "dc01", tmp_path
+    )
     assert run.cmds[1][:4] == ["virt-v2v", "-i", "disk", "/mnt/hv/dc01.vhdx"]
 
-    with pytest.raises(ConversionFailed, match="inspection could not detect the source guest"):
-        V2VConverter(FakeV2V(fail="inspection could not detect the source guest")).convert(
-            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "f"
+    hibernated = (
+        "unable to mount the disk image for writing. This has probably happened because "
+        "Windows Hibernation or Fast Restart is being used in this guest."
+    )
+    with pytest.raises(ConversionFailed, match="powercfg /h off"):
+        V2VConverter(FakeV2V(fail=hibernated), log_dir=tmp_path).convert(
+            VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "h"
         )
+
+    with pytest.raises(ConversionFailed, match="Upgrade the node from the ibHiCS ISO"):
+        V2VConverter(
+            FakeV2V(fail="One of rhsrvany.exe or pvvxsvc.exe is missing in /usr/share/virt-tools"),
+            log_dir=tmp_path,
+        ).convert(VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "s")
+
+    with pytest.raises(ConversionFailed, match="inspection could not detect the source guest"):
+        V2VConverter(
+            FakeV2V(fail="inspection could not detect the source guest"), log_dir=tmp_path
+        ).convert(VMWARE, parse_vmware_xml(ESX_XML), "x", tmp_path / "f")
 
 
 def test_node_import_creates_vm_after_conversion(tmp_path):
@@ -244,9 +474,23 @@ def test_node_import_creates_vm_after_conversion(tmp_path):
     assert list(tmp_path.iterdir()) == []  # scratch cleaned
 
 
+def test_node_import_converts_on_the_target_pool(tmp_path):
+    used = []
+
+    class Driver(FakeDriver):
+        def scratch_space(self, pool, size_gb):
+            used.append((pool, size_gb))
+            return super().scratch_space(pool, size_gb)
+
+    driver = Driver()
+    vm = SourceVM(ref="/x.ova", name="x", disks_gb=[1, 2])
+    NodeImport(driver, FakeConverter()).run(VMWARE, vm, "x", pool="default")
+    assert used == [("default", 3)]
+
+
 def test_node_import_removes_vm_when_copy_fails(tmp_path):
     class Broken(FakeConverter):
-        def convert(self, source, vm, name, out_dir):
+        def convert(self, source, vm, name, out_dir, progress=None):
             done = super().convert(source, vm, name, out_dir)
             done.images[1].write_bytes(b"x" * (10 * 1024 * 1024))  # bigger than the fake disk
             return Converted(done.images, done.firmware)
@@ -280,7 +524,12 @@ def env(tmp_path):
     agents.add("http://witness:8007", "witness", NodeRole.WITNESS)
     cluster = Cluster(token=TOKEN, client_factory=agents.client, clock=Clock())
     cluster.add_local("node1", FakeDriver(memory_mb=65536))
-    imports = ImportManager(cluster, state_path=tmp_path / "migrate.json", executor=Inline())
+    imports = ImportManager(
+        cluster,
+        state_path=tmp_path / "migrate.json",
+        executor=Inline(),
+        upload_dir=tmp_path / "uploads",
+    )
     client = TestClient(create_app(cluster, imports=imports))
     join(client, "node2", "compute", "http://node2:8007")
     join(client, "witness", "witness", "http://witness:8007")
@@ -317,13 +566,44 @@ def test_import_through_api(env):
     assert missing.status_code == 404
 
 
+def test_upload_a_file_and_import_it(env):
+    client, imports, exports, node2, tmp_path = env
+    ova = (exports / "web-01.ova").read_bytes()
+    resp = client.put("/api/v1/migrate/uploads/web-01.ova", content=ova)
+    assert resp.status_code == 200 and resp.json()["size_bytes"] == len(ova)
+    assert client.get("/api/v1/migrate/uploads").json() == [
+        {"name": "web-01.ova", "size_bytes": len(ova)}
+    ]
+    for bad in ("..%2Fx.ova", "notes.txt", ".hidden.ova"):
+        assert client.put(f"/api/v1/migrate/uploads/{bad}", content=b"x").status_code in (
+            404,
+            405,
+            422,
+        )
+
+    [vm] = client.get("/api/v1/migrate/sources/uploads/vms").json()
+    # Uploaded files are on the manager's disk, so node1 converts them.
+    assert (
+        client.post(
+            "/api/v1/migrate/jobs", json={"source": "uploads", "vm": vm["ref"], "node": "node2"}
+        ).status_code
+        == 422
+    )
+    job = client.post("/api/v1/migrate/jobs", json={"source": "uploads", "vm": vm["ref"]}).json()
+    assert job["node"] == "node1" and job["state"] == "done", job
+    assert client.delete("/api/v1/migrate/sources/uploads").status_code == 422
+    assert client.delete("/api/v1/migrate/uploads/web-01.ova").status_code == 204
+    assert client.get("/api/v1/migrate/uploads").json() == []
+
+
 def test_vmware_source_keeps_password_private(env):
     client, imports, _, _, tmp_path = env
     body = {"name": "esx", "type": "vmware", "host": "10.0.0.50", "username": "root"}
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 422
     body["password"] = "VMware1!"
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 201
-    [listed] = client.get("/api/v1/migrate/sources").json()
+    uploads, listed = client.get("/api/v1/migrate/sources").json()
+    assert uploads["name"] == "uploads"  # built in, always first
     assert listed["settings"]["password"] == "********"
     state = tmp_path / "migrate.json"
     assert state.stat().st_mode & 0o077 == 0
@@ -339,3 +619,170 @@ def test_unreachable_folder_is_reported(env):
     client.post("/api/v1/migrate/sources", json={"name": "gone", "type": "disk", "path": "/nope"})
     resp = client.get("/api/v1/migrate/sources/gone/vms")
     assert resp.status_code == 502 and "mounted" in resp.json()["detail"]
+
+
+def test_unreachable_vmware_host_fails_fast():
+    import socket
+    import time
+
+    from ibhics.importer.sources import SourceUnavailable, check_reachable
+
+    with socket.socket() as srv:  # a port that is bound but never accepts: refused at once
+        srv.bind(("127.0.0.1", 0))
+        port = srv.getsockname()[1]
+    start = time.monotonic()
+    with pytest.raises(SourceUnavailable, match=f"cannot reach 127.0.0.1 on port {port}"):
+        check_reachable("127.0.0.1", port, timeout=2)
+    assert time.monotonic() - start < 3
+
+
+def test_v2v_error_is_the_real_reason():
+    from ibhics.importer.convert import v2v_error
+
+    out = """[   0.0] Setting up the source
+virt-v2v: error: internal error: invalid argument: libvirt domain 'Zabbix' is
+running or paused.  It must be shut down in order to perform virt-v2v
+conversion
+
+If reporting bugs, run virt-v2v with debugging enabled and include the
+complete output:
+
+  virt-v2v -v -x [...]
+"""
+    assert v2v_error(out, 1) == (
+        "internal error: invalid argument: libvirt domain 'Zabbix' is running or paused."
+        "  It must be shut down in order to perform virt-v2v conversion"
+    )
+    assert v2v_error("something broke\n  virt-v2v -v -x [...]\n", 1) == "something broke"
+    assert v2v_error("", 3) == "virt-v2v exited 3"
+
+
+def test_import_refuses_vm_bigger_than_the_pool():
+    from types import SimpleNamespace
+
+    from ibhics.manager.imports import NotEnoughSpace, check_space
+
+    pools = [
+        SimpleNamespace(name="default", type=PoolType.DIR, available_gb=186.4),
+        SimpleNamespace(name="local-raid", type=PoolType.LVM, available_gb=500.0),
+    ]
+    member = SimpleNamespace(name="node1", driver=SimpleNamespace(list_pools=lambda: pools))
+    vm = SourceVM(ref="Zabbix", name="Zabbix", disks_gb=[300])
+    with pytest.raises(
+        NotEnoughSpace, match="needs 300 GB of disks, but storage pool 'default' on node1 has only"
+    ):
+        check_space(member, "default", vm)
+    check_space(member, "default", SourceVM(ref="a", name="a", disks_gb=[100, 50]))
+    check_space(member, "default", SourceVM(ref="b", name="b", disks_gb=[0]))  # unknown size
+    # On LVM the converted images first wait in a logical volume of the full size.
+    with pytest.raises(NotEnoughSpace, match=r"needs 600 GB \(300 GB of disks plus room"):
+        check_space(member, "local-raid", vm)
+    check_space(member, "local-raid", SourceVM(ref="c", name="c", disks_gb=[200]))
+
+
+def test_esxi_api_starts_ssh():
+    from ibhics.importer.esxi_api import EsxiApi
+
+    def ok(body):
+        return (
+            f'<?xml version="1.0"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/'
+            f'soap/envelope/" xmlns="urn:vim25"><soapenv:Body>{body}</soapenv:Body>'
+            "</soapenv:Envelope>"
+        )
+
+    calls = []
+
+    def transport(body, cookie):
+        calls.append((body.split(">", 1)[0].lstrip("<"), cookie))
+        if body.startswith("<RetrieveServiceContent"):
+            return (
+                200,
+                ok(
+                    "<RetrieveServiceContentResponse><returnval><sessionManager "
+                    'type="SessionManager">ha-sessionmgr</sessionManager></returnval>'
+                    "</RetrieveServiceContentResponse>"
+                ),
+                None,
+            )
+        if body.startswith("<Login"):
+            assert "<password>pw</password>" in body
+            return 200, ok("<LoginResponse/>"), "vmware_soap_session=abc"
+        if body.startswith("<RetrieveProperties"):
+            return (
+                200,
+                ok(
+                    "<RetrievePropertiesResponse><returnval><propSet><val "
+                    'type="HostServiceSystem">serviceSystem</val></propSet></returnval>'
+                    "</RetrievePropertiesResponse>"
+                ),
+                cookie,
+            )
+        assert "<id>TSM-SSH</id>" in body and ">serviceSystem<" in body
+        return 200, ok("<StartServiceResponse/>"), cookie
+
+    EsxiApi(VMWARE, transport).start_ssh()
+    assert [c[0] for c in calls] == [
+        "RetrieveServiceContent",
+        "Login",
+        "RetrieveProperties",
+        "StartService",
+    ]
+    assert calls[-1][1] == "vmware_soap_session=abc"  # the session cookie is kept
+
+
+def test_virt_v2v_stages_become_progress():
+    from ibhics.importer.convert import stage_progress
+
+    assert stage_progress("[   0.0] Setting up the source: -i vmx ssh://root@esx") == (
+        "Setting up the source: -i vmx ssh://root@esx",
+        2,
+    )
+    assert stage_progress("[  48.2] Copying disk 2/2") == ("Copying disk 2/2", 62)
+    assert stage_progress("[ 900.1] Finishing off") == ("Finishing off", 98)
+    assert stage_progress("nbdkit: debug: something") is None
+
+
+def test_import_job_reports_progress_and_log(env):
+    client, imports, exports, node2, tmp_path = env
+    client.post(
+        "/api/v1/migrate/sources", json={"name": "nas", "type": "ova", "path": str(exports)}
+    )
+    [vm] = client.get("/api/v1/migrate/sources/nas/vms").json()
+    job = client.post(
+        "/api/v1/migrate/jobs", json={"source": "nas", "vm": vm["ref"], "node": "node1"}
+    ).json()
+    assert (job["state"], job["percent"]) == ("done", 100)
+    assert client.get(f"/api/v1/migrate/jobs/{job['id']}/log").json() == {"log": ""}
+
+
+def test_keep_nic_names_runs_the_pin_script_in_the_guest(tmp_path):
+    seen = {}
+
+    def run(cmd, **kw):
+        seen["cmd"] = cmd
+        seen["script"] = Path(cmd[cmd.index("--run") + 1]).read_text()
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    images = [tmp_path / "x-sda", tmp_path / "x-sdb"]
+    note = V2VConverter(run, log_dir=tmp_path).keep_nic_names(images, ["52:54:00:aa:bb:01", None])
+    assert note == "kept the guest's NIC names"
+    assert seen["cmd"][:2] == ["virt-customize", "--no-network"]
+    assert seen["cmd"].count("-a") == 2
+    assert 'macs="52:54:00:aa:bb:01"' in seen["script"]
+    assert '[Link]\\nName=%s\\n\' "$mac" "$name"' in seen["script"]
+    assert not Path(seen["cmd"][seen["cmd"].index("--run") + 1]).exists()  # cleaned up
+
+
+def test_node_import_pins_nic_names_with_the_new_macs():
+    calls = []
+
+    class Pinning(FakeConverter):
+        def keep_nic_names(self, images, macs):
+            calls.append(macs)
+            return "kept"
+
+    driver = FakeDriver()
+    NodeImport(driver, Pinning()).run(VMWARE, SourceVM(ref="/l", name="l", nics=1), "l")
+    win = SourceVM(ref="/w", name="w", nics=1, guest_os="Microsoft Windows Server 2019")
+    NodeImport(driver, Pinning()).run(VMWARE, win, "w")
+    assert len(calls) == 1 and calls[0][0]  # Linux only, with the MAC libvirt assigned
