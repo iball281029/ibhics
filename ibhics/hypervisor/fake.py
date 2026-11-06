@@ -196,7 +196,9 @@ class FakeDriver(HypervisorDriver):
             self._get(uuid)
             return [copy.deepcopy(s[0]) for s in self._snaps.get(uuid, [])]
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
         check_snapshot_name(name)
         with self._lock:
             vm = self._get(uuid)
@@ -391,6 +393,11 @@ class FakeDriver(HypervisorDriver):
         names = {n.name for n in self.list_networks()}
         cfg.validate(names)
         self.edge = (cfg.to_dict(), router)
+
+    def run_command(self, line: str) -> tuple[int, str]:
+        from .terminal import run_line
+
+        return run_line(line, lambda cmd: (0, f"(fake node) {' '.join(cmd)}"))
 
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         from .edge import net_test

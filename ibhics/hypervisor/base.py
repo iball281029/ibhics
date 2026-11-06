@@ -551,8 +551,13 @@ class HypervisorDriver(abc.ABC):
         """The VM's snapshots, oldest first."""
         return []
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
-        """Snapshot the VM's disks; a running VM's memory too (it pauses briefly)."""
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
+        """Snapshot the VM's disks; a running VM's memory too (it pauses briefly).
+
+        `restart`: a running UEFI VM that cannot be snapshotted live yet may be shut down
+        and started again first."""
         raise NotImplementedError
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
@@ -576,6 +581,10 @@ class HypervisorDriver(abc.ABC):
     def apply_edge(self, config: dict, router: bool) -> None:
         """Set up the virtual router (when `router`) and the firewall from an
         edge.EdgeConfig in dict form."""
+        raise NotImplementedError
+
+    def run_command(self, line: str) -> tuple[int, str]:
+        """Run an allowlisted diagnostic command on this node (see terminal.py)."""
         raise NotImplementedError
 
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:

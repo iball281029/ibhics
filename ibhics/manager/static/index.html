@@ -52,6 +52,7 @@
   <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></g></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></g></symbol>
   <symbol id="i-nic" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 9h16v8H4z"/><path d="M8 17v3M16 17v3M8 9V6h8v3"/><path d="M8 13h.01M12 13h.01M16 13h.01"/></g></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></g></symbol>
   <symbol id="i-cd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 5.5a6.5 6.5 0 0 1 6.5 6.5"/></g></symbol>
   <symbol id="i-server" viewBox="0 0 56 56"><g fill="currentColor"><rect x="6" y="4" width="20" height="48" rx="3"/><rect x="30" y="4" width="20" height="48" rx="3" opacity=".75"/></g><g fill="#fff"><rect x="10" y="10" width="12" height="3" rx="1"/><rect x="10" y="17" width="12" height="3" rx="1"/><rect x="34" y="10" width="12" height="3" rx="1"/><rect x="34" y="17" width="12" height="3" rx="1"/><circle cx="16" cy="44" r="2.5"/><circle cx="40" cy="44" r="2.5"/></g></symbol>
   <symbol id="i-disk" viewBox="0 0 56 56"><g fill="currentColor"><ellipse cx="28" cy="13" rx="20" ry="7"/><path d="M8 19c0 3.9 9 7 20 7s20-3.1 20-7v8c0 3.9-9 7-20 7S8 30.9 8 27z" opacity=".85"/><path d="M8 33c0 3.9 9 7 20 7s20-3.1 20-7v8c0 3.9-9 7-20 7S8 44.9 8 41z" opacity=".7"/></g></symbol>
@@ -68,6 +69,7 @@
     <a href="#nodes" data-page="nodes" data-label="Nodes"><svg><use href="#i-nodes"/></svg></a>
     <a href="#backup" data-page="backup" data-label="Backup"><svg><use href="#i-backup"/></svg></a>
     <a href="#migrate" data-page="migrate" data-label="Migrate"><svg><use href="#i-migrate"/></svg></a>
+    <a href="#terminal" data-page="terminal" data-label="Terminal" class="admin-only"><svg><use href="#i-term"/></svg></a>
   </nav>
 </aside>
 
@@ -284,7 +286,6 @@
           <button data-tab="net-list">Virtual switches</button>
           <button data-tab="net-router">Router</button>
           <button data-tab="net-fw">Firewall</button>
-          <button data-tab="net-test">Test connectivity</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
           <div class="topo-toolbar">
@@ -338,15 +339,6 @@
             <thead><tr><th>#</th><th>Rule</th><th>Action</th><th>From</th><th>To</th><th>Protocol</th><th></th></tr></thead>
             <tbody id="fw-rules"></tbody>
           </table></div>
-        </div>
-        <div class="subpage" id="tab-net-test">
-          <form id="nettest-form" class="form-grid" style="padding:18px 26px">
-            <label>Test <select name="kind"><option value="ping">Ping</option><option value="trace">Trace route</option></select></label>
-            <label>To (IP address or host name) <input name="target" required placeholder="10.0.10.25" autocomplete="off"></label>
-            <label>From <select name="network" id="nettest-from"></select></label>
-            <div class="wide"><button class="primary" type="submit">Run test</button> <span class="hint" id="nettest-status"></span></div>
-          </form>
-          <pre class="log" id="nettest-out" hidden style="margin:0 26px 26px"></pre>
         </div>
       </div>
     </section>
@@ -547,6 +539,26 @@
       </div>
     </section>
 
+    <section class="page" id="page-terminal">
+      <div class="sheet">
+        <div class="page-head"><h1>Terminal</h1><span class="sub">Diagnostic commands on a node, as if signed in over SSH: look, never change. Every command is in the audit log.</span>
+          <span class="spacer"></span>
+          <label class="inline">Node <select id="term-node"></select></label>
+        </div>
+        <div class="term-chips" id="term-chips">
+          <button class="small" data-cmd="ping -c 4 ">ping</button><button class="small" data-cmd="traceroute ">traceroute</button>
+          <button class="small" data-cmd="ip -br addr">ip addr</button><button class="small" data-cmd="ip route">ip route</button>
+          <button class="small" data-cmd="ip neigh">ARP table</button><button class="small" data-cmd="bridge vlan">bridge vlan</button>
+          <button class="small" data-cmd="getent hosts ">DNS lookup</button><button class="small" data-cmd="ss -tlnp">listening ports</button>
+          <button class="small" data-cmd="df -h">df -h</button><button class="small" data-cmd="free -h">free -h</button>
+          <button class="small" data-cmd="help">help</button><button class="small" data-cmd="clear">clear</button>
+        </div>
+        <div class="term" id="term">
+          <pre id="term-out"></pre>
+          <form id="term-form" autocomplete="off"><span class="term-prompt" id="term-prompt">$</span><input id="term-input" spellcheck="false" placeholder="ping 8.8.8.8" maxlength="1000"></form>
+        </div>
+      </div>
+    </section>
     <section class="page" id="page-tasks">
       <div class="sheet">
         <div class="page-head"><h1>Tasks</h1><span class="sub" id="tasks-sum"></span>
@@ -1130,6 +1142,7 @@
       <label class="wide">Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, digits and _ . - (no spaces)" autocomplete="off"></label>
       <label class="wide">Description (optional) <input name="description" maxlength="1024" placeholder="e.g. before installing updates"></label>
       <p class="hint wide snap-mem"></p>
+      <label class="wide check snap-restart" hidden><input type="checkbox" name="restart" checked> Shut down and start again if needed (once per UEFI VM, so later snapshots work while it runs)</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Take snapshot</button></footer>
   </form>

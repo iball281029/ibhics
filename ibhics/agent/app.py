@@ -148,6 +148,11 @@ def create_agent_app(
         def apply_edge(body: dict) -> None:
             driver.apply_edge(body["config"], bool(body["router"]))
 
+        @api.post("/terminal")
+        def terminal(body: dict) -> dict:
+            code, output = driver.run_command(str(body.get("command", "")))
+            return {"code": code, "output": output}
+
         @api.post("/net-test")
         def net_test(body: dict) -> dict:
             ok, output = driver.net_test(body["kind"], body["target"], body.get("network", ""))
@@ -199,7 +204,8 @@ def create_agent_app(
 
         @api.post("/vms/{uuid}/snapshots", response_model=SnapshotOut)
         def create_snapshot(uuid: str, body: SnapshotIn) -> SnapshotOut:
-            return SnapshotOut(**asdict(driver.create_snapshot(uuid, body.name, body.description)))
+            snap = driver.create_snapshot(uuid, body.name, body.description, body.restart)
+            return SnapshotOut(**asdict(snap))
 
         @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
         def revert_snapshot(uuid: str, name: str) -> VMOut:

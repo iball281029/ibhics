@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from . import customize, edge, vmstats
+from . import customize, edge, terminal, vmstats
 from .base import (
     CloneSpec,
     DiskSpec,
@@ -100,6 +100,15 @@ def _run(cmd: list[str]) -> None:
 
 APPARMOR_LOCAL = Path("/etc/apparmor.d/local/abstractions/libvirt-qemu")
 COVERED = ("/var/lib/ibhics/pools/", "/mnt/ibhics/")
+
+
+def _qemu_may_write(path: Path) -> None:
+    """mkdtemp makes a 0700 root folder; QEMU runs as libvirt-qemu and writes backups there."""
+    path.chmod(0o755)
+    try:
+        shutil.chown(path, "libvirt-qemu", "kvm")
+    except (LookupError, PermissionError, OSError):
+        path.chmod(0o1777)  # no such user (tests, other distros): let anyone write
 
 
 def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
@@ -350,6 +359,7 @@ class LibvirtDriver(HypervisorDriver):
             )
         if recycled_at(root):
             raise InvalidState("this VM is in the recycle bin: restore it first")
+        self._nvram_qcow2(dom)
         dom.create()
         return self._info(dom)
 
@@ -398,7 +408,9 @@ class LibvirtDriver(HypervisorDriver):
         snaps = [_snapshot_info(s) for s in dom.listAllSnapshots(0)]
         return sorted(snaps, key=lambda s: s.created)
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
         check_snapshot_name(name)
         dom = self._lookup(uuid)
         info = self._info(dom)
@@ -410,18 +422,72 @@ class LibvirtDriver(HypervisorDriver):
                 "file" if driver is not None and driver.get("type") == "qcow2" else "block"
             )
         snapshot_allowed(info.spec, backends)
-        if info.spec.firmware == Firmware.UEFI and dom.isActive():
-            raise InvalidState(
-                "QEMU cannot save the memory of a running UEFI VM in a snapshot: shut it down "
-                "and take the snapshot then"
-            )
         if any(s.getName() == name for s in dom.listAllSnapshots(0)):
             raise InvalidState(f"{info.spec.name} already has a snapshot named {name!r}")
+        if info.spec.firmware == Firmware.UEFI and not _nvram_is_qcow2(dom.XMLDesc(0)):
+            # QEMU snapshots UEFI variables only in a qcow2 image; ours are converted while
+            # the VM is off, so a running VM with raw variables needs one power cycle.
+            if dom.isActive():
+                if not restart:
+                    raise InvalidState(
+                        "this UEFI VM must power off once before its first snapshot (its UEFI "
+                        "settings move to a format QEMU can snapshot); choose 'shut down and "
+                        "start again' to do it now"
+                    )
+                self._power_off(dom)
+                self._nvram_qcow2(dom)
+                dom.create()
+            else:
+                self._nvram_qcow2(dom)
         xml = f"<domainsnapshot><name>{escape(name)}</name>"
         if description:
             xml += f"<description>{escape(description)}</description>"
         xml += "</domainsnapshot>"
         return _snapshot_info(dom.snapshotCreateXML(xml, 0))
+
+    def _power_off(self, dom, timeout: float = 300, poll: float = 2) -> None:
+        """Shut the guest down cleanly (ACPI), waiting for it to power off."""
+        dom.shutdown()
+        deadline = time.monotonic() + timeout
+        while dom.isActive():
+            if time.monotonic() > deadline:
+                raise InvalidState(
+                    f"{dom.name()} did not shut down within {int(timeout)} s: shut it down "
+                    "from inside the guest, then take the snapshot"
+                )
+            time.sleep(poll)
+
+    def _nvram_qcow2(self, dom) -> bool:
+        """Move a stopped UEFI VM's variables to a qcow2 image, so it can be snapshotted
+        (raw pflash cannot). Firmware is pinned, as autoselection expects raw variables."""
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        os_el = root.find("os")
+        loader = os_el.find("loader") if os_el is not None else None
+        nvram = os_el.find("nvram") if os_el is not None else None
+        if loader is None or nvram is None or not (nvram.text or "").strip():
+            return False  # never started: libvirt has not picked the firmware yet
+        if nvram.get("format") == "qcow2":
+            return True
+        src = nvram.text.strip()
+        if dom.isActive() or not Path(src).is_file() or not (loader.text or "").strip():
+            return False
+        dst = (src[:-3] if src.endswith(".fd") else src) + ".qcow2"
+        self.run(["qemu-img", "convert", "-f", "raw", "-O", "qcow2", src, dst])
+        os_el.attrib.pop("firmware", None)
+        for el in os_el.findall("firmware"):
+            os_el.remove(el)
+        loader.set("format", loader.get("format", "raw"))
+        for attr in ("template", "templateFormat"):
+            nvram.attrib.pop(attr, None)
+        nvram.set("format", "qcow2")
+        nvram.text = dst
+        try:
+            self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        except libvirt.libvirtError:
+            Path(dst).unlink(missing_ok=True)
+            raise
+        Path(src).unlink(missing_ok=True)
+        return True
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         dom = self._lookup(uuid)
@@ -709,6 +775,29 @@ class LibvirtDriver(HypervisorDriver):
             data = json.loads(state.read_text())
             self.apply_edge(data["config"], data["router"])
 
+    def run_command(self, line: str) -> tuple[int, str]:
+        def run(cmd: list[str]) -> tuple[int, str]:
+            try:
+                done = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=terminal.TIMEOUT,
+                    stdin=subprocess.DEVNULL,
+                )
+            except subprocess.TimeoutExpired as exc:
+                out = (
+                    (exc.stdout or b"").decode(errors="replace")
+                    if isinstance(exc.stdout, bytes)
+                    else (exc.stdout or "")
+                )
+                return 124, f"{out}\n{cmd[0]}: stopped after {terminal.TIMEOUT} s".strip()
+            except FileNotFoundError:
+                return 127, f"{cmd[0]}: not installed on this node"
+            return done.returncode, (done.stdout + done.stderr).rstrip()
+
+        return terminal.run_line(line, run)
+
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         def run(cmd: list[str]) -> tuple[int, str]:
             try:
@@ -991,6 +1080,7 @@ class LibvirtDriver(HypervisorDriver):
         disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
         Path(self.scratch_dir).mkdir(parents=True, exist_ok=True)
         scratch = Path(tempfile.mkdtemp(prefix=f"backup-{uuid}-", dir=self.scratch_dir))
+        _qemu_may_write(scratch)
         try:
             images = [scratch / f"disk{i}.raw" for i in range(len(disks))]
             if dom.isActive():
@@ -1100,6 +1190,11 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             pass
         return info
+
+
+def _nvram_is_qcow2(xml: str) -> bool:
+    nvram = ET.fromstring(xml).find("os/nvram")
+    return nvram is not None and nvram.get("format") == "qcow2"
 
 
 def _snapshot_info(snap) -> SnapshotInfo:
@@ -1240,9 +1335,8 @@ def _spec_from_xml(xml: str) -> VMSpec:
     driver_cd = drives[1] if len(drives) > 1 else None
     template, linked_to = template_facts(root)
     os_el = root.find("os")
-    firmware = (
-        Firmware.UEFI if os_el is not None and os_el.get("firmware") == "efi" else Firmware.BIOS
-    )
+    uefi = os_el is not None and (os_el.get("firmware") == "efi" or os_el.find("nvram") is not None)
+    firmware = Firmware.UEFI if uefi else Firmware.BIOS
     return VMSpec(
         name=root.findtext("name", ""),
         vcpus=int(root.findtext("vcpu", "1")),

@@ -168,6 +168,10 @@ class EdgeOut(BaseModel):
     router_node: str
 
 
+class TerminalIn(BaseModel):
+    command: str = Field(min_length=1, max_length=1000)
+
+
 class NetTestIn(BaseModel):
     kind: str = Field(default="ping", pattern="^(ping|trace)$")
     target: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
@@ -329,6 +333,7 @@ class StopRequest(BaseModel):
 class SnapshotIn(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
     description: str = Field(default="", max_length=1024)
+    restart: bool = False  # running UEFI VM: shut down and start again first, if needed
 
 
 class SnapshotOut(BaseModel):

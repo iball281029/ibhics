@@ -121,7 +121,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -567,6 +567,7 @@ async function refresh(page, auto = false) {
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
+  if (page === "terminal") renderTerminal();
   if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
@@ -3168,14 +3169,24 @@ $("#vm-snap-take").addEventListener("click", () => openSnapshot(vmFromHash()));
 function openSnapshot(uuid) {
   const vm = state.vms.find((v) => v.uuid === uuid);
   if (!vm) return;
-  const d = new Date(), p = (n) => String(n).padStart(2, "0");
-  openDialog("snap-dialog", { uuid: vm.uuid }, { name: `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` });
+  openDialog("snap-dialog", { uuid: vm.uuid }, { name: snapshotName(vm.name) });
+  const uefiOn = vm.state === "running" && vm.firmware === "uefi";
+  $("#snap-form .snap-restart").hidden = !uefiOn;
   $("#snap-form .snap-mem").textContent = vm.state === "running"
-    ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
+    ? "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running."
     : "The VM is off: the snapshot holds its disks.";
 }
+// Default snapshot name: the VM's name and when it was taken, e.g. web01-20261106-1530.
+function snapshotName(vmName, d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  const base = String(vmName || "").replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 48).replace(/-+$/, "");
+  return `${base || "snap"}-${stamp}`;
+}
 handlers["snap-dialog"] = async (f, ctx) => {
-  await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description") });
+  const restart = !$("#snap-form .snap-restart").hidden && f.get("restart") === "on";
+  if (restart) toast("Taking the snapshot: the VM may shut down and start again first…");
+  await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description"), restart });
   toast(`Snapshot taken: ${f.get("name").trim()}`);
   if (currentPage() !== "vm") return;
   selectTab("vm-tabs", "vm-snapshots");
@@ -4122,9 +4133,6 @@ function renderEdge() {
   </tr>`).join("") : empty(7, "No rules: everything is allowed.");
   const nets = state.networks.map((n) => n.name);
   $("#fw-ends").innerHTML = ["any", ...nets].map((n) => `<option value="${esc(n)}">`).join("");
-  const routed = edge.routers.map((r) => r.network);
-  $("#nettest-from").innerHTML = `<option value="">${esc(edge.router_node || "this node")} (its own address)</option>` +
-    routed.map((n) => `<option value="${esc(n)}">Gateway of ${esc(n)}</option>`).join("");
 }
 
 async function saveRules(rules) {
@@ -4183,15 +4191,55 @@ $("#fw-rules").addEventListener("click", async (e) => {
   } catch (err) { fail(err); }
 });
 
-$("#nettest-form").addEventListener("submit", async (e) => {
+// Terminal (v0.8): allowlisted diagnostic commands on a node, run over the node's agent.
+const term = { history: [], at: 0, busy: false };
+function renderTerminal() {
+  const sel = $("#term-node"), names = computeMembers().map((m) => m.name);
+  const keep = sel.value;
+  sel.innerHTML = names.map((n) => `<option>${esc(n)}</option>`).join("");
+  if (names.includes(keep)) sel.value = keep;
+  $("#term-prompt").textContent = `${sel.value || "node"} $`;
+  if (!$("#term-out").textContent) termPrint("Type a command such as  ping 8.8.8.8  or  traceroute 1.1.1.1 , or  help  for the list.\n");
+  $("#term-input").focus();
+}
+function termPrint(text, cls = "") {
+  const out = $("#term-out"), span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = text.endsWith("\n") ? text : text + "\n";
+  out.append(span);
+  out.parentElement.scrollTop = out.parentElement.scrollHeight;
+}
+$("#term-node").addEventListener("change", () => { $("#term-prompt").textContent = `${$("#term-node").value} $`; $("#term-input").focus(); });
+$("#term-chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-cmd]");
+  if (!b) return;
+  const input = $("#term-input");
+  input.value = b.dataset.cmd;
+  if (!b.dataset.cmd.endsWith(" ")) $("#term-form").requestSubmit(); else input.focus();
+});
+$("#term-input").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
   e.preventDefault();
-  const f = new FormData(e.target), out = $("#nettest-out"), status = $("#nettest-status");
-  status.textContent = f.get("kind") === "ping" ? "Pinging…" : "Tracing… (up to a minute)";
-  out.hidden = true;
+  term.at = Math.max(0, Math.min(term.history.length, term.at + (e.key === "ArrowUp" ? -1 : 1)));
+  e.target.value = term.history[term.at] || "";
+});
+$("#term-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = $("#term-input"), line = input.value.trim(), node = $("#term-node").value;
+  if (!line || term.busy) return;
+  input.value = "";
+  if (term.history.at(-1) !== line) term.history.push(line);
+  term.at = term.history.length;
+  if (line === "clear") { $("#term-out").textContent = ""; return; }
+  termPrint(`${node} $ ${line}`, "term-cmd");
+  term.busy = true; input.disabled = true;
   try {
-    const r = await post("/edge/test", { kind: f.get("kind"), target: f.get("target").trim(), network: f.get("network") });
-    status.textContent = `${r.ok ? "✓ Reachable" : "✗ No answer"} (from ${r.node})`;
-    out.textContent = r.output || "(no output)";
-    out.hidden = false;
-  } catch (err) { status.textContent = ""; fail(err); }
+    const r = await post(`/nodes/${enc(node)}/terminal`, { command: line });
+    termPrint(r.output || "", r.code ? "term-err" : "");
+    if (r.code) termPrint(`(exit ${r.code})`, "term-dim");
+  } catch (err) {
+    termPrint(String(err.message || err), "term-err");
+  } finally {
+    term.busy = false; input.disabled = false; input.focus();
+  }
 });

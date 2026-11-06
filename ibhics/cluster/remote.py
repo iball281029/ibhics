@@ -139,9 +139,11 @@ class RemoteDriver(HypervisorDriver):
         resp = self._client.request("GET", f"/vms/{uuid}/snapshots")
         return [SnapshotInfo(**s) for s in self._ok(resp, uuid).json()]
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
         # Saving a running VM's memory takes as long as writing it: no timeout.
-        body = {"name": name, "description": description}
+        body = {"name": name, "description": description, "restart": restart}
         resp = self._client.request("POST", f"/vms/{uuid}/snapshots", json=body, timeout=None)
         if resp.status_code == 422:
             raise ValueError(str(resp.json().get("detail")))
@@ -224,6 +226,13 @@ class RemoteDriver(HypervisorDriver):
 
     def apply_edge(self, config: dict, router: bool) -> None:
         self._ok(self._client.request("PUT", "/edge", json={"config": config, "router": router}))
+
+    def run_command(self, line: str) -> tuple[int, str]:
+        resp = self._client.request("POST", "/terminal", json={"command": line}, timeout=90)
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        data = self._ok(resp).json()
+        return data["code"], data["output"]
 
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         body = {"kind": kind, "target": target, "network": network}

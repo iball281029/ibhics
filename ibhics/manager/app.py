@@ -82,6 +82,7 @@ from .schemas import (
     SourceVMOut,
     StopRequest,
     TemplateRequest,
+    TerminalIn,
     UploadOut,
     UserIn,
     UserOut,
@@ -160,6 +161,7 @@ ADMIN_ROUTES = {
     ("POST", f"{API}/networks"),
     ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
+    ("POST", f"{API}/nodes/{{name}}/terminal"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
 SELF_ROUTES = {f"{API}/auth/me", f"{API}/auth/logout", f"{API}/auth/password"}
@@ -290,10 +292,11 @@ def create_app(
             and request.url.path != f"{API}/auth/login"  # recorded by the login route
         ):
             user = getattr(request.state, "user", None)
+            note = getattr(request.state, "audit_note", "")
             auth.record(
                 user.name if user else "-",
                 request.method,
-                request.url.path,
+                f"{request.url.path} {note}".strip(),
                 response.status_code,
                 request.client.host if request.client else "",
             )
@@ -558,6 +561,15 @@ def create_app(
     @api.put("/edge/router-node", response_model=EdgeOut)
     def set_router_node(body: dict) -> EdgeOut:
         return EdgeOut(**edge.set_router_node(str(body.get("node", ""))))
+
+    # Terminal (v0.8): diagnostic commands on a node, from an allowlist; admins only,
+    # and each command is written to the audit log.
+
+    @api.post("/nodes/{name}/terminal")
+    def node_terminal(name: str, body: TerminalIn, request: Request) -> dict:
+        request.state.audit_note = body.command[:300]
+        code, output = cluster.member(name).driver.run_command(body.command)
+        return {"node": name, "code": code, "output": output[-200_000:]}
 
     @api.post("/edge/test")
     def net_test(body: NetTestIn) -> dict:
@@ -824,7 +836,7 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         return SnapshotOut(
-            **asdict(member.driver.create_snapshot(uuid, body.name, body.description))
+            **asdict(member.driver.create_snapshot(uuid, body.name, body.description, body.restart))
         )
 
     @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
