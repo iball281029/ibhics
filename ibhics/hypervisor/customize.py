@@ -25,7 +25,9 @@ def hostname_for(c: Customization, vm_name: str) -> str:
     """The guest's host name: the one asked for, else the VM name made into a valid one."""
     if c.hostname:
         return c.hostname
-    name = "".join(ch if ch.isalnum() else "-" for ch in vm_name).strip("-") or "vm"
+    name = (
+        "".join(ch if ch.isascii() and ch.isalnum() else "-" for ch in vm_name).strip("-") or "vm"
+    )
     return name[: 15 if c.os == "windows" else 63].strip("-")
 
 

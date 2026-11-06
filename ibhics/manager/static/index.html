@@ -725,9 +725,18 @@
   </form>
 </dialog>
 <datalist id="os-names">
-  <option value="Windows Server 2025"><option value="Windows Server 2022"><option value="Windows Server 2019"><option value="Windows 11">
-  <option value="Ubuntu 24.04 LTS"><option value="Ubuntu 22.04 LTS"><option value="Debian 13"><option value="Red Hat Enterprise Linux 9">
-  <option value="Rocky Linux 9"><option value="AlmaLinux 9"><option value="Oracle Linux 9"><option value="SUSE Linux Enterprise 15">
+  <option value="Windows Server 2025"><option value="Windows Server 2022"><option value="Windows Server 2019"><option value="Windows Server 2016">
+  <option value="Windows Server 2012 R2"><option value="Windows Server 2012"><option value="Windows Server 2008 R2"><option value="Windows 11">
+  <option value="Windows 10"><option value="Windows 8.1"><option value="Windows 7"><option value="Other Windows">
+  <option value="Ubuntu 24.04 LTS"><option value="Ubuntu 22.04 LTS"><option value="Ubuntu 20.04 LTS"><option value="Ubuntu 18.04 LTS">
+  <option value="Debian 13"><option value="Debian 12"><option value="Debian 11"><option value="Debian 10">
+  <option value="Red Hat Enterprise Linux 10"><option value="Red Hat Enterprise Linux 9"><option value="Red Hat Enterprise Linux 8"><option value="Red Hat Enterprise Linux 7">
+  <option value="Rocky Linux 10"><option value="Rocky Linux 9"><option value="Rocky Linux 8"><option value="AlmaLinux 10">
+  <option value="AlmaLinux 9"><option value="AlmaLinux 8"><option value="CentOS 7"><option value="CentOS Stream 9">
+  <option value="Oracle Linux 9"><option value="Oracle Linux 8"><option value="Oracle Linux 7"><option value="SUSE Linux Enterprise 15">
+  <option value="SUSE Linux Enterprise 12"><option value="openSUSE Leap 15"><option value="Fedora"><option value="Other Linux">
+  <option value="FreeBSD 14"><option value="FreeBSD 13"><option value="pfSense"><option value="OPNsense">
+  <option value="VMware ESXi (nested)"><option value="Other">
 </datalist>
 
 <dialog id="edit-dialog" class="wide-dialog">
@@ -1162,7 +1171,7 @@
     <div class="body">
       <div class="deploy-src" id="deploy-src"></div>
       <div class="form-grid">
-        <label>New VM name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}" autocomplete="off" placeholder="web-01"></label>
+        <label>New VM name <input name="name" required pattern="[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.\-]{0,62}" autocomplete="off" placeholder="web-01"></label>
         <label>Description (optional) <input name="description" maxlength="1024"></label>
       </div>
       <div class="form-grid deploy-pool" style="margin-top:12px">

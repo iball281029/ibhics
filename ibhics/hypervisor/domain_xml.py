@@ -17,10 +17,20 @@ META_NS = "https://ibhics.org/xmlns/vm/1"  # ibHiCS's own facts about a VM, kept
 ET.register_namespace("ibhics", META_NS)
 
 
+def file_name(vm_name: str) -> str:
+    """The VM's name for files and LVM volumes: as is when ASCII; a Thai name becomes
+    vm-<hash> (LVM, QEMU job IDs and other tools want ASCII)."""
+    if vm_name.isascii():
+        return vm_name
+    import hashlib
+
+    return "vm-" + hashlib.sha1(vm_name.encode()).hexdigest()[:10]
+
+
 def volume_name(vm_name: str, index: int, disk: DiskSpec) -> str:
     # Block volumes are raw; file images use qcow2 so they stay thin and support snapshots.
     suffix = "" if disk.backend == "block" else ".qcow2"
-    return f"{vm_name}-disk{index}{suffix}"
+    return f"{file_name(vm_name)}-disk{index}{suffix}"
 
 
 def build_volume_xml(vm_name: str, index: int, disk: DiskSpec, backing: str | None = None) -> str:
@@ -166,7 +176,8 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     devices = ET.SubElement(dom, "devices")
     for index, disk in enumerate(spec.disks):
         volume = volume_name(spec.name, index, disk)
-        dev = f"vd{DISK_DEVS[index]}"
+        # SATA disks (older Windows with no virtio driver) come after the two CD drives.
+        dev = f"vd{DISK_DEVS[index]}" if disk.bus == "virtio" else f"sd{DISK_DEVS[index + 2]}"
         devices.append(disk_element(disk, volume, dev))
         ET.SubElement(meta, f"{{{META_NS}}}disk", dev=dev, pool=disk.pool, volume=volume)
 

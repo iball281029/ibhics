@@ -13,6 +13,12 @@ from enum import StrEnum
 from pathlib import Path
 
 NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+# VM names may also be Thai; disk files still get an ASCII name (see domain_xml.volume_name).
+VM_NAME_RE = re.compile(r"^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$")
+VM_NAME_RULE = (
+    "name must start with a letter or digit and use only letters (English or Thai), "
+    "digits, '_', '.', '-'"
+)
 
 
 BOOT_DEVICES = ("hd", "cdrom", "network")
@@ -81,10 +87,8 @@ class VMSpec:
     def validate(self) -> None:
         if len(self.os_type) > 64:
             raise ValueError("os_type is at most 64 characters")
-        if not NAME_RE.match(self.name):
-            raise ValueError(
-                "name must start with a letter or digit and use only letters, digits, '_', '.', '-'"
-            )
+        if not VM_NAME_RE.match(self.name):
+            raise ValueError(VM_NAME_RULE)
         if self.vcpus < 1:
             raise ValueError("vcpus must be at least 1")
         if self.memory_mb < 128:
@@ -146,10 +150,8 @@ class CloneSpec:
     description: str | None = None  # None: the source's
 
     def validate(self) -> None:
-        if not NAME_RE.match(self.name):
-            raise ValueError(
-                "name must start with a letter or digit and use only letters, digits, '_', '.', '-'"
-            )
+        if not VM_NAME_RE.match(self.name):
+            raise ValueError(VM_NAME_RULE)
         if self.linked and self.pool:
             raise ValueError("a linked clone's disks stay in the template's pool")
         if self.customization:
