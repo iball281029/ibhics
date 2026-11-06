@@ -1,0 +1,10 @@
+Template: ibhics/already-installed
+Type: note
+Description: ibHiCS is already installed on ${DISK}
+ The server started the installer again because the installer ISO is still
+ attached (BMC virtual media often ignores the eject). Nothing has been erased.
+ .
+ Detach the ISO, then choose Continue: the server restarts into ibHiCS.
+ .
+ To reinstall over it, restart from the ISO and pick "Install ibHiCS, choose
+ disk and network by hand".

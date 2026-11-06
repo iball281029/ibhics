@@ -89,6 +89,12 @@ class LibvirtDriver(HypervisorDriver):
     scratch_dir = SCRATCH_DIR
     run = staticmethod(_run)
 
+    @staticmethod
+    def clear_disks(devices: list[str]) -> None:
+        from .disks import clear_disks
+
+        clear_disks(devices)
+
     def __init__(self, uri: str = "qemu:///system") -> None:
         if libvirt is None:
             raise RuntimeError("libvirt-python is not installed: pip install 'ibhics[libvirt]'")
@@ -355,14 +361,21 @@ class LibvirtDriver(HypervisorDriver):
         if spec.name in self._pool_names() or iscsi_session_name(spec.name) in self._pool_names():
             raise InvalidState(f"a pool named {spec.name!r} already exists")
 
-        if spec.type == PoolType.LVM and spec.device.startswith("/dev/disk/"):
+        if spec.type == PoolType.LVM:
             # libvirt finds the volume group by the device name pvs reports (/dev/sda), so a
             # /dev/disk/by-id link would make the pool fail to start after vgcreate.
             # (/dev/mapper names are what pvs reports for multipath, so they stay.)
-            spec = replace(spec, device=os.path.realpath(spec.device))
+            devices = [
+                os.path.realpath(d) if d.startswith("/dev/disk/") else d for d in spec.all_devices()
+            ]
+            spec = replace(spec, device=devices[0], devices=devices)
         if spec.type == PoolType.DISK:
             # The pool mounts its disk on every start, so it must not follow /dev/sdX letters.
-            spec = replace(spec, device=stable_device(spec.device))
+            spec = replace(spec, device=stable_device(spec.all_devices()[0]), devices=None)
+        if spec.type in (PoolType.LVM, PoolType.DISK):
+            # Old partitions, another system's LVM or a Ceph OSD would make the build fail;
+            # the caller confirmed the erase, so clear them first.
+            self.clear_disks(spec.all_devices())
         session = None
         try:
             if spec.type == PoolType.ISCSI:
@@ -390,8 +403,8 @@ class LibvirtDriver(HypervisorDriver):
                 if built and root.get("type") == "logical":
                     # Do not leave a volume group behind that blocks the next try.
                     vg = root.findtext("source/name")
-                    device = root.find("source/device").get("path")
-                    for cmd in (["vgremove", "-f", vg], ["pvremove", "-ff", "-y", device]):
+                    devices = [d.get("path") for d in root.findall("source/device")]
+                    for cmd in (["vgremove", "-f", vg], ["pvremove", "-ff", "-y", *devices]):
                         try:
                             self.run(cmd)
                         except RuntimeError:
@@ -488,6 +501,16 @@ class LibvirtDriver(HypervisorDriver):
                     self.run(["ip", "link", "set", target.get("dev"), "master", bridge])
                 except RuntimeError:
                     pass  # the bridge is not back (yet); the next change tries again
+
+    def pool_path(self, name: str) -> str | None:
+        try:
+            pool = self._conn.storagePoolLookupByName(name)
+        except libvirt.libvirtError:
+            raise PoolNotFound(name) from None
+        root = ET.fromstring(pool.XMLDesc(0))
+        if root.get("type") not in ("dir", "netfs", "fs") or not pool.isActive():
+            return None
+        return root.findtext("target/path")
 
     def list_local_disks(self):
         from .disks import list_local_disks

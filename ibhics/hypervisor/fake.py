@@ -50,6 +50,8 @@ class FakeDriver(HypervisorDriver):
             "default": (PoolSpec(name="default", type=PoolType.DIR), 1000.0)
         }
         self._disks: dict[str, list[bytearray]] = {}
+        # Set to a folder to give file-based fake pools real files (datastore browser).
+        self.files_root: Path | None = None
         # Where each VM's "screen" is. By default a running VM gets a small built-in VNC
         # server with a test picture; tests can map a uuid to any (host, port) instead.
         self.consoles: dict[str, tuple[str, int]] = {}
@@ -237,12 +239,30 @@ class FakeDriver(HypervisorDriver):
             self._host = FakeHost()
         return self._host
 
+    def pool_path(self, name: str) -> str | None:
+        with self._lock:
+            if name not in self._pools:
+                raise PoolNotFound(name)
+            spec = self._pools[name][0]
+        if self.files_root is None or spec.type in (PoolType.LVM, PoolType.ISCSI):
+            return None
+        path = Path(self.files_root) / name
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
     def list_local_disks(self):
         from .disks import LocalDisk
 
         return [
-            LocalDisk("/dev/sdb", 12509.0, "RAID 930-8i", "6000d31000f0", "sas"),
-            LocalDisk("/dev/sdc", 894.3, "MZ7L3960", "S6KN", "sata", False, "3 partitions (vmfs)"),
+            LocalDisk("/dev/sdb", 12509.0, "RAID 930-8i", "6000d31000f0", "sas", media="hdd"),
+            LocalDisk(
+                "/dev/sdc", 894.3, "MZ7L3960", "S6KN", "sata", False, "3 partitions (vmfs)", "ssd"
+            ),
+            LocalDisk(
+                "/dev/sdd", 894.3, "MZ7L3960", "S6KP", "sata", False, "Ceph OSD (LVM)", "ssd"
+            ),
+            LocalDisk("/dev/sde", 3726.0, "ST4000NM0035", "ZC1A", "sata", media="hdd"),
+            LocalDisk("/dev/sdf", 3726.0, "ST4000NM0035", "ZC1B", "sata", media="hdd"),
         ]
 
     def guest_info(self, uuid: str) -> GuestInfo:
@@ -331,7 +351,7 @@ class FakeDriver(HypervisorDriver):
             PoolType.DIR: spec.path or f"/var/lib/ibhics/pools/{name}",
             PoolType.NFS: f"{spec.host}:{spec.export}",
             PoolType.ISCSI: f"{spec.host}:{spec.port} {spec.iqn} lun {spec.lun}",
-            PoolType.LVM: spec.device or "",
+            PoolType.LVM: ", ".join(spec.all_devices()),
             PoolType.DISK: spec.device or "",
         }[spec.type]
         return PoolInfo(

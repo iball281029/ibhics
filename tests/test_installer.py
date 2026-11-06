@@ -79,7 +79,7 @@ def test_console_banner_says_where_to_go():
     assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
-    assert "beta version 0.3" in issue
+    assert "beta version 0.4" in issue
 
 
 def test_apply_manager(tmp_path):
@@ -267,3 +267,75 @@ def test_pick_disk_prefers_small_internal_boot_drive(tmp_path):
     assert pick() == "/dev/nvme0n1"
     (sys_block / "nvme0n1" / "size").write_text("0\n")
     assert pick() == "/dev/sda"  # no small drive: the RAID volume, never the USB stick
+
+
+def test_wake_ports_brings_ports_up_and_waits_for_a_link(tmp_path):
+    # Fresh boot: the ports are down, so none reports a carrier until it is brought up.
+    for name in ("eno1", "eno2", "ens1f0"):
+        (tmp_path / name / "device").mkdir(parents=True)
+    commands = []
+    naps = []
+
+    def run(cmd, **_kw):
+        commands.append(cmd)
+
+    def sleep(seconds):
+        naps.append(seconds)
+        if len(naps) == 3:  # the cable on eno2 negotiates after a moment
+            (tmp_path / "eno2" / "carrier").write_text("1\n")
+
+    nics = setup.detect_interfaces(tmp_path)
+    assert nics == ["eno1", "eno2", "ens1f0"]  # nothing looks cabled yet
+    setup.wake_ports(nics, run=run, sys_net=tmp_path, sleep=sleep)
+    assert commands == [["ip", "link", "set", n, "up"] for n in nics]
+    assert len(naps) == 3
+    assert setup.detect_interfaces(tmp_path)[0] == "eno2"  # the cabled port is the default
+
+
+def test_wake_ports_gives_up_when_nothing_is_cabled(tmp_path):
+    (tmp_path / "eno1" / "device").mkdir(parents=True)
+    naps = []
+    setup.wake_ports(
+        ["eno1"], run=lambda *a, **k: None, sys_net=tmp_path, wait=2, sleep=naps.append
+    )
+    assert sum(naps) == 2
+
+
+def test_find_ibhics_spots_an_existing_install(tmp_path):
+    sys_block, dev = tmp_path / "block", tmp_path / "dev"
+    dev.mkdir()
+    for disk, parts in {"sda": ["sda1", "sda2", "sda3"], "nvme0n1": ["nvme0n1p1"]}.items():
+        for p in parts:
+            (sys_block / disk / p).mkdir(parents=True)
+            (dev / p).write_bytes(b"\0" * 8192)
+    # sda3 is an LVM PV of the "ibhics" volume group: label, then text metadata.
+    (dev / "sda3").write_bytes(
+        b"\0" * 512 + b"LABELONE" + b"\0" * 4088 + b'ibhics {\nid = "abc"\nseqno = 3\n'
+    )
+    (dev / "nvme0n1p1").write_bytes(b"\0" * 4096 + b'pve {\nid = "def"\n')  # someone else's VG
+
+    def found(disk):
+        env = {"PATH": "/usr/bin:/bin", "SYS": str(sys_block), "DEV": str(dev)}
+        script = str(INSTALLER / "find-ibhics.sh")
+        return subprocess.run(["sh", script, disk], env=env).returncode == 0
+
+    assert found("/dev/sda")
+    assert not found("/dev/nvme0n1")
+    assert not found("/dev/sdz")
+
+
+def test_default_entry_guards_an_existing_install():
+    preseed = (INSTALLER / "preseed.cfg").read_text()
+    assert "find-ibhics.sh" in preseed and "already-installed.sh" in preseed
+    assert "priority=critical" in (INSTALLER / "boot/isolinux.cfg").read_text()
+    templates = (INSTALLER / "ibhics.templates").read_text()
+    assert "Template: ibhics/already-installed" in templates
+    build = (INSTALLER / "build-iso.sh").read_text()
+    for name in ("find-ibhics.sh", "already-installed.sh", "ibhics.templates"):
+        assert f'"$HERE/{name}"' in build  # shipped on the ISO under /cdrom/ibhics
+
+
+def test_boot_menu_title_names_the_release():
+    menu = (INSTALLER / "boot/isolinux.cfg").read_text()
+    assert "menu title ibHiCS @VERSION@ beta installer" in menu
+    assert "s/@VERSION@/$SHORT/g" in (INSTALLER / "build-iso.sh").read_text()

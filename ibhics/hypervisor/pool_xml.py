@@ -69,11 +69,12 @@ def build_iscsi_session_xml(spec: PoolSpec) -> str:
     return ET.tostring(pool, encoding="unicode")
 
 
-def build_lvm_pool_xml(name: str, device: str) -> str:
+def build_lvm_pool_xml(name: str, device: str | list[str]) -> str:
     pool = ET.Element("pool", type="logical")
     ET.SubElement(pool, "name").text = name
     source = ET.SubElement(pool, "source")
-    ET.SubElement(source, "device", path=device)
+    for path in [device] if isinstance(device, str) else device:
+        ET.SubElement(source, "device", path=path)  # libvirt vgcreates over all of them
     ET.SubElement(source, "name").text = vg_name(name)
     ET.SubElement(source, "format", type="lvm2")
     target = ET.SubElement(pool, "target")
@@ -89,7 +90,7 @@ def build_pool_xml(spec: PoolSpec) -> str:
     if spec.type == PoolType.NFS:
         return build_nfs_pool_xml(spec)
     if spec.type == PoolType.LVM:
-        return build_lvm_pool_xml(spec.name, spec.device)
+        return build_lvm_pool_xml(spec.name, spec.all_devices())
     if spec.type == PoolType.DISK:
         return build_disk_pool_xml(spec)
     raise ValueError("iSCSI pools are built from the LUN device; use build_lvm_pool_xml")
@@ -116,8 +117,7 @@ def describe_pool_xml(xml: str, iscsi_sessions: dict[str, str]) -> tuple[PoolTyp
         device = root.find("source/device")
         return PoolType.DISK, device.get("path", "") if device is not None else ""
     if kind == "logical":
-        device = root.find("source/device")
-        dev = device.get("path", "") if device is not None else ""
+        dev = ", ".join(d.get("path", "") for d in root.findall("source/device"))
         session = iscsi_sessions.get(iscsi_session_name(name))
         if session:
             return PoolType.ISCSI, f"{session} ({dev})"

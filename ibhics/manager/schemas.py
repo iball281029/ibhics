@@ -302,6 +302,9 @@ class PoolCreate(BaseModel):
     iqn: str | None = None
     lun: int = Field(default=0, ge=0)
     device: str | None = Field(default=None, description="disk or lvm: e.g. /dev/disk/by-id/...")
+    devices: list[str] | None = Field(
+        default=None, max_length=64, description="lvm: several disks in one pool"
+    )
     confirm_wipe: bool = Field(
         default=False, description="required for iscsi, lvm and disk: the device is erased"
     )
@@ -318,6 +321,7 @@ class LocalDiskOut(BaseModel):
     transport: str
     empty: bool
     contents: str
+    media: str = ""
 
 
 class PoolOut(BaseModel):
@@ -574,6 +578,20 @@ class IsoOut(BaseModel):
     name: str
     path: str
     size_bytes: int
+    pool: str = ""  # empty: the ISO library folder on the system disk
+    folder: str = ""
+
+
+class PoolFileOut(BaseModel):
+    name: str
+    path: str  # relative to the pool
+    dir: bool
+    size_bytes: int
+    modified: float
+
+
+class FolderIn(BaseModel):
+    path: str = Field(min_length=1, max_length=512)
 
 
 class UploadOut(BaseModel):

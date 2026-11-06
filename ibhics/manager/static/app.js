@@ -63,7 +63,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [] };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
-const POOL_TYPES = { dir: "Local", disk: "Local disk (thin)", nfs: "NFS", iscsi: "iSCSI", lvm: "LVM (FC / disk)" };
+const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
@@ -122,7 +122,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "nodes", "backup", "migrate", "activity", "system"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -174,6 +174,53 @@ $$("dialog form").forEach((form) => {
 const handlers = {};
 let dialogContext = null;
 
+// Step-by-step dialogs ("wizards"): .wiz-steps on top, .wiz-page[data-page] sections, and
+// Back / Next / OK buttons. check(step) throws to stop Next; show(step) fills a page.
+const wizards = {};
+function wizard(id, { steps = 3, check = () => {}, show = () => {}, reset = () => {} }) {
+  const form = $(`#${id} form`);
+  const w = { step: 1, form };
+  const paint = () => {
+    $$(".wiz-steps li", form).forEach((li) => {
+      const n = Number(li.dataset.step);
+      li.classList.toggle("on", n === w.step);
+      li.classList.toggle("done", n < w.step);
+    });
+    $$(".wiz-page", form).forEach((p) => { p.hidden = Number(p.dataset.page) !== w.step; });
+    $(".wiz-back", form).hidden = w.step === 1;
+    $(".wiz-next", form).hidden = w.step === steps;
+    $(".wiz-ok", form).hidden = w.step !== steps;
+    show(w.step);
+  };
+  w.start = () => { w.step = 1; reset(); paint(); };
+  w.go = (n) => { w.step = n; paint(); };
+  w.check = check;
+  $(".wiz-next", form).addEventListener("click", () => {
+    try { check(w.step); w.step++; paint(); } catch (err) { fail(err); }
+  });
+  $(".wiz-back", form).addEventListener("click", () => { w.step--; paint(); });
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT" && w.step < steps) { e.preventDefault(); $(".wiz-next", form).click(); }
+  });
+  wizards[id] = w;
+  return w;
+}
+// Preset buttons (.chips.presets[data-target]) set a number field and show which is on.
+function syncPresets(form) {
+  $$(".chips.presets", form).forEach((c) => {
+    const v = form.elements[c.dataset.target].value;
+    $$("button", c).forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+  });
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest(".chips.presets button[data-v]");
+  if (!b) return;
+  const form = b.closest("form");
+  form.elements[b.closest(".chips").dataset.target].value = b.dataset.v;
+  syncPresets(form);
+});
+document.addEventListener("input", (e) => { if (e.target.form && $(".chips.presets", e.target.form)) syncPresets(e.target.form); });
+
 function openDialog(id, context = null, prefill = {}) {
   const dlg = document.getElementById(id);
   const form = $("form", dlg);
@@ -187,7 +234,7 @@ function openDialog(id, context = null, prefill = {}) {
   const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms",
     $(".net-list", form) && "networks", $(".iso-list", form) && "isos"].filter(Boolean);
   if (want.length) load(...want).then(() => fillSelects()).catch(() => {});
-  if ($(".disk-list", form)) fillDisks(form);
+  wizards[id]?.start();
 }
 
 $$("dialog").forEach((dlg) => {
@@ -358,7 +405,8 @@ async function refresh(page, auto = false) {
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
-  if (page === "storage") { await load("pools", "vms", "networks", "isos"); renderPools(); renderIsos(); renderNetworks(); }
+  if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
+  if (page === "network") { await load("vms", "networks"); renderNetworks(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -737,20 +785,93 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
   await refresh(currentPage());
 };
 
+// New VM: basics (name, OS), hardware (CPU, memory, disks, network), then install media
+// and a summary. Windows and recent OS versions default to UEFI.
+const vmWiz = wizard("vm-dialog", {
+  reset() {
+    const f = $("#vm-form");
+    $$(".vm-disk:not(:first-child)", f).forEach((d) => d.parentNode.removeChild(d));
+    f.elements.vcpus.value = 2;
+    f.elements.memory_gb.value = 4;
+    f.elements.disk_gb.value = 60;
+    vmWizOs(f);
+    syncPresets(f);
+  },
+  check(step) {
+    const f = $("#vm-form").elements;
+    if (step === 1 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the VM with letters, digits, '-', '_' or '.' (no spaces).");
+    if (step === 1 && state.vms.some((v) => v.name === f.name.value)) throw new Error(`A VM named ${f.name.value} already exists.`);
+    if (step === 2) {
+      if (!(Number(f.vcpus.value) >= 1)) throw new Error("Give the VM at least 1 vCPU.");
+      if (!(Number(f.memory_gb.value) >= 0.25)) throw new Error("Give the VM at least 0.25 GB of memory.");
+      if ($$(".vm-disk", $("#vm-form")).some((d) => !(Number($("input", d).value) >= 1) || !$("select", d).value)) throw new Error("Each disk needs a size and a storage pool.");
+    }
+  },
+  show(step) {
+    const form = $("#vm-form"), f = form.elements;
+    if (step === 3) {
+      const disks = $$(".vm-disk", form).map((d) => `${esc($("input", d).value)} GB on ${esc($("select", d).value)}`);
+      const rows = [["Name", esc(f.name.value)], ["Node", esc(f.node.value || "Automatic")],
+        ["OS", esc(f.os_type.value || { windows: "Windows", linux: "Linux", other: "Other" }[f.os_family.value])],
+        ["CPU / memory", `${esc(f.vcpus.value)} vCPU · ${esc(f.memory_gb.value)} GB`], ["Disks", disks.join("<br>")],
+        ["Network", esc(f.network.value)], ["Firmware", esc(f.firmware.value.toUpperCase())]];
+      $(".wiz-summary", form).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    }
+  },
+});
+function vmWizOs(form) {
+  const f = form.elements, family = f.os_family.value, ver = f.os_type.value.toLowerCase();
+  const uefi = (family === "windows" && !/2012|2016|windows 7|windows 8/.test(ver)) || /2025|red hat enterprise linux 9|24\.04/.test(ver);
+  f.firmware.value = uefi ? "uefi" : "bios";
+  $(".fw-hint", form).textContent = uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "";
+  f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
+}
+{
+  const form = $("#vm-form");
+  $$('input[name="os_family"]', form).forEach((r) => r.addEventListener("change", () => vmWizOs(form)));
+  form.elements.os_type.addEventListener("change", () => {
+    const v = form.elements.os_type.value.toLowerCase();
+    const fam = /windows/.test(v) ? "windows" : /ubuntu|debian|linux|rhel|rocky|alma|suse|centos|fedora/.test(v) ? "linux" : null;
+    if (fam) form.elements.os_family.value = fam;
+    vmWizOs(form);
+  });
+  $(".add-disk", form).addEventListener("click", () => {
+    const first = $(".vm-disk", form);
+    const row = document.createElement("div");
+    row.className = "vm-disk";
+    row.innerHTML = `<input type="number" min="1" value="100" aria-label="Size (GB)"><span class="muted">GB on</span><select>${$("select", first).innerHTML}</select><button type="button" class="ghost" title="Remove disk">×</button>`;
+    $("select", row).value = $("select", first).value;
+    $(".vm-disks", form).append(row);
+  });
+  $(".vm-disks", form).addEventListener("click", (e) => {
+    const row = e.target.closest("button") && e.target.closest(".vm-disk");
+    if (row) row.parentNode.removeChild(row);
+  });
+}
+
 handlers["vm-dialog"] = async (f) => {
+  const form = $("#vm-form");
+  vmWiz.check(1); vmWiz.check(2);
   const body = {
     name: f.get("name"),
     vcpus: Number(f.get("vcpus")),
-    memory_mb: Number(f.get("memory_mb")),
+    memory_mb: Math.round(Number(f.get("memory_gb")) * 1024),
     firmware: f.get("firmware"),
     os_type: f.get("os_type").trim(),
-    disks: [{ size_gb: Number(f.get("disk_gb")), pool: f.get("pool") || "default" }],
+    description: f.get("description").trim(),
+    disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default" })),
     nics: [{ network: f.get("network") || "default" }],
     node: f.get("node") || null,
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);
   toast(`${vm.name} created on ${vm.node}`);
+  if (f.get("start") === "on") {
+    try {
+      await post(`/vms/${vm.uuid}/start`);
+      window.open(`console.html?${new URLSearchParams({ vm: vm.uuid, name: vm.name })}`, `console-${vm.uuid}`, "width=1100,height=760");
+    } catch (err) { fail(err); }
+  }
   if (currentPage() === "compute") await refresh("compute"); else location.hash = "compute";
 };
 
@@ -772,7 +893,9 @@ handlers["migrate-dialog"] = async (f, ctx) => {
 
 // ---------- storage ----------
 
-const netLabel = (n) => (n.vlan ? `${n.name} (VLAN ${n.vlan})` : n.name === "default" ? "default (LAN, untagged)" : n.name);
+// The LAN without a tag is the switch port's native VLAN, VLAN 1 unless the switch says otherwise.
+const vlanId = (n) => n.vlan ?? 1;
+const netLabel = (n) => `${n.name} (VLAN ${vlanId(n)})`;
 function netOptions(selected) {
   const nets = state.networks.length ? state.networks : [{ name: "default" }];
   const names = nets.map((n) => n.name);
@@ -785,7 +908,7 @@ function renderNetworks() {
   $("#networks").innerHTML = state.networks.map((n) => {
     const vms = state.vms.filter((v) => v.nics.some((x) => x.network === n.name)).length;
     return `<tr><td><div class="name-cell">${avatar("i-nic")}<span class="vm-name">${esc(n.name)}</span></div></td>
-      <td>${n.vlan ?? `<span class="muted">untagged</span>`}</td><td class="mono">${esc(n.bridge)}</td>
+      <td>VLAN ${vlanId(n)}${n.vlan ? "" : ` <span class="muted">(native)</span>`}</td><td class="mono">${esc(n.bridge)}</td>
       <td>${esc(n.nodes.join(", "))}</td><td>${vms}</td>
       <td><div class="actions">${admin && n.name !== "default" ? `<button class="small danger" data-net-del="${esc(n.name)}">Remove</button>` : ""}</div></td></tr>`;
   }).join("") || empty(6, "No networks");
@@ -793,12 +916,12 @@ function renderNetworks() {
 $("#networks").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-net-del]");
   if (!btn || !confirm(`Remove network ${btn.dataset.netDel}?`)) return;
-  try { await del(`/networks/${enc(btn.dataset.netDel)}`); await refresh("storage"); } catch (err) { fail(err); }
+  try { await del(`/networks/${enc(btn.dataset.netDel)}`); await refresh("network"); } catch (err) { fail(err); }
 });
 handlers["net-dialog"] = async (f) => {
   await post("/networks", { name: f.get("name"), vlan: Number(f.get("vlan")) });
   toast(`Network ${f.get("name")} added on every compute node`);
-  await refresh("storage");
+  await refresh("network");
 };
 
 function renderPools() {
@@ -806,7 +929,7 @@ function renderPools() {
   $("#pools").innerHTML = state.pools.length ? state.pools.map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
-      <td><div class="name-cell">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
+      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
       <td>${esc(p.node)}</td>
       <td><span class="badge info plain">${esc(POOL_TYPES[p.type] || p.type)}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
@@ -817,6 +940,8 @@ function renderPools() {
 }
 
 $("#pools").addEventListener("click", async (e) => {
+  const link = e.target.closest("[data-pool-view]");
+  if (link) { openPoolView(link.dataset.node, link.dataset.poolView); return; }
   const btn = e.target.closest("button[data-pool]");
   if (!btn || !confirm(`Remove pool ${btn.dataset.pool} from ${btn.dataset.node}? Data on the storage stays.`)) return;
   try {
@@ -825,11 +950,110 @@ $("#pools").addEventListener("click", async (e) => {
   } catch (err) { fail(err); }
 });
 
+// ---------- storage detail: summary and files ----------
+
+const pv = { node: "", pool: "", path: "" };
+const pvDlg = $("#pool-view");
+function openPoolView(node, pool) {
+  Object.assign(pv, { node, pool, path: "" });
+  selectTab("pv-tabs", "pv-summary");
+  pvSummary();
+  pvDlg.showModal();
+  pvFiles();
+}
+function pvInfo() { return state.pools.find((p) => p.node === pv.node && p.name === pv.pool); }
+function pvSummary() {
+  const p = pvInfo();
+  if (!p) return;
+  $(".pv-title", pvDlg).textContent = `${p.name} on ${p.node}`;
+  const used = pct(p.allocation_gb, p.capacity_gb), free = p.available_gb ?? p.capacity_gb - p.allocation_gb;
+  $(".pv-stats", pvDlg).innerHTML = `
+    <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(POOL_TYPES[p.type] || p.type)}</em></div>
+    <div class="stat"><span>Used</span><b>${sizeText(p.allocation_gb)} <small>${used}%</small></b>${bar(used)}</div>
+    <div class="stat"><span>Free</span><b>${sizeText(free)}</b><em>${p.active ? "Online" : "Offline"}</em></div>`;
+  const disks = state.vms.filter((v) => v.node === p.node).flatMap((v) => v.disks.map((d, i) => ({ vm: v, d, i }))).filter((x) => x.d.pool === p.name);
+  const isos = state.isos.filter((i) => i.pool === p.name);
+  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(p.node)], ["Type", esc(POOL_TYPES[p.type] || p.type)], ["Source", `<span class="mono">${esc(p.source)}</span>`],
+    ["VM disks", `${disks.length} (${sizeText(disks.reduce((s, x) => s + x.d.size_gb, 0))} provisioned)`], ["ISOs", String(isos.length)]]
+    .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $(".pv-disks", pvDlg).innerHTML = disks.length ? disks.map((x) => `<tr><td class="vm-name"><a class="vm-link" href="#vm/${esc(x.vm.uuid)}">${esc(x.vm.name)}</a></td>
+    <td>Disk ${x.i + 1}</td><td>${num(x.d.size_gb)} GB</td><td><span class="badge ${esc(x.vm.state)}">${esc(x.vm.state)}</span></td></tr>`).join("")
+    : empty(4, "No VM disks here yet");
+  const files = ["dir", "disk", "nfs"].includes(p.type);
+  $('#pv-tabs [data-tab="pv-files"]').hidden = !files;
+}
+async function pvFiles() {
+  const p = pvInfo();
+  if (!p || !["dir", "disk", "nfs"].includes(p.type)) return;
+  const parts = pv.path ? pv.path.split("/") : [];
+  $(".pv-crumb", pvDlg).innerHTML = [`<button type="button" data-go="">${esc(pv.pool)}</button>`,
+    ...parts.map((n, i) => `<svg><use href="#i-chev"/></svg><button type="button" data-go="${esc(parts.slice(0, i + 1).join("/"))}">${esc(n)}</button>`)].join("");
+  $(".pv-up-btn", pvDlg).hidden = !pv.path; // uploads go into a folder, not next to the VM disks
+  $(".pv-note", pvDlg).hidden = !!pv.path;
+  const tbody = $(".pv-files", pvDlg);
+  tbody.innerHTML = empty(4, "Loading...");
+  try {
+    const items = await api(`/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/files?path=${enc(pv.path)}`);
+    const op = canOperate(), admin = isAdmin();
+    tbody.innerHTML = items.length ? items.map((f) => `<tr ${f.dir ? `data-dir="${esc(f.path)}"` : ""}>
+      <td><div class="name-cell">${avatar(f.dir ? "i-storage" : f.name.toLowerCase().endsWith(".iso") ? "i-cd" : "i-hdd")}<span class="vm-name">${esc(f.name)}</span></div></td>
+      <td>${f.dir ? "Folder" : size(f.size_bytes)}</td>
+      <td>${f.modified ? esc(new Date(f.modified * 1000).toLocaleString()) : ""}</td>
+      <td><div class="actions">${admin && (f.dir || pv.path) ? `<button type="button" class="small danger" data-del="${esc(f.path)}">Delete</button>` : ""}${op ? "" : ""}</div></td>
+    </tr>`).join("") : empty(4, pv.path ? "Empty folder. Upload files into it." : "No files yet. Make a folder such as iso.");
+  } catch (err) { tbody.innerHTML = empty(4, err.message); }
+}
+{
+  $("#pv-tabs").addEventListener("click", (e) => { if (e.target.closest('[data-tab="pv-files"]')) pvFiles(); });
+  $(".pv-crumb", pvDlg).addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-go]");
+    if (b) { pv.path = b.dataset.go; pvFiles(); }
+  });
+  $(".pv-files", pvDlg).addEventListener("click", async (e) => {
+    const del = e.target.closest("button[data-del]");
+    if (del) {
+      if (!confirm(`Delete ${del.dataset.del}${e.target.closest("tr[data-dir]") ? " and everything in it" : ""}?`)) return;
+      try { await del_(`/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/files?path=${enc(del.dataset.del)}`); } catch (err) { fail(err); }
+      await Promise.all([pvFiles(), load("isos").catch(() => {})]);
+      return;
+    }
+    const dir = e.target.closest("tr[data-dir]");
+    if (dir) { pv.path = dir.dataset.dir; pvFiles(); }
+  });
+  $(".pv-refresh", pvDlg).addEventListener("click", pvFiles);
+  $(".pv-mkdir", pvDlg).addEventListener("click", async () => {
+    const name = prompt("Folder name", pv.path ? "" : "iso");
+    if (!name) return;
+    try {
+      await post(`/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/folders`, { path: pv.path ? `${pv.path}/${name}` : name });
+      pvFiles();
+    } catch (err) { fail(err); }
+  });
+  $(".pv-upload", pvDlg).addEventListener("change", async (e) => {
+    const files = [...e.target.files];
+    e.target.value = "";
+    for (const file of files) {
+      const row = document.createElement("div");
+      row.className = "upload-row";
+      row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
+      $(".pv-progress", pvDlg).append(row);
+      try {
+        await uploadFile(file, row, `/api/v1/nodes/${enc(pv.node)}/pools/${enc(pv.pool)}/files?path=${enc(`${pv.path}/${file.name}`)}`);
+        $(".pct", row).textContent = "Uploaded";
+        setTimeout(() => row.parentNode && row.parentNode.removeChild(row), 4000);
+      } catch (err) { row.classList.add("failed"); $(".pct", row).textContent = err.message; }
+    }
+    await Promise.all([pvFiles(), load("isos").then(() => currentPage() === "storage" && renderIsos()).catch(() => {})]);
+  });
+}
+const del_ = (path) => del(path);
+
+
 // ---------- ISO library ----------
 
 // Options for an ISO picker; an ISO set by hand that is not in the library stays listed.
 function isoOptions(selected = "", none = "None") {
-  const items = state.isos.map((i) => [i.path, `${i.name} (${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))})`]);
+  const items = state.isos.map((i) => [i.path, `${i.name} (${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}${i.pool ? `, ${i.pool}` : ""})`]);
   if (selected && !items.some(([p]) => p === selected)) items.push([selected, selected.split("/").pop()]);
   return [["", none], ...items].map(([p, label]) =>
     `<option value="${esc(p)}" ${p === selected ? "selected" : ""}>${esc(label)}</option>`).join("");
@@ -838,14 +1062,39 @@ function isoOptions(selected = "", none = "None") {
 function renderIsos() {
   const users = (path) => state.vms.filter((v) => v.iso === path).map((v) => v.name);
   $("#isos").innerHTML = state.isos.length ? state.isos.map((i) => {
-    const own = i.path.startsWith("/var/lib/ibhics/iso/");
+    const own = !i.pool && i.name !== "ibHiCS guest tools";
+    const where = i.pool ? `${i.pool}${i.folder ? ` / ${i.folder}` : ""}` : own ? "System disk" : "Built in";
     return `<tr>
       <td><div class="name-cell">${avatar("i-cd")}<span class="vm-name">${esc(i.name)}</span></div></td>
+      <td>${esc(where)}</td>
       <td>${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}</td>
       <td>${esc(users(i.path).join(", ") || "–")}</td>
       <td><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
     </tr>`;
-  }).join("") : empty(4, "No ISOs yet: upload one to install a new VM from it");
+  }).join("") : empty(5, "No ISOs yet: upload one to install a new VM from it");
+  fillIsoDest();
+}
+
+// Where "Upload ISO" saves: the system disk's ISO library, or the iso folder of a
+// file-based pool (folder, thin disk, NFS), which has far more room.
+function fillIsoDest() {
+  const sel = $("#iso-dest");
+  if (!sel) return;
+  const was = sel.value;
+  const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
+  sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
+    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(p.node)} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
+  if (sel.dataset.touched && [...sel.options].some((o) => o.value === was)) sel.value = was;
+  else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
+}
+$("#iso-dest").addEventListener("change", (e) => { e.target.dataset.touched = "1"; });
+async function isoUploadUrl(file, input) {
+  const dest = input.closest("#page-storage") ? $("#iso-dest").value : "";
+  if (!dest) return `/api/v1/isos/${enc(file.name)}`;
+  const [node, pool] = dest.split("|");
+  const base = `/nodes/${enc(node)}/pools/${enc(pool)}`;
+  try { await post(`${base}/folders`, { path: "iso" }); } catch { /* already there */ }
+  return `/api/v1${base}/files?path=${enc(`iso/${file.name}`)}`;
 }
 
 $("#isos").addEventListener("click", async (e) => {
@@ -870,7 +1119,7 @@ document.addEventListener("change", async (e) => {
     row.innerHTML = `<span class="vm-name">${esc(file.name)}</span><span class="bar"><i></i></span><span class="pct">0%</span>`;
     box.append(row);
     try {
-      await uploadFile(file, row, `/api/v1/isos/${enc(file.name)}`);
+      await uploadFile(file, row, await isoUploadUrl(file, input));
       $(".pct", row).textContent = "Uploaded";
       setTimeout(() => row.remove(), 5000);
       last = file.name;
@@ -890,42 +1139,238 @@ document.addEventListener("change", async (e) => {
   if (currentPage() === "storage") renderIsos();
 });
 
-// The disk picker lists the node's unused whole disks, so nobody has to find /dev/sdX.
-async function fillDisks(form) {
-  const sel = $(".disk-list", form);
-  const node = form.elements.node.value;
-  if (!node || !["disk", "lvm"].includes(form.elements.type.value)) return;
-  sel.innerHTML = `<option value="">Looking for disks on ${esc(node)}...</option>`;
-  let disks = [];
-  try { disks = await api(`/nodes/${enc(node)}/disks`); } catch (err) { /* offered by hand below */ }
-  const label = (d) => [d.path, `${Math.round(d.size_gb).toLocaleString()} GB`, d.model, d.transport.toUpperCase(),
-    d.empty ? "empty" : `has data: ${d.contents}`].filter(Boolean).join(" · ");
-  sel.innerHTML = (disks.length ? disks.map((d) => `<option value="${esc(d.path)}">${esc(label(d))}</option>`).join("")
-    : `<option value="">No unused disk found on ${esc(node)}</option>`) + `<option value="other">Other device path...</option>`;
-  syncDiskPath(form);
+// ---------- Add storage wizard ----------
+// Three steps: what kind of storage, which disks (or where the share is), then a name
+// and a clear warning about what gets erased. Local disks are picked from a table with
+// SSD/HDD shown, and several disks make one pool.
+
+const poolWiz = {
+  form: $("#pool-form"),
+  step: 1,
+  disks: {}, // node -> [disk] (null while loading)
+  picked: new Set(),
+  media: "",
+  nameTouched: false,
+};
+const KIND_LABEL = { local: "Local disks", fc: "Fibre Channel", nfs: "NFS", iscsi: "iSCSI", dir: "Folder" };
+const sizeText = (gb) => (gb >= 1000 ? `${(gb / 1024).toFixed(gb >= 10240 ? 1 : 2)} TB` : `${Math.round(gb)} GB`);
+const isFcDisk = (d) => d.transport === "fc" || d.path.startsWith("/dev/mapper/");
+
+function wizKind() { return poolWiz.form.elements.kind.value; }
+function wizNode() { return poolWiz.form.elements.node.value; }
+function wizDiskList() {
+  const all = poolWiz.disks[wizNode()] || [];
+  return all.filter((d) => (wizKind() === "fc" ? isFcDisk(d) : !isFcDisk(d)));
 }
-function syncDiskPath(form) {
-  $(".disk-path", form).hidden = form.elements.device.value !== "other";
-}
-{
-  const form = $("#pool-form");
-  form.elements.node.addEventListener("change", () => fillDisks(form));
-  form.elements.type.addEventListener("change", () => fillDisks(form));
-  form.elements.device.addEventListener("change", () => syncDiskPath(form));
+function wizPicked() { return wizDiskList().filter((d) => poolWiz.picked.has(d.path)); }
+
+function wizStart() {
+  Object.assign(poolWiz, { step: 1, disks: {}, picked: new Set(), media: "", nameTouched: false });
+  $$(".chips button", poolWiz.form).forEach((b) => b.classList.toggle("on", b.dataset.media === ""));
+  $(".disk-search", poolWiz.form).value = "";
+  $(".node-check-list", poolWiz.form).innerHTML = computeMembers().filter((m) => m.healthy).map((m, i) =>
+    `<label class="check"><input type="checkbox" name="nodes" value="${esc(m.name)}" ${i === 0 ? "checked" : ""}> ${esc(m.name)}</label>`).join("")
+    || `<p class="hint">No node is online.</p>`;
+  wizShow();
 }
 
+function wizShow() {
+  const { form, step } = poolWiz, kind = wizKind();
+  $$(".wiz-steps li", form).forEach((li) => {
+    const n = Number(li.dataset.step);
+    li.classList.toggle("on", n === step);
+    li.classList.toggle("done", n < step);
+  });
+  $(".wiz-step2", form).textContent = ["local", "fc"].includes(kind) ? "Disks" : kind === "dir" ? "Folder" : "Connection";
+  $$(".wiz-page", form).forEach((p) => {
+    p.hidden = Number(p.dataset.page) !== step || (p.dataset.kinds && !p.dataset.kinds.split(" ").includes(kind));
+  });
+  $$("[data-kinds]:not(.wiz-page)", form).forEach((el) => { el.hidden = !el.dataset.kinds.split(" ").includes(kind); });
+  $(".wiz-back", form).hidden = step === 1;
+  $(".wiz-next", form).hidden = step === 3;
+  $(".wiz-ok", form).hidden = step !== 3;
+  if (step === 2 && ["local", "fc"].includes(kind)) wizLoadDisks();
+  if (step === 3) wizReview();
+}
+
+async function wizLoadDisks(force = false) {
+  const node = wizNode();
+  if (!node) { wizRenderDisks(); return; }
+  if (poolWiz.disks[node] !== undefined && !force) { wizRenderDisks(); return; }
+  poolWiz.disks[node] = null;
+  wizRenderDisks();
+  try { poolWiz.disks[node] = await api(`/nodes/${enc(node)}/disks`); } catch (err) { poolWiz.disks[node] = []; fail(err); }
+  if (wizNode() === node) wizRenderDisks();
+}
+
+function wizRenderDisks() {
+  const { form } = poolWiz, node = wizNode(), kind = wizKind();
+  const rows = $(".disk-rows", form);
+  if (!node) { rows.innerHTML = empty(6, "No node is online"); return wizPickText(); }
+  if (poolWiz.disks[node] === null) { rows.innerHTML = empty(6, `Looking for disks on ${node}...`); return wizPickText(); }
+  const q = $(".disk-search", form).value.trim().toLowerCase();
+  const list = wizDiskList().filter((d) => (!poolWiz.media || d.media === poolWiz.media)
+    && (!q || [d.path, d.model, d.serial, d.contents].join(" ").toLowerCase().includes(q)));
+  rows.innerHTML = list.length ? list.map((d) => {
+    const on = poolWiz.picked.has(d.path);
+    return `<tr data-path="${esc(d.path)}" class="${on ? "sel" : ""}">
+      <td><input type="checkbox" ${on ? "checked" : ""} aria-label="Select ${esc(d.path)}"></td>
+      <td>${d.empty ? `<span class="badge empty-disk">Empty</span>` : `<span class="badge has-data">Has data</span>`}</td>
+      <td><span class="vm-name mono">${esc(d.path)}</span><span class="vm-sub">${esc([d.model, d.transport.toUpperCase()].filter(Boolean).join(" · "))}</span></td>
+      <td>${d.media ? `<span class="media ${esc(d.media)}">${esc(d.media.toUpperCase())}</span>` : "–"}</td>
+      <td style="white-space:nowrap">${sizeText(d.size_gb)}</td>
+      <td class="vm-sub" style="display:table-cell">${esc(d.empty ? (d.serial ? `S/N ${d.serial}` : "") : d.contents)}</td>
+    </tr>`;
+  }).join("") : empty(6, kind === "fc"
+    ? `No FC LUN found on ${node}. Zone the LUN to this node on the SAN, then Rescan.`
+    : poolWiz.media || q ? "No disk matches the filter" : `No free disk on ${node}. Insert a disk into the node, then Rescan.`);
+  const shown = list.map((d) => d.path);
+  const all = $(".disk-all", form);
+  all.checked = shown.length > 0 && shown.every((p) => poolWiz.picked.has(p));
+  all.indeterminate = !all.checked && shown.some((p) => poolWiz.picked.has(p));
+  wizPickText();
+}
+
+function wizMixNote(picked) {
+  const kinds = new Set(picked.map((d) => d.media).filter(Boolean));
+  return kinds.size > 1
+    ? `<div class="wiz-note warn">SSD and HDD are mixed in one pool. The pool runs only as fast as its HDDs; separate pools are better.</div>` : "";
+}
+
+function wizPickText() {
+  const picked = wizPicked();
+  const box = $(".wiz-pick", poolWiz.form);
+  if (!picked.length) { box.innerHTML = `<span class="muted">Tick the disks for the new pool.</span>`; return; }
+  const total = picked.reduce((s, d) => s + d.size_gb, 0);
+  box.innerHTML = `<b>${picked.length} disk${picked.length > 1 ? "s" : ""} selected</b> · ${sizeText(total)} in total${wizMixNote(picked)}`;
+}
+
+function wizSuggestName() {
+  const el = poolWiz.form.elements.name;
+  if (poolWiz.nameTouched && el.value) return;
+  const kind = wizKind(), picked = wizPicked(), f = poolWiz.form.elements;
+  const media = new Set(picked.map((d) => d.media));
+  let base = { nfs: "nas", iscsi: "iscsi", fc: "san", dir: "local" }[kind] || (media.size === 1 ? `${[...media][0] || "data"}` : "data");
+  if (kind === "nfs" && f.host.value) base = `nas-${f.host.value.split(".").pop()}`;
+  if (kind === "local") base += `-${wizNode()}`;
+  base = base.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^[^a-zA-Z0-9]+/, "") || "pool";
+  const taken = new Set(state.pools.map((p) => p.name));
+  let name = base;
+  for (let i = 2; taken.has(name); i++) name = `${base}-${i}`;
+  el.value = name;
+}
+
+function wizReview() {
+  const { form } = poolWiz, f = form.elements, kind = wizKind(), picked = wizPicked();
+  wizSuggestName();
+  const fmt = $$('input[name="format"]', form);
+  if (kind === "local") {
+    const thin = fmt.find((r) => r.value === "disk");
+    thin.disabled = picked.length > 1;
+    if (!$('input[name="format"]:checked', form) || thin.disabled) fmt.find((r) => r.value === (picked.length > 1 ? "lvm" : "disk")).checked = true;
+  }
+  const rows = [["Type", KIND_LABEL[kind]]];
+  if (["local", "fc"].includes(kind)) {
+    rows.push(["Node", wizNode()], ["Disks", picked.map((d) => `${d.path} (${sizeText(d.size_gb)}${d.media ? ` ${d.media.toUpperCase()}` : ""})`).join("<br>")],
+      ["Capacity", `About ${sizeText(picked.reduce((s, d) => s + d.size_gb, 0))}`]);
+  } else {
+    const nodes = $$('input[name="nodes"]:checked', form).map((c) => c.value);
+    if (kind === "nfs") rows.push(["Share", esc(`${f.host.value}:${f.export.value}`)]);
+    if (kind === "iscsi") rows.push(["Target", esc(`${f.host.value} · ${f.iqn.value} · LUN ${f.lun.value}`)]);
+    if (kind === "dir") rows.push(["Folder", esc(f.path.value || "Default (/var/lib/ibhics/pools/<name>)")]);
+    rows.push(["Nodes", esc(nodes.join(", "))]);
+  }
+  $(".wiz-summary", form).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${k === "Node" || k === "Type" ? esc(v) : v}</dd>`).join("");
+  const withData = picked.filter((d) => !d.empty);
+  const erases = ["local", "fc", "iscsi"].includes(kind);
+  $(".wiz-warn", form).innerHTML = (withData.length ? `<div class="wiz-note bad"><div><b>These disks still hold data, which will be erased:</b><ul>${withData.map((d) =>
+    `<li><span class="mono">${esc(d.path)}</span>: ${esc(d.contents)}</li>`).join("")}</ul></div></div>` : "") + wizMixNote(picked);
+  $(".wiz-confirm", form).hidden = !erases;
+  $(".wiz-confirm span", form).textContent = kind === "iscsi"
+    ? "I understand everything on this LUN will be erased"
+    : `I understand everything on ${picked.length > 1 ? `these ${picked.length} disks` : "this disk"} will be erased`;
+}
+
+function wizCheck(step) {
+  const f = poolWiz.form.elements, kind = wizKind();
+  if (step === 2 && ["local", "fc"].includes(kind) && !wizPicked().length) throw new Error("Tick at least one disk.");
+  if (step === 2 && !["local", "fc"].includes(kind)) {
+    if (["nfs", "iscsi"].includes(kind) && !f.host.value.trim()) throw new Error("Enter the server address.");
+    if (kind === "nfs" && !f.export.value.trim().startsWith("/")) throw new Error("Enter the export path, starting with /.");
+    if (kind === "iscsi" && !f.iqn.value.trim()) throw new Error("Enter the target IQN.");
+    if (!$$('input[name="nodes"]:checked', poolWiz.form).length) throw new Error("Pick at least one node.");
+  }
+  if (step === 3) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the pool with letters, digits, '-', '_' or '.'.");
+    if (!$(".wiz-confirm", poolWiz.form).hidden && !f.confirm_wipe.checked) throw new Error("Tick the box to confirm the disks may be erased.");
+  }
+}
+
+{
+  const { form } = poolWiz;
+  $(".wiz-next", form).addEventListener("click", () => {
+    try { wizCheck(poolWiz.step); poolWiz.step++; wizShow(); } catch (err) { fail(err); }
+  });
+  $(".wiz-back", form).addEventListener("click", () => { poolWiz.step--; wizShow(); });
+  $$(".type-card input[name=kind]", form).forEach((r) => r.addEventListener("change", () => { poolWiz.picked.clear(); poolWiz.nameTouched = false; }));
+  $$(".type-cards .type-card", form).forEach((c) => c.addEventListener("dblclick", () => $(".wiz-next", form).click()));
+  form.elements.node.addEventListener("change", () => { poolWiz.picked.clear(); wizLoadDisks(); });
+  form.elements.name.addEventListener("input", () => { poolWiz.nameTouched = true; });
+  $(".disk-rescan", form).addEventListener("click", () => wizLoadDisks(true));
+  $(".disk-search", form).addEventListener("input", wizRenderDisks);
+  $(".chips", form).addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-media]");
+    if (!b) return;
+    poolWiz.media = b.dataset.media;
+    $$(".chips button", form).forEach((x) => x.classList.toggle("on", x === b));
+    wizRenderDisks();
+  });
+  $(".disk-rows", form).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-path]");
+    if (!tr) return;
+    const p = tr.dataset.path;
+    if (poolWiz.picked.has(p)) poolWiz.picked.delete(p); else poolWiz.picked.add(p);
+    wizRenderDisks();
+  });
+  $(".disk-all", form).addEventListener("change", (e) => {
+    $$(".disk-rows tr[data-path]", form).forEach((tr) => {
+      if (e.target.checked) poolWiz.picked.add(tr.dataset.path); else poolWiz.picked.delete(tr.dataset.path);
+    });
+    wizRenderDisks();
+  });
+  // Enter in a field moves on instead of submitting from an earlier step.
+  form.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT" && poolWiz.step < 3) { e.preventDefault(); $(".wiz-next", form).click(); }
+  });
+}
+
+wizards["pool-dialog"] = { start: wizStart };
+
 handlers["pool-dialog"] = async (f) => {
-  const type = f.get("type");
-  const body = { name: f.get("name"), type, confirm_wipe: f.get("confirm_wipe") === "on" };
-  if (type === "dir" && f.get("path")) body.path = f.get("path");
-  if (type === "nfs" || type === "iscsi") body.host = f.get("host");
-  if (type === "nfs") body.export = f.get("export");
-  if (type === "iscsi") { body.iqn = f.get("iqn"); body.lun = Number(f.get("lun")); }
-  const onDisk = type === "disk" || type === "lvm";
-  if (onDisk) body.device = f.get("device") === "other" ? f.get("device_path") : f.get("device");
-  if (onDisk && !body.device) throw new Error("Pick a disk.");
-  await post(`/nodes/${enc(f.get("node"))}/pools`, body);
-  toast(`Pool ${body.name} added`);
+  wizCheck(3);
+  const kind = wizKind(), name = f.get("name"), confirm_wipe = f.get("confirm_wipe") === "on";
+  if (["local", "fc"].includes(kind)) {
+    const devices = wizPicked().map((d) => d.path);
+    const type = kind === "local" ? f.get("format") : "lvm";
+    const body = type === "disk" ? { name, type, device: devices[0], confirm_wipe } : { name, type, devices, confirm_wipe };
+    await post(`/nodes/${enc(wizNode())}/pools`, body);
+    toast(`Storage ${name} added on ${wizNode()}`);
+  } else {
+    const body = { name, type: kind, confirm_wipe };
+    if (kind === "dir" && f.get("path")) body.path = f.get("path");
+    if (kind === "nfs" || kind === "iscsi") body.host = f.get("host").trim();
+    if (kind === "nfs") body.export = f.get("export").trim();
+    if (kind === "iscsi") { body.iqn = f.get("iqn").trim(); body.lun = Number(f.get("lun")); }
+    const nodes = f.getAll("nodes"), done = [];
+    for (const node of nodes) {
+      try { await post(`/nodes/${enc(node)}/pools`, body); done.push(node); } catch (err) {
+        if (done.length) toast(`Storage ${name} added on ${done.join(", ")}`);
+        await refresh("storage");
+        throw new Error(`${node}: ${err.message}`);
+      }
+    }
+    toast(`Storage ${name} added on ${done.join(", ")}`);
+  }
   await refresh("storage");
 };
 
@@ -1507,22 +1952,220 @@ handlers["target-dialog"] = async (f) => {
   await refresh("backup");
 };
 
+// New backup schedule: which VMs, when and how many to keep, where to, then a name.
+const polWiz = { picked: new Set(), nameTouched: false };
+const polForm = $("#policy-form");
+function polScope() { return polForm.elements.scope.value; }
+function polRender() {
+  const pick = polScope() === "pick";
+  $(".pol-vms", polForm).hidden = !pick;
+  if (!pick) return;
+  const q = $(".pol-search", polForm).value.trim().toLowerCase();
+  const vms = [...state.vms].sort((a, b) => a.name.localeCompare(b.name)).filter((v) => !q || v.name.toLowerCase().includes(q));
+  $(".pol-rows", polForm).innerHTML = vms.length ? vms.map((v) => {
+    const on = polWiz.picked.has(v.name);
+    return `<tr data-vm="${esc(v.name)}" class="${on ? "sel" : ""}"><td><input type="checkbox" ${on ? "checked" : ""} aria-label="Back up ${esc(v.name)}"></td>
+      <td class="vm-name">${esc(v.name)}</td><td>${esc(v.node || "")}</td><td><span class="badge ${esc(v.state)}">${esc(v.state)}</span></td>
+      <td>${v.disks.reduce((s, d) => s + d.size_gb, 0).toLocaleString()} GB</td></tr>`;
+  }).join("") : empty(5, state.vms.length ? "No VM matches" : "No VMs yet");
+  $(".pol-count", polForm).textContent = `${polWiz.picked.size} of ${state.vms.length} VMs ticked`;
+}
+function polSchedule() {
+  const f = polForm.elements;
+  $(".pol-at", polForm).hidden = f.mode.value !== "at";
+  $(".pol-every", polForm).hidden = f.mode.value !== "every";
+  const keep = Number(f.keep_last.value) || 0;
+  const hours = f.mode.value === "at" ? 24 : Number(f.every_hours.value) || 0;
+  const span = keep * hours;
+  $(".pol-keep", polForm).textContent = keep && hours
+    ? `You can go back about ${span >= 48 ? `${Math.round(span / 24)} days` : `${span} hours`}. Older backups are deleted automatically.` : "";
+}
+function polText() {
+  const f = polForm.elements;
+  return f.mode.value === "at" ? `Every day at ${f.at.value}` : `Every ${f.every_hours.value} hours`;
+}
+const policyWiz = wizard("policy-dialog", {
+  steps: 4,
+  reset() {
+    polWiz.picked = new Set();
+    polWiz.nameTouched = false;
+    $(".pol-search", polForm).value = "";
+    syncPresets(polForm);
+    polSchedule();
+    polRender();
+    load("vms", "targets", "policies").then(polRender).catch(() => {});
+  },
+  check(step) {
+    const f = polForm.elements;
+    if (step === 1 && polScope() === "pick" && !polWiz.picked.size) throw new Error("Tick at least one VM, or choose Every VM.");
+    if (step === 2) {
+      if (f.mode.value === "at" && !/^\d\d:\d\d$/.test(f.at.value)) throw new Error("Pick a time of day.");
+      if (f.mode.value === "every" && !(Number(f.every_hours.value) >= 1 && Number(f.every_hours.value) <= 168)) throw new Error("Hours must be 1 to 168.");
+      if (!(Number(f.keep_last.value) >= 1)) throw new Error("Keep at least 1 backup.");
+    }
+    if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup target first (Backup → Targets).");
+    if (step === 4 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the schedule with letters, digits, '-', '_' or '.'.");
+    if (step === 4 && state.policies.some((p) => p.name === f.name.value)) throw new Error(`A schedule named ${f.name.value} already exists.`);
+  },
+  show(step) {
+    const f = polForm.elements;
+    if (step === 1) polRender();
+    if (step === 2) polSchedule();
+    if (step === 3) {
+      const was = $('input[name="target"]:checked', polForm)?.value;
+      $(".pol-targets", polForm).innerHTML = state.targets.map((t, i) => `<label class="type-card small"><input type="radio" name="target" value="${esc(t.name)}" ${(was ? t.name === was : i === 0) ? "checked" : ""}>
+        <svg><use href="#i-backup"/></svg><span><b>${esc(t.name)}</b><em>${esc(TARGET_TYPES[t.type] || t.type)} · ${esc(t.source)}</em></span></label>`).join("")
+        || `<p class="hint" style="padding:0">No backup target yet.</p>`;
+    }
+    if (step === 4) {
+      if (!polWiz.nameTouched || !f.name.value) {
+        let base = f.mode.value === "at" ? (f.at.value < "06:00" || f.at.value >= "20:00" ? "nightly" : "daily") : `every-${f.every_hours.value}h`;
+        if (polScope() === "pick" && polWiz.picked.size === 1) base = `${[...polWiz.picked][0]}-${base}`;
+        let name = base;
+        for (let i = 2; state.policies.some((p) => p.name === name); i++) name = `${base}-${i}`;
+        f.name.value = name;
+      }
+      const vms = polScope() === "all" ? "Every VM, including new ones" : esc([...polWiz.picked].join(", "));
+      const rows = [["VMs", vms], ["When", esc(polText())], ["Keep", `${esc(f.keep_last.value)} latest of each VM`],
+        ["Target", esc($('input[name="target"]:checked', polForm)?.value || "")]];
+      $(".wiz-summary", polForm).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    }
+  },
+});
+{
+  $$('input[name="scope"]', polForm).forEach((r) => r.addEventListener("change", polRender));
+  $$('input[name="mode"]', polForm).forEach((r) => r.addEventListener("change", polSchedule));
+  ["every_hours", "keep_last"].forEach((n) => polForm.elements[n].addEventListener("input", polSchedule));
+  $(".chips.presets", polForm).addEventListener("click", () => setTimeout(polSchedule));
+  $(".pol-search", polForm).addEventListener("input", polRender);
+  polForm.elements.name.addEventListener("input", () => { polWiz.nameTouched = true; });
+  $(".pol-rows", polForm).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-vm]");
+    if (!tr) return;
+    if (polWiz.picked.has(tr.dataset.vm)) polWiz.picked.delete(tr.dataset.vm); else polWiz.picked.add(tr.dataset.vm);
+    polRender();
+  });
+}
+
 handlers["policy-dialog"] = async (f) => {
+  [1, 2, 3, 4].forEach((n) => policyWiz.check(n));
   const body = {
     name: f.get("name"),
     target: f.get("target"),
-    vms: f.getAll("vms"),
+    vms: polScope() === "all" ? [] : [...polWiz.picked],
     keep_last: Number(f.get("keep_last")),
   };
   if (f.get("mode") === "at") body.at = f.get("at"); else body.every_hours = Number(f.get("every_hours"));
   await post("/backup/policies", body);
-  toast(`Schedule ${body.name} created`);
+  toast(`Schedule ${body.name} created: ${polText()}`);
   await refresh("backup");
 };
 
-handlers["restore-dialog"] = async (f, ctx) => {
-  const body = { name: f.get("name") || null, node: f.get("node") || null, pool: f.get("pool") || null, source_node: ctx.sourceNode || null };
-  await post(`/backup/targets/${enc(ctx.target)}/backups/${enc(ctx.id)}/restore`, body);
+// Restore: pick the VM, then the restore point, then restore it as a new VM or under
+// its own name (only when the original is gone). Restore buttons on a restore point
+// open it at the last step with that point chosen.
+const rsForm = $("#restore-form");
+const rs = { points: [], vm: null, point: null, nameTouched: false };
+const rsKey = (p) => `${p.target}/${p.id}`;
+function rsVmGone(name) { return !state.vms.some((v) => v.name === name); }
+async function rsLoad() {
+  const lists = await Promise.all(state.targets.map((t) =>
+    api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
+  rs.points = lists.flat().sort((a, b) => String(b.created).localeCompare(String(a.created)));
+}
+function rsRenderVms() {
+  const q = $(".rs-search", rsForm).value.trim().toLowerCase();
+  const byVm = new Map();
+  for (const p of rs.points) (byVm.get(p.vm_name) || byVm.set(p.vm_name, []).get(p.vm_name)).push(p);
+  const names = [...byVm.keys()].sort().filter((n) => !q || n.toLowerCase().includes(q));
+  $(".rs-vms", rsForm).innerHTML = names.length ? names.map((n) => {
+    const on = rs.vm === n, pts = byVm.get(n);
+    return `<tr data-vm="${esc(n)}" class="${on ? "sel" : ""}"><td><input type="radio" ${on ? "checked" : ""} aria-label="${esc(n)}"></td>
+      <td class="vm-name">${esc(n)}</td><td>${pts.length}</td><td>${esc(when(pts[0].created))}</td>
+      <td>${rsVmGone(n) ? `<span class="badge failed">Deleted</span>` : `<span class="badge online">Yes</span>`}</td></tr>`;
+  }).join("") : empty(5, state.targets.length ? (rs.points.length ? "No VM matches" : "No restore points yet") : "Add a backup target first");
+}
+function rsRenderPoints() {
+  $(".rs-vm-title", rsForm).textContent = `Restore points of ${rs.vm}, newest first`;
+  const pts = rs.points.filter((p) => p.vm_name === rs.vm);
+  $(".rs-points", rsForm).innerHTML = pts.map((p) => {
+    const on = rs.point && rsKey(p) === rsKey(rs.point);
+    return `<tr data-key="${esc(rsKey(p))}" class="${on ? "sel" : ""}"><td><input type="radio" ${on ? "checked" : ""} aria-label="${esc(when(p.created))}"></td>
+      <td>${esc(when(p.created))}</td><td>${esc(p.target)}</td><td>${esc(p.node || "shared")}</td><td>${size(p.size_bytes)}</td></tr>`;
+  }).join("");
+}
+function rsAs() {
+  const f = rsForm.elements, gone = rsVmGone(rs.vm);
+  const orig = $('input[name="as"][value="original"]', rsForm);
+  orig.disabled = !gone;
+  $(".rs-orig-note", rsForm).textContent = gone ? `${rs.vm} was deleted, so it can come back under its own name.` : `${rs.vm} still exists. Delete it first to restore over it.`;
+  if (!gone && f.as.value === "original") f.as.value = "new";
+  if (f.as.value === "original") { f.name.value = rs.vm; f.name.readOnly = true; }
+  else {
+    f.name.readOnly = false;
+    if (!rs.nameTouched || !f.name.value || f.name.value === rs.vm) {
+      let name = `${rs.vm}-restore`;
+      for (let i = 2; state.vms.some((v) => v.name === name); i++) name = `${rs.vm}-restore-${i}`;
+      f.name.value = name;
+    }
+  }
+  const rows = [["VM", esc(rs.vm)], ["Restore point", `${esc(when(rs.point.created))} on ${esc(rs.point.target)}`],
+    ["Restore as", esc(f.name.value)], ["Node", esc(f.node.value || "Automatic")], ["Storage", esc(f.pool.value || "Same as the original VM")]];
+  $(".wiz-summary", rsForm).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+const restoreWiz = wizard("restore-dialog", {
+  reset() {
+    const ctx = dialogContext || {};
+    Object.assign(rs, { vm: null, point: null, nameTouched: false });
+    $(".rs-search", rsForm).value = "";
+    $(".rs-vms", rsForm).innerHTML = empty(5, "Looking for restore points...");
+    Promise.all([load("vms", "targets"), rsLoad()]).then(() => {
+      if (ctx.id) {
+        const p = rs.points.find((x) => x.id === ctx.id && (!ctx.target || x.target === ctx.target));
+        if (p) { rs.vm = p.vm_name; rs.point = p; restoreWiz.go(3); return; }
+      }
+      rsRenderVms();
+    }).catch(fail);
+  },
+  check(step) {
+    if (step === 1 && !rs.vm) throw new Error("Pick the VM to restore.");
+    if (step === 2 && !rs.point) throw new Error("Pick a restore point.");
+    if (step === 3) {
+      const n = rsForm.elements.name.value;
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(n)) throw new Error("Name the VM with letters, digits, '-', '_' or '.'.");
+      if (state.vms.some((v) => v.name === n)) throw new Error(`A VM named ${n} already exists.`);
+    }
+  },
+  show(step) {
+    if (step === 1) rsRenderVms();
+    if (step === 2) {
+      if (!rs.point || rs.point.vm_name !== rs.vm) rs.point = rs.points.find((p) => p.vm_name === rs.vm) || null;
+      rsRenderPoints();
+    }
+    if (step === 3) rsAs();
+  },
+});
+{
+  $(".rs-search", rsForm).addEventListener("input", rsRenderVms);
+  $(".rs-vms", rsForm).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-vm]");
+    if (tr) { rs.vm = tr.dataset.vm; rsRenderVms(); }
+  });
+  $(".rs-vms", rsForm).addEventListener("dblclick", (e) => { if (e.target.closest("tr[data-vm]")) $(".wiz-next", rsForm).click(); });
+  $(".rs-points", rsForm).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-key]");
+    if (tr) { rs.point = rs.points.find((p) => rsKey(p) === tr.dataset.key); rsRenderPoints(); }
+  });
+  $$('input[name="as"]', rsForm).forEach((r) => r.addEventListener("change", rsAs));
+  ["node", "pool"].forEach((n) => rsForm.elements[n].addEventListener("change", rsAs));
+  rsForm.elements.name.addEventListener("input", () => { rs.nameTouched = true; rsAs(); });
+}
+
+handlers["restore-dialog"] = async (f) => {
+  restoreWiz.check(3);
+  const p = rs.point;
+  const body = { name: f.get("name") || null, node: f.get("node") || null, pool: f.get("pool") || null, source_node: p.node || null };
+  await post(`/backup/targets/${enc(p.target)}/backups/${enc(p.id)}/restore`, body);
   toast(`Restoring ${body.name}. Progress is under Backup → Jobs.`);
   await refresh(currentPage());
 };

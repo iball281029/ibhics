@@ -244,6 +244,24 @@ def test_pools_on_remote_node(env):
     assert client.delete("/api/v1/nodes/node2/pools/ghost").status_code == 404
 
 
+def test_pool_over_several_disks_and_disk_media_on_remote_node(env):
+    client, *_ = env
+    build_two_node_witness(client)
+    disks = client.get("/api/v1/nodes/node2/disks").json()
+    assert {d["media"] for d in disks} == {"ssd", "hdd"}
+    resp = client.post(
+        "/api/v1/nodes/node2/pools",
+        json={
+            "name": "hdd",
+            "type": "lvm",
+            "devices": ["/dev/sde", "/dev/sdf"],
+            "confirm_wipe": True,
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source"] == "/dev/sde, /dev/sdf"
+
+
 def test_backup_and_restore_on_remote_node(env, tmp_path):
     from ibhics.backup import NodeBackup
     from ibhics.manager.backups import BackupManager

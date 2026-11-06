@@ -118,12 +118,21 @@ class PoolSpec:
     iqn: str | None = None  # iSCSI target IQN
     lun: int = 0
     device: str | None = None  # lvm: /dev/mapper/mpatha, /dev/disk/by-id/..., /dev/sdb
+    # lvm only: several disks in one volume group (the pool is their sum). `device`, when
+    # set, is the first of them.
+    devices: list[str] | None = None
     # Creating an LVM volume group erases the device; callers must say they mean it.
     confirm_wipe: bool = False
 
     @property
     def disk_backend(self) -> str:
         return "block" if self.type in BLOCK_POOL_TYPES else "file"
+
+    def all_devices(self) -> list[str]:
+        """The pool's disks: `devices`, or the single `device`."""
+        if self.devices:
+            return list(self.devices)
+        return [self.device] if self.device else []
 
     def validate(self) -> None:
         if not NAME_RE.match(self.name):
@@ -144,8 +153,13 @@ class PoolSpec:
             if self.lun < 0 or not 0 < self.port < 65536:
                 raise ValueError("invalid iSCSI LUN or port")
         elif self.type in (PoolType.LVM, PoolType.DISK):
-            if not self.device or not DEV_RE.match(self.device):
+            devices = self.all_devices()
+            if not devices or not all(DEV_RE.match(d) for d in devices):
                 raise ValueError(f"{self.type} pool needs a block device path under /dev/")
+            if len(set(devices)) != len(devices):
+                raise ValueError("the same disk is listed twice")
+            if self.type == PoolType.DISK and len(devices) > 1:
+                raise ValueError("a thin (XFS) pool takes one disk; use LVM for several")
         if self.type in WIPE_POOL_TYPES and not self.confirm_wipe:
             raise ValueError("this pool erases its device; set confirm_wipe to true")
 
@@ -385,6 +399,11 @@ class HypervisorDriver(abc.ABC):
     def list_local_disks(self) -> list:
         """Whole disks on this node that could become an LVM pool (disks.LocalDisk)."""
         return []
+
+    def pool_path(self, name: str) -> str | None:
+        """The folder a file-based pool (folder, thin XFS disk, NFS) keeps its files in,
+        when this process can reach it; None for LVM pools and pools on other nodes."""
+        return None
 
     def host_system(self):
         """The node itself: its summary, network ports and settings (host.HostSystem)."""

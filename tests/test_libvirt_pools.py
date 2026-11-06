@@ -121,6 +121,8 @@ def driver(monkeypatch):
     )
     d = object.__new__(lv.LibvirtDriver)
     d._conn = Conn()
+    d.cleared = []
+    d.clear_disks = d.cleared.append
     return d
 
 
@@ -230,3 +232,22 @@ def test_delete_pool_refuses_while_in_use_and_removes_session(driver):
 def test_delete_unknown_pool(driver):
     with pytest.raises(PoolNotFound):
         driver.delete_pool("ghost")
+
+
+def test_lvm_pool_over_several_disks_clears_them_first(driver):
+    spec = PoolSpec(
+        name="ssd", type=PoolType.LVM, devices=["/dev/sdb", "/dev/sdc"], confirm_wipe=True
+    )
+    info = driver.create_pool(spec)
+    root = ET.fromstring(driver._conn.pools["ssd"].xml)
+    assert [d.get("path") for d in root.findall("source/device")] == ["/dev/sdb", "/dev/sdc"]
+    assert driver.cleared == [["/dev/sdb", "/dev/sdc"]]
+    assert info.source == "/dev/sdb, /dev/sdc"
+
+
+def test_thin_pool_takes_one_disk():
+    spec = PoolSpec(
+        name="t", type=PoolType.DISK, devices=["/dev/sdb", "/dev/sdc"], confirm_wipe=True
+    )
+    with pytest.raises(ValueError, match="one disk"):
+        spec.validate()
