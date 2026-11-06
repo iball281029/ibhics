@@ -2600,6 +2600,7 @@ function renderNodes() {
     const vms = state.vms.filter((v) => v.node === m.name).length;
     const buttons = [
       m.role === "compute" ? `<a class="btn small" href="#node/${enc(m.name)}">Summary</a>` : "",
+      admin && m.role === "compute" ? `<button class="small" data-maint="${esc(m.name)}" data-on="${m.maintenance ? "" : "1"}">${m.maintenance ? "Exit maintenance" : "Maintenance"}</button>` : "",
       admin && m.role === "compute" && vms && computeMembers().length > 1 ? `<button class="small" data-evacuate="${esc(m.name)}">Evacuate</button>` : "",
       admin && !m.local ? `<button class="small danger" data-node="${esc(m.name)}">Remove</button>` : "",
     ].join("");
@@ -2607,7 +2608,7 @@ function renderNodes() {
       <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(m.name)}</a>` : `<span class="vm-name">${esc(m.name)}</span>`}${m.local ? '<span class="vm-sub">runs the manager</span>' : ""}</div></div></td>
       <td>${esc(m.role)}</td>
       <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
-      <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span></td>
+      <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>${m.maintenance ? ` <span class="badge plain">maintenance</span>` : ""}</td>
       <td>${h ? `${h.cpus} cores` : "–"}</td>
       <td>${h ? gbText(h.memory_mb) : "–"}</td>
       <td>${m.role === "compute" ? vms : "–"}</td>
@@ -2619,8 +2620,17 @@ function renderNodes() {
 $("#nodes").addEventListener("click", async (e) => {
   const ev = e.target.closest("button[data-evacuate]");
   const rm = e.target.closest("button[data-node]");
+  const mt = e.target.closest("button[data-maint]");
   try {
-    if (ev) {
+    if (mt) {
+      const on = Boolean(mt.dataset.on), n = mt.dataset.maint;
+      const others = computeMembers().filter((x) => x.name !== n && !x.maintenance).length;
+      const vmsHere = state.vms.filter((v) => v.node === n).length;
+      if (on && !confirm(`Put ${n} into maintenance? No VM will be placed, started or moved onto it.${vmsHere && others ? ` Its ${vmsHere} VM(s) move to other nodes first.` : vmsHere ? " There is no other node to move its VMs to: they stay as they are." : ""}`)) return;
+      const r = await post(`/nodes/${enc(n)}/maintenance`, { on, evacuate: on && others > 0 });
+      const failed = r.moves.filter((j) => j.state === "failed");
+      toast(on ? `${n} is in maintenance${r.moves.length ? `; moving ${r.moves.length - failed.length} VM(s)` : ""}${failed.length ? `; ${failed.length} cannot move: ${failed[0].error}` : ""}` : `${n} is back in service`, failed.length > 0);
+    } else if (ev) {
       if (!confirm(`Move every VM off ${ev.dataset.evacuate}?`)) return;
       const jobs = await post(`/nodes/${enc(ev.dataset.evacuate)}/evacuate`);
       const failed = jobs.filter((j) => j.state === "failed");
@@ -2661,6 +2671,19 @@ function ifaceNames() {
   return [...names].sort((a, b) => order[kind(a)] - order[kind(b)] || a.localeCompare(b, undefined, { numeric: true }));
 }
 
+function systemDiskText(d) {
+  if (!d.device) return "–";
+  const dot = d.health === "ok" ? "ok" : d.health === "failing" ? "bad" : "";
+  const bits = [
+    d.health === "ok" ? "SMART OK" : d.health === "failing" ? "SMART FAILING: replace it" : (d.note || "health unknown"),
+    d.wear_percent != null ? `${d.wear_percent}% worn` : "",
+    d.temperature_c != null ? `${d.temperature_c} °C` : "",
+    d.power_on_hours != null ? `${Math.round(d.power_on_hours / 24)} days on` : "",
+    d.reallocated_sectors ? `${d.reallocated_sectors} reallocated sectors` : "",
+    d.root_used_percent != null ? `/ ${d.root_used_percent}% used (${d.root_free_gb} GB free)` : "",
+  ].filter(Boolean);
+  return `${dot ? `<span class="dot ${dot}"></span> ` : ""}<span class="mono">${esc(d.device)}</span> ${esc(d.model || "")}<br><span class="muted">${esc(bits.join(" · "))}</span>`;
+}
 async function renderNodeDetail(auto = false) {
   const name = nodeFromHash();
   const m = state.cluster.members.find((x) => x.name === name);
@@ -2719,6 +2742,8 @@ async function renderNodeDetail(auto = false) {
     ["Kernel", `<span class="mono">${esc(s.kernel)}</span>`],
     ["Time zone", esc(s.timezone)],
     ["Uptime", uptimeText(s.uptime_s)],
+    ["Maintenance", m.maintenance ? `<span class="dot bad"></span> In maintenance: no VMs are placed here` : `<span class="dot ok"></span> In service`],
+    ["System disk", systemDiskText(s.system_disk || {})],
   ]);
 
   const used = (n) => n.master ? `Part of ${esc(n.master)}` : ifaceOf(n.name)?.method !== "manual" && ifaceOf(n.name) ? "Own address" : '<span class="muted">Not used</span>';
@@ -2832,6 +2857,8 @@ function openIface(name, kind) {
   if (mtu && ![...form.elements.mtu.options].some((o) => o.value === mtu)) form.elements.mtu.add(new Option(mtu, mtu));
   form.elements.mtu.value = mtu;
   form.elements.auto.checked = cfg ? cfg.auto : true;
+  $$('input[name="roles"]', form).forEach((c) => { c.checked = (cfg?.roles || []).includes(c.value); });
+  form.elements.routes.value = (cfg?.routes || []).join("\n");
   form.elements.bond_mode.value = cfg?.bond_mode || "active-backup";
   // Ports this one may use: free ones, its own, and for a bridge also bonds.
   const own = cfg?.ports || [];
@@ -2874,6 +2901,8 @@ handlers["iface-dialog"] = async (f) => {
     address: f.get("method") === "static" ? f.get("address").trim() : "",
     gateway: f.get("method") === "static" ? f.get("gateway").trim() : "",
     mtu: f.get("mtu") ? Number(f.get("mtu")) : null,
+    roles: f.getAll("roles"),
+    routes: f.get("routes").split("\n").map((r) => r.trim().replace(/\s+/g, " ")).filter(Boolean),
   });
   if (kind !== "ethernet") {
     cfg.ports = f.getAll("ports");

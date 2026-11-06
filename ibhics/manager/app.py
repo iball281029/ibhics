@@ -56,6 +56,7 @@ from .schemas import (
     LocalDiskOut,
     LoginOut,
     LoginRequest,
+    MaintenanceIn,
     MemberOut,
     MigrateRequest,
     MigrationOut,
@@ -142,6 +143,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}/files"),
     ("POST", f"{API}/nodes/{{name}}/evacuate"),
+    ("POST", f"{API}/nodes/{{name}}/maintenance"),
     ("PUT", f"{API}/nodes/{{name}}/network"),
     ("POST", f"{API}/nodes/{{name}}/network/confirm"),
     ("POST", f"{API}/nodes/{{name}}/network/undo"),
@@ -416,6 +418,7 @@ def create_app(
                     local=m.local,
                     healthy=cluster.is_healthy(m),
                     last_error=m.last_error,
+                    maintenance=m.maintenance,
                 )
                 for m in cluster.members()
             ],
@@ -770,6 +773,7 @@ def create_app(
     def start_vm(uuid: str) -> VMOut:
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
+        cluster.require_in_service(member)
         return VMOut.from_info(member.driver.start_vm(uuid), member.name)
 
     @api.post("/vms/{uuid}/stop", response_model=VMOut)
@@ -934,6 +938,19 @@ def create_app(
     @api.get("/migrations", response_model=list[MigrationOut])
     def list_migrations() -> list[MigrationOut]:
         return [MigrationOut(**job.__dict__) for job in migrations.jobs()]
+
+    @api.post("/nodes/{name}/maintenance")
+    def node_maintenance(name: str, body: MaintenanceIn) -> dict:
+        """Enter maintenance: no new VMs land here; with evacuate, running VMs move away
+        (stopped ones too). Exit: back in service."""
+        cluster.require_quorum()
+        member = cluster.set_maintenance(name, body.on)
+        jobs = migrations.evacuate(name) if body.on and body.evacuate else []
+        return {
+            "node": member.name,
+            "maintenance": member.maintenance,
+            "moves": [MigrationOut(**j.__dict__).model_dump() for j in jobs],
+        }
 
     @api.post(
         "/nodes/{name}/evacuate",

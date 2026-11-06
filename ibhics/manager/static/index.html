@@ -970,6 +970,13 @@
       </label>
       <label data-for="static">Address with prefix <input name="address" placeholder="10.0.0.11/24"></label>
       <label data-for="static">Gateway (blank = none) <input name="gateway" placeholder="none"></label>
+      <fieldset class="vm-checks wide"><legend>Used for</legend><div class="vm-check-list">
+        <label class="check"><input type="checkbox" name="roles" value="management"> Management</label>
+        <label class="check"><input type="checkbox" name="roles" value="migration"> VM migration</label>
+        <label class="check"><input type="checkbox" name="roles" value="storage"> Storage (iSCSI/NFS)</label>
+        <label class="check"><input type="checkbox" name="roles" value="vm"> VM uplink</label>
+      </div></fieldset>
+      <label class="wide">Static routes (one per line) <textarea name="routes" rows="2" placeholder="10.20.0.0/16 via 10.0.0.1"></textarea></label>
       <label class="check wide"><input name="auto" type="checkbox" checked> Bring up at boot</label>
       <p class="hint wide" id="iface-note"></p>
     </div>

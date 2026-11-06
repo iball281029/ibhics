@@ -1,4 +1,4 @@
 """ibHiCS: open-source hyper-converged infrastructure platform."""
 
-__version__ = "0.8.0b3"
-RELEASE_NAME = "ibHiCS Hyper-Converged Infrastructure beta version 0.8"
+__version__ = "0.9.0b1"
+RELEASE_NAME = "ibHiCS Hyper-Converged Infrastructure beta version 0.9"

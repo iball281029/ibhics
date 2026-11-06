@@ -95,12 +95,13 @@ class MigrationManager:
             target = self._cluster.member(node)
             if target.name == source.name:
                 raise InvalidState(f"VM {vm.spec.name!r} is already on {node}")
+            self._cluster.require_in_service(target)
             return Plan(source, vm, target, self._check(source, vm, target, copy_storage))
 
         reasons = []
         best = None
         for target in self._cluster.compute_members():
-            if target.name == source.name:
+            if target.name == source.name or target.maintenance:
                 continue
             try:
                 copy = self._check(source, vm, target, copy_storage)

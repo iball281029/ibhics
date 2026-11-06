@@ -45,3 +45,4 @@ dnsmasq-base
 nftables
 iputils-ping
 iputils-tracepath
+smartmontools

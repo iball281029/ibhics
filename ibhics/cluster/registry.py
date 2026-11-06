@@ -40,6 +40,8 @@ class Member:
     imports: NodeImport | RemoteImport | None = None  # converts VMs brought in by Migrate
     last_seen: float | None = None
     last_error: str | None = None
+    # Maintenance mode: no new VM is placed, started or moved here (v0.9).
+    maintenance: bool = False
 
     @property
     def local(self) -> bool:
@@ -73,6 +75,8 @@ class Cluster:
         return cluster
 
     # Membership
+
+    _maintenance: set[str] = set()
 
     def add_local(
         self,
@@ -141,13 +145,18 @@ class Cluster:
         """Re-add remote members saved by a previous run. Unreachable ones start unhealthy."""
         if not self._state_path or not self._state_path.exists():
             return
-        for entry in json.loads(self._state_path.read_text())["members"]:
+        data = json.loads(self._state_path.read_text())
+        self._maintenance = set(data.get("maintenance", []))
+        for member in self._members.values():
+            member.maintenance = member.name in self._maintenance
+        for entry in data["members"]:
             client = self._client_factory(entry["address"], self._token)
             role = NodeRole(entry["role"])
             with self._lock:
                 if entry["name"] in self._members:
                     continue
                 self._members[entry["name"]] = Member(
+                    maintenance=entry["name"] in self._maintenance,
                     name=entry["name"],
                     role=role,
                     address=entry["address"],
@@ -236,6 +245,8 @@ class Cluster:
         """Place a new VM on the healthy compute node with the most unallocated memory."""
         best, best_free = None, None
         for member in self.compute_members():
+            if member.maintenance:
+                continue
             try:
                 host = member.driver.host_info()
                 used = sum(vm.spec.memory_mb for vm in member.driver.list_vms())
@@ -245,8 +256,23 @@ class Cluster:
             if best_free is None or free > best_free:
                 best, best_free = member, free
         if best is None:
-            raise NodeUnavailable("no compute node is available")
+            raise NodeUnavailable("no compute node is available (all are down or in maintenance)")
         return best
+
+    def set_maintenance(self, name: str, on: bool) -> Member:
+        member = self.member(name)
+        member.maintenance = on
+        self._save()
+        return member
+
+    def require_in_service(self, member: Member) -> None:
+        from ..hypervisor import InvalidState
+
+        if member.maintenance:
+            raise InvalidState(
+                f"node {member.name} is in maintenance mode: exit maintenance first, or "
+                "move the VM to another node"
+            )
 
     # Internals
 
@@ -264,5 +290,6 @@ class Cluster:
         ]
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"members": entries}, indent=2))
+        maintenance = sorted(m.name for m in self._members.values() if m.maintenance)
+        tmp.write_text(json.dumps({"members": entries, "maintenance": maintenance}, indent=2))
         tmp.replace(self._state_path)

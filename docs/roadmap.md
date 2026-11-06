@@ -56,6 +56,9 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v0.9 — Nodes ⏳
+Beta 1 (0.9.0b1) ✅: maintenance mode (no VMs placed/started/moved here, evacuate first), interface roles (management, migration, storage, VM uplink), static routes, system disk health (SMART, wear, temperature)
+
+Still to do:
 - Add node wizard, node summary (accessible storage, VMs), maintenance mode
 - Communication interfaces: management, migration (overlay), storage, VM uplink
 - Aggregate interfaces (bonds), static routes, MTU/flow control, system disk health

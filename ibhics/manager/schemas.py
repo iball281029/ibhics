@@ -194,6 +194,8 @@ class HostIfaceIn(BaseModel):
     ports: list[str] = Field(default_factory=list)
     bond_mode: str = ""
     options: list[str] = Field(default_factory=list)
+    routes: list[str] = Field(default_factory=list, description="e.g. 10.20.0.0/16 via 10.0.0.1")
+    roles: list[str] = Field(default_factory=list, description="management, migration, ...")
 
 
 class HostNetworkIn(BaseModel):
@@ -459,6 +461,12 @@ class MemberOut(BaseModel):
     local: bool
     healthy: bool
     last_error: str | None
+    maintenance: bool = False
+
+
+class MaintenanceIn(BaseModel):
+    on: bool = True
+    evacuate: bool = True  # move the node's VMs to other nodes first
 
 
 class ClusterOut(BaseModel):

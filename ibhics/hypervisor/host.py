@@ -74,6 +74,77 @@ class NodeSummary:
     os: str
     version: str
     timezone: str
+    # The disk the system runs from: SMART health, wear, temperature, free space (v0.9).
+    system_disk: dict = field(default_factory=dict)
+
+
+def _raw(cmd: list[str]) -> tuple[int, str]:
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return 127, ""
+    return done.returncode, done.stdout
+
+
+WEAR_ATTRS = ("Wear_Leveling_Count", "Media_Wearout_Indicator", "Percent_Lifetime_Remain")
+
+
+def system_disk_health(run: Callable[[list[str]], tuple[int, str]] = _raw, root: str = "/") -> dict:
+    """SMART facts of the disk holding /, as far as the disk and smartctl tell them."""
+    out: dict = {"device": "", "health": "unknown"}
+    try:
+        st = os.statvfs(root)
+        total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+        out["root_used_percent"] = round(100 * (total - free) / total, 1) if total else 0
+        out["root_free_gb"] = round(free / 1024**3, 1)
+    except OSError:
+        pass
+    code, source = run(["findmnt", "-no", "SOURCE", root])
+    source = source.strip()
+    if code or not source:
+        return out
+    _code, parent = run(["lsblk", "-ndo", "PKNAME", source])
+    parents = [p for p in parent.split() if p]
+    # LVM or partitions: walk down to the whole disk.
+    _code, tree = run(["lsblk", "-nso", "NAME,TYPE", source])
+    disks = [
+        ln.split()[0].lstrip("|`-─└├ ") for ln in tree.splitlines() if ln.split()[-1:] == ["disk"]
+    ]
+    name = (disks or parents or [""])[0]
+    if not name:
+        return out
+    out["device"] = f"/dev/{name}"
+    code, text = run(["smartctl", "-H", "-A", "-i", "-j", out["device"]])
+    try:
+        data = json.loads(text or "{}")
+    except ValueError:
+        data = {}
+    if code == 127 or not data:
+        out["note"] = "smartctl is not installed" if code == 127 else "no SMART data"
+        return out
+    out["model"] = data.get("model_name", "")
+    passed = (data.get("smart_status") or {}).get("passed")
+    out["health"] = "ok" if passed else "failing" if passed is False else "unknown"
+    temp = (data.get("temperature") or {}).get("current")
+    if temp is not None:
+        out["temperature_c"] = temp
+    hours = (data.get("power_on_time") or {}).get("hours")
+    if hours is not None:
+        out["power_on_hours"] = hours
+    nvme = data.get("nvme_smart_health_information_log") or {}
+    if "percentage_used" in nvme:
+        out["wear_percent"] = nvme["percentage_used"]
+    for attr in (data.get("ata_smart_attributes") or {}).get("table", []):
+        if attr.get("name") in (
+            "Wear_Leveling_Count",
+            "Media_Wearout_Indicator",
+            "Percent_Lifetime_Remain",
+            "SSD_Life_Left",
+        ):
+            out["wear_percent"] = max(0, 100 - int(attr.get("value", 100)))
+        if attr.get("name") == "Reallocated_Sector_Ct":
+            out["reallocated_sectors"] = (attr.get("raw") or {}).get("value", 0)
+    return out
 
 
 @dataclass
@@ -108,6 +179,12 @@ class IfaceConfig:
     ports: list[str] = field(default_factory=list)  # bridge ports or bond members
     bond_mode: str = ""
     options: list[str] = field(default_factory=list)  # other lines, kept as they are
+    # v0.9: static routes ("10.20.0.0/16 via 10.0.0.1") and what the interface is used for.
+    routes: list[str] = field(default_factory=list)
+    roles: list[str] = field(default_factory=list)  # management, migration, storage, vm
+
+
+ROLES = ("management", "migration", "storage", "vm")
 
 
 @dataclass
@@ -156,6 +233,28 @@ class HostNetwork:
                 if port in used:
                     raise ValueError(f"{port} is already a port of {used[port]}")
                 used[port] = i.name
+            for role in i.roles:
+                if role not in ROLES:
+                    raise ValueError(f"{i.name}: a role is one of {', '.join(ROLES)}")
+            for route in i.routes:
+                parts = route.split()
+                try:
+                    if len(parts) != 3 or parts[1] != "via":
+                        raise ValueError
+                    ipaddress.IPv4Network(parts[0])
+                    ipaddress.IPv4Address(parts[2])
+                except ValueError:
+                    raise ValueError(
+                        f"{i.name}: write a route as 10.20.0.0/16 via 10.0.0.1, not {route!r}"
+                    ) from None
+                if i.method == "static" and "/" in i.address:
+                    if (
+                        ipaddress.IPv4Address(parts[2])
+                        not in ipaddress.IPv4Interface(i.address).network
+                    ):
+                        raise ValueError(
+                            f"{i.name}: the route's gateway {parts[2]} is not on {i.address}"
+                        )
             if i.mtu is not None and not 576 <= i.mtu <= 9216:
                 raise ValueError(f"{i.name}: MTU is between 576 and 9216")
             if i.method == "static":
@@ -247,6 +346,9 @@ def parse_interfaces(text: str) -> HostNetwork:
     current: IfaceConfig | None = None
     for raw in text.splitlines():
         line = raw.strip()
+        if line.startswith("# ibhics-roles:") and current is not None:
+            current.roles = line.split(":", 1)[1].split()
+            continue
         if not line or line.startswith("#"):
             continue
         words = line.split()
@@ -282,6 +384,10 @@ def parse_interfaces(text: str) -> HostNetwork:
             elif norm == "bond-mode" and value:
                 current.kind = "bond"
                 current.bond_mode = value[0]
+            elif key == "up" and value[:3] == ["ip", "route", "add"] and len(value) >= 6:
+                current.routes.append(f"{value[3]} via {value[5]}")
+            elif key == "down" and value[:3] == ["ip", "route", "del"]:
+                pass  # written again from the route
             elif norm in ("bridge-stp", "bridge-fd", "bond-miimon", "bond-master"):
                 pass  # written again from the settings above
             else:
@@ -315,6 +421,8 @@ def render_interfaces(net: HostNetwork, node: str = "") -> str:
         if i.auto:
             out.append(f"auto {i.name}")
         out.append(f"iface {i.name} inet {i.method}")
+        if i.roles:
+            out.append(f"    # ibhics-roles: {' '.join(i.roles)}")
         if i.method == "static":
             out.append(f"    address {i.address}")
             if i.gateway:
@@ -335,6 +443,10 @@ def render_interfaces(net: HostNetwork, node: str = "") -> str:
                 "    bridge_stp off",
                 "    bridge_fd 0",
             ]
+        for route in i.routes:
+            net, _via, gw = route.split()
+            out.append(f"    up ip route add {net} via {gw} dev {i.name}")
+            out.append(f"    down ip route del {net} via {gw} dev {i.name} || true")
         out += [f"    {o}" for o in i.options]
     return "\n".join(out) + "\n"
 
@@ -618,6 +730,7 @@ class LinuxHost(HostSystem):
             os=os_release.get("PRETTY_NAME", "").strip('"'),
             version=__version__,
             timezone=self._timezone(),
+            system_disk=system_disk_health(root=str(self.root)),
         )
 
     def _cpu_percent(self) -> float:
@@ -876,6 +989,16 @@ class FakeHost(HostSystem):
             os="Debian GNU/Linux 13 (trixie)",
             version=__version__,
             timezone=self._settings.timezone,
+            system_disk={
+                "device": "/dev/nvme0n1",
+                "model": "M.2 NVMe 240GB",
+                "health": "ok",
+                "wear_percent": 3,
+                "temperature_c": 38,
+                "power_on_hours": 9100,
+                "root_used_percent": 21.5,
+                "root_free_gb": 160.2,
+            },
         )
 
     def nics(self) -> list[HostNic]:

@@ -1318,8 +1318,16 @@ def disk_source(root, disk) -> tuple[str, str]:
         return source.get("pool", ""), source.get("volume")
     target = disk.find("target")
     dev = target.get("dev") if target is not None else None
-    for meta in root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk"):
+    metas = root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk")
+    for meta in metas:
         if meta.get("dev") == dev:
+            return meta.get("pool", ""), meta.get("volume", "")
+    # The domain was edited by hand (e.g. virsh: vda -> sdc) and the metadata kept the old
+    # device name: match the volume by the file or device the disk points at instead.
+    path = (source.get("dev") or source.get("file") or "") if source is not None else ""
+    name = path.rsplit("/", 1)[-1]
+    for meta in metas:
+        if name and meta.get("volume") == name:
             return meta.get("pool", ""), meta.get("volume", "")
     return "", ""
 
