@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Respons
 from fastapi.staticfiles import StaticFiles
 
 from .. import RELEASE_NAME, __version__, console
+from ..backup.targets import BackupTarget, TargetType
 from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNotFound, VMState
 from ..hypervisor.serialize import guest_to_json
@@ -1022,7 +1023,34 @@ def create_app(
     )
     def add_target(body: BackupTargetIn) -> BackupTargetOut:
         cluster.require_quorum()
-        return BackupTargetOut.from_target(backups.add_target(body.to_target()))
+        target = body.to_target()
+        if target.pool:
+            repository_in_pool(target)
+        return BackupTargetOut.from_target(backups.add_target(target))
+
+    def repository_in_pool(target: BackupTarget) -> None:
+        """A backup repository carved out of a storage pool: a folder in the pool, with
+        the reserved size checked against the pool's free space."""
+        if target.type != TargetType.LOCAL:
+            raise InvalidState("only a local repository can live in a storage pool")
+        for member in cluster.compute_members():
+            try:
+                pool = next((p for p in member.driver.list_pools() if p.name == target.pool), None)
+                root = pool and member.driver.pool_path(pool.name)
+            except NodeUnavailable:
+                continue
+            if not pool:
+                continue
+            if not root:
+                raise InvalidState(f"pool {target.pool} has no folder to keep backups in")
+            if target.quota_gb and target.quota_gb > pool.available_gb:
+                raise InvalidState(
+                    f"pool {target.pool} has {pool.available_gb:.0f} GB free, "
+                    f"less than the {target.quota_gb} GB asked for"
+                )
+            target.path = f"{root}/backup/{target.name}"
+            return
+        raise InvalidState(f"no storage pool named {target.pool}")
 
     @api.delete("/backup/targets/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_target(name: str) -> None:

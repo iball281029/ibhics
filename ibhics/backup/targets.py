@@ -53,6 +53,9 @@ class BackupTarget:
     access_key: str | None = None
     secret_key: str | None = None
     prefix: str = "ibhics"  # nfs/smb/usb/iscsi/fc: subdirectory; s3: key prefix
+    # local: a backup repository carved out of a storage pool (its folder is in the pool)
+    pool: str | None = None
+    quota_gb: int | None = None  # local: space set aside; backups stop when it is used up
 
     @property
     def shared(self) -> bool:
@@ -75,6 +78,8 @@ class BackupTarget:
             raise ValueError("target name must use only letters, digits, '_', '.', '-'")
         if not PREFIX_RE.match(self.prefix) or ".." in self.prefix.split("/"):
             raise ValueError("prefix may use letters, digits, '_', '.', '-', '/' and no '..'")
+        if self.quota_gb is not None and (self.type != TargetType.LOCAL or self.quota_gb < 1):
+            raise ValueError("a reserved size (GB) is for local repositories, at least 1")
         if self.type == TargetType.LOCAL:
             if self.path is not None and (not self.path.startswith("/") or self.path == "/"):
                 raise ValueError("local target path must be an absolute directory other than /")
@@ -133,7 +138,11 @@ class BackupTarget:
 
     def describe(self) -> str:
         return {
-            TargetType.LOCAL: self.path or f"{LOCAL_ROOT}/{self.name}",
+            TargetType.LOCAL: (
+                f"{self.pool} · {self.quota_gb} GB reserved"
+                if self.pool and self.quota_gb
+                else self.pool or self.path or f"{LOCAL_ROOT}/{self.name}"
+            ),
             TargetType.NFS: f"{self.host}:{self.export}",
             TargetType.SMB: f"//{self.host}/{self.share}",
             TargetType.USB: self.device or "",

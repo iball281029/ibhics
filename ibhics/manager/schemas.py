@@ -495,13 +495,17 @@ class BackupTargetIn(BaseModel):
     access_key: str | None = None
     secret_key: str | None = None
     prefix: str = "ibhics"
+    pool: str | None = Field(
+        default=None, pattern=NAME_PATTERN, description="local: keep backups in this storage pool"
+    )
+    quota_gb: int | None = Field(default=None, ge=1, description="local: space set aside (GB)")
 
     def to_target(self) -> BackupTarget:
         return BackupTarget(**self.model_dump())
 
 
 TARGET_FIELDS = {
-    TargetType.LOCAL: ("path",),
+    TargetType.LOCAL: ("path", "pool", "quota_gb"),
     TargetType.NFS: ("host", "export", "prefix"),
     TargetType.SMB: ("host", "share", "username", "password", "domain", "prefix"),
     TargetType.USB: ("device", "prefix"),
