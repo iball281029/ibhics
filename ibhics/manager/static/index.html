@@ -1130,6 +1130,7 @@
       <label class="wide">Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, digits and _ . - (no spaces)" autocomplete="off"></label>
       <label class="wide">Description (optional) <input name="description" maxlength="1024" placeholder="e.g. before installing updates"></label>
       <p class="hint wide snap-mem"></p>
+      <label class="wide check snap-restart" hidden><input type="checkbox" name="restart" checked> Shut down and start again if needed (once per UEFI VM, so later snapshots work while it runs)</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Take snapshot</button></footer>
   </form>

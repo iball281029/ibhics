@@ -139,9 +139,11 @@ class RemoteDriver(HypervisorDriver):
         resp = self._client.request("GET", f"/vms/{uuid}/snapshots")
         return [SnapshotInfo(**s) for s in self._ok(resp, uuid).json()]
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
         # Saving a running VM's memory takes as long as writing it: no timeout.
-        body = {"name": name, "description": description}
+        body = {"name": name, "description": description, "restart": restart}
         resp = self._client.request("POST", f"/vms/{uuid}/snapshots", json=body, timeout=None)
         if resp.status_code == 422:
             raise ValueError(str(resp.json().get("detail")))

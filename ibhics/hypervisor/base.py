@@ -551,8 +551,13 @@ class HypervisorDriver(abc.ABC):
         """The VM's snapshots, oldest first."""
         return []
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
-        """Snapshot the VM's disks; a running VM's memory too (it pauses briefly)."""
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
+        """Snapshot the VM's disks; a running VM's memory too (it pauses briefly).
+
+        `restart`: a running UEFI VM that cannot be snapshotted live yet may be shut down
+        and started again first."""
         raise NotImplementedError
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:

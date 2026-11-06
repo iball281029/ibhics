@@ -132,7 +132,16 @@ for tool in ibhics-manager ibhics-agent ibhics-setup; do
 done
 if [ -f "$SRC/apparmor-libvirt-qemu" ]; then
     # Nodes from 0.4/0.5 could not start VMs: AppArmor denied QEMU its pool volumes.
-    install -D -m 0644 "$SRC/apparmor-libvirt-qemu" /etc/apparmor.d/local/abstractions/libvirt-qemu
+    rules=/etc/apparmor.d/local/abstractions/libvirt-qemu
+    # Keep the pool folders ibHiCS added for custom storage paths.
+    extra=$(grep -sv '^#' "$rules" | grep -vxFf "$SRC/apparmor-libvirt-qemu" || true)
+    install -D -m 0644 "$SRC/apparmor-libvirt-qemu" "$rules"
+    if [ -n "$extra" ]; then printf '%s\n' "$extra" >> "$rules"; fi
+    # Running VMs keep the profile they started with: reload theirs with the new rules.
+    for prof in /etc/apparmor.d/libvirt/libvirt-*; do
+        case "$prof" in *.files) continue ;; esac
+        [ -f "$prof" ] && apparmor_parser -r "$prof" 2>/dev/null || true
+    done
 fi
 if ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
     # Nodes set up by 0.1/0.2 had no DNS (ifupdown's dns-nameservers needs resolvconf).

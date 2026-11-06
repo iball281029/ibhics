@@ -131,7 +131,8 @@ class Dom:
 
 @pytest.fixture
 def lvd(monkeypatch):
-    monkeypatch.setattr(lv, "libvirt", types.SimpleNamespace(libvirtError=LibvirtError))
+    lib = types.SimpleNamespace(libvirtError=LibvirtError, VIR_DOMAIN_XML_INACTIVE=2)
+    monkeypatch.setattr(lv, "libvirt", lib)
 
     def make(spec, active=True):
         d = object.__new__(lv.LibvirtDriver)
@@ -157,10 +158,52 @@ def test_libvirt_snapshot_xml_and_ops(lvd):
         d.delete_snapshot("u", "nope")
 
 
-def test_libvirt_refuses_running_uefi_and_raw_disks(lvd):
-    d, _ = lvd(VMSpec(name="w", firmware="uefi", disks=[DiskSpec(size_gb=1)]))
-    with pytest.raises(InvalidState, match="UEFI"):
+def test_running_uefi_vm_moves_its_variables_to_qcow2_then_snapshots(lvd, tmp_path):
+    d, dom = lvd(VMSpec(name="w", firmware="uefi", disks=[DiskSpec(size_gb=1)]))
+    raw = tmp_path / "w_VARS.fd"
+    raw.write_bytes(b"\0" * 16)
+    root = ET.fromstring(dom.xml)
+    os_el = root.find("os")
+    ET.SubElement(os_el, "loader", readonly="yes", type="pflash").text = "/usr/share/OVMF/C.fd"
+    ET.SubElement(os_el, "nvram", template="/usr/share/OVMF/V.fd").text = str(raw)
+    dom.xml = ET.tostring(root, encoding="unicode")
+    with pytest.raises(InvalidState, match="power off once"):
         d.create_snapshot("u", "x")
+    assert not dom.snaps
+
+    events = []
+    dom.shutdown = lambda: (events.append("shutdown"), setattr(dom, "active", False))
+    dom.create = lambda: (events.append("start"), setattr(dom, "active", True))
+    dom.name = lambda: "w"
+
+    def define(xml):
+        events.append("define")
+        dom.xml = xml
+
+    def run(cmd):
+        events.append(cmd[0])
+        open(cmd[-1], "wb").close()
+
+    d._conn = types.SimpleNamespace(defineXML=define)
+    d.run = run
+    d.create_snapshot("u", "w-20261106-1530", restart=True)
+    assert events == ["shutdown", "qemu-img", "define", "start"] and dom.active
+    nvram = ET.fromstring(dom.xml).find("os/nvram")
+    assert nvram.get("format") == "qcow2" and nvram.text == str(tmp_path / "w_VARS.qcow2")
+    assert ET.fromstring(dom.xml).find("os").get("firmware") is None and not raw.exists()
+    assert lv._spec_from_xml(dom.xml).firmware == "uefi"  # still a UEFI VM
+    assert [s.getName() for s in dom.snaps] == ["w-20261106-1530"]
+    events.clear()
+    d.create_snapshot("u", "again")  # live from now on
+    assert events == [] and len(dom.snaps) == 2
+
+
+def test_backup_scratch_is_writable_by_qemu(tmp_path):
+    lv._qemu_may_write(tmp_path)
+    assert tmp_path.stat().st_mode & 0o755 == 0o755
+
+
+def test_libvirt_refuses_raw_disks(lvd):
     d, _ = lvd(VMSpec(name="b", disks=[DiskSpec(size_gb=1, backend="block", pool="vg")]), False)
     with pytest.raises(InvalidState, match="qcow2"):
         d.create_snapshot("u", "x")

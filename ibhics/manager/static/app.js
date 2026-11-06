@@ -3168,14 +3168,24 @@ $("#vm-snap-take").addEventListener("click", () => openSnapshot(vmFromHash()));
 function openSnapshot(uuid) {
   const vm = state.vms.find((v) => v.uuid === uuid);
   if (!vm) return;
-  const d = new Date(), p = (n) => String(n).padStart(2, "0");
-  openDialog("snap-dialog", { uuid: vm.uuid }, { name: `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` });
+  openDialog("snap-dialog", { uuid: vm.uuid }, { name: snapshotName(vm.name) });
+  const uefiOn = vm.state === "running" && vm.firmware === "uefi";
+  $("#snap-form .snap-restart").hidden = !uefiOn;
   $("#snap-form .snap-mem").textContent = vm.state === "running"
-    ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
+    ? "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running."
     : "The VM is off: the snapshot holds its disks.";
 }
+// Default snapshot name: the VM's name and when it was taken, e.g. web01-20261106-1530.
+function snapshotName(vmName, d = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  const base = String(vmName || "").replace(/[^A-Za-z0-9_.-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 48).replace(/-+$/, "");
+  return `${base || "snap"}-${stamp}`;
+}
 handlers["snap-dialog"] = async (f, ctx) => {
-  await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description") });
+  const restart = !$("#snap-form .snap-restart").hidden && f.get("restart") === "on";
+  if (restart) toast("Taking the snapshot: the VM may shut down and start again first…");
+  await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description"), restart });
   toast(`Snapshot taken: ${f.get("name").trim()}`);
   if (currentPage() !== "vm") return;
   selectTab("vm-tabs", "vm-snapshots");

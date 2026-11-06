@@ -196,7 +196,9 @@ class FakeDriver(HypervisorDriver):
             self._get(uuid)
             return [copy.deepcopy(s[0]) for s in self._snaps.get(uuid, [])]
 
-    def create_snapshot(self, uuid: str, name: str, description: str = "") -> SnapshotInfo:
+    def create_snapshot(
+        self, uuid: str, name: str, description: str = "", restart: bool = False
+    ) -> SnapshotInfo:
         check_snapshot_name(name)
         with self._lock:
             vm = self._get(uuid)

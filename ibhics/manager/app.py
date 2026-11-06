@@ -824,7 +824,7 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         return SnapshotOut(
-            **asdict(member.driver.create_snapshot(uuid, body.name, body.description))
+            **asdict(member.driver.create_snapshot(uuid, body.name, body.description, body.restart))
         )
 
     @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)

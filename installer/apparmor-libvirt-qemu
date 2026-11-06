@@ -4,3 +4,5 @@
 # image ("Could not open ...qcow2: Permission denied") and the VM does not start.
 /var/lib/ibhics/pools/** rwk,
 /mnt/ibhics/** rwk,
+# Backups of a running VM: QEMU writes a point-in-time copy of each disk here.
+/var/lib/ibhics/scratch/** rwk,

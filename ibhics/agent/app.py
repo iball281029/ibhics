@@ -199,7 +199,8 @@ def create_agent_app(
 
         @api.post("/vms/{uuid}/snapshots", response_model=SnapshotOut)
         def create_snapshot(uuid: str, body: SnapshotIn) -> SnapshotOut:
-            return SnapshotOut(**asdict(driver.create_snapshot(uuid, body.name, body.description)))
+            snap = driver.create_snapshot(uuid, body.name, body.description, body.restart)
+            return SnapshotOut(**asdict(snap))
 
         @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
         def revert_snapshot(uuid: str, name: str) -> VMOut:
