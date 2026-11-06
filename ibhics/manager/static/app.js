@@ -228,6 +228,7 @@ function openDialog(id, context = null, prefill = {}) {
   for (const [k, v] of Object.entries(prefill)) if (form.elements[k] && v != null) form.elements[k].value = v;
   syncSwitch(form);
   dialogContext = context;
+  $$("[data-ctx]", form).forEach((el) => { el.hidden = !context?.[el.dataset.ctx]; });
   dlg.showModal();
   // Pickers need the current pools and VMs even when the page did not load them.
   const want = [$(".pool-list", form) && "pools", $(".vm-check-list", form) && "vms",
@@ -1073,8 +1074,7 @@ async function vmAction(e) {
   if (act === "edit") { openEdit(id).catch(fail); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "backup") {
-    if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
-    openDialog("backup-dialog", { id, name });
+    backupNow(id, name).catch(fail);
     return;
   }
   if (act === "migrate") {
@@ -1458,6 +1458,14 @@ handlers["vm-dialog"] = async (f) => {
   }
   if (currentPage() === "compute") await refresh("compute"); else location.hash = "compute";
 };
+
+// Back up a VM now. With no backup target yet, ask where backups go first (a local
+// folder on the node by default), then start the backup straight away.
+async function backupNow(id, name) {
+  await load("targets");
+  if (state.targets.length) { openDialog("backup-dialog", { id, name }); return; }
+  openDialog("target-dialog", { backupAfter: { id, name } }, { name: "local-backup", type: "local" });
+}
 
 handlers["backup-dialog"] = async (f, ctx) => {
   const body = { target: f.get("target") };
@@ -2595,8 +2603,7 @@ $("#vm-backups").addEventListener("click", (e) => {
 $("#vm-backup-now").addEventListener("click", () => {
   const vm = state.vms.find((v) => v.uuid === vmFromHash());
   if (!vm) return;
-  if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
-  openDialog("backup-dialog", { id: vm.uuid, name: vm.name });
+  backupNow(vm.uuid, vm.name).catch(fail);
 });
 
 // ---------- VM snapshots and alerts ----------
@@ -2878,7 +2885,7 @@ $("#page-backup").addEventListener("click", async (e) => {
   } catch (err) { fail(err); }
 });
 
-handlers["target-dialog"] = async (f) => {
+handlers["target-dialog"] = async (f, ctx) => {
   const FIELDS = {
     local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
     usb: ["device"], iscsi: ["host", "iqn"], fc: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
@@ -2891,6 +2898,13 @@ handlers["target-dialog"] = async (f) => {
     if (body.confirm_wipe && !confirm("If the LUN has no filesystem it will be formatted. Continue?")) return;
   }
   await post("/backup/targets", body);
+  const after = ctx?.backupAfter;
+  if (after) {
+    await post(`/vms/${after.id}/backup`, { target: body.name });
+    toast(`Target ${body.name} added. Backing up ${after.name} now; progress is under Backup → Jobs.`);
+    await load("targets");
+    return;
+  }
   toast(`Target ${body.name} added`);
   await refresh("backup");
 };
