@@ -1040,7 +1040,7 @@
   <form method="dialog" id="snap-form">
     <header><h3>Take snapshot</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
-      <label class="wide">Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9 _.:\-]*" autocomplete="off"></label>
+      <label class="wide">Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" title="Letters, digits and _ . - (no spaces)" autocomplete="off"></label>
       <label class="wide">Description (optional) <input name="description" maxlength="1024" placeholder="e.g. before installing updates"></label>
       <p class="hint wide snap-mem"></p>
     </div>

@@ -281,7 +281,7 @@ class PoolNotFound(LookupError):
     pass
 
 
-SNAPSHOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,62}$")
+SNAPSHOT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 
 @dataclass
@@ -304,7 +304,7 @@ class SnapshotNotFound(LookupError):
 def check_snapshot_name(name: str) -> None:
     if not SNAPSHOT_NAME_RE.match(name):
         raise ValueError(
-            "snapshot name: letters, digits, spaces and '_.:-', starting with a letter or digit"
+            "snapshot name: letters, digits and '_.-' (no spaces), starting with a letter or digit"
         )
 
 

@@ -2630,7 +2630,7 @@ $("#vm-snap-take").addEventListener("click", () => {
   const vm = state.vms.find((v) => v.uuid === vmFromHash());
   if (!vm) return;
   const d = new Date(), p = (n) => String(n).padStart(2, "0");
-  openDialog("snap-dialog", { uuid: vm.uuid }, { name: `Snapshot ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}.${p(d.getMinutes())}` });
+  openDialog("snap-dialog", { uuid: vm.uuid }, { name: `snap-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}` });
   $("#snap-form .snap-mem").textContent = vm.state === "running"
     ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
     : "The VM is off: the snapshot holds its disks.";

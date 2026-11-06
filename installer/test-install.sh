@@ -193,14 +193,14 @@ try:
     started = call("POST", f"/vms/{vm['uuid']}/start", token=token)
     assert started["state"] == "running", started
     print("ok  the VM powers on (QEMU opens its disk)")
-    snap = call("POST", f"/vms/{vm['uuid']}/snapshots", {"name": "smoke snap"}, token=token)
+    snap = call("POST", f"/vms/{vm['uuid']}/snapshots", {"name": "smoke-snap"}, token=token)
     assert snap["vm_state"] == "running", snap
     call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
-    back = call("POST", f"/vms/{vm['uuid']}/snapshots/smoke%20snap/revert", token=token)
+    back = call("POST", f"/vms/{vm['uuid']}/snapshots/smoke-snap/revert", token=token)
     assert back["state"] == "running", back
     print("ok  a snapshot with memory is taken, and reverting brings the VM back running")
     call("POST", f"/vms/{vm['uuid']}/stop", {"force": True}, token=token)
-    call("DELETE", f"/vms/{vm['uuid']}/snapshots/smoke%20snap", token=token)
+    call("DELETE", f"/vms/{vm['uuid']}/snapshots/smoke-snap", token=token)
     assert call("GET", f"/vms/{vm['uuid']}/snapshots", token=token) == []
 except urllib.error.HTTPError as exc:
     detail = exc.read().decode(errors="replace")

@@ -26,10 +26,10 @@ def fake():
 def test_revert_brings_disks_and_settings_back(fake):
     d, uuid = fake
     d.write_disk(uuid, 0, 0, b"before")
-    d.create_snapshot(uuid, "before upgrade", "clean install")
+    d.create_snapshot(uuid, "before-upgrade", "clean install")
     d.write_disk(uuid, 0, 0, b"broken")
     d.update_vm(uuid, __import__("ibhics.hypervisor", fromlist=["VMEdit"]).VMEdit(vcpus=4))
-    vm = d.revert_snapshot(uuid, "before upgrade")
+    vm = d.revert_snapshot(uuid, "before-upgrade")
     assert vm.spec.vcpus == 1 and d.read_disk(uuid, 0).startswith(b"before")
 
 
@@ -145,13 +145,13 @@ def lvd(monkeypatch):
 
 def test_libvirt_snapshot_xml_and_ops(lvd):
     d, dom = lvd(VMSpec(name="a", disks=[DiskSpec(size_gb=1)]))
-    snap = d.create_snapshot("u", "pre-patch 1", "note & more")
+    snap = d.create_snapshot("u", "pre-patch.1", "note & more")
     root = ET.fromstring(dom.snaps[0].xml)
-    assert root.findtext("name") == "pre-patch 1" and root.findtext("description") == "note & more"
+    assert root.findtext("name") == "pre-patch.1" and root.findtext("description") == "note & more"
     assert (snap.vm_state, snap.current, snap.created[:4]) == ("running", True, "2023")
-    d.revert_snapshot("u", "pre-patch 1")
-    assert dom.reverted == "pre-patch 1"
-    d.delete_snapshot("u", "pre-patch 1")
+    d.revert_snapshot("u", "pre-patch.1")
+    assert dom.reverted == "pre-patch.1"
+    d.delete_snapshot("u", "pre-patch.1")
     assert dom.snaps[0].deleted
     with pytest.raises(SnapshotNotFound):
         d.delete_snapshot("u", "nope")
@@ -180,10 +180,10 @@ def test_snapshots_through_manager_on_remote_node(tmp_path):
     )
     uuid = env.create_vm("remote-vm", node="node2", start=False)
     api = env.client
-    resp = api.post(f"/api/v1/vms/{uuid}/snapshots", json={"name": "base line", "description": "x"})
+    resp = api.post(f"/api/v1/vms/{uuid}/snapshots", json={"name": "base-line", "description": "x"})
     assert resp.status_code == 201, resp.text
-    assert [s["name"] for s in api.get(f"/api/v1/vms/{uuid}/snapshots").json()] == ["base line"]
-    assert api.post(f"/api/v1/vms/{uuid}/snapshots/base%20line/revert").status_code == 200
+    assert [s["name"] for s in api.get(f"/api/v1/vms/{uuid}/snapshots").json()] == ["base-line"]
+    assert api.post(f"/api/v1/vms/{uuid}/snapshots/base-line/revert").status_code == 200
     assert api.delete(f"/api/v1/vms/{uuid}/snapshots/nope").status_code == 404
-    assert api.delete(f"/api/v1/vms/{uuid}/snapshots/base%20line").status_code == 204
+    assert api.delete(f"/api/v1/vms/{uuid}/snapshots/base-line").status_code == 204
     assert api.get(f"/api/v1/vms/{uuid}/snapshots").json() == []
