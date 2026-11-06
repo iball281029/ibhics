@@ -734,3 +734,36 @@ th { color: color-mix(in srgb, var(--brand) 35%, var(--muted)); }
 #deploy-form details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
 .t-kind.k-deploy { color: #9333ea; background: color-mix(in srgb, #a855f7 13%, transparent); }
 @media (max-width: 600px) { .tpl-grid, .tpl-intro { padding-left: 14px; padding-right: 14px; } }
+
+/* Snapshots, alerts, recycle bin */
+.tab-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; font-size: 11px; background: var(--hover); color: var(--muted); }
+.tab-n:empty { display: none; }
+.tab-n.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.snap-line { list-style: none; margin: 0; padding: 8px 26px 26px; position: relative; }
+.snap { position: relative; display: flex; align-items: flex-start; gap: 14px; padding: 12px 0 12px 4px; }
+.snap::before { content: ""; position: absolute; left: 19px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+.snap:first-child::before { top: 24px; }
+.snap:last-child::before { bottom: calc(100% - 24px); }
+.snap-dot { position: relative; z-index: 1; flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--panel); border: 2px solid var(--line); color: var(--muted); }
+.snap-dot svg { width: 16px; height: 16px; }
+.snap.current .snap-dot { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+.snap.here .snap-dot { width: 16px; height: 16px; margin: 8px; border: 0; background: var(--grad); box-shadow: 0 0 0 5px color-mix(in srgb, var(--brand) 18%, transparent); }
+.snap.here > div { display: flex; flex-direction: column; padding-top: 4px; }
+.snap-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; }
+.snap.current .snap-body { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+.snap-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.snap-body p { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
+.snap > .actions { align-self: center; }
+.snap-empty { padding: 24px 0; }
+.alert-list { list-style: none; margin: 0; padding: 18px 26px 26px; display: grid; gap: 10px; }
+.alert-list li { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line)); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.alert-list li > div { display: flex; flex-direction: column; gap: 2px; }
+.alert-list li.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--line)); background: color-mix(in srgb, var(--ok) 7%, transparent); }
+.al-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; flex: none; color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.alert-list li.ok .al-icon { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.al-icon svg { width: 18px; height: 18px; }
+.vg-bin { display: flex; align-items: center; gap: 8px; margin: 10px 8px 4px; padding: 8px 10px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+.vg-bin:hover { color: var(--text); }
+.vg-bin svg { width: 16px; height: 16px; }
+.vg-bin .vg-n { margin-left: auto; }
+#page-recycle .crumb { margin-bottom: 12px; }

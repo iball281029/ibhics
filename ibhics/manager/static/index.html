@@ -48,6 +48,8 @@
   <symbol id="i-hdd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M12 11h.01M6 17h3"/></g></symbol>
   <symbol id="i-power" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></g></symbol>
   <symbol id="i-template" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 3 7.5 12 12l9-4.5z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></g></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></g></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></g></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></g></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></g></symbol>
@@ -140,6 +142,7 @@
           <aside class="vgroups">
             <div class="vg-head"><span>Groups</span><button type="button" class="icon ghost operator-only" id="vg-add" title="New group">+</button></div>
             <ul class="vg-tree" id="vg-tree"></ul>
+            <a class="vg-bin" href="#recycle"><svg><use href="#i-trash"/></svg>Recycle bin <span class="vg-n" id="vg-bin-n"></span></a>
           </aside>
           <div class="vmp-main">
             <div class="vm-alert" id="vm-alert" hidden></div>
@@ -200,8 +203,10 @@
         <div class="tabs" id="vm-tabs">
           <button data-tab="vm-summary" class="active">Summary</button>
           <button data-tab="vm-hardware">Hardware</button>
+          <button data-tab="vm-snapshots">Snapshots <span class="tab-n" id="vm-snap-n"></span></button>
           <button data-tab="vm-backups">Backups</button>
-          <button data-tab="vm-activity">Activity</button>
+          <button data-tab="vm-activity">Tasks</button>
+          <button data-tab="vm-alerts">Alerts <span class="tab-n warn" id="vm-alert-n"></span></button>
         </div>
         <div class="subpage active" id="tab-vm-summary">
           <div class="cards">
@@ -228,6 +233,13 @@
         </div>
         <div class="subpage" id="tab-vm-activity">
           <ul class="feed section" id="vm-feed"></ul>
+        </div>
+        <div class="subpage" id="tab-vm-snapshots">
+          <div class="toolbar"><span class="hint" id="vm-snap-hint">Go back to how the VM was before a change. A snapshot of a running VM includes its memory, so reverting resumes it.</span><span class="spacer"></span><button class="primary operator-only" id="vm-snap-take">Take snapshot</button></div>
+          <ol class="snap-line" id="vm-snaps"></ol>
+        </div>
+        <div class="subpage" id="tab-vm-alerts">
+          <ul class="alert-list" id="vm-alerts"></ul>
         </div>
       </div>
     </section>
@@ -452,6 +464,20 @@
             <tbody id="imports"></tbody>
           </table></div>
         </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-recycle">
+      <div class="crumb"><a href="#compute">Virtual Machines</a><svg><use href="#i-chev"/></svg><span>Recycle bin</span></div>
+      <div class="sheet">
+        <div class="page-head"><h1>Recycle bin</h1><span class="sub" id="rb-sub"></span>
+          <span class="spacer"></span>
+          <button class="danger operator-only" id="rb-empty">Empty recycle bin</button>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>VM</th><th>Node</th><th>Hardware</th><th>Disks</th><th>Deleted</th><th>Deleted for good</th><th></th></tr></thead>
+          <tbody id="rb-rows"></tbody>
+        </table></div>
       </div>
     </section>
 
@@ -987,6 +1013,18 @@
       <button type="button" class="primary wiz-next">Next</button>
       <button class="primary wiz-ok" value="ok">Restore</button>
     </footer>
+  </form>
+</dialog>
+
+<dialog id="snap-dialog">
+  <form method="dialog" id="snap-form">
+    <header><h3>Take snapshot</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label class="wide">Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9 _.:\-]*" autocomplete="off"></label>
+      <label class="wide">Description (optional) <input name="description" maxlength="1024" placeholder="e.g. before installing updates"></label>
+      <p class="hint wide snap-mem"></p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Take snapshot</button></footer>
   </form>
 </dialog>
 

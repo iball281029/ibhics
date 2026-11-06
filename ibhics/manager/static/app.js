@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [] };
+const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -121,7 +121,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -133,7 +133,7 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 function show() {
   const page = currentPage();
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  const section = { vm: "compute", node: "nodes" }[page] || page;
+  const section = { vm: "compute", node: "nodes", recycle: "compute" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
@@ -319,10 +319,11 @@ async function loadCluster() {
 const loaders = {
   vms: async () => {
     const all = await api("/vms");
-    state.vms = all.filter((v) => !v.template);
-    state.templates = all.filter((v) => v.template);
+    state.vms = all.filter((v) => !v.template && !v.recycled);
+    state.templates = all.filter((v) => v.template && !v.recycled);
   },
   deploys: async () => { state.deploys = await api("/deploys"); },
+  recycle: async () => { state.recycle = await api("/recycle-bin"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
   stats: async () => { state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s])); },
   groups: async () => { state.groups = await api("/vm-groups"); },
@@ -485,15 +486,16 @@ async function refresh(page, auto = false) {
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
-  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves"); renderVMs(); renderMoves(); }
-  if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports"); await renderVMDetail(); }
+  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
+  if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
   if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
-  if (page === "templates") { await load("vms", "pools", "deploys"); renderTemplates(); }
+  if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
+  if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
@@ -812,6 +814,7 @@ function renderVMs() {
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#vm-count").textContent = `${state.vms.length} total · ${running} running`;
   renderGroupTree();
+  $("#vg-bin-n").textContent = state.recycle.vms.length || "";
   renderVMAlert();
   $$("#vm-view button").forEach((b) => b.classList.toggle("on", b.dataset.view === vmp.view));
   $$("#vm-metrics button").forEach((b) => b.classList.toggle("active", b.dataset.metric === vmp.metric));
@@ -1034,7 +1037,7 @@ async function batch(act) {
   const label = { start: "Power on", stop: "Shut down", poweroff: "Power off", restart: "Restart", delete: "Delete" }[act];
   if (!todo.length) { toast(`${label}: none of the selected VMs ${act === "start" ? "is stopped" : act === "delete" ? "is stopped (shut down first)" : "is running"}`, true); return; }
   const names = todo.map((v) => v.name).join(", ");
-  if (act === "delete" && !confirm(`Delete ${todo.length} VM${todo.length === 1 ? "" : "s"} and all their disks?\n\n${names}`)) return;
+  if (act === "delete" && !confirm(`Delete ${todo.length} VM${todo.length === 1 ? "" : "s"}?${binNote()}\n\n${names}`)) return;
   if (["poweroff", "restart"].includes(act) && !confirm(`${label} ${names}?${act === "poweroff" ? " Unsaved work in the guests is lost." : ""}`)) return;
   const call = (v) => ({
     start: () => post(`/vms/${v.uuid}/start`), stop: () => post(`/vms/${v.uuid}/stop`),
@@ -1098,9 +1101,9 @@ async function vmAction(e) {
       return;
     }
     if (act === "delete") {
-      if (!confirm(`Delete ${name} and all its disks?`)) return;
+      if (!confirm(`Delete ${name}?${binNote()}`)) return;
       await del(`/vms/${id}`);
-      toast(`${name} deleted`);
+      toast(state.recycle.days ? `${name} moved to the recycle bin` : `${name} deleted`);
       if (currentPage() === "vm") { location.hash = "compute"; return; }
     }
     await refresh(currentPage());
@@ -1165,7 +1168,7 @@ $("#tpl-grid").addEventListener("click", async (e) => {
       toast(`${name} is a VM again`);
     }
     if (act === "delete") {
-      if (!confirm(`Delete template ${name} and its disks?`)) return;
+      if (!confirm(`Delete template ${name}?${binNote()}`)) return;
       await del(`/vms/${id}`);
       toast(`${name} deleted`);
     }
@@ -2479,7 +2482,7 @@ async function renderVMDetail() {
     $("#vm-title").textContent = "VM not found";
     $("#vm-crumb").textContent = uuid;
     $("#vm-subtitle").textContent = "It may have been deleted, or moved and renamed.";
-    ["#vm-actions", "#vm-stats", "#vm-general", "#vm-guest", "#vm-net", "#vm-hw", "#vm-backups", "#vm-feed"].forEach((id) => { $(id).innerHTML = ""; });
+    ["#vm-actions", "#vm-stats", "#vm-general", "#vm-guest", "#vm-net", "#vm-hw", "#vm-backups", "#vm-feed", "#vm-snaps", "#vm-alerts"].forEach((id) => { $(id).innerHTML = ""; });
     return;
   }
   let g = null;
@@ -2565,7 +2568,8 @@ async function renderVMDetail() {
     <span class="badge ${esc(a.state)}">${JOB_STATE[a.state] || esc(a.state)}</span>
     <span class="when">${esc(ago(a.created))}</span></li>`).join("") : `<li class="hint">No backups, restores or migrations for this VM yet.</li>`;
 
-  await renderVMBackups(vm);
+  renderVMAlerts(vm);
+  await Promise.all([renderVMSnapshots(vm), renderVMBackups(vm)]);
 }
 
 async function renderVMBackups(vm) {
@@ -2594,6 +2598,135 @@ $("#vm-backup-now").addEventListener("click", () => {
   if (!state.targets.length) { toast("Add a backup target first (Backup → Targets)", true); return; }
   openDialog("backup-dialog", { id: vm.uuid, name: vm.name });
 });
+
+// ---------- VM snapshots and alerts ----------
+
+async function renderVMSnapshots(vm) {
+  const box = $("#vm-snaps");
+  const snaps = await api(`/vms/${vm.uuid}/snapshots`).catch((err) => { box.innerHTML = `<li class="hint">${esc(err.message)}</li>`; return null; });
+  if (!snaps) return;
+  $("#vm-snap-n").textContent = snaps.length || "";
+  const block = vm.disks.some((d) => d.backend === "block");
+  const why = vm.template ? "Templates do not take snapshots." : block ? "This VM has a disk on block storage (LVM/iSCSI): snapshots need qcow2 disks. Use Back up now instead." : "";
+  $("#vm-snap-take").disabled = Boolean(why);
+  $("#vm-snap-take").title = why;
+  const op = canOperate() && !vm.template;
+  const here = `<li class="snap here"><span class="snap-dot"></span><div><b>You are here</b><span class="vm-sub">The VM as it is now${snaps.some((s) => s.current) ? `, changed since ${esc(snaps.find((s) => s.current).name)}` : ""}</span></div></li>`;
+  box.innerHTML = (snaps.length ? [...snaps].reverse().map((s) => `<li class="snap${s.current ? " current" : ""}">
+      <span class="snap-dot"><svg><use href="#i-camera"/></svg></span>
+      <div class="snap-body">
+        <div class="snap-head"><b>${esc(s.name)}</b>
+          <span class="badge ${s.vm_state === "running" ? "running" : "plain"}">${s.vm_state === "running" ? "with memory" : "disks only"}</span>
+          ${s.current ? `<span class="badge plain">current</span>` : ""}</div>
+        <span class="vm-sub">${esc(when(s.created))}${s.parent ? ` · after ${esc(s.parent)}` : ""}</span>
+        ${s.description ? `<p>${esc(s.description)}</p>` : ""}
+      </div>
+      ${op ? `<div class="actions"><button class="small" data-snap="revert" data-name="${esc(s.name)}" data-state="${esc(s.vm_state)}">Revert</button>
+        <button class="small danger" data-snap="delete" data-name="${esc(s.name)}">Delete</button></div>` : ""}
+    </li>`).join("") : `<li class="hint snap-empty">No snapshots yet.${why ? " " + esc(why) : " Take one before an upgrade or a risky change."}</li>`) ;
+  if (snaps.length) box.insertAdjacentHTML("afterbegin", here);
+}
+$("#vm-snap-take").addEventListener("click", () => {
+  const vm = state.vms.find((v) => v.uuid === vmFromHash());
+  if (!vm) return;
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  openDialog("snap-dialog", { uuid: vm.uuid }, { name: `Snapshot ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}.${p(d.getMinutes())}` });
+  $("#snap-form .snap-mem").textContent = vm.state === "running"
+    ? (vm.firmware === "uefi" ? "This UEFI VM is running: QEMU cannot save its memory. Shut it down first." : "The VM is running: its memory is saved too, so it pauses for a moment. Reverting brings it back running.")
+    : "The VM is off: the snapshot holds its disks.";
+});
+handlers["snap-dialog"] = async (f, ctx) => {
+  await post(`/vms/${ctx.uuid}/snapshots`, { name: f.get("name").trim(), description: f.get("description") });
+  toast(`Snapshot taken: ${f.get("name").trim()}`);
+  selectTab("vm-tabs", "vm-snapshots");
+  await refresh("vm");
+  selectTab("vm-tabs", "vm-snapshots");
+};
+$("#vm-snaps").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-snap]");
+  if (!b) return;
+  const uuid = vmFromHash(), name = b.dataset.name, vm = state.vms.find((v) => v.uuid === uuid);
+  try {
+    if (b.dataset.snap === "revert") {
+      const lose = `Everything that changed in ${vm.name} since then is lost.`;
+      if (!confirm(`Revert ${vm.name} to ${name}? ${lose}${b.dataset.state === "running" ? " The VM will be running, as it was." : " The VM will be off."}`)) return;
+      b.disabled = true;
+      await post(`/vms/${uuid}/snapshots/${enc(name)}/revert`);
+      toast(`${vm.name} is back at ${name}`);
+    } else {
+      if (!confirm(`Delete snapshot ${name}? The VM itself does not change.`)) return;
+      b.disabled = true;
+      await del(`/vms/${uuid}/snapshots/${enc(name)}`);
+      toast(`Snapshot ${name} deleted`);
+    }
+    await refresh("vm");
+    selectTab("vm-tabs", "vm-snapshots");
+  } catch (err) { b.disabled = false; fail(err); }
+});
+
+const ALERT_HELP = [
+  [/^CPU/, "i-cpu", "The guest uses almost all its processors. Add vCPUs in Settings, or find what keeps it busy."],
+  [/^Memory/, "i-mem", "The guest uses almost all its memory. Add memory in Settings before it starts swapping."],
+  [/^Disk/, "i-hdd", "The disks are nearly full. Enlarge a disk in Settings, then extend the partition in the guest."],
+  [/^No guest agent/, "i-alert", "Install the guest tools (⋯ → Insert guest tools CD) so ibHiCS sees IPs, disk use and can shut it down cleanly."],
+  [/^Restart/, "i-refresh", "Processor, memory or boot order changes wait for the next power off and on."],
+];
+function renderVMAlerts(vm) {
+  const alerts = vmAlerts(vm);
+  $("#vm-alert-n").textContent = alerts.length || "";
+  $("#vm-alerts").innerHTML = alerts.length ? alerts.map((a) => {
+    const [, icon, help] = ALERT_HELP.find(([re]) => re.test(a)) || [null, "i-alert", ""];
+    return `<li><span class="al-icon"><svg><use href="#${icon}"/></svg></span><div><b>${esc(a)}</b><span class="vm-sub">${esc(help)}</span></div></li>`;
+  }).join("") : `<li class="ok"><span class="al-icon"><svg><use href="#i-power"/></svg></span><div><b>No alerts</b><span class="vm-sub">CPU, memory, disks and the guest agent look fine.</span></div></li>`;
+}
+
+// ---------- recycle bin ----------
+
+function renderRecycle() {
+  const { days, vms } = state.recycle;
+  $("#rb-sub").textContent = days ? `Deleted VMs are kept ${days} days with their disks, then deleted for good` : "Off: deleting a VM removes it at once";
+  $("#rb-empty").disabled = !vms.length;
+  $("#rb-rows").innerHTML = vms.length ? vms.map(({ vm, expires }) => `<tr>
+    <td><div class="name-cell">${avatar(vm.template ? "i-template" : osIcon(vm))}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub">${esc(vm.os_type || (vm.template ? "Template" : ""))}</span></div></div></td>
+    <td>${esc(vm.node || "")}</td>
+    <td>${vm.vcpus} vCPU · ${gbText(vm.memory_mb)}</td>
+    <td>${num(diskTotal(vm))} GB <span class="vm-sub">${esc([...new Set(vm.disks.map((d) => d.pool))].join(", "))}</span></td>
+    <td>${esc(when(vm.recycled))}</td>
+    <td>${expires ? `${esc(when(expires))}<span class="vm-sub">${esc(leftUntil(expires))}</span>` : "–"}</td>
+    <td><div class="actions">${canOperate() ? `<button class="small" data-rb="restore" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Restore</button>
+      <button class="small danger" data-rb="purge" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete now</button>` : ""}</div></td>
+  </tr>`).join("") : empty(7, "The recycle bin is empty.");
+}
+$("#rb-rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-rb]");
+  if (!b) return;
+  const { rb, id, name } = b.dataset;
+  try {
+    if (rb === "restore") {
+      await post(`/recycle-bin/${id}/restore`);
+      toast(`${name} restored. It is off; power it on when you need it.`);
+    } else {
+      if (!confirm(`Delete ${name} and its disks for good? This cannot be undone.`)) return;
+      await del(`/recycle-bin/${id}`);
+      toast(`${name} deleted for good`);
+    }
+    await refresh("recycle");
+  } catch (err) { fail(err); }
+});
+$("#rb-empty").addEventListener("click", async () => {
+  const vms = state.recycle.vms;
+  if (!vms.length || !confirm(`Delete ${vms.length} VM${vms.length === 1 ? "" : "s"} and their disks for good? This cannot be undone.\n\n${vms.map((r) => r.vm.name).join(", ")}`)) return;
+  const results = await Promise.allSettled(vms.map((r) => del(`/recycle-bin/${r.vm.uuid}`)));
+  const failed = results.filter((r) => r.status === "rejected");
+  toast(failed.length ? `${failed.length} could not be deleted: ${failed.map((r) => r.reason.message).join("; ")}` : "Recycle bin emptied", failed.length > 0);
+  await refresh("recycle");
+});
+function leftUntil(iso) {
+  const h = (new Date(iso) - Date.now()) / 3600000;
+  if (h <= 1) return "within the hour";
+  return h < 48 ? `in ${Math.round(h)} hours` : `in ${Math.round(h / 24)} days`;
+}
+const binNote = () => (state.recycle.days ? ` It goes to the recycle bin for ${state.recycle.days} days and can be restored.` : " This cannot be undone.");
 
 // ---------- backup ----------
 
