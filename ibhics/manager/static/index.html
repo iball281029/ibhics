@@ -881,6 +881,7 @@
   <form method="dialog" id="target-form">
     <header><h3>Add backup target</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
+      <p class="hint wide" data-ctx="backupAfter">No backup target yet: choose where backups are kept. "Local disk" with a blank path keeps them on this node; a NAS (NFS / SMB) or S3 keeps them off the node. The backup starts as soon as the target is added.</p>
       <label>Name <input name="name" required placeholder="nas-backup"></label>
       <label>Type
         <select name="type" data-switch>
