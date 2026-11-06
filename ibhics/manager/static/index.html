@@ -388,12 +388,12 @@
         <div class="tabs" id="backup-tabs">
           <button data-tab="backups" class="active">Restore points</button>
           <button data-tab="policies">Schedules</button>
-          <button data-tab="targets">Targets</button>
+          <button data-tab="targets">Repositories</button>
           <button data-tab="jobs">Jobs</button>
         </div>
         <div class="subpage active" id="tab-backups">
           <div class="toolbar">
-            <label style="display:flex;align-items:center;gap:8px">Target <select id="browse-target" class="target-list" style="width:auto"></select></label>
+            <label style="display:flex;align-items:center;gap:8px">Repository <select id="browse-target" class="target-list" style="width:auto"></select></label>
             <span class="spacer"></span><button id="refresh-backups">Refresh</button>
           </div>
           <div class="table-wrap"><table>
@@ -409,7 +409,7 @@
           </table></div>
         </div>
         <div class="subpage" id="tab-targets">
-          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="target-dialog">+ Add target</button></div>
+          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="target-dialog">+ Add repository</button></div>
           <div class="table-wrap"><table>
             <thead><tr><th>Name</th><th>Type</th><th>Location</th><th>Connection</th><th></th></tr></thead>
             <tbody id="targets"></tbody>
@@ -879,17 +879,20 @@
 
 <dialog id="target-dialog">
   <form method="dialog" id="target-form">
-    <header><h3>Add backup target</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Add backup repository</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
-      <p class="hint wide" data-ctx="backupAfter">No backup target yet: choose where backups are kept. "Local disk" with a blank path keeps them on this node; a NAS (NFS / SMB) or S3 keeps them off the node. The backup starts as soon as the target is added.</p>
+      <p class="hint wide" data-ctx="backupAfter">No backup repository yet: choose where backups are kept. "Storage pool" sets aside space in a pool you already have; a NAS (NFS / SMB) or S3 keeps them off the node. The backup starts as soon as the repository is added.</p>
       <label>Name <input name="name" required placeholder="nas-backup"></label>
       <label>Type
         <select name="type" data-switch>
-          <option value="local">Local disk</option><option value="nfs">NFS</option><option value="smb">SMB / Windows share</option>
+          <option value="pool">Storage pool (set aside space)</option>
+          <option value="local">Local folder</option><option value="nfs">NFS</option><option value="smb">SMB / Windows share</option>
           <option value="usb">USB disk</option><option value="iscsi">iSCSI LUN (SAN / NAS)</option>
           <option value="fc">FC LUN / block device</option><option value="s3">S3 / MinIO</option>
         </select>
       </label>
+      <label data-for="pool">Storage pool <select name="pool" class="pool-list"></select></label>
+      <label data-for="pool">Space for backups (GB) <input name="quota_gb" type="number" min="1" value="500"></label>
       <label data-for="local">Path (blank = default) <input name="path" placeholder="/var/lib/ibhics/backup/..."></label>
       <label data-for="nfs smb iscsi">Server / portal <input name="host" placeholder="10.0.0.50"></label>
       <label data-for="nfs">Export <input name="export" placeholder="/backup"></label>
@@ -906,7 +909,7 @@
       <label class="check" data-for="iscsi fc"><input name="confirm_wipe" type="checkbox"> Format the LUN if it has no filesystem</label>
     </div>
     <p class="hint" style="padding:0 18px">NAS, SAN and USB targets are attached only while a job runs and detached when it ends.</p>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add target</button></footer>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add repository</button></footer>
   </form>
 </dialog>
 
@@ -954,7 +957,7 @@
 
       <section class="wiz-page" data-page="3">
         <div class="type-cards pol-targets"></div>
-        <p class="hint" style="padding:0;margin-top:12px">Need somewhere new? Add a target (NAS, USB disk, S3...) under Backup → Targets first.</p>
+        <p class="hint" style="padding:0;margin-top:12px">Need somewhere new? Add a target (NAS, USB disk, S3...) under Backup → Repositories first.</p>
       </section>
 
       <section class="wiz-page" data-page="4">
@@ -1094,7 +1097,7 @@
   <form method="dialog" id="backup-form">
     <header><h3>Back up VM</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
-      <label>Target <select name="target" class="target-list" required></select></label>
+      <label>Backup repository <select name="target" class="target-list" required></select></label>
       <label>Keep last (optional) <input name="keep_last" type="number" min="1"></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Back up now</button></footer>

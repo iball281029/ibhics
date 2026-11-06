@@ -1467,7 +1467,7 @@ handlers["vm-dialog"] = async (f) => {
 async function backupNow(id, name) {
   await load("targets");
   if (state.targets.length) { openDialog("backup-dialog", { id, name }); return; }
-  openDialog("target-dialog", { backupAfter: { id, name } }, { name: "local-backup", type: "local" });
+  openDialog("target-dialog", { backupAfter: { id, name } }, { name: "backup-repo", type: "pool" });
 }
 
 handlers["backup-dialog"] = async (f, ctx) => {
@@ -2585,7 +2585,7 @@ async function renderVMDetail() {
 
 async function renderVMBackups(vm) {
   const tbody = $("#vm-backups");
-  if (!state.targets.length) { tbody.innerHTML = empty(6, "Add a backup target first (Backup → Targets)"); return; }
+  if (!state.targets.length) { tbody.innerHTML = empty(6, "Add a backup repository first (Backup → Repositories)"); return; }
   const lists = await Promise.all(state.targets.map((t) =>
     api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
   const points = lists.flat().filter((b) => b.vm_name === vm.name).sort((a, b) => b.created.localeCompare(a.created));
@@ -2805,13 +2805,13 @@ function renderTargets() {
     <td class="vm-sub" style="display:table-cell">${esc(t.source)}</td>
     <td>${t.on_demand ? '<span class="badge waiting">Attached only during jobs</span>' : '<span class="badge online">Always available</span>'}</td>
     <td><div class="actions">${admin ? `<button class="small danger" data-target="${esc(t.name)}">Remove</button>` : ""}</div></td>
-  </tr>`).join("") : empty(5, "No backup targets. Add one to start protecting VMs.");
+  </tr>`).join("") : empty(5, "No backup repositories. Add one to start protecting VMs.");
 }
 
 async function renderBackups() {
   const target = $("#browse-target").value || state.targets[0]?.name;
   const tbody = $("#backups");
-  if (!target) { tbody.innerHTML = empty(6, "Add a backup target first"); return; }
+  if (!target) { tbody.innerHTML = empty(6, "Add a backup repository first"); return; }
   const op = canOperate(), admin = isAdmin();
   try {
     const backups = await api(`/backup/targets/${enc(target)}/backups`);
@@ -2892,11 +2892,12 @@ $("#page-backup").addEventListener("click", async (e) => {
 
 handlers["target-dialog"] = async (f, ctx) => {
   const FIELDS = {
-    local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
+    pool: [], local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
     usb: ["device"], iscsi: ["host", "iqn"], fc: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
   };
   const body = { name: f.get("name"), type: f.get("type") };
   for (const key of FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
+  if (body.type === "pool") Object.assign(body, { type: "local", pool: f.get("pool"), quota_gb: Number(f.get("quota_gb")) });
   if (body.type === "iscsi") body.lun = Number(f.get("lun"));
   if (body.type === "iscsi" || body.type === "fc") {
     body.confirm_wipe = f.get("confirm_wipe") === "on";
@@ -2906,11 +2907,11 @@ handlers["target-dialog"] = async (f, ctx) => {
   const after = ctx?.backupAfter;
   if (after) {
     await post(`/vms/${after.id}/backup`, { target: body.name });
-    toast(`Target ${body.name} added. Backing up ${after.name} now; progress is under Backup → Jobs.`);
+    toast(`Repository ${body.name} added. Backing up ${after.name} now; progress is under Backup → Jobs.`);
     await load("targets");
     return;
   }
-  toast(`Target ${body.name} added`);
+  toast(`Repository ${body.name} added`);
   await refresh("backup");
 };
 
@@ -2965,7 +2966,7 @@ const policyWiz = wizard("policy-dialog", {
       if (f.mode.value === "every" && !(Number(f.every_hours.value) >= 1 && Number(f.every_hours.value) <= 168)) throw new Error("Hours must be 1 to 168.");
       if (!(Number(f.keep_last.value) >= 1)) throw new Error("Keep at least 1 backup.");
     }
-    if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup target first (Backup → Targets).");
+    if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup repository first (Backup → Repositories).");
     if (step === 4 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the schedule with letters, digits, '-', '_' or '.'.");
     if (step === 4 && state.policies.some((p) => p.name === f.name.value)) throw new Error(`A schedule named ${f.name.value} already exists.`);
   },
@@ -3045,7 +3046,7 @@ function rsRenderVms() {
     return `<tr data-vm="${esc(n)}" class="${on ? "sel" : ""}"><td><input type="radio" ${on ? "checked" : ""} aria-label="${esc(n)}"></td>
       <td class="vm-name">${esc(n)}</td><td>${pts.length}</td><td>${esc(when(pts[0].created))}</td>
       <td>${rsVmGone(n) ? `<span class="badge failed">Deleted</span>` : `<span class="badge online">Yes</span>`}</td></tr>`;
-  }).join("") : empty(5, state.targets.length ? (rs.points.length ? "No VM matches" : "No restore points yet") : "Add a backup target first");
+  }).join("") : empty(5, state.targets.length ? (rs.points.length ? "No VM matches" : "No restore points yet") : "Add a backup repository first");
 }
 function rsRenderPoints() {
   $(".rs-vm-title", rsForm).textContent = `Restore points of ${rs.vm}, newest first`;
