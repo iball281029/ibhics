@@ -74,6 +74,9 @@ class VMSpec:
     # on (copy-on-write qcow2 overlays), so that template must stay.
     template: bool = False
     linked_to: str = ""
+    # When the VM went into the recycle bin (ISO 8601); empty while it is in use. A recycled
+    # VM keeps its disks but cannot start until it is restored.
+    recycled: str = ""
 
     def validate(self) -> None:
         if len(self.os_type) > 64:
@@ -533,6 +536,10 @@ class HypervisorDriver(abc.ABC):
     def set_template(self, uuid: str, template: bool) -> VMInfo:
         """Convert a stopped VM to a template, or a template back to a VM (refused while
         linked clones are based on it)."""
+        raise NotImplementedError
+
+    def set_recycled(self, uuid: str, at: str) -> VMInfo:
+        """Move a stopped VM into the recycle bin (`at`: when), or restore it with ""."""
         raise NotImplementedError
 
     def clone_vm(self, uuid: str, clone: CloneSpec) -> VMInfo:

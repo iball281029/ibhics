@@ -24,6 +24,7 @@ from .deploys import Deploy, DeployManager
 from .errors import install_cluster_errors, install_driver_errors
 from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
+from .recycle import RecycleBin
 from .schemas import (
     AuditOut,
     BackupOut,
@@ -60,6 +61,8 @@ from .schemas import (
     PoolFileOut,
     PoolOut,
     PowerIn,
+    RecycleBinOut,
+    RecycledOut,
     RestoreRequest,
     SnapshotIn,
     SnapshotOut,
@@ -176,6 +179,7 @@ def create_app(
     iso_dir: Path = ISO_DIR,
     groups: VMGroups | None = None,
     deploys: DeployManager | None = None,
+    recycle_days: int = 0,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -199,6 +203,7 @@ def create_app(
 
     deploys = deploys or DeployManager(cluster)
     deploys.on_done = deployed
+    recycle = RecycleBin(cluster, recycle_days, forget=groups.forget)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -217,6 +222,7 @@ def create_app(
             async def schedule() -> None:
                 while True:
                     await asyncio.to_thread(backups.tick)
+                    await asyncio.to_thread(recycle.purge_expired)
                     await asyncio.sleep(scheduler_interval)
 
             scheduler = asyncio.create_task(schedule())
@@ -586,8 +592,10 @@ def create_app(
     @api.post("/vms", response_model=VMOut, status_code=status.HTTP_201_CREATED)
     def create_vm(body: VMCreate) -> VMOut:
         cluster.require_quorum()
-        if any(vm.spec.name == body.name for _, vm in cluster.all_vms()):
-            raise VMExists(f"VM named {body.name!r} already exists in the cluster")
+        for _, vm in cluster.all_vms():
+            if vm.spec.name == body.name:
+                where = " (in the recycle bin)" if vm.spec.recycled else ""
+                raise VMExists(f"VM named {body.name!r} already exists in the cluster{where}")
         member = cluster.member(body.node) if body.node else cluster.pick_node(body.memory_mb)
         if body.driver_iso is None and "windows" in body.os_type.lower():
             if Path(GUEST_TOOLS_ISO).is_file():
@@ -715,13 +723,41 @@ def create_app(
         return VMOut.from_info(vm, member.name)
 
     @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
-    def delete_vm(uuid: str) -> None:
+    def delete_vm(uuid: str, permanent: bool = False) -> None:
+        """Into the recycle bin when it is on, unless `permanent`; for good otherwise."""
         cluster.require_quorum()
-        member, vm = cluster.find_vm(uuid)
+        _, vm = cluster.find_vm(uuid)
         if deploys.busy(uuid):
             raise InvalidState(f"a VM is being deployed from {vm.spec.name!r}; wait for it")
-        member.driver.delete_vm(uuid)
-        groups.forget(uuid)
+        recycle.delete(uuid, permanent)
+
+    # Recycle bin: deleted VMs, kept for `recycle_days`.
+
+    def recycled_out(node: str, vm: VMInfo) -> RecycledOut:
+        expires = recycle.expires(vm)
+        return RecycledOut(
+            vm=VMOut.from_info(vm, node),
+            expires=expires.isoformat(timespec="seconds") if expires else None,
+        )
+
+    @api.get("/recycle-bin", response_model=RecycleBinOut)
+    def recycle_bin() -> RecycleBinOut:
+        return RecycleBinOut(
+            days=recycle.days, vms=[recycled_out(n, vm) for n, vm in recycle.contents()]
+        )
+
+    @api.post("/recycle-bin/{uuid}/restore", response_model=VMOut)
+    def restore_vm(uuid: str) -> VMOut:
+        vm = recycle.restore(uuid)
+        member, _ = cluster.find_vm(uuid)
+        return VMOut.from_info(vm, member.name)
+
+    @api.delete("/recycle-bin/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
+    def purge_vm(uuid: str) -> None:
+        _, vm = cluster.find_vm(uuid)
+        if not vm.spec.recycled:
+            raise InvalidState(f"{vm.spec.name} is not in the recycle bin")
+        recycle.delete(uuid, permanent=True)
 
     # Snapshots: go back to how a VM was before a change.
 

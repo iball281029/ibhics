@@ -54,6 +54,8 @@ from .domain_xml import (
     cdrom_element,
     disk_element,
     nic_element,
+    recycled_at,
+    set_recycled_mark,
     set_template_flag,
     template_facts,
     vm_meta,
@@ -339,11 +341,14 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if dom.isActive():
             raise InvalidState("VM is already running")
-        if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
+        root = ET.fromstring(dom.XMLDesc(0))
+        if template_facts(root)[0]:
             raise InvalidState(
                 "this is a template, which does not run: deploy a VM from it, or convert it "
                 "back to a VM first"
             )
+        if recycled_at(root):
+            raise InvalidState("this VM is in the recycle bin: restore it first")
         dom.create()
         return self._info(dom)
 
@@ -448,6 +453,18 @@ class LibvirtDriver(HypervisorDriver):
         self._conn.defineXML(ET.tostring(root, encoding="unicode"))
         dom = self._lookup(uuid)
         if template:
+            dom.setAutostart(0)
+        return self._info(dom)
+
+    def set_recycled(self, uuid: str, at: str) -> VMInfo:
+        dom = self._lookup(uuid)
+        if at and dom.isActive():
+            raise InvalidState("shut the VM down before deleting it")
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        set_recycled_mark(vm_meta(root), at)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        dom = self._lookup(uuid)
+        if at:
             dom.setAutostart(0)
         return self._info(dom)
 
@@ -1209,4 +1226,5 @@ def _spec_from_xml(xml: str) -> VMSpec:
         boot=[b.get("dev") for b in root.findall("os/boot")] or None,
         template=template,
         linked_to=linked_to,
+        recycled=recycled_at(root),
     )

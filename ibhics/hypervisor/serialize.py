@@ -36,6 +36,7 @@ def spec_from_json(data: dict) -> VMSpec:
         autostart=data.get("autostart", False),
         template=data.get("template", False),
         linked_to=data.get("linked_to", ""),
+        recycled=data.get("recycled", ""),
     )
 
 
@@ -80,6 +81,7 @@ def spec_to_json(spec: VMSpec) -> dict:
         "autostart": spec.autostart,
         "template": spec.template,
         "linked_to": spec.linked_to,
+        "recycled": spec.recycled,
     }
 
 

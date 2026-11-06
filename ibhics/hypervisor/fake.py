@@ -157,6 +157,8 @@ class FakeDriver(HypervisorDriver):
                     "this is a template, which does not run: deploy a VM from it, or convert "
                     "it back to a VM first"
                 )
+            if vm.spec.recycled:
+                raise InvalidState("this VM is in the recycle bin: restore it first")
             vm.state = VMState.RUNNING
             return copy.deepcopy(vm)
 
@@ -260,6 +262,16 @@ class FakeDriver(HypervisorDriver):
                 self._refuse_if_linked(uuid, "converting the template back to a VM")
             vm.spec.template = template
             if template:
+                vm.spec.autostart = False
+            return copy.deepcopy(vm)
+
+    def set_recycled(self, uuid: str, at: str) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if at and vm.state != VMState.STOPPED:
+                raise InvalidState("shut the VM down before deleting it")
+            vm.spec.recycled = at
+            if at:
                 vm.spec.autostart = False
             return copy.deepcopy(vm)
 

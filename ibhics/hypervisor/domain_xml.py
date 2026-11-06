@@ -102,6 +102,18 @@ def set_template_flag(meta: ET.Element, template: bool) -> None:
         ET.SubElement(meta, f"{{{META_NS}}}template")
 
 
+def set_recycled_mark(meta: ET.Element, at: str) -> None:
+    for el in meta.findall(f"{{{META_NS}}}recycled"):
+        meta.remove(el)
+    if at:
+        ET.SubElement(meta, f"{{{META_NS}}}recycled", at=at)
+
+
+def recycled_at(root: ET.Element) -> str:
+    el = root.find(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}recycled")
+    return el.get("at", "") if el is not None else ""
+
+
 def template_facts(root: ET.Element) -> tuple[bool, str]:
     """(is a template, uuid of the template a linked clone is based on) from domain XML."""
     meta = root.find(f"metadata/{{{META_NS}}}vm")
@@ -131,6 +143,7 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     set_template_flag(meta, spec.template)
     if spec.linked_to:
         ET.SubElement(meta, f"{{{META_NS}}}linked", template=spec.linked_to)
+    set_recycled_mark(meta, spec.recycled)
     ET.SubElement(dom, "memory", unit="MiB").text = str(spec.memory_mb)
     ET.SubElement(dom, "vcpu", placement="static").text = str(spec.vcpus)
 

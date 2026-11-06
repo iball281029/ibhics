@@ -63,6 +63,8 @@ class DeployManager:
         self._cluster.require_quorum()
         clone.validate()
         member, source = self._cluster.find_vm(uuid)
+        if source.spec.recycled:
+            raise InvalidState(f"{source.spec.name!r} is in the recycle bin: restore it first")
         if source.state != VMState.STOPPED:
             raise InvalidState(f"shut {source.spec.name!r} down before cloning it")
         if clone.linked and not source.spec.template:

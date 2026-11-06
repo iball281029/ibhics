@@ -162,6 +162,10 @@ class RemoteDriver(HypervisorDriver):
             raise SnapshotNotFound(name)
         return self._ok(resp, uuid)
 
+    def set_recycled(self, uuid: str, at: str) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/recycled", json={"at": at})
+        return info_from_json(self._ok(resp, uuid).json())
+
     def set_template(self, uuid: str, template: bool) -> VMInfo:
         resp = self._client.request("POST", f"/vms/{uuid}/template", json={"template": template})
         return info_from_json(self._ok(resp, uuid).json())

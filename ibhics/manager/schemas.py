@@ -103,6 +103,7 @@ class VMOut(BaseModel):
     restart_needed: bool = False
     template: bool = False
     linked_to: str = ""  # uuid of the template a linked clone's disks are based on
+    recycled: str = ""  # when it went into the recycle bin; empty: in use
     node: str | None = None
 
     @classmethod
@@ -130,6 +131,7 @@ class VMOut(BaseModel):
             restart_needed=info.restart_needed,
             template=spec.template,
             linked_to=spec.linked_to,
+            recycled=spec.recycled,
         )
 
 
@@ -304,6 +306,16 @@ class SnapshotOut(BaseModel):
     description: str = ""
     parent: str = ""
     current: bool = False
+
+
+class RecycledOut(BaseModel):
+    vm: VMOut
+    expires: str | None  # when it is deleted for good; None: kept until emptied by hand
+
+
+class RecycleBinOut(BaseModel):
+    days: int  # how long deleted VMs are kept; 0: deleting is permanent
+    vms: list[RecycledOut]
 
 
 class TemplateRequest(BaseModel):

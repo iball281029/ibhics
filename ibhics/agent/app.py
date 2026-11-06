@@ -200,6 +200,10 @@ def create_agent_app(
         def delete_snapshot(uuid: str, name: str) -> None:
             driver.delete_snapshot(uuid, name)
 
+        @api.post("/vms/{uuid}/recycled", response_model=VMOut)
+        def set_recycled(uuid: str, body: dict) -> VMOut:
+            return VMOut.from_info(driver.set_recycled(uuid, str(body.get("at", ""))))
+
         @api.post("/vms/{uuid}/template", response_model=VMOut)
         def set_template(uuid: str, body: TemplateRequest) -> VMOut:
             return VMOut.from_info(driver.set_template(uuid, body.template))
