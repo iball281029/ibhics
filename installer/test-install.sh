@@ -159,7 +159,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.7", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.8", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -238,6 +238,41 @@ call("DELETE", f"/vms/{clone['uuid']}?permanent=true", token=token)
 call("DELETE", f"/vms/{vm['uuid']}?permanent=true", token=token)
 assert call("GET", "/vms", token=token) == []
 print("ok  and deletes them for good")
+
+if kvm:
+    # v0.8: a running UEFI VM takes a snapshot (its UEFI variables move to qcow2 while it
+    # is off) and is backed up while it runs (QEMU writes the copy to the scratch folder).
+    efi = call("POST", "/vms", {"name": "smoke-efi", "vcpus": 1, "memory_mb": 512,
+                                "firmware": "uefi", "disks": [{"size_gb": 1}]}, token=token)
+    call("POST", f"/vms/{efi['uuid']}/start", token=token)  # libvirt picks the firmware
+    call("POST", f"/vms/{efi['uuid']}/stop", {"force": True}, token=token)
+    call("POST", f"/vms/{efi['uuid']}/start", token=token)  # variables are qcow2 now
+    snap = call("POST", f"/vms/{efi['uuid']}/snapshots", {"name": "smoke-efi-20261106-1200"},
+                token=token)
+    assert snap["vm_state"] == "running", snap
+    print("ok  a running UEFI VM takes a snapshot")
+    call("POST", "/backup/targets", {"name": "smoke-bk", "type": "local",
+                                     "path": "/var/lib/ibhics/smoke-backups"}, token=token)
+    job = call("POST", f"/vms/{efi['uuid']}/backup", {"target": "smoke-bk"}, token=token)
+    for _ in range(150):
+        job = next(j for j in call("GET", "/backup/jobs", token=token) if j["id"] == job["id"])
+        if job["state"] in ("done", "failed"):
+            break
+        time.sleep(2)
+    assert job["state"] == "done", job
+    print("ok  a running VM is backed up (QEMU may write the scratch folder)")
+    call("POST", f"/vms/{efi['uuid']}/stop", {"force": True}, token=token)
+    call("DELETE", f"/vms/{efi['uuid']}/snapshots/smoke-efi-20261106-1200", token=token)
+    call("DELETE", f"/vms/{efi['uuid']}?permanent=true", token=token)
+    try:
+        call("DELETE", "/backup/targets/smoke-bk", token=token)
+    except urllib.error.HTTPError:
+        pass  # a repository that holds backups may refuse; it does no harm here
+
+name = cluster["members"][0]["name"]
+out = call("POST", f"/nodes/{name}/terminal", {"command": "ip -br addr"}, token=token)
+assert out["code"] == 0 and "br0" in out["output"], out
+print("ok  the Terminal runs diagnostic commands on the node")
 
 # v0.7 network: a VLAN with a router (gateway, NAT, DHCP), a firewall rule and a ping
 # of the gateway, all on the real node (ip, nft, dnsmasq).

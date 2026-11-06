@@ -227,6 +227,13 @@ class RemoteDriver(HypervisorDriver):
     def apply_edge(self, config: dict, router: bool) -> None:
         self._ok(self._client.request("PUT", "/edge", json={"config": config, "router": router}))
 
+    def run_command(self, line: str) -> tuple[int, str]:
+        resp = self._client.request("POST", "/terminal", json={"command": line}, timeout=90)
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        data = self._ok(resp).json()
+        return data["code"], data["output"]
+
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         body = {"kind": kind, "target": target, "network": network}
         data = self._ok(self._client.request("POST", "/net-test", json=body, timeout=90)).json()

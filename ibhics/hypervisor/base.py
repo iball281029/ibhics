@@ -583,6 +583,10 @@ class HypervisorDriver(abc.ABC):
         edge.EdgeConfig in dict form."""
         raise NotImplementedError
 
+    def run_command(self, line: str) -> tuple[int, str]:
+        """Run an allowlisted diagnostic command on this node (see terminal.py)."""
+        raise NotImplementedError
+
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         """Ping or trace `target` from this node, out of `network` when it has a router."""
         raise NotImplementedError

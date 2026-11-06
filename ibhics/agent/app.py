@@ -148,6 +148,11 @@ def create_agent_app(
         def apply_edge(body: dict) -> None:
             driver.apply_edge(body["config"], bool(body["router"]))
 
+        @api.post("/terminal")
+        def terminal(body: dict) -> dict:
+            code, output = driver.run_command(str(body.get("command", "")))
+            return {"code": code, "output": output}
+
         @api.post("/net-test")
         def net_test(body: dict) -> dict:
             ok, output = driver.net_test(body["kind"], body["target"], body.get("network", ""))

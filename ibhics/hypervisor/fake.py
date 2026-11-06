@@ -394,6 +394,11 @@ class FakeDriver(HypervisorDriver):
         cfg.validate(names)
         self.edge = (cfg.to_dict(), router)
 
+    def run_command(self, line: str) -> tuple[int, str]:
+        from .terminal import run_line
+
+        return run_line(line, lambda cmd: (0, f"(fake node) {' '.join(cmd)}"))
+
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         from .edge import net_test
 

@@ -851,3 +851,14 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 .import-notes li, .import-errors li, .import-warnings li { white-space: pre-wrap; }
 .import-log-mini { max-height: 340px; overflow: auto; }
 #log-fetch-error { color: #ff9696; }
+
+/* Terminal page (v0.8) */
+.term-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 26px 12px; }
+.term { margin: 0 26px 26px; background: #0f141b; color: #d5dbe5; border-radius: 8px; height: 62vh; overflow: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 12px 16px; }
+.term pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
+.term form { display: flex; gap: 8px; align-items: center; }
+.term-prompt { color: #7fd18b; white-space: nowrap; }
+.term input { flex: 1; background: transparent; border: 0; outline: 0; color: inherit; font: inherit; padding: 2px 0; }
+.term .term-cmd { color: #7fd18b; }
+.term .term-err { color: #ff9b8f; }
+.term .term-dim { color: #8a94a3; }

@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
-from . import customize, edge, vmstats
+from . import customize, edge, terminal, vmstats
 from .base import (
     CloneSpec,
     DiskSpec,
@@ -774,6 +774,29 @@ class LibvirtDriver(HypervisorDriver):
         if state.is_file():
             data = json.loads(state.read_text())
             self.apply_edge(data["config"], data["router"])
+
+    def run_command(self, line: str) -> tuple[int, str]:
+        def run(cmd: list[str]) -> tuple[int, str]:
+            try:
+                done = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=terminal.TIMEOUT,
+                    stdin=subprocess.DEVNULL,
+                )
+            except subprocess.TimeoutExpired as exc:
+                out = (
+                    (exc.stdout or b"").decode(errors="replace")
+                    if isinstance(exc.stdout, bytes)
+                    else (exc.stdout or "")
+                )
+                return 124, f"{out}\n{cmd[0]}: stopped after {terminal.TIMEOUT} s".strip()
+            except FileNotFoundError:
+                return 127, f"{cmd[0]}: not installed on this node"
+            return done.returncode, (done.stdout + done.stderr).rstrip()
+
+        return terminal.run_line(line, run)
 
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         def run(cmd: list[str]) -> tuple[int, str]:
