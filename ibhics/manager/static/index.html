@@ -282,6 +282,9 @@
         <div class="tabs" id="net-tabs">
           <button data-tab="net-topology" class="active">Topology</button>
           <button data-tab="net-list">Virtual switches</button>
+          <button data-tab="net-router">Router</button>
+          <button data-tab="net-fw">Firewall</button>
+          <button data-tab="net-test">Test connectivity</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
           <div class="topo-toolbar">
@@ -321,6 +324,29 @@
           <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
           <tbody id="networks"></tbody>
         </table></div>
+        </div>
+        <div class="subpage" id="tab-net-router">
+          <div class="toolbar"><span class="hint">A gateway for a VLAN: VMs on routed VLANs reach each other through it, and the LAN through NAT. It runs on <b id="edge-router-node">–</b>.</span><span class="spacer"></span><button class="primary operator-only" id="router-add">+ Add router</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Network</th><th>Gateway</th><th>NAT to the LAN</th><th>DHCP</th><th></th></tr></thead>
+            <tbody id="routers"></tbody>
+          </table></div>
+        </div>
+        <div class="subpage" id="tab-net-fw">
+          <div class="toolbar"><span class="hint">Checked top to bottom on every compute node; the first rule that matches decides. Traffic no rule matches is allowed.</span><span class="spacer"></span><button class="primary operator-only" id="fw-add">+ Add rule</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>#</th><th>Rule</th><th>Action</th><th>From</th><th>To</th><th>Protocol</th><th></th></tr></thead>
+            <tbody id="fw-rules"></tbody>
+          </table></div>
+        </div>
+        <div class="subpage" id="tab-net-test">
+          <form id="nettest-form" class="form-grid" style="padding:18px 26px">
+            <label>Test <select name="kind"><option value="ping">Ping</option><option value="trace">Trace route</option></select></label>
+            <label>To (IP address or host name) <input name="target" required placeholder="10.0.10.25" autocomplete="off"></label>
+            <label>From <select name="network" id="nettest-from"></select></label>
+            <div class="wide"><button class="primary" type="submit">Run test</button> <span class="hint" id="nettest-status"></span></div>
+          </form>
+          <pre class="log" id="nettest-out" hidden style="margin:0 26px 26px"></pre>
         </div>
       </div>
     </section>
@@ -737,6 +763,39 @@
       <label class="wide">Group <select name="group" class="md-group"></select></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Move</button></footer>
+  </form>
+</dialog>
+
+<dialog id="router-dialog">
+  <form method="dialog" id="router-form">
+    <header><h3>Router for a VLAN</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Network <select name="network" id="router-net" required></select></label>
+      <label>Gateway address <input name="gateway" required placeholder="192.168.50.1/24" autocomplete="off"></label>
+      <label class="check wide"><input name="nat" type="checkbox" checked> NAT: VMs reach the LAN and the internet through this node</label>
+      <label class="check wide"><input name="dhcp" type="checkbox" checked data-switch-check> Hand out addresses (DHCP)</label>
+      <label>DHCP from (blank = automatic) <input name="dhcp_start" placeholder="192.168.50.100"></label>
+      <label>DHCP to <input name="dhcp_end" placeholder="192.168.50.200"></label>
+      <label>DNS server for VMs <input name="dns" placeholder="1.1.1.1"></label>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save router</button></footer>
+  </form>
+</dialog>
+
+<dialog id="fw-dialog">
+  <form method="dialog" id="fw-form">
+    <header><h3>Firewall rule</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" placeholder="web-to-db"></label>
+      <label>Action <select name="action"><option value="deny">Deny</option><option value="allow">Allow</option></select></label>
+      <label>From <input name="src" list="fw-ends" value="any" required></label>
+      <label>To <input name="dst" list="fw-ends" value="any" required></label>
+      <label>Protocol <select name="proto"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP (ping)</option></select></label>
+      <label>Port (TCP/UDP) <input name="port" type="number" min="1" max="65535"></label>
+      <datalist id="fw-ends"></datalist>
+      <p class="hint wide" style="padding:0">From and To: a network name, a range such as 10.0.10.0/24 or 10.0.10.25/32, or any.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save rule</button></footer>
   </form>
 </dialog>
 

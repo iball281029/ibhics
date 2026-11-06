@@ -329,6 +329,7 @@ const loaders = {
   },
   deploys: async () => { state.deploys = await api("/deploys"); },
   recycle: async () => { state.recycle = await api("/recycle-bin"); },
+  edge: async () => { state.edge = await api("/edge"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
   stats: async () => { state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s])); },
   groups: async () => { state.groups = await api("/vm-groups"); },
@@ -559,7 +560,7 @@ async function refresh(page, auto = false) {
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
-  if (page === "network") { await load("vms", "networks"); renderNetworks(); await renderTopology(); }
+  if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
   if (page === "nodes") { await load("vms"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); }
@@ -4096,3 +4097,101 @@ loadMe().then(show).catch(fail);
 setInterval(() => {
   if (!document.querySelector("dialog[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);
+
+
+// ---------- v0.7: virtual router, firewall, connectivity test ----------
+
+function renderEdge() {
+  const edge = state.edge || { routers: [], rules: [], router_node: "" };
+  const op = canOperate();
+  $("#edge-router-node").textContent = edge.router_node || "–";
+  $("#routers").innerHTML = edge.routers.length ? edge.routers.map((r) => `<tr>
+    <td><b>${esc(r.network)}</b></td><td class="mono">${esc(r.gateway)}</td>
+    <td>${r.nat ? "Yes" : "No (routed only)"}</td>
+    <td>${r.dhcp ? esc(r.dhcp_start && r.dhcp_end ? `${r.dhcp_start} – ${r.dhcp_end}` : "Automatic range") : "Off"}</td>
+    <td><div class="actions">${op ? `<button class="small" data-router-edit="${esc(r.network)}">Edit</button><button class="small danger" data-router-del="${esc(r.network)}">Remove</button>` : ""}</div></td>
+  </tr>`).join("") : empty(5, "No routers yet. VLANs are plain layer-2 switches until one gets a gateway.");
+  $("#fw-rules").innerHTML = edge.rules.length ? edge.rules.map((r, i) => `<tr class="${r.enabled ? "" : "muted"}">
+    <td>${i + 1}</td><td><b>${esc(r.name)}</b></td>
+    <td><span class="badge ${r.action === "allow" ? "done" : "failed"}">${r.action === "allow" ? "Allow" : "Deny"}</span></td>
+    <td>${esc(r.src)}</td><td>${esc(r.dst)}</td>
+    <td>${r.proto === "any" ? "Any" : esc(r.proto.toUpperCase())}${r.port ? ` ${r.port}` : ""}</td>
+    <td><div class="actions">${op ? `<button class="small" data-fw-up="${i}" ${i ? "" : "disabled"} title="Move up">↑</button>
+      <button class="small" data-fw-toggle="${i}">${r.enabled ? "Disable" : "Enable"}</button>
+      <button class="small" data-fw-edit="${i}">Edit</button><button class="small danger" data-fw-del="${i}">Delete</button>` : ""}</div></td>
+  </tr>`).join("") : empty(7, "No rules: everything is allowed.");
+  const nets = state.networks.map((n) => n.name);
+  $("#fw-ends").innerHTML = ["any", ...nets].map((n) => `<option value="${esc(n)}">`).join("");
+  const routed = edge.routers.map((r) => r.network);
+  $("#nettest-from").innerHTML = `<option value="">${esc(edge.router_node || "this node")} (its own address)</option>` +
+    routed.map((n) => `<option value="${esc(n)}">Gateway of ${esc(n)}</option>`).join("");
+}
+
+async function saveRules(rules) {
+  state.edge = await api("/edge/rules", { method: "PUT", body: JSON.stringify(rules) });
+  renderEdge();
+}
+
+function openRouter(network) {
+  const r = (state.edge?.routers || []).find((x) => x.network === network);
+  const vlans = state.networks.filter((n) => n.vlan);
+  if (!vlans.length) { toast("Add a virtual switch (VLAN) first: the LAN itself keeps its own gateway.", true); return; }
+  $("#router-net").innerHTML = vlans.map((n) => `<option value="${esc(n.name)}">${esc(n.name)} (VLAN ${n.vlan})</option>`).join("");
+  const { nat, dhcp, ...fields } = r || { network: vlans[0].name };
+  openDialog("router-dialog", { edit: Boolean(r) }, fields);
+  const f = $("#router-form");
+  f.elements.network.disabled = Boolean(r);
+  f.elements.nat.checked = r ? r.nat : true;
+  f.elements.dhcp.checked = r ? r.dhcp : true;
+}
+$("#router-add").addEventListener("click", () => openRouter(null));
+handlers["router-dialog"] = async (f) => {
+  const el = $("#router-form").elements, net = el.network.value;
+  const body = { gateway: f.get("gateway").trim(), nat: el.nat.checked, dhcp: el.dhcp.checked,
+    dhcp_start: (f.get("dhcp_start") || "").trim(), dhcp_end: (f.get("dhcp_end") || "").trim(), dns: (f.get("dns") || "").trim() };
+  state.edge = await api(`/edge/routers/${enc(net)}`, { method: "PUT", body: JSON.stringify(body) });
+  toast(`Router for ${net} saved: gateway ${body.gateway}`);
+  renderEdge();
+};
+$("#routers").addEventListener("click", async (e) => {
+  const ed = e.target.closest("[data-router-edit]"), rm = e.target.closest("[data-router-del]");
+  if (ed) openRouter(ed.dataset.routerEdit);
+  if (rm && confirm(`Remove the router of ${rm.dataset.routerDel}? Its VMs lose their gateway and DHCP.`)) {
+    try { state.edge = await api(`/edge/routers/${enc(rm.dataset.routerDel)}`, { method: "DELETE" }); renderEdge(); } catch (err) { fail(err); }
+  }
+});
+
+$("#fw-add").addEventListener("click", () => openDialog("fw-dialog", { index: null }));
+handlers["fw-dialog"] = async (f, ctx) => {
+  const rule = { name: f.get("name").trim(), action: f.get("action"), src: f.get("src").trim(), dst: f.get("dst").trim(),
+    proto: f.get("proto"), port: f.get("port") ? Number(f.get("port")) : null, enabled: true };
+  const rules = [...(state.edge?.rules || [])];
+  if (ctx.index == null) rules.push(rule); else rules[ctx.index] = { ...rules[ctx.index], ...rule };
+  await saveRules(rules);
+  toast(`Rule ${rule.name} saved on every node`);
+};
+$("#fw-rules").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const rules = [...(state.edge?.rules || [])];
+  try {
+    if (b.dataset.fwEdit != null) { const i = Number(b.dataset.fwEdit); openDialog("fw-dialog", { index: i }, { ...rules[i], port: rules[i].port ?? "" }); return; }
+    if (b.dataset.fwDel != null) { const i = Number(b.dataset.fwDel); if (!confirm(`Delete rule ${rules[i].name}?`)) return; rules.splice(i, 1); }
+    if (b.dataset.fwUp != null) { const i = Number(b.dataset.fwUp); [rules[i - 1], rules[i]] = [rules[i], rules[i - 1]]; }
+    if (b.dataset.fwToggle != null) { const i = Number(b.dataset.fwToggle); rules[i] = { ...rules[i], enabled: !rules[i].enabled }; }
+    await saveRules(rules);
+  } catch (err) { fail(err); }
+});
+
+$("#nettest-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target), out = $("#nettest-out"), status = $("#nettest-status");
+  status.textContent = f.get("kind") === "ping" ? "Pinging…" : "Tracing… (up to a minute)";
+  out.hidden = true;
+  try {
+    const r = await post("/edge/test", { kind: f.get("kind"), target: f.get("target").trim(), network: f.get("network") });
+    status.textContent = `${r.ok ? "✓ Reachable" : "✗ No answer"} (from ${r.node})`;
+    out.textContent = r.output || "(no output)";
+    out.hidden = false;
+  } catch (err) { status.textContent = ""; fail(err); }
+});

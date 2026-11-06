@@ -35,7 +35,7 @@ and the words are ibHiCS's own.
 - Import VM: OVA/OVF/VMDK/VHDX from the VM page (reusing ibHiCS Migrate) ✅
 - Recycle bin for deleted VMs (kept N days) ✅
 
-## v0.7 — Network, part 2 ⏳
+## v0.7 — Network, part 2 ✅
 - Edge settings per node: which ports carry VM traffic, bonds (LACP, active-backup)
 - Virtual router: routed networks between VLANs, NAT to the LAN, DHCP for a network
 - Distributed firewall: allow/deny rules between VM groups and networks

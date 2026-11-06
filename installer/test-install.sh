@@ -159,7 +159,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.6", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.7", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -238,5 +238,22 @@ call("DELETE", f"/vms/{clone['uuid']}?permanent=true", token=token)
 call("DELETE", f"/vms/{vm['uuid']}?permanent=true", token=token)
 assert call("GET", "/vms", token=token) == []
 print("ok  and deletes them for good")
+
+# v0.7 network: a VLAN with a router (gateway, NAT, DHCP), a firewall rule and a ping
+# of the gateway, all on the real node (ip, nft, dnsmasq).
+call("POST", "/networks", {"name": "edge-test", "vlan": 77}, token=token)
+edge = call("PUT", "/edge/routers/edge-test", {"gateway": "10.77.0.1/24"}, token=token)
+assert edge["routers"][0]["network"] == "edge-test", edge
+rules = [{"name": "no-ssh", "action": "deny", "src": "any", "dst": "edge-test",
+          "proto": "tcp", "port": 22}]
+assert call("PUT", "/edge/rules", rules, token=token)["rules"][0]["name"] == "no-ssh"
+ping = call("POST", "/edge/test", {"kind": "ping", "target": "10.77.0.1",
+                                   "network": "edge-test"}, token=token)
+assert ping["ok"], ping
+print("ok  a VLAN gets a router with NAT and DHCP, a firewall rule, and its gateway answers")
+call("PUT", "/edge/rules", [], token=token)
+call("DELETE", "/edge/routers/edge-test", token=token)
+call("DELETE", "/networks/edge-test", token=token)
+print("ok  and the router and network are removed again")
 EOF
 echo ">> All checks passed"
