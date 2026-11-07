@@ -56,6 +56,8 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v1.3
+Backlog (asked 2026-11-07, start when told): Tasks page logs every activity (VM create/delete/start/shutdown/restart/edit/rename/snapshot, containers, storage, network, nodes/hardware, logins) with time, user, object, action, result/error and duration; filters by time range (today/7/30 days/custom), type, object, user, status and search; kept in SQLite (retention configurable, default forever), CSV export; built on audit.log.
+
 Beta 2 (1.3.0b2): Migrate… on every VM's menu: Change host (live migration; disabled with the reason on a one-node cluster) or Change storage: each disk to a pool of its node, running (block copy, then QEMU switches to the copy) or off (qemu-img), as a task with %, the old volume deleted after. dm-cache chunk size picked for big SSDs.
 
 Beta 1 (1.3.0b1): Hybrid pool (HDD + SSD cache). Add storage → Hybrid: HDDs or an md RAID hold the data, SSDs cache it (LVM dm-cache on a volume group of the pool's own, XFS on top, thin qcow2 disks). Writethrough (default, safe) or writeback (faster writes, needs a mirrored SSD), cache size; the pool's Summary shows hit ratio (reads/writes), cache use and dirty data, and adds or removes the cache (dirty blocks flushed first) or switches mode later. Disks holding data must be emptied first (move VMs off).
