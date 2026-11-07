@@ -151,6 +151,18 @@ class RemoteDriver(HypervisorDriver):
             raise ValueError(str(resp.json().get("detail")))
         return SnapshotInfo(**self._ok(resp, uuid).json())
 
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        body = {"moves": [{"index": i, "pool": p} for i, p in moves.items()]}
+        resp = self._client.request("POST", f"/vms/{uuid}/move-disks", json=body, timeout=None)
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def disk_move_progress(self, uuid: str) -> dict:
+        try:
+            resp = self._client.request("GET", f"/vms/{uuid}/move-disks", timeout=10)
+            return resp.json() if resp.status_code == 200 else {}
+        except Exception:  # noqa: BLE001 - progress is best effort
+            return {}
+
     def switch_to_virtio(self, uuid: str) -> VMInfo:
         resp = self._client.request("POST", f"/vms/{uuid}/to-virtio", timeout=None)
         return info_from_json(self._ok(resp, uuid).json())

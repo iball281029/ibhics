@@ -72,7 +72,7 @@ const canOperate = () => !state.me || state.me.role !== "viewer";
 const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
-  "container-delete": "Delete container", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
+  "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 
 // ---------- theme and user menu ----------
@@ -369,7 +369,7 @@ function allTasks() {
     })),
     ...state.jobs.map((j) => ({
       kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind === "rename" ? j.target : j.kind.startsWith("container") ? `container · ${j.target}` : j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
-      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
+      state: j.state, step: j.step || "", percent: j.percent ?? null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
       kind: m.live ? "Live migration" : "Move", title: m.vm, sub: `${m.source} → ${m.target || "auto"}`,
@@ -740,7 +740,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
-      ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
+      ${vm.template ? "" : `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate… (host or storage)</button>`}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
       <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
       <button data-vm="snapshots" data-id="${vm.uuid}">Restore snapshot…</button>
@@ -1189,12 +1189,7 @@ async function vmAction(e) {
     backupNow(id, name).catch(fail);
     return;
   }
-  if (act === "migrate") {
-    openDialog("migrate-dialog", { id, name });
-    const sel = $("#migrate-form select[name=node]");
-    [...sel.options].forEach((o) => { if (o.value === btn.dataset.node) o.remove(); });
-    return;
-  }
+  if (act === "migrate") { openMigrate(id, name, btn.dataset.node); return; }
   try {
     if (act === "start") await post(`/vms/${id}/start`);
     if (act === "stop") await post(`/vms/${id}/stop`);
@@ -1620,7 +1615,41 @@ handlers["backup-dialog"] = async (f, ctx) => {
   toast(`Backing up ${ctx.name} to ${body.target}. Progress is under Backup → Jobs.`);
 };
 
+// Migrate: another node (live migration) or other pools for the disks (storage move).
+function openMigrate(id, name, node) {
+  const vm = state.vms.find((v) => v.uuid === id) || { disks: [] };
+  openDialog("migrate-dialog", { id, name });
+  const form = $("#migrate-form"), sel = $("select[name=node]", form);
+  [...sel.options].forEach((o) => { if (o.value === node) o.remove(); });
+  $("#migrate-title").textContent = `Migrate ${name}`;
+  const host = $("input[name=mode][value=host]", form), others = sel.options.length > 0;
+  host.disabled = !others;
+  host.closest(".type-card").classList.toggle("disabled", !others);
+  $(".mig-host-why", form).textContent = others ? "Move the VM to another node; a running VM keeps running."
+    : "Only one node in the cluster: add a node to move VMs between hosts.";
+  $(`input[name=mode][value=${others ? "host" : "storage"}]`, form).checked = true;
+  const pools = [...new Set(state.pools.filter((p) => p.node === node && p.active).map((p) => p.name))];
+  $(".mig-disks", form).innerHTML = (vm.disks || []).map((d, i) => `<tr><td>Disk ${i + 1}</td><td>${num(d.size_gb)} GB</td><td>${esc(d.pool)}</td>
+    <td><select data-disk="${i}" data-from="${esc(d.pool)}">${[d.pool, ...pools.filter((p) => p !== d.pool)].map((p) => `<option value="${esc(p)}">${p === d.pool ? `${esc(p)} (stay)` : esc(p)}</option>`).join("")}</select></td></tr>`).join("")
+    || empty(4, "This VM has no disks");
+  migShow();
+}
+function migShow() {
+  const form = $("#migrate-form"), mode = form.elements.mode.value;
+  $$("[data-mig]", form).forEach((el) => { el.hidden = el.dataset.mig !== mode; });
+}
+$("#migrate-form").addEventListener("change", (e) => { if (e.target.name === "mode") migShow(); });
 handlers["migrate-dialog"] = async (f, ctx) => {
+  if (f.get("mode") === "storage") {
+    const moves = $$("#migrate-form select[data-disk]").filter((s) => s.value !== s.dataset.from).map((s) => ({ index: Number(s.dataset.disk), pool: s.value }));
+    if (!moves.length) throw new Error("Pick another pool for at least one disk.");
+    toast(`Moving ${ctx.name}'s disks… follow it in Tasks`);
+    setTimeout(() => load("jobs").then(renderTasks).catch(() => {}), 800);
+    post(`/vms/${ctx.id}/move-disks`, { moves })
+      .then(() => { toast(`${ctx.name}: disks moved`); return refresh(currentPage()); })
+      .catch(fail);
+    return;
+  }
   const body = { node: f.get("node") || null };
   if (f.get("copy_storage") === "false") body.copy_storage = false;
   if (f.get("bandwidth_mib")) body.bandwidth_mib = Number(f.get("bandwidth_mib"));

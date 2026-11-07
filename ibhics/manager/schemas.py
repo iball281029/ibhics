@@ -521,6 +521,18 @@ class PoolCreate(BaseModel):
         return PoolSpec(**self.model_dump())
 
 
+class DiskMoveIn(BaseModel):
+    index: int = Field(ge=0, le=63)  # the disk's place in the VM, 0 = the first
+    pool: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+
+
+class DiskMovesIn(BaseModel):
+    moves: list[DiskMoveIn] = Field(min_length=1, max_length=64)
+
+    def as_dict(self) -> dict[int, str]:
+        return {m.index: m.pool for m in self.moves}
+
+
 class PoolCacheIn(BaseModel):
     action: str = Field(pattern="^(add|remove|mode)$")
     devices: list[str] | None = Field(default=None, max_length=16)
@@ -686,6 +698,8 @@ class JobOut(BaseModel):
     finished: str | None
     result: str | None
     error: str | None
+    step: str = ""
+    percent: float | None = None
 
 
 # Agent-only request bodies: the manager sends the whole target, credentials included.

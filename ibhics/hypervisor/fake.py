@@ -224,6 +224,20 @@ class FakeDriver(HypervisorDriver):
             snaps.append((info, copy.deepcopy(vm.spec), disks, vm.state))
             return copy.deepcopy(info)
 
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            for i, pool in moves.items():
+                if not 0 <= i < len(vm.spec.disks):
+                    raise ValueError(f"this VM has no disk {i + 1}")
+                if pool not in self._pools:
+                    raise PoolNotFound(pool)
+            for i, pool in moves.items():
+                disk = vm.spec.disks[i]
+                disk.pool = pool
+                disk.backend = self._pools[pool][0].disk_backend
+            return copy.deepcopy(vm)
+
     def switch_to_virtio(self, uuid: str) -> VMInfo:
         with self._lock:
             vm = self._get(uuid)

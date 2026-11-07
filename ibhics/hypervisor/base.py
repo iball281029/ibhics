@@ -614,6 +614,16 @@ class HypervisorDriver(abc.ABC):
         and started again first."""
         raise NotImplementedError
 
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        """Disks (by their order, 0 = the first) to other pools on this node: copied while
+        the VM runs (block copy, then a switch to the copy) or while it is off, then the
+        old volume is deleted."""
+        raise NotImplementedError
+
+    def disk_move_progress(self, uuid: str) -> dict:
+        """{"step", "percent"} of a move_disks running for this VM; {} when none is."""
+        return {}
+
     def switch_to_virtio(self, uuid: str) -> VMInfo:
         """Move a Windows VM's SATA disks to VirtIO once its guest tools are in: start it
         once with a small VirtIO disk so Windows binds the driver, then switch the bus."""

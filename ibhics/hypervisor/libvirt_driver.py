@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -141,6 +142,8 @@ def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
 log = logging.getLogger("ibhics.libvirt")
 RESTART_TIMEOUT = 180  # s a guest has to shut down for a restart that applies changes
 PROBE_SETTLE = 60  # s Windows gets to install the VirtIO disk driver
+BLOCK_COPY_POLL = 2  # s between looks at a running disk copy
+QEMU_IMG_PROGRESS = re.compile(r"\((\d+(?:\.\d+)?)/100%\)")
 
 RESET_OPERATIONS = (
     "machine-id",
@@ -177,6 +180,7 @@ class LibvirtDriver(HypervisorDriver):
         self._conn = libvirt.open(uri)
         self._samples: dict[str, vmstats.Sample] = {}
         self._balloon_asked: set[str] = set()
+        self._moves: dict[str, dict] = {}  # disk moves running: uuid -> step, percent
 
     def host_info(self) -> HostInfo:
         # model, memory, logical CPUs, MHz, NUMA nodes, sockets per node, cores per socket,
@@ -585,6 +589,135 @@ class LibvirtDriver(HypervisorDriver):
             if "no operating systems" in str(exc).lower():
                 log.warning("identity not reset: %s", exc)
                 return
+            raise
+
+    def disk_move_progress(self, uuid: str) -> dict:
+        return dict(self._moves.get(uuid, {}))
+
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        dom = self._lookup(uuid)
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        disks = root.findall("devices/disk[@device='disk']")
+        plan = []
+        for i, pool_name in sorted(moves.items()):
+            if not 0 <= i < len(disks):
+                raise ValueError(f"this VM has no disk {i + 1}")
+            self._pool(pool_name)
+            if disk_source(root, disks[i])[0] != pool_name:
+                plan.append((i, disks[i].find("target").get("dev"), pool_name))
+        if not plan:
+            return self._info(dom)
+        if dom.snapshotNum(0):
+            raise InvalidState(
+                "this VM has snapshots, which stay inside its disk files: delete them (or "
+                "restore one and delete the rest) before moving its disks"
+            )
+        self._moves[uuid] = {"step": "Starting", "percent": 0.0}
+        try:
+            for n, (i, dev, pool_name) in enumerate(plan):
+
+                def progress(pct: float, i=i, n=n, pool_name=pool_name) -> None:
+                    self._moves[uuid] = {
+                        "step": f"Disk {i + 1} → {pool_name}",
+                        "percent": round((n + pct / 100) * 100 / len(plan), 1),
+                    }
+
+                progress(0)
+                self._move_disk(dom, dev, pool_name, progress)
+        finally:
+            self._moves.pop(uuid, None)
+        return self._info(self._lookup(uuid))
+
+    def _move_disk(self, dom, dev: str, pool_name: str, progress) -> None:
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        disk = next(d for d in root.findall("devices/disk[@device='disk']")
+                    if d.find("target").get("dev") == dev)  # fmt: skip
+        src = self._volume(disk)
+        src_fmt = (disk.find("driver").get("type") if disk.find("driver") is not None else "") \
+            or "raw"  # fmt: skip
+        dest_pool = self._pool(pool_name)
+        if not dest_pool.isActive():
+            raise InvalidState(f"pool {pool_name} is offline")
+        backend = _backend(dest_pool)
+        name = src.name().removesuffix(".qcow2") + (".qcow2" if backend == "file" else "")
+        if name in dest_pool.listVolumes():
+            raise InvalidState(f"pool {pool_name} already has a volume named {name}")
+        vol = ET.fromstring(build_volume_xml("x", 0, DiskSpec(size_gb=1, backend=backend)))
+        vol.find("name").text = name
+        cap = vol.find("capacity")
+        cap.set("unit", "bytes")
+        cap.text = str(src.info()[1])
+        new = dest_pool.createXML(ET.tostring(vol, encoding="unicode"), 0)
+        try:
+            if dom.isActive():
+                self._block_copy(dom, dev, new.path(), backend, progress)
+            else:
+                self._offline_copy(src.path(), src_fmt, new.path(), backend, progress)
+        except BaseException:
+            new.delete(0)
+            raise
+        # The definition: the disk now names the new volume (bus, boot order, address and
+        # serial stay), and the metadata says which pool and volume it is.
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        devices = root.find("devices")
+        old = next(d for d in devices.findall("disk[@device='disk']")
+                   if d.find("target").get("dev") == dev)  # fmt: skip
+        bus = old.find("target").get("bus", "virtio")
+        el = disk_element(DiskSpec(size_gb=1, backend=backend, pool=pool_name, bus=bus), name, dev)
+        for keep in ("boot", "address", "serial", "iotune"):
+            for child in old.findall(keep):
+                el.append(child)
+        devices.insert(list(devices).index(old), el)
+        devices.remove(old)
+        for meta in root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk"):
+            if meta.get("dev") == dev:
+                meta.set("pool", pool_name)
+                meta.set("volume", name)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        src.delete(0)
+        progress(100)
+
+    @staticmethod
+    def _offline_copy(src: str, src_fmt: str, dest: str, backend: str, progress) -> None:
+        fmt = "qcow2" if backend == "file" else "raw"
+        proc = subprocess.Popen(
+            ["qemu-img", "convert", "-p", "-n", "-f", src_fmt, "-O", fmt, src, dest],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        )  # fmt: skip
+        buf = b""
+        while chunk := proc.stdout.read1(256):
+            buf = (buf + chunk)[-200:]
+            for m in QEMU_IMG_PROGRESS.finditer(buf.decode(errors="replace")):
+                progress(float(m.group(1)))
+        if proc.wait():
+            raise InvalidState(f"copying the disk failed: {proc.stderr.read().decode()[-400:]}")
+
+    def _block_copy(self, dom, dev: str, dest: str, backend: str, progress) -> None:
+        if backend == "file":
+            xml = f"<disk type='file'><source file={quoteattr(dest)}/><driver type='qcow2'/></disk>"
+        else:
+            xml = f"<disk type='block'><source dev={quoteattr(dest)}/><driver type='raw'/></disk>"
+        dom.blockCopy(dev, xml, None, libvirt.VIR_DOMAIN_BLOCK_COPY_REUSE_EXT
+                      | libvirt.VIR_DOMAIN_BLOCK_COPY_TRANSIENT_JOB)  # fmt: skip
+        try:
+            while True:
+                info = dom.blockJobInfo(dev, 0)
+                if not info:
+                    raise InvalidState("the disk copy stopped: see the node's libvirt log")
+                if info.get("end"):
+                    progress(min(99.0, 100 * info["cur"] / info["end"]))
+                if info.get("end") and info["cur"] == info["end"]:
+                    try:  # both copies are in step: QEMU switches to the new one
+                        dom.blockJobAbort(dev, libvirt.VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT)
+                        return
+                    except libvirt.libvirtError:
+                        pass  # not ready yet
+                time.sleep(BLOCK_COPY_POLL)
+        except BaseException:
+            try:
+                dom.blockJobAbort(dev, 0)
+            except libvirt.libvirtError:
+                pass
             raise
 
     def switch_to_virtio(self, uuid: str) -> VMInfo:

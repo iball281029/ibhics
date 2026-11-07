@@ -27,6 +27,7 @@ from ..manager.schemas import (
     BackupOut,
     CdromRequest,
     CloneIn,
+    DiskMovesIn,
     HostNetworkIn,
     HostOut,
     HostSettingsIn,
@@ -212,6 +213,14 @@ def create_agent_app(
         def create_snapshot(uuid: str, body: SnapshotIn) -> SnapshotOut:
             snap = driver.create_snapshot(uuid, body.name, body.description, body.restart)
             return SnapshotOut(**asdict(snap))
+
+        @api.post("/vms/{uuid}/move-disks", response_model=VMOut)
+        def move_disks(uuid: str, body: DiskMovesIn) -> VMOut:
+            return VMOut.from_info(driver.move_disks(uuid, body.as_dict()))
+
+        @api.get("/vms/{uuid}/move-disks")
+        def move_disks_progress(uuid: str) -> dict:
+            return driver.disk_move_progress(uuid)
 
         @api.post("/vms/{uuid}/to-virtio", response_model=VMOut)
         def switch_to_virtio(uuid: str) -> VMOut:

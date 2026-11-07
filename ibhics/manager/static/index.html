@@ -1325,8 +1325,19 @@
 
 <dialog id="migrate-dialog">
   <form method="dialog" id="migrate-form">
-    <header><h3>Live migrate VM</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
+    <header><h3 id="migrate-title">Migrate VM</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <div class="type-cards">
+        <label class="type-card"><input type="radio" name="mode" value="host">
+          <svg><use href="#i-nodes"/></svg><span><b>Change host</b><em class="mig-host-why">Move the VM to another node; a running VM keeps running.</em></span></label>
+        <label class="type-card"><input type="radio" name="mode" value="storage">
+          <svg><use href="#i-storage"/></svg><span><b>Change storage</b><em>Move its disks to another pool on the same node, running or not.</em></span></label>
+      </div>
+      <div data-mig="storage">
+        <div class="table-wrap disk-table"><table><thead><tr><th>Disk</th><th>Size</th><th>Now in</th><th>Move to</th></tr></thead><tbody class="mig-disks"></tbody></table></div>
+        <p class="hint">A running VM keeps running: its disk is copied, then QEMU switches to the copy. The old volume is deleted afterwards. Follow it in Tasks. VMs with snapshots must delete them first.</p>
+      </div>
+    <div class="form-grid" data-mig="host">
       <label>Destination node <select name="node" class="node-list-auto"></select></label>
       <label>Disk copy
         <select name="copy_storage">
@@ -1335,8 +1346,9 @@
         </select>
       </label>
       <label>Bandwidth limit (MiB/s, optional) <input name="bandwidth_mib" type="number" min="1"></label>
+      <p class="hint wide">A running VM keeps running while it moves. A stopped VM can move only if its disks are on shared storage.</p>
     </div>
-    <p class="hint" style="padding:0 18px">A running VM keeps running while it moves. A stopped VM can move only if its disks are on shared storage.</p>
+    </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Migrate</button></footer>
   </form>
 </dialog>

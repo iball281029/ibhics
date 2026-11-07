@@ -41,6 +41,7 @@ from .schemas import (
     CloneIn,
     ClusterOut,
     DeployOut,
+    DiskMovesIn,
     EdgeOut,
     FirewallRuleIn,
     FolderIn,
@@ -768,6 +769,19 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
+
+    @api.post("/vms/{uuid}/move-disks", response_model=VMOut)
+    def move_disks(uuid: str, body: DiskMovesIn) -> VMOut:
+        """Disks to other pools on the VM's node (running or not), as a task with %."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        moves = body.as_dict()
+        detail = ", ".join(f"disk {i + 1} → {p}" for i, p in moves.items())
+        driver = member.driver
+        info = backups.run_task("move-disks", detail, vm.spec.name, member.name, uuid,
+                                lambda: driver.move_disks(uuid, moves),
+                                progress=lambda: driver.disk_move_progress(uuid))  # fmt: skip
+        return VMOut.from_info(info, member.name)
 
     @api.post("/vms/{uuid}/to-virtio", response_model=VMOut)
     def switch_to_virtio(uuid: str) -> VMOut:
