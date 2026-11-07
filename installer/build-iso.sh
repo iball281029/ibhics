@@ -17,6 +17,8 @@ REPO=$(dirname "$HERE")
 MIRROR=${DEBIAN_CD_MIRROR:-https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}
 TARGET_PYTHON=3.13  # Debian 13's python3: the wheels must match it
 VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso}
+# Server 2012 R2, 8.1 and older: the last release whose drivers are signed for them.
+VIRTIO_WIN_LEGACY_URL=${VIRTIO_WIN_LEGACY_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.229-1/virtio-win-0.1.229.iso}
 NO_VIRTIO_WIN=""
 SOURCE=""
 OUT=""
@@ -94,9 +96,17 @@ if [ -z "$NO_VIRTIO_WIN" ]; then
     xorriso -osirrox on -indev "$WORK/virtio-win.iso" -extract / "$WORK/virtio-all" >/dev/null 2>&1
     chmod -R u+w "$WORK/virtio-all"
     python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-all" "$PAYLOAD/virtio-win"
-    # The guest tools CD that "Install guest tools" puts in a VM's drive.
+    echo ">> Adding virtio-win 0.1.229 for Windows Server 2012 R2, 8.1 and older"
+    curl -fL --retry 3 -o "$WORK/virtio-legacy.iso" "$VIRTIO_WIN_LEGACY_URL"
+    mkdir -p "$WORK/virtio-legacy"
+    xorriso -osirrox on -indev "$WORK/virtio-legacy.iso" -extract / "$WORK/virtio-legacy" >/dev/null 2>&1
+    chmod -R u+w "$WORK/virtio-legacy"
+    python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-legacy" "$PAYLOAD/virtio-win" --legacy
+    # The guest tools CD that "Install guest tools" puts in a VM's drive; Windows Setup
+    # loads its disk and network drivers from $WinPEDriver$ by itself.
     mkdir -p "$WORK/tools/linux"
     cp -r "$PAYLOAD/virtio-win/." "$WORK/tools/"
+    python3 "$HERE/prune-virtio-win.py" --winpe "$PAYLOAD/virtio-win" "$WORK/tools"
     cp "$HERE/guest-tools/install.sh" "$WORK/tools/linux/install.sh"
     cp "$HERE/guest-tools/README.txt" "$WORK/tools/README.txt"
     xorriso -as mkisofs -quiet -J -R -V IBHICS_TOOLS -o "$PAYLOAD/guest-tools.iso" "$WORK/tools"
