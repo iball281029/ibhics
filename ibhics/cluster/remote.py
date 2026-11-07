@@ -129,7 +129,9 @@ class RemoteDriver(HypervisorDriver):
         return info_from_json(self._ok(resp, uuid).json())
 
     def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
-        resp = self._client.request("POST", f"/vms/{uuid}/restart", json={"force": force})
+        resp = self._client.request(
+            "POST", f"/vms/{uuid}/restart", json={"force": force}, timeout=None
+        )
         return info_from_json(self._ok(resp, uuid).json())
 
     def delete_vm(self, uuid: str) -> None:

@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from test_snapshots import Dom, LibvirtError, Snap
 
 import ibhics.hypervisor.libvirt_driver as lv
-from ibhics.hypervisor import DiskSpec, VMExists, VMSpec
+from ibhics.hypervisor import DiskSpec, InvalidState, VMExists, VMSpec
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.manager import create_app
 
@@ -148,3 +148,38 @@ def test_sysprep_windows_through_api():
     assert client.get(f"{API}/vms/{win['uuid']}").json()["state"] == "stopped"
     client.post(f"{API}/vms/{lin['uuid']}/start")
     assert client.post(f"{API}/vms/{lin['uuid']}/sysprep").status_code == 409
+
+
+def test_restart_applies_pending_changes():
+    """Restart after editing memory powers the VM off and on, so the change applies."""
+    client = TestClient(create_app(FakeDriver()))
+    vm = make_vm(client, "ex2022")
+    client.post(f"{API}/vms/{vm['uuid']}/start")
+    edited = client.patch(f"{API}/vms/{vm['uuid']}", json={"memory_mb": 32768}).json()
+    assert edited["restart_needed"]
+    r = client.post(f"{API}/vms/{vm['uuid']}/restart").json()
+    assert not r["restart_needed"] and r["state"] == "running" and r["memory_mb"] == 32768
+    assert "restart" in [j["kind"] for j in client.get(f"{API}/backup/jobs").json()]
+
+
+def test_libvirt_restart_with_pending_changes_power_cycles(monkeypatch):
+    calls = []
+    d = object.__new__(lv.LibvirtDriver)
+    dom = types.SimpleNamespace(isActive=lambda: True, destroy=lambda: calls.append("destroy"),
+                                reboot=lambda _f: calls.append("reboot"))  # fmt: skip
+    d._lookup = lambda _u: dom
+    pending = {"on": True}
+    d._info = lambda _d: types.SimpleNamespace(restart_needed=pending["on"])
+
+    def off(_dom, timeout):
+        calls.append("shutdown")
+        raise InvalidState("guest ignored it")
+
+    d._power_off = off
+    d.start_vm = lambda _u: calls.append("start") or "started"
+    assert d.restart_vm("u") == "started"
+    assert calls == ["shutdown", "destroy", "start"]
+    calls.clear()
+    pending["on"] = False
+    d.restart_vm("u")
+    assert calls == ["reboot"]  # nothing pending: a plain guest reboot

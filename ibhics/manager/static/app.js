@@ -69,7 +69,7 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", sysprep: "Generalize (sysprep)",
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container" };
@@ -1469,7 +1469,7 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
   };
   const vm = await patch(`/vms/${uuid}`, body);
   if ((e.iso || null) !== (e.vm.iso || null)) await post(`/vms/${uuid}/cdrom`, { iso: e.iso || null });
-  toast(vm.restart_needed ? `${vm.name} saved. Shut it down and power it on to apply the processor, memory and boot order.` : `${vm.name} saved`);
+  toast(vm.restart_needed ? `${vm.name} saved. Restart it to apply the processor, memory and boot order: ibHiCS shuts it down and powers it on again.` : `${vm.name} saved`);
   await refresh(currentPage());
 };
 

@@ -137,6 +137,7 @@ def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
 
 # What virt-sysprep resets on a deployed copy (users, data and settings stay).
 log = logging.getLogger("ibhics.libvirt")
+RESTART_TIMEOUT = 180  # s a guest has to shut down for a restart that applies changes
 
 RESET_OPERATIONS = (
     "machine-id",
@@ -416,6 +417,17 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if not dom.isActive():
             raise InvalidState("VM is not running")
+        if self._info(dom).restart_needed:
+            # A reboot stays in the same QEMU process, which keeps the old CPU, memory and
+            # devices: power the VM off (cleanly unless forced) and start it again.
+            if force:
+                dom.destroy()
+            else:
+                try:
+                    self._power_off(dom, timeout=RESTART_TIMEOUT)
+                except InvalidState:
+                    dom.destroy()  # the guest ignored the shutdown request
+            return self.start_vm(uuid)
         if force:
             dom.reset(0)
         else:

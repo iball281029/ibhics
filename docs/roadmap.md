@@ -56,6 +56,7 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v1.1
+Beta 2 (1.1.0b2): Restart applies saved CPU/memory/boot changes (power off and on, not a guest reboot)
 Beta 1 (1.1.0b1) ✅: rename a VM (Thai names too), even while it runs (shown name; the VM itself is renamed when off), snapshots and backup policies follow; rename containers; every image on images.linuxcontainers.org as a container template (search, grouped by distribution, offline falls back to the curated list); 18 app templates (Nginx, MariaDB, PostgreSQL, Redis, Docker, Zabbix, Grafana, WordPress, Nextcloud, …); on-screen keyboard on the VM console (Esc, Tab, F1–F12, sticky Ctrl/Alt/Shift/Win, Ctrl+Alt+Del)
 
 ## v1.0 — Containers ⏳

@@ -820,8 +820,14 @@ def create_app(
     @api.post("/vms/{uuid}/restart", response_model=VMOut)
     def restart_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
         cluster.require_quorum()
-        member, _ = cluster.find_vm(uuid)
-        vm = member.driver.restart_vm(uuid, force=bool(body and body.force))
+        member, vm = cluster.find_vm(uuid)
+        force = bool(body and body.force)
+        if vm.restart_needed:  # power off and on to apply the changes: a task, it takes a while
+            cluster.require_in_service(member)
+            vm = backups.run_task("restart", "apply changes", vm.spec.name, member.name, uuid,
+                                  lambda: member.driver.restart_vm(uuid, force=force))  # fmt: skip
+        else:
+            vm = member.driver.restart_vm(uuid, force=force)
         return VMOut.from_info(vm, member.name)
 
     @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
