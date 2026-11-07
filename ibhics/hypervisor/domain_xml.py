@@ -11,6 +11,7 @@ from .base import DiskSpec, Firmware, NicSpec, VMSpec
 from .pool_xml import vg_name
 
 DISK_DEVS = "abcdefghijklmnopqrstuvwxyz"
+NAME_NS = "https://ibhics.org/xmlns/name/1"  # a running VM's new name (rename while on)
 META_NS = "https://ibhics.org/xmlns/vm/1"  # ibHiCS's own facts about a VM, kept in its XML
 
 

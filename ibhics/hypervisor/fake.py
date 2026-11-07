@@ -230,8 +230,6 @@ class FakeDriver(HypervisorDriver):
             if vm.spec.name != name:
                 if any(v.spec.name == name for v in self._vms.values()):
                     raise VMExists(f"VM named {name!r} already exists")
-                if vm.state == VMState.RUNNING:
-                    raise InvalidState("shut the VM down to rename it")
                 vm.spec.name = name
             return copy.deepcopy(vm)
 

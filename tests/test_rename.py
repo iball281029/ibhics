@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from test_snapshots import Dom, LibvirtError, Snap
 
 import ibhics.hypervisor.libvirt_driver as lv
-from ibhics.hypervisor import DiskSpec, InvalidState, VMExists, VMSpec
+from ibhics.hypervisor import DiskSpec, VMExists, VMSpec
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.manager import create_app
 
@@ -29,8 +29,8 @@ def test_rename_via_api_thai_and_rules():
     assert client.post(f"{API}/vms/{a['uuid']}/rename", json={"name": "db01"}).status_code == 409
     assert client.post(f"{API}/vms/{a['uuid']}/rename", json={"name": "a b"}).status_code == 422
     client.post(f"{API}/vms/{b['uuid']}/start")
-    r = client.post(f"{API}/vms/{b['uuid']}/rename", json={"name": "db02"})
-    assert r.status_code == 409 and "shut" in r.json()["detail"]
+    r = client.post(f"{API}/vms/{b['uuid']}/rename", json={"name": "ฐานข้อมูล"})
+    assert r.status_code == 200 and r.json()["state"] == "running"
     kinds = [j["kind"] for j in client.get(f"{API}/backup/jobs").json()]
     assert "rename" in kinds
 
@@ -68,6 +68,21 @@ class RenDom(Dom):
         self.xml = ET.tostring(root, encoding="unicode")
         self.snaps = []
 
+    def setMetadata(self, _type, xml, prefix, uri, flags):
+        root = ET.fromstring(self.xml)
+        meta = root.find("metadata")
+        if meta is None:
+            meta = ET.SubElement(root, "metadata")
+        for el in list(meta):
+            if el.tag.startswith(f"{{{uri}}}"):
+                meta.remove(el)
+        if xml:
+            el = ET.fromstring(xml)
+            el.tag = f"{{{uri}}}{el.tag}"
+            meta.append(el)
+        self.xml = ET.tostring(root, encoding="unicode")
+        self.meta_flags = flags
+
     def hasCurrentSnapshot(self, _f):
         return 1 if self.snaps else 0
 
@@ -87,6 +102,9 @@ def test_libvirt_rename_keeps_snapshots(monkeypatch):
         VIR_DOMAIN_SNAPSHOT_DELETE_METADATA_ONLY=2,
         VIR_DOMAIN_SNAPSHOT_CREATE_REDEFINE=1,
         VIR_DOMAIN_SNAPSHOT_CREATE_CURRENT=2,
+        VIR_DOMAIN_AFFECT_CONFIG=2,
+        VIR_DOMAIN_AFFECT_LIVE=1,
+        VIR_DOMAIN_METADATA_ELEMENT=2,
     )
     monkeypatch.setattr(lv, "libvirt", lib)
     d = object.__new__(lv.LibvirtDriver)
@@ -107,6 +125,11 @@ def test_libvirt_rename_keeps_snapshots(monkeypatch):
     assert ET.fromstring(snap.xml).findtext("domain/name") == "บี"
     with pytest.raises(VMExists):
         d.rename_vm("u", "taken")
+    # Running: the domain keeps its name, the new one is shown (metadata, live + config).
     dom.active = True
-    with pytest.raises(InvalidState):
-        d.rename_vm("u", "c")
+    assert d.rename_vm("u", "ซี").spec.name == "ซี"
+    assert dom.name() == "บี" and dom.meta_flags == 3
+    # Off again: the domain itself is renamed and the shown name cleared.
+    dom.active = False
+    assert d.rename_vm("u", "dee").spec.name == "dee" and dom.name() == "dee"
+    assert "ซี" not in dom.xml

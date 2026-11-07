@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
+from xml.sax.saxutils import escape as xml_escape
 
 from . import customize, edge, terminal, vmstats
 from .base import (
@@ -51,6 +52,7 @@ from .base import (
 from .domain_xml import (
     DISK_DEVS,
     META_NS,
+    NAME_NS,
     build_domain_xml,
     build_volume_xml,
     cdrom_element,
@@ -500,6 +502,17 @@ class LibvirtDriver(HypervisorDriver):
         Path(src).unlink(missing_ok=True)
         return True
 
+    def _set_display_name(self, dom, name: str, live: bool) -> None:
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if live:
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+        xml = f"<name>{xml_escape(name)}</name>" if name else None
+        try:
+            dom.setMetadata(libvirt.VIR_DOMAIN_METADATA_ELEMENT, xml, "ibhics-name", NAME_NS, flags)
+        except libvirt.libvirtError:
+            if name:
+                raise
+
     def rename_vm(self, uuid: str, name: str) -> VMInfo:
         if not VM_NAME_RE.match(name):
             raise ValueError("VM names use letters (Thai too), digits and '_.-'")
@@ -513,7 +526,10 @@ class LibvirtDriver(HypervisorDriver):
         else:
             raise VMExists(f"VM named {name!r} already exists")
         if dom.isActive():
-            raise InvalidState("shut the VM down to rename it")
+            # A running domain keeps its libvirt name; the new one shows everywhere until
+            # the next rename while it is off, which renames the domain itself.
+            self._set_display_name(dom, name, live=True)
+            return self._info(dom)
         # libvirt renames only a domain without snapshots: keep their XML, drop only the
         # metadata, rename, then define them again under the new name.
         topo = getattr(libvirt, "VIR_DOMAIN_SNAPSHOT_LIST_TOPOLOGICAL", 0)
@@ -526,6 +542,7 @@ class LibvirtDriver(HypervisorDriver):
         try:
             dom.rename(name, 0)
             renamed = True
+            self._set_display_name(dom, "", live=False)
         finally:
             dom = self._lookup(uuid)
             for snap_name, xml in saved:
@@ -1441,7 +1458,7 @@ def _spec_from_xml(xml: str) -> VMSpec:
     uefi = os_el is not None and (os_el.get("firmware") == "efi" or os_el.find("nvram") is not None)
     firmware = Firmware.UEFI if uefi else Firmware.BIOS
     return VMSpec(
-        name=root.findtext("name", ""),
+        name=root.findtext(f"metadata/{{{NAME_NS}}}name") or root.findtext("name", ""),
         vcpus=int(root.findtext("vcpu", "1")),
         memory_mb=memory_mb,
         firmware=firmware,

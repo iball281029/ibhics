@@ -39,48 +39,94 @@ DISTROS = {
     "almalinux-9": ("almalinux", "9", "AlmaLinux 9"),
     "alpine-3.20": ("alpine", "3.20", "Alpine Linux 3.20"),
 }
+APT = "apt-get update && apt-get install -y "
 APPS = {
-    "nginx": ("debian-13", "Nginx web server", "apt-get update && apt-get install -y nginx"),
-    "mariadb": (
+    "nginx": ("debian-13", "Nginx web server", APT + "nginx"),
+    "mariadb": ("debian-13", "MariaDB database", APT + "mariadb-server"),
+    "postgresql": ("debian-13", "PostgreSQL database", APT + "postgresql"),
+    "redis": ("debian-13", "Redis cache", APT + "redis-server"),
+    "docker": ("debian-13", "Docker host (nesting on)", APT + "docker.io docker-compose"),
+    "zabbix-agent": ("debian-13", "Zabbix agent", APT + "zabbix-agent2"),
+    "zabbix": (
         "debian-13",
-        "MariaDB database",
-        "apt-get update && apt-get install -y mariadb-server",
+        "Zabbix server (web UI on /zabbix)",
+        APT + "postgresql zabbix-server-pgsql zabbix-frontend-php php-pgsql "
+        "apache2 libapache2-mod-php && "
+        'su postgres -c "createuser zabbix; createdb -O zabbix zabbix" && '
+        "zcat /usr/share/zabbix-server-pgsql/schema.sql.gz /usr/share/zabbix-server-pgsql/"
+        "images.sql.gz /usr/share/zabbix-server-pgsql/data.sql.gz 2>/dev/null "
+        "| su zabbix -s /bin/sh -c 'psql -q zabbix'; "
+        "ln -sf /usr/share/zabbix /var/www/html/zabbix; "
+        "systemctl enable --now zabbix-server apache2",
     ),
-    "docker": (
+    "grafana": (
         "debian-13",
-        "Docker host (nesting on)",
-        "apt-get update && apt-get install -y docker.io docker-compose",
-    ),
-    "zabbix-agent": (
-        "debian-13",
-        "Zabbix agent",
-        "apt-get update && apt-get install -y zabbix-agent2",
+        "Grafana dashboards (port 3000)",
+        APT + "apt-transport-https wget gpg && mkdir -p /etc/apt/keyrings && "
+        "wget -qO- https://apt.grafana.com/gpg.key | gpg --dearmor "
+        "> /etc/apt/keyrings/grafana.gpg && "
+        "echo 'deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main' "
+        "> /etc/apt/sources.list.d/grafana.list && "
+        + APT
+        + "grafana && systemctl enable --now grafana-server",
     ),
     "wordpress": (
         "debian-13",
         "WordPress (Apache, PHP, MariaDB)",
-        "apt-get update && apt-get install -y apache2 php php-mysql mariadb-server wordpress",
+        APT + "apache2 php php-mysql mariadb-server wordpress",
     ),
+    "nextcloud": (
+        "debian-13",
+        "Nextcloud files (Apache, PHP, MariaDB; open /nextcloud)",
+        APT + "apache2 libapache2-mod-php mariadb-server wget bzip2 php-gd php-mysql "
+        "php-curl php-mbstring php-intl php-gmp php-bcmath php-xml php-imagick php-zip && "
+        "wget -qO /tmp/nc.tar.bz2 https://download.nextcloud.com/server/releases/latest.tar.bz2 "
+        "&& tar -xjf /tmp/nc.tar.bz2 -C /var/www/html && chown -R www-data: "
+        "/var/www/html/nextcloud && rm /tmp/nc.tar.bz2 && systemctl restart apache2",
+    ),
+    "nodejs": ("debian-13", "Node.js runtime", APT + "nodejs npm"),
+    "python": ("debian-13", "Python 3 with pip and venv", APT + "python3-pip python3-venv"),
+    "samba": ("debian-13", "Samba file share", APT + "samba"),
+    "pihole-dns": ("debian-13", "DNS/DHCP server (dnsmasq)", APT + "dnsmasq"),
+    "haproxy": ("debian-13", "HAProxy load balancer", APT + "haproxy"),
+    "gitea": ("debian-13", "Git server (git + SSH)", APT + "git openssh-server"),
+    "lamp": ("debian-13", "LAMP stack (Apache, MariaDB, PHP)", APT + "apache2 mariadb-server php"),
 }
 
+IMAGE_INDEX = "https://images.linuxcontainers.org/meta/1.0/index-system"
+LXC_ID = re.compile(r"^lxc:([a-z0-9][a-z0-9.-]*):([A-Za-z0-9][A-Za-z0-9._-]*)$")
 
-def catalog() -> list[dict]:
+
+def parse_image_index(text: str, arch: str = "amd64") -> list[dict]:
+    """Every distribution and release images.linuxcontainers.org has, from its index
+    (lines of distro;release;arch;variant;serial;path)."""
+    seen, out = set(), []
+    for line in text.splitlines():
+        parts = line.strip().split(";")
+        if len(parts) < 4 or parts[2] != arch or parts[3] != "default":
+            continue
+        distro, release = parts[0], parts[1]
+        tid = f"lxc:{distro}:{release}"
+        if (distro, release) in seen or not LXC_ID.match(tid):
+            continue
+        seen.add((distro, release))
+        out.append({"id": tid, "kind": "image", "title": f"{distro.capitalize()} {release}",
+                    "distro": distro, "release": release})  # fmt: skip
+    return sorted(out, key=lambda t: (t["distro"], t["release"]))
+
+
+def catalog(images: list[dict] | None = None) -> list[dict]:
+    """The curated templates first, then the rest of the image server's list."""
     out = [
         {"id": k, "kind": "os", "title": title, "distro": d, "release": r}
         for k, (d, r, title) in DISTROS.items()
     ]
     for k, (base, title, _script) in APPS.items():
         d, r, os_title = DISTROS[base]
-        out.append(
-            {
-                "id": f"app:{k}",
-                "kind": "app",
-                "title": title,
-                "distro": d,
-                "release": r,
-                "base": os_title,
-            }
-        )
+        out.append({"id": f"app:{k}", "kind": "app", "title": title, "distro": d,
+                    "release": r, "base": os_title})  # fmt: skip
+    curated = {(t["distro"], t["release"]) for t in out}
+    out += [t for t in images or [] if (t["distro"], t["release"]) not in curated]
     return out
 
 
@@ -109,7 +155,8 @@ class ContainerSpec:
             raise ValueError(
                 "container names use small letters, digits and '-' (it is the host name too)"
             )
-        if self.template not in DISTROS and self.template.removeprefix("app:") not in APPS:
+        known = self.template in DISTROS or self.template.removeprefix("app:") in APPS
+        if not known and not LXC_ID.match(self.template):
             raise ValueError(f"unknown template {self.template!r}")
         if not 1 <= self.vcpus <= 256 or self.memory_mb < 64 or not 1 <= self.disk_gb <= 65536:
             raise ValueError("1-256 vCPU, at least 64 MB of memory and 1 GB of disk")
@@ -136,6 +183,8 @@ class ContainerSpec:
 
     @property
     def distro(self) -> tuple[str, str]:
+        if m := LXC_ID.match(self.template):
+            return m.group(1), m.group(2)
         key = APPS[self.template[4:]][0] if self.template.startswith("app:") else self.template
         return DISTROS[key][0], DISTROS[key][1]
 
@@ -428,6 +477,30 @@ class LxcContainers:
         (home / "ibhics.json").write_text(json.dumps(asdict(new)))
         return self._info(base, new)
 
+    def rename(self, name: str, new: str) -> ContainerInfo:
+        """A stopped container's new name (and host name); its folder moves with it."""
+        base, spec = self._find(name)
+        renamed = replace(spec, name=new)
+        renamed.validate()
+        if new == name:
+            return self._info(base, spec)
+        try:
+            self._find(new)
+        except ContainerNotFound:
+            pass
+        else:
+            raise InvalidState(f"a container named {new!r} already exists")
+        if self._info(base, spec).state == "running":
+            raise InvalidState("stop the container to rename it")
+        old_home, home = base / name, base / new
+        old_home.rename(home)
+        # Paths in its config and its snapshots' configs name the old folder.
+        for cfg in [home / "config", *home.glob("snaps/*/config")]:
+            text = cfg.read_text().replace(f"{old_home}/", f"{home}/")
+            cfg.write_text(text.replace(f"lxc.uts.name = {name}", f"lxc.uts.name = {new}"))
+        (home / "ibhics.json").write_text(json.dumps(asdict(renamed)))
+        return self._info(base, renamed)
+
     def delete(self, name: str) -> None:
         base, _spec = self._find(name)
         self._lxc("stop", base, name, "-k", check=False)
@@ -541,6 +614,19 @@ class FakeContainers:
         info.spec.validate()
         return info
 
+    def rename(self, name: str, new: str) -> ContainerInfo:
+        info = self.get(name)
+        renamed = replace(info.spec, name=new)
+        renamed.validate()
+        if new != name:
+            if new in self._cts:
+                raise InvalidState(f"a container named {new!r} already exists")
+            if info.state == "running":
+                raise InvalidState("stop the container to rename it")
+            info.spec = renamed
+            self._cts[new] = self._cts.pop(name)
+        return info
+
     def delete(self, name: str) -> None:
         self.get(name)
         del self._cts[name]
@@ -624,6 +710,9 @@ class RemoteContainers:
         }
         return info_from_dict(self._call("PATCH", f"/{name}", json=body, timeout=600))
 
+    def rename(self, name: str, new: str) -> ContainerInfo:
+        return info_from_dict(self._call("POST", f"/{name}/rename", json={"name": new}))
+
     def delete(self, name: str) -> None:
         self._call("DELETE", f"/{name}")
 
@@ -671,6 +760,10 @@ def install_agent_routes(api, get_containers) -> None:
     def ct_update(name: str, body: dict) -> dict:
         keys = ("vcpus", "memory_mb", "disk_gb", "autostart", "description")
         return get_containers().update(name, *(body.get(k) for k in keys)).to_dict()
+
+    @api.post("/containers/{name}/rename")
+    def ct_rename(name: str, body: dict) -> dict:
+        return get_containers().rename(name, str(body.get("name", ""))).to_dict()
 
     @api.delete("/containers/{name}", status_code=204)
     def ct_delete(name: str) -> None:

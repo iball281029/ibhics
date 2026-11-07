@@ -12,6 +12,7 @@ from ibhics.hypervisor.containers import (
     catalog,
     first_boot_script,
     lxc_config,
+    parse_image_index,
 )
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.manager import create_app
@@ -19,7 +20,62 @@ from ibhics.manager import create_app
 
 def test_catalog_has_os_and_app_templates():
     ids = {t["id"] for t in catalog()}
-    assert {"debian-13", "ubuntu-24.04", "app:nginx", "app:docker"} <= ids
+    apps = {"nginx", "mariadb", "postgresql", "redis", "docker", "zabbix", "grafana"}
+    apps |= {"wordpress", "nextcloud"}
+    assert {"debian-13", "ubuntu-24.04"} | {f"app:{a}" for a in apps} <= ids
+
+
+def test_image_server_list_joins_the_catalog():
+    index = "\n".join(
+        [
+            "debian;trixie;amd64;default;20261106_05:24;/images/debian/trixie/amd64/default/x",
+            "debian;trixie;arm64;default;20261106_05:24;/x",
+            "fedora;42;amd64;default;20261106_20:33;/x",
+            "fedora;42;amd64;cloud;20261106_20:33;/x",
+            "archlinux;current;amd64;default;20261106_04:18;/x",
+            "bad;../x;amd64;default;1;/x",
+        ]
+    )
+    images = parse_image_index(index)
+    ids = [t["id"] for t in images]
+    assert ids == ["lxc:archlinux:current", "lxc:debian:trixie", "lxc:fedora:42"]
+    ids = [t["id"] for t in catalog(images)]
+    assert "lxc:fedora:42" in ids and "lxc:debian:trixie" not in ids  # already curated
+    spec = ContainerSpec("f", template="lxc:fedora:42")
+    spec.validate()
+    assert spec.distro == ("fedora", "42")
+
+
+def test_rename_container():
+    from ibhics.hypervisor.fake import FakeDriver
+
+    client = TestClient(create_app(FakeDriver()))
+    client.post("/api/v1/containers", json={"name": "a1"})
+    wait_for(client, "a1")
+    r = client.post("/api/v1/containers/a1/rename", json={"name": "b1"})
+    assert r.status_code == 409  # running
+    client.post("/api/v1/containers/a1/action", json={"action": "stop"})
+    assert client.post("/api/v1/containers/a1/rename", json={"name": "b1"}).json()["name"] == "b1"
+    assert client.get("/api/v1/containers/a1").status_code == 404
+    assert client.post("/api/v1/containers/b1/rename", json={"name": "B 1"}).status_code == 422
+
+
+def test_lxc_rename_moves_folder_and_paths(tmp_path):
+    def run(cmd):
+        return (0, "State: STOPPED\n") if cmd[0] == "lxc-info" else (0, "")
+
+    lxc = LxcContainers(lambda p: str(tmp_path / p), lambda n: "br0", run, lambda: ["default"])
+    home = tmp_path / "default/containers/old"
+    (home / "snaps/s1").mkdir(parents=True)
+    spec = ContainerSpec("old")
+    (home / "ibhics.json").write_text(json.dumps(spec.public() | {"password": ""}))
+    (home / "config").write_text(lxc_config(spec, "br0", f"{home}/rootfs.img"))
+    (home / "snaps/s1/config").write_text(f"lxc.rootfs.path = loop:{home}/snaps/s1/rootfs\n")
+    assert lxc.rename("old", "new").spec.name == "new"
+    new = tmp_path / "default/containers/new"
+    cfg = (new / "config").read_text()
+    assert f"loop:{new}/rootfs.img" in cfg and "lxc.uts.name = new" in cfg
+    assert f"{new}/snaps/s1/rootfs" in (new / "snaps/s1/config").read_text()
 
 
 def test_spec_validation():

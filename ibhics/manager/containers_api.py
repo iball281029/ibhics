@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import threading
+import time
+import urllib.request
 
 from fastapi import status
 from pydantic import BaseModel, Field
 
 from ..cluster import NodeUnavailable
 from ..hypervisor import InvalidState
-from ..hypervisor.containers import ContainerNotFound, ContainerSpec, catalog
+from ..hypervisor.containers import (
+    IMAGE_INDEX,
+    ContainerNotFound,
+    ContainerSpec,
+    catalog,
+    parse_image_index,
+)
 
 
 class ContainerIn(BaseModel):
@@ -49,6 +57,10 @@ class ContainerExec(BaseModel):
     command: str = Field(min_length=1, max_length=4000)
 
 
+class ContainerRename(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
 class ContainerSnapIn(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
@@ -79,9 +91,20 @@ def install(api, cluster, backups) -> None:
     def task(kind, detail, name, member, work):
         return backups.run_task(kind, detail, name, member.name, f"ct:{name}", work)
 
+    images: dict = {"at": 0.0, "list": []}
+
     @api.get("/containers/templates")
     def ct_templates() -> list[dict]:
-        return catalog()
+        """Curated templates, then every image on images.linuxcontainers.org (read at most
+        every 6 hours; without internet, the curated list alone)."""
+        if time.monotonic() - images["at"] > 6 * 3600 or not images["at"]:
+            try:
+                with urllib.request.urlopen(IMAGE_INDEX, timeout=8) as resp:
+                    images["list"] = parse_image_index(resp.read().decode())
+                images["at"] = time.monotonic()
+            except (OSError, ValueError):
+                images["at"] = time.monotonic() - 5.5 * 3600  # try again in half an hour
+        return catalog(images["list"])
 
     @api.get("/containers")
     def ct_list() -> list[dict]:
@@ -149,6 +172,26 @@ def install(api, cluster, backups) -> None:
                 member,
                 lambda: cts(member).update(name, **args),
             ),
+        )
+
+    @api.post("/containers/{name}/rename")
+    def ct_rename(name: str, body: ContainerRename) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        if body.name != name:
+            taken = {c.spec.name for _, c in everywhere()}
+            taken |= {vm.spec.name for _, vm in cluster.all_vms()}
+            if body.name in taken:
+                raise InvalidState(f"a VM or container named {body.name!r} already exists")
+        return out(
+            member,
+            task(
+                "rename",
+                f"{name} → {body.name}",
+                name,
+                member,
+                lambda: cts(member).rename(name, body.name),
+            ),  # fmt: skip
         )
 
     @api.delete("/containers/{name}", status_code=status.HTTP_204_NO_CONTENT)

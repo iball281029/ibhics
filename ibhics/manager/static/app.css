@@ -874,3 +874,7 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 .ct-line { display: flex; gap: 8px; align-items: center; }
 .ct-line input { flex: 1; background: transparent; border: 0; color: inherit; font: inherit; outline: none; }
 #ct-out { max-height: 50vh; overflow: auto; white-space: pre-wrap; }
+.ct-head { display: flex; align-items: center; gap: 12px; padding-right: 22px; }
+.ct-head input { flex: 1; max-width: 340px; }
+.ct-catalog { max-height: 420px; overflow: auto; }
+.ct-group { grid-column: 1 / -1; margin: 8px 0 0; font-size: 13px; }

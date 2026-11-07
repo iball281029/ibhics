@@ -729,8 +729,8 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
-      ${vm.state === "stopped" ? `<button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
-        <button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
+      <button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
+      ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
       ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
     </div></details>`;
@@ -1142,7 +1142,7 @@ function renderMoves() {
     <td class="vm-sub" style="display:table-cell">${esc(m.error || "")}</td></tr>`).join("");
 }
 
-// Rename a stopped VM (Thai names too); backup policies follow the new name.
+// Rename a VM (Thai names too), even while it runs; backup policies follow the new name.
 async function renameVM(uuid, old) {
   const name = (prompt(`New name for ${old}`, old) || "").trim();
   if (!name || name === old) return;
@@ -4354,8 +4354,15 @@ $("#term-form").addEventListener("submit", async (e) => {
 const CT_ICONS = { debian: "🌀", ubuntu: "🟠", rockylinux: "🟢", almalinux: "🔵", alpine: "🏔️" };
 function renderContainers() {
   const tpls = state.ctTemplates || [];
-  $("#ct-catalog").innerHTML = tpls.map((t) => `<button class="ct-tpl" data-tpl="${esc(t.id)}">
-    <span class="ct-ico">${CT_ICONS[t.distro] || "📦"}</span><b>${esc(t.title)}</b><span class="muted">${t.kind === "app" ? `app · ${esc(t.base)}` : "operating system"}</span></button>`).join("");
+  const q = ($("#ct-search").value || "").trim().toLowerCase();
+  const card = (t) => `<button class="ct-tpl" data-tpl="${esc(t.id)}">
+    <span class="ct-ico">${CT_ICONS[t.distro] || "📦"}</span><b>${esc(t.title)}</b><span class="muted">${t.kind === "app" ? `app · ${esc(t.base)}` : t.kind === "os" ? "operating system" : "image"}</span></button>`;
+  const match = (t) => !q || `${t.title} ${t.distro} ${t.release} ${t.id}`.toLowerCase().includes(q);
+  const groups = [["Applications", tpls.filter((t) => t.kind === "app" && match(t))], ["Popular systems", tpls.filter((t) => t.kind === "os" && match(t))]];
+  const more = tpls.filter((t) => t.kind === "image" && match(t));
+  for (const d of [...new Set(more.map((t) => t.distro))]) groups.push([d.charAt(0).toUpperCase() + d.slice(1), more.filter((t) => t.distro === d)]);
+  $("#ct-catalog").innerHTML = groups.filter(([, list]) => list.length).map(([title, list]) =>
+    `<h4 class="ct-group">${esc(title)} <span class="muted">${list.length}</span></h4>${list.map(card).join("")}`).join("") || `<p class="hint">No template matches “${esc(q)}”.</p>`;
   const cts = [...(state.containers || [])].sort((a, b) => a.name.localeCompare(b.name));
   const title = (id) => tpls.find((t) => t.id === id)?.title || id;
   $("#ct-rows").innerHTML = cts.length ? cts.map((c) => {
@@ -4371,17 +4378,23 @@ function renderContainers() {
       ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
       ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
       <button class="small" data-act="edit">Settings</button>
+      ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
       <button class="small danger" data-act="delete">Delete</button>
     </td></tr>`;
   }).join("") : empty(10, "No containers yet. Pick a template above to create one in a minute.");
 }
 function openCtWizard(tpl = "debian-13") {
-  const opts = (state.ctTemplates || []).map((t) => `<option value="${esc(t.id)}">${esc(t.title)}${t.kind === "app" ? ` (${esc(t.base)})` : ""}</option>`).join("");
+  const label = { app: "Applications", os: "Popular systems", image: "All images" };
+  const opts = ["app", "os", "image"].map((k) => {
+    const list = (state.ctTemplates || []).filter((t) => t.kind === k);
+    return list.length ? `<optgroup label="${label[k]}">${list.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}${t.kind === "app" ? ` (${esc(t.base)})` : ""}</option>`).join("")}</optgroup>` : "";
+  }).join("");
   $("#ct-template").innerHTML = opts;
   openDialog("ct-dialog", null, { template: tpl });
   $("#ct-form").elements.nesting.checked = tpl === "app:docker";
 }
 $("#ct-new").addEventListener("click", () => openCtWizard());
+$("#ct-search").addEventListener("input", renderContainers);
 $("#ct-catalog").addEventListener("click", (e) => { const b = e.target.closest("[data-tpl]"); if (b) openCtWizard(b.dataset.tpl); });
 handlers["ct-dialog"] = async (f) => {
   const num = (k) => Number(f.get(k));
@@ -4422,6 +4435,14 @@ $("#ct-rows").addEventListener("click", async (e) => {
       $("#ct-out").textContent = "";
       $("#ct-console-dialog").showModal();
       $("#ct-input").focus();
+      return;
+    }
+    if (act === "rename") {
+      const to = (prompt(`New name for ${name} (small letters, digits and -; also its host name)`, name) || "").trim();
+      if (!to || to === name) return;
+      await post(`/containers/${enc(name)}/rename`, { name: to });
+      toast(`${name} is now ${to}`);
+      await refresh("containers");
       return;
     }
     if (act === "delete" && !confirm(`Delete container ${name} and its disk and snapshots? This cannot be undone.`)) return;
