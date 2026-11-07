@@ -12,9 +12,12 @@ from ibhics.manager import create_app
 class Lvm:
     def __init__(self, cached=True):
         self.calls, self.cached = [], cached
+        self.cache_bytes = 200 * 2**30
 
     def __call__(self, cmd):
         self.calls.append(cmd)
+        if cmd[0] == "lvs" and "lv_size" in cmd:
+            return f"  {self.cache_bytes}\n"
         if cmd[0] == "lvs":
             if not self.cached:
                 return "  ;0;0;0;0;0;0;0;0\n"
@@ -34,7 +37,8 @@ def test_build_makes_vg_data_and_cache():
     assert "vgcreate -y ibhc-hy1 /dev/md0 /dev/nvme0n1" in cmds
     assert "lvcreate -y -n data -l 100%PVS ibhc-hy1 /dev/md0" in cmds
     assert "lvcreate -y -n cache -L 200G ibhc-hy1 /dev/nvme0n1" in cmds
-    assert any("--cachevol cache --cachemode writethrough ibhc-hy1/data" in c for c in cmds)
+    want = "--cachevol cache --cachemode writethrough --chunksize 256k ibhc-hy1/data"
+    assert any(want in c for c in cmds)
     assert hybrid.vg_of("/dev/sdb") is None
 
 
@@ -96,3 +100,16 @@ def test_api_hybrid_pool_and_cache():
     assert client.post(f"/api/v1/nodes/{node}/pools/default/cache",
                        json={"action": "remove"}).status_code == 409  # fmt: skip
     assert "pool-cache" in {j["kind"] for j in client.get("/api/v1/backup/jobs").json()}
+
+
+def test_chunk_size_fits_big_ssds():
+    run = Lvm()
+    assert hybrid.chunk_size(run, "ibhc-x") == "256k"  # 200 GiB: 64k would be 3.3M chunks
+    run.cache_bytes = 894 * 10**9  # the 894 GB SSD that lvconvert refused with 64k chunks
+    size = int(hybrid.chunk_size(run, "ibhc-x")[:-1]) * 1024
+    assert run.cache_bytes // size <= 1_000_000 and size == 1024 * 1024
+    run.cache_bytes = 10 * 2**30
+    assert hybrid.chunk_size(run, "ibhc-x") == "64k"
+    run = Lvm()
+    hybrid.build(run, "hy1", ["/dev/md0"], ["/dev/sdc"], "writethrough", None)
+    assert ["--chunksize", "256k"] == run.calls[-1][-3:-1]
