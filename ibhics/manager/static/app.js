@@ -1484,7 +1484,9 @@ const vmWiz = wizard("vm-dialog", {
 // (Server 2012 non-R2, Windows 8, Windows 7 / Server 2008 R2 and older) get SATA disks and
 // an Intel NIC that Windows has a driver for (e1000e from Windows 8 / 2012, e1000 before).
 function osProfile(family, ver) {
-  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp|server 2012(?! r2)|windows 8(?!\.1)/.test(ver);
+  // Up to Server 2012 R2 / Windows 8.1: Setup refuses the bundled virtio drivers ("No
+  // signed device drivers were found"), so these install on SATA and an Intel NIC.
+  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp|server 2012|windows 8/.test(ver);
   const nic = !legacy ? "virtio" : /2012|windows 8/.test(ver) ? "e1000e" : "e1000";
   const uefi = !legacy && ((family === "windows" && !/2012|2016|windows 8/.test(ver))
     || /2025|enterprise linux (9|10)|rocky linux (9|10)|almalinux (9|10)|oracle linux 9|stream 9|2[2-4]\.04|debian 1[23]|leap 15|suse linux enterprise 15|fedora|freebsd 1[34]/.test(ver));
@@ -1500,7 +1502,7 @@ function vmWizOs(form) {
   const f = form.elements, family = f.os_family.value, ver = f.os_type.value.toLowerCase();
   const { uefi, legacy, nic, folder } = osProfile(family, ver);
   f.firmware.value = uefi ? "uefi" : "bios";
-  $(".fw-hint", form).textContent = legacy ? `This Windows has no virtio driver on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
+  $(".fw-hint", form).textContent = legacy ? `Windows Setup of this version does not take the virtio drivers on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
     : uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "BIOS suits this OS.";
   $(".win-driver-note", form).innerHTML = legacy ? "No driver CD needed: Windows has its own SATA and Intel network drivers."
     : `Windows VMs get a second CD with the virtio drivers. When Windows Setup shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;

@@ -53,3 +53,43 @@ def test_legacy_windows_gets_sata_disks_and_e1000():
         == 201
     )
     assert client.post("/api/v1/vms", json={**body, "nics": [{"model": "rtl"}]}).status_code == 422
+
+
+def test_windows_up_to_2012_r2_install_on_sata_and_intel_nic():
+    """Setup of Server 2012 R2 refused the bundled virtio drivers (unsigned for it)."""
+    import json
+    import re
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    js = Path("ibhics/manager/static/app.js").read_text()
+    code = "\n".join(
+        re.search(rf"^function {fn}\(.*?^}}\n", js, re.S | re.M).group(0)
+        for fn in ("osProfile", "virtioFolder")
+    )
+    cases = [
+        "windows server 2012 r2",
+        "windows server 2012",
+        "windows 8.1",
+        "windows server 2008 r2",
+        "windows 7",
+        "windows server 2016",
+        "windows server 2022",
+        "windows 10",
+    ]
+    out = subprocess.run(
+        ["node", "-e", code + f"console.log(JSON.stringify({json.dumps(cases)}.map("
+         "(v) => osProfile('windows', v))))"],  # fmt: skip
+        capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    got = dict(zip(cases, json.loads(out), strict=True))
+    for v in cases[:5]:
+        assert got[v]["legacy"], v
+    assert got["windows server 2012 r2"]["nic"] == "e1000e"
+    for v in cases[5:]:
+        assert not got[v]["legacy"] and got[v]["nic"] == "virtio", v
