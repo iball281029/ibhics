@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import re
 import shlex
 import time
@@ -19,6 +20,8 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from .base import InvalidState
+
+log = logging.getLogger("ibhics.containers")
 
 CT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")  # also its host name: DNS-safe
 SNAP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
@@ -149,6 +152,37 @@ class ContainerSpec:
     nesting: bool = False  # lets Docker and the like run inside
     autostart: bool = False
     description: str = ""
+    mac: str = ""  # eth0's; made at create
+    # More network cards (eth1, eth2, ...): {"network", "ip", "gateway", "mac"} each.
+    nics: list[dict] = field(default_factory=list)
+
+    def interfaces(self) -> list[dict]:
+        """Every network card, eth0 first."""
+        first = {"network": self.network, "ip": self.ip, "gateway": self.gateway, "mac": self.mac}
+        return [{**n, "name": f"eth{i}"} for i, n in enumerate([first, *self.nics])]
+
+    def with_interfaces(self, cards: list[dict], dns: str | None = None) -> ContainerSpec:
+        if not 1 <= len(cards) <= MAX_NICS:
+            raise ValueError(f"a container has 1 to {MAX_NICS} network cards")
+        cards = [
+            {
+                "network": str(c.get("network") or "default"),
+                "ip": str(c.get("ip") or "dhcp").strip(),
+                "gateway": str(c.get("gateway") or "").strip(),
+                "mac": str(c.get("mac") or "").lower() or random_mac(),
+            }
+            for c in cards
+        ]
+        first, *more = cards
+        return replace(
+            self,
+            network=first["network"],
+            ip=first["ip"],
+            gateway=first["gateway"],
+            mac=first["mac"],
+            nics=more,
+            dns=self.dns if dns is None else dns.strip(),
+        )
 
     def validate(self) -> None:
         if not CT_NAME_RE.match(self.name):
@@ -162,16 +196,15 @@ class ContainerSpec:
             raise ValueError("1-256 vCPU, at least 64 MB of memory and 1 GB of disk")
         if self.swap_mb < 0:
             raise ValueError("swap cannot be negative")
-        if self.ip != "dhcp":
-            try:
-                iface = ipaddress.IPv4Interface(self.ip)
-            except ValueError:
-                msg = "IP is 'dhcp' or an address with prefix, e.g. 10.0.0.50/24"
-                raise ValueError(msg) from None
-            if "/" not in self.ip:
-                raise ValueError("write the IP with its prefix, e.g. 10.0.0.50/24")
-            if self.gateway and ipaddress.IPv4Address(self.gateway) not in iface.network:
-                raise ValueError(f"the gateway must be inside {iface.network}")
+        if len(self.nics) + 1 > MAX_NICS:
+            raise ValueError(f"a container has 1 to {MAX_NICS} network cards")
+        macs = set()
+        for card in self.interfaces():
+            _check_card(card)
+            if card["mac"]:
+                if card["mac"] in macs:
+                    raise ValueError(f"{card['name']}: MAC {card['mac']} is used twice")
+                macs.add(card["mac"])
         for server in self.dns.split():
             ipaddress.ip_address(server)
         if self.ssh_key and not re.match(r"^(ssh-|ecdsa-)\S+ \S+", self.ssh_key.strip()):
@@ -217,8 +250,45 @@ class ContainerInfo:
         }
 
 
-def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str = "") -> str:
-    """The container's LXC config, after the distribution's own includes."""
+MAX_NICS = 8
+MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
+
+
+def random_mac() -> str:
+    import secrets
+
+    return "00:16:3e:" + ":".join(f"{b:02x}" for b in secrets.token_bytes(3))
+
+
+def _check_card(card: dict) -> None:
+    name, ip, gw = card["name"], card["ip"], card["gateway"]
+    if card["mac"] and not MAC_RE.match(card["mac"]):
+        raise ValueError(f"{name}: MAC is six pairs of hex digits, e.g. 00:16:3e:12:34:56")
+    if ip == "dhcp":
+        if gw:
+            raise ValueError(f"{name}: DHCP gives the gateway; leave it empty")
+        return
+    try:
+        iface = ipaddress.IPv4Interface(ip)
+    except ValueError:
+        raise ValueError(
+            f"{name}: IP is 'dhcp' or an address with prefix, e.g. 10.0.0.50/24"
+        ) from None
+    if "/" not in ip:
+        raise ValueError(f"{name}: write the IP with its prefix, e.g. 10.0.0.50/24")
+    if gw:
+        try:
+            inside = ipaddress.IPv4Address(gw) in iface.network
+        except ValueError:
+            raise ValueError(f"{name}: the gateway is an IPv4 address") from None
+        if not inside:
+            raise ValueError(f"{name}: the gateway must be inside {iface.network}")
+
+
+def lxc_config(spec: ContainerSpec, bridge, rootfs: str = "") -> str:
+    """The container's LXC config, after the distribution's own includes. `bridge` is
+    one bridge for every card, or a function from network name to bridge."""
+    bridge_of = bridge if callable(bridge) else (lambda _n: bridge)
     lines = [
         "# Written by ibHiCS: change the container in the web console.",
         "lxc.include = /usr/share/lxc/config/common.conf",
@@ -232,10 +302,6 @@ def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str = "") -> str:
     lines += [
         f"lxc.uts.name = {spec.name}",
         *([f"lxc.rootfs.path = loop:{rootfs}"] if rootfs else []),
-        "lxc.net.0.type = veth",
-        f"lxc.net.0.link = {bridge}",
-        "lxc.net.0.flags = up",
-        "lxc.net.0.name = eth0",
         f"lxc.cgroup2.memory.max = {spec.memory_mb}M",
         f"lxc.cgroup2.memory.swap.max = {spec.swap_mb}M",
         f"lxc.cgroup2.cpu.max = {spec.vcpus * 100000} 100000",
@@ -243,13 +309,76 @@ def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str = "") -> str:
         "lxc.apparmor.profile = generated",
         f"lxc.apparmor.allow_nesting = {1 if spec.nesting else 0}",
     ]
-    if spec.ip != "dhcp":
-        lines.append(f"lxc.net.0.ipv4.address = {spec.ip}")
-        if spec.gateway:
-            lines.append(f"lxc.net.0.ipv4.gateway = {spec.gateway}")
+    # Addresses are set inside the container (guest_network_script), so DHCP and fixed
+    # IPs both work with the distribution's own network setup.
+    for i, card in enumerate(spec.interfaces()):
+        lines += [
+            f"lxc.net.{i}.type = veth",
+            f"lxc.net.{i}.link = {bridge_of(card['network'])}",
+            f"lxc.net.{i}.flags = up",
+            f"lxc.net.{i}.name = {card['name']}",
+        ]
+        if card["mac"]:
+            lines.append(f"lxc.net.{i}.hwaddr = {card['mac']}")
     if spec.nesting:
         lines.append("lxc.include = /usr/share/lxc/config/nesting.conf")
     return "\n".join(lines) + "\n"
+
+
+def guest_network_script(spec: ContainerSpec) -> str:
+    """Write the cards' settings the way the distribution reads them (netplan, systemd-
+    networkd or ifupdown) and apply them. Run inside the container after each start."""
+    q = shlex.quote
+    cards = spec.interfaces()
+    netplan = ["network:", "  version: 2", "  ethernets:"]
+    interfaces = ["auto lo", "iface lo inet loopback", ""]
+    steps = ["mkdir -p /etc/systemd/network"]
+    dns = spec.dns.split()
+    for card in cards:
+        n, ip, gw = card["name"], card["ip"], card["gateway"]
+        netplan.append(f"    {n}:")
+        if ip == "dhcp":
+            netplan.append("      dhcp4: true")
+            networkd = f"[Match]\nName={n}\n\n[Network]\nDHCP=ipv4\n"
+            interfaces += [f"auto {n}", f"iface {n} inet dhcp", ""]
+        else:
+            netplan += ["      dhcp4: false", f"      addresses: [{ip}]"]
+            if gw:
+                netplan += ["      routes:", f"        - to: default\n          via: {gw}"]
+            if dns:
+                netplan.append(f"      nameservers: {{addresses: [{', '.join(dns)}]}}")
+            networkd = f"[Match]\nName={n}\n\n[Network]\nAddress={ip}\n"
+            networkd += f"Gateway={gw}\n" if gw else ""
+            networkd += "".join(f"DNS={s}\n" for s in dns)
+            interfaces += [f"auto {n}", f"iface {n} inet static", f"    address {ip}"]
+            interfaces += [f"    gateway {gw}"] if gw else []
+            interfaces.append("")
+        steps.append(f"printf '%b' {q(networkd)} > /etc/systemd/network/{n}.network")
+    names = " ".join(c["name"] for c in cards)
+    steps += [
+        # Cards that were removed lose their files.
+        'for f in /etc/systemd/network/eth*.network; do n=$(basename "$f" .network);'
+        f' case " {names} " in *" $n "*) ;; *) rm -f "$f" ;; esac; done',
+        "if [ -d /etc/netplan ]; then",
+        "  rm -f /etc/netplan/*.yaml",
+        f"  printf '%s\\n' {' '.join(q(x) for x in netplan)} > /etc/netplan/10-ibhics.yaml",
+        "  chmod 600 /etc/netplan/10-ibhics.yaml",
+        "  netplan apply 2>&1 || true",
+        "elif command -v networkctl >/dev/null && systemctl is-enabled -q systemd-networkd; then",
+        "  networkctl reload && for n in " + names + "; do networkctl reconfigure $n; done",
+        "elif [ -f /etc/network/interfaces ]; then",
+        "  ifdown -a --exclude=lo 2>/dev/null || true",
+        f"  printf '%s\\n' {' '.join(q(x) for x in interfaces)} > /etc/network/interfaces",
+        "  ifup -a 2>&1 || true",
+        "fi",
+    ]
+    if dns:
+        resolv = "".join(f"nameserver {s}\n" for s in dns)
+        steps.append(
+            f"[ -L /etc/resolv.conf ] && command -v resolvectl >/dev/null || "
+            f"printf %s {q(resolv)} > /etc/resolv.conf"
+        )
+    return "\n".join(steps) + "\n"
 
 
 def first_boot_script(spec: ContainerSpec) -> str:
@@ -362,7 +491,10 @@ class LxcContainers:
             pass
         else:
             raise InvalidState(f"a container named {spec.name!r} already exists")
-        bridge = self._bridge_of(spec.network)
+        spec = spec.with_interfaces(spec.interfaces())  # gives each card a MAC
+        bridge = self._bridge_of
+        for card in spec.interfaces():
+            bridge(card["network"])  # an unknown network fails here, before anything is made
         base = self._dir(spec.pool)
         home = base / spec.name
         base.mkdir(parents=True, exist_ok=True)
@@ -401,6 +533,7 @@ class LxcContainers:
             (home / "ibhics.json").write_text(json.dumps(asdict(replace(spec, password=""))))
             self._lxc("start", base, spec.name)
             self._wait_running(base, spec.name)
+            self._apply_network(spec)
             self.exec(spec.name, first_boot_script(spec), timeout=1800)
         except Exception:
             self._lxc("stop", base, spec.name, "-k", check=False)
@@ -413,6 +546,11 @@ class LxcContainers:
     def _wait_running(self, base: Path, name: str, timeout: float = 30) -> None:
         self._lxc("wait", base, name, "-s", "RUNNING", "-t", str(int(timeout)), check=False)
         time.sleep(2)  # let the network come up before the first-boot script
+
+    def _apply_network(self, spec: ContainerSpec) -> None:
+        code, out = self.exec(spec.name, guest_network_script(spec), timeout=90)
+        if code:
+            log.warning("%s: network settings: %s", spec.name, out.strip()[-300:])
 
     def action(self, name: str, act: str) -> ContainerInfo:
         base, spec = self._find(name)
@@ -427,7 +565,31 @@ class LxcContainers:
             self._lxc("start", base, name)
         else:
             raise ValueError("action is start, stop, kill or restart")
+        if act in ("start", "restart"):
+            self._wait_running(base, name)
+            self._apply_network(spec)
         return self._info(base, spec)
+
+    def set_network(self, name: str, cards: list[dict], dns: str | None) -> ContainerInfo:
+        """New network cards (network/VLAN, DHCP or fixed IP, gateway), applied by
+        restarting the container when it runs."""
+        base, spec = self._find(name)
+        new = spec.with_interfaces(cards, dns)
+        new.validate()
+        for card in new.interfaces():
+            self._bridge_of(card["network"])
+        home = base / name
+        cfg = home / "config"
+        cfg.write_text(
+            _keep_template_lines(cfg, lxc_config(new, self._bridge_of, str(home / "rootfs.img")))
+        )
+        (home / "ibhics.json").write_text(json.dumps(asdict(new)))
+        if self._info(base, spec).state == "running":
+            self._lxc("stop", base, name, "-t", "60", check=False)
+            self._lxc("start", base, name)
+            self._wait_running(base, name)
+            self._apply_network(new)
+        return self._info(base, new)
 
     def update(
         self,
@@ -471,9 +633,10 @@ class LxcContainers:
                 code, out = self._run(["resize2fs", image])
             if code:
                 raise InvalidState(f"the disk grew, but its file system did not: {out.strip()}")
-        bridge = self._bridge_of(new.network)
         cfg = home / "config"
-        cfg.write_text(_keep_template_lines(cfg, lxc_config(new, bridge, str(home / "rootfs.img"))))
+        cfg.write_text(
+            _keep_template_lines(cfg, lxc_config(new, self._bridge_of, str(home / "rootfs.img")))
+        )
         (home / "ibhics.json").write_text(json.dumps(asdict(new)))
         return self._info(base, new)
 
@@ -583,13 +746,26 @@ class FakeContainers:
         spec.validate()
         if spec.name in self._cts:
             raise InvalidState(f"a container named {spec.name!r} already exists")
-        if spec.network not in self._networks():
-            raise InvalidState(f"no network named {spec.network!r}")
+        spec = spec.with_interfaces(spec.interfaces())
+        self._check_networks(spec)
         if spec.pool not in self._pools():
             raise InvalidState(f"no storage pool named {spec.pool!r}")
-        ip = spec.ip.split("/")[0] if spec.ip != "dhcp" else "10.0.0.123"
-        info = ContainerInfo(replace(spec, password=""), "running", [ip], 0.5, 40, 0.6)
+        info = ContainerInfo(replace(spec, password=""), "running", _fake_ips(spec), 0.5, 40, 0.6)
         self._cts[spec.name] = info
+        return info
+
+    def _check_networks(self, spec: ContainerSpec) -> None:
+        for card in spec.interfaces():
+            if card["network"] not in self._networks():
+                raise InvalidState(f"no network named {card['network']!r}")
+
+    def set_network(self, name: str, cards: list[dict], dns: str | None) -> ContainerInfo:
+        info = self.get(name)
+        new = info.spec.with_interfaces(cards, dns)
+        new.validate()
+        self._check_networks(new)
+        info.spec = new
+        info.addresses = _fake_ips(new) if info.state == "running" else []
         return info
 
     def action(self, name: str, act: str) -> ContainerInfo:
@@ -660,6 +836,13 @@ class FakeContainers:
         return info
 
 
+def _fake_ips(spec: ContainerSpec) -> list[str]:
+    return [
+        c["ip"].split("/")[0] if c["ip"] != "dhcp" else f"10.0.{i}.123"
+        for i, c in enumerate(spec.interfaces())
+    ]
+
+
 def info_from_dict(data: dict) -> ContainerInfo:
     names = {f for f in ContainerSpec.__dataclass_fields__ if f != "password"}
     spec = ContainerSpec(**{k: v for k, v in data.items() if k in names})
@@ -713,6 +896,10 @@ class RemoteContainers:
     def rename(self, name: str, new: str) -> ContainerInfo:
         return info_from_dict(self._call("POST", f"/{name}/rename", json={"name": new}))
 
+    def set_network(self, name: str, cards: list[dict], dns: str | None) -> ContainerInfo:
+        body = {"nics": cards, "dns": dns}
+        return info_from_dict(self._call("PUT", f"/{name}/network", json=body, timeout=300))
+
     def delete(self, name: str) -> None:
         self._call("DELETE", f"/{name}")
 
@@ -760,6 +947,11 @@ def install_agent_routes(api, get_containers) -> None:
     def ct_update(name: str, body: dict) -> dict:
         keys = ("vcpus", "memory_mb", "disk_gb", "autostart", "description")
         return get_containers().update(name, *(body.get(k) for k in keys)).to_dict()
+
+    @api.put("/containers/{name}/network")
+    def ct_network(name: str, body: dict) -> dict:
+        return get_containers().set_network(name, list(body.get("nics") or []),
+                                            body.get("dns")).to_dict()  # fmt: skip
 
     @api.post("/containers/{name}/rename")
     def ct_rename(name: str, body: dict) -> dict:

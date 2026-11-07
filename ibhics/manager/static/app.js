@@ -72,7 +72,7 @@ const canOperate = () => !state.me || state.me.role !== "viewer";
 const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
-  "container-delete": "Delete container" };
+  "container-delete": "Delete container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 
 // ---------- theme and user menu ----------
@@ -4453,6 +4453,8 @@ $("#ct-rows").addEventListener("click", async (e) => {
       ctCurrent = name;
       openDialog("ct-edit-dialog", { name }, { vcpus: c.vcpus, memory_mb: c.memory_mb, disk_gb: c.disk_gb, description: c.description });
       $("#ct-edit-form").elements.autostart.checked = c.autostart;
+      $("#ct-edit-form").elements.dns.value = c.dns || "";
+      ctNics(c);
       $("#ct-edit-title").textContent = `Container ${name}`;
       ctSnaps(c);
       return;
@@ -4482,7 +4484,44 @@ $("#ct-rows").addEventListener("click", async (e) => {
     await refresh("containers");
   } catch (err) { fail(err); } finally { b.disabled = false; }
 });
+// Network cards of a container: one row each, eth0 first.
+function ctNicRow(card, i, now = "") {
+  const nets = (state.networks || []).map((n) => n.name);
+  if (!nets.includes(card.network)) nets.unshift(card.network);
+  return `<tr data-nic>
+    <td class="mono">eth${i}</td>
+    <td><select data-f="network">${nets.map((n) => `<option ${n === card.network ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></td>
+    <td><input data-f="ip" value="${esc(card.ip || "dhcp")}" placeholder="dhcp or 10.0.0.50/24" size="16"></td>
+    <td><input data-f="gateway" value="${esc(card.gateway || "")}" placeholder="10.0.0.1" size="12"></td>
+    <td class="mono"><input type="hidden" data-f="mac" value="${esc(card.mac || "")}">${esc(card.mac || "new")}</td>
+    <td class="mono">${esc(now)}</td>
+    <td>${i ? `<button type="button" class="small danger" data-nic-rm>Remove</button>` : ""}</td></tr>`;
+}
+function ctNics(c) {
+  const cards = [{ network: c.network, ip: c.ip, gateway: c.gateway, mac: c.mac }, ...(c.nics || [])];
+  $("#ct-nics").innerHTML = cards.map((card, i) => ctNicRow(card, i, (c.addresses || [])[i] || "")).join("");
+  ctNicSnapshot = ctNicValues();
+}
+let ctNicSnapshot = "";
+const ctNicValues = () => JSON.stringify([...$$("#ct-nics tr[data-nic]")].map((tr) =>
+  Object.fromEntries($$("[data-f]", tr).map((el) => [el.dataset.f, el.value.trim()]))));
+$("#ct-nic-add").addEventListener("click", () => {
+  const n = $$("#ct-nics tr[data-nic]").length;
+  if (n >= 8) { toast("A container has at most 8 network cards", true); return; }
+  $("#ct-nics").insertAdjacentHTML("beforeend", ctNicRow({ network: "default", ip: "dhcp" }, n));
+});
+$("#ct-nics").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-nic-rm]")) return;
+  e.target.closest("tr").remove();
+  $$("#ct-nics tr[data-nic]").forEach((tr, i) => { tr.cells[0].textContent = `eth${i}`; });
+});
 handlers["ct-edit-dialog"] = async (f, ctx) => {
+  const c = state.containers.find((x) => x.name === ctx.name) || {};
+  const nics = ctNicValues(), dns = (f.get("dns") || "").trim();
+  if (nics !== ctNicSnapshot || dns !== (c.dns || "")) {
+    if (c.state === "running" && !confirm(`Apply the network to ${ctx.name}? It restarts for a few seconds.`)) return;
+    await api(`/containers/${enc(ctx.name)}/network`, { method: "PUT", body: JSON.stringify({ nics: JSON.parse(nics), dns }) });
+  }
   await patch(`/containers/${enc(ctx.name)}`, {
     vcpus: Number(f.get("vcpus")), memory_mb: Number(f.get("memory_mb")), disk_gb: Number(f.get("disk_gb")),
     autostart: f.get("autostart") === "on", description: f.get("description"),

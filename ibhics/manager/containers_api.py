@@ -61,6 +61,18 @@ class ContainerRename(BaseModel):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
+class ContainerNicIn(BaseModel):
+    network: str = Field(min_length=1, max_length=64)
+    ip: str = Field(default="dhcp", max_length=43)
+    gateway: str = Field(default="", max_length=15)
+    mac: str = Field(default="", pattern=r"^$|^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+class ContainerNetworkIn(BaseModel):
+    nics: list[ContainerNicIn] = Field(min_length=1, max_length=8)
+    dns: str | None = Field(default=None, max_length=200)
+
+
 class ContainerSnapIn(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
@@ -172,6 +184,24 @@ def install(api, cluster, backups) -> None:
                 member,
                 lambda: cts(member).update(name, **args),
             ),
+        )
+
+    @api.put("/containers/{name}/network")
+    def ct_network(name: str, body: ContainerNetworkIn) -> dict:
+        """Network cards: network (VLAN), DHCP or fixed IP and gateway, DNS. A running
+        container restarts to take them."""
+        cluster.require_quorum()
+        member, _ = find(name)
+        cards = [n.model_dump() for n in body.nics]
+        return out(
+            member,
+            task(
+                "container-network",
+                f"{len(cards)} card(s)",
+                name,
+                member,
+                lambda: cts(member).set_network(name, cards, body.dns),
+            ),  # fmt: skip
         )
 
     @api.post("/containers/{name}/rename")

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Upgrade an installed ibHiCS node in place from this ISO, like a firmware upgrade:
 #
-#   mount -o loop,ro ibhics-1.1.0b2.iso /mnt && sh /mnt/ibhics/upgrade.sh
+#   mount -o loop,ro ibhics-1.1.0b3.iso /mnt && sh /mnt/ibhics/upgrade.sh
 #
 # VMs keep running. Kept as they are: /etc/ibhics (config, TLS, users), /var/lib/ibhics,
 # libvirt VMs, storage pools and networks, /root/.ssh. Replaced: the ibHiCS program in

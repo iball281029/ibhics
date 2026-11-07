@@ -100,7 +100,7 @@ def test_config_is_unprivileged_with_limits():
     assert "lxc.idmap = u 0 100000 65536" in cfg
     assert "lxc.net.0.link = br0" in cfg and "lxc.cgroup2.memory.max = 1024M" in cfg
     assert "lxc.cgroup2.cpu.max = 200000 100000" in cfg
-    assert "lxc.net.0.ipv4.address = 10.0.0.5/24" in cfg
+    assert "ipv4.address" not in cfg  # set inside the container (guest_network_script)
     assert "rootfs.path = loop:/p/containers/web/rootfs.img" in cfg
     assert "rootfs.path" not in lxc_config(spec, "br0")  # for lxc-create -B loop
     script = first_boot_script(
@@ -192,3 +192,60 @@ def test_containers_through_node_agents(tmp_path):
     assert r.json()["snapshots"] == ["before"]
     assert client.delete("/api/v1/containers/db/snapshots/nope").status_code == 409
     assert client.delete("/api/v1/containers/db").status_code == 204
+
+
+def test_network_cards_config_and_guest_script():
+    from ibhics.hypervisor.containers import guest_network_script
+
+    spec = ContainerSpec("web").with_interfaces(
+        [
+            {"network": "default", "ip": "dhcp"},
+            {"network": "vlan20", "ip": "10.20.0.5/24", "gateway": "10.20.0.1"},
+        ],
+        dns="1.1.1.1",
+    )
+    spec.validate()
+    a, b = spec.interfaces()
+    assert a["mac"].startswith("00:16:3e:") and a["mac"] != b["mac"]
+    cfg = lxc_config(spec, {"default": "br0", "vlan20": "br-v20"}.get)
+    assert "lxc.net.1.link = br-v20" in cfg and "lxc.net.1.name = eth1" in cfg
+    assert f"lxc.net.0.hwaddr = {a['mac']}" in cfg
+    script = guest_network_script(spec)
+    assert "DHCP=ipv4" in script and "Address=10.20.0.5/24" in script
+    assert "Gateway=10.20.0.1" in script and "netplan apply" in script
+    assert "iface eth1 inet static" in script
+    for bad in (
+        [{"network": "default", "ip": "10.0.0.5"}],
+        [{"network": "default", "ip": "10.0.0.5/24", "gateway": "10.9.0.1"}],
+        [{"network": "default", "ip": "dhcp", "gateway": "10.0.0.1"}],
+        [{"network": "default", "mac": "zz"}],
+        [{"network": "default"}] * 9,
+    ):
+        with pytest.raises(ValueError):
+            ContainerSpec("web").with_interfaces(bad).validate()
+
+
+def test_container_network_api():
+    client = TestClient(create_app(FakeDriver()))
+    client.post("/api/v1/networks", json={"name": "vlan20", "vlan": 20})
+    client.post("/api/v1/containers", json={"name": "web"})
+    ct = wait_for(client, "web")
+    mac = ct["mac"]
+    assert mac.startswith("00:16:3e:")
+    body = {
+        "nics": [
+            {"network": "default", "ip": "10.0.0.50/24", "gateway": "10.0.0.1", "mac": mac},
+            {"network": "vlan20", "ip": "dhcp"},
+        ],
+        "dns": "8.8.8.8",
+    }
+    r = client.put("/api/v1/containers/web/network", json=body)
+    assert r.status_code == 200, r.text
+    ct = r.json()
+    assert ct["ip"] == "10.0.0.50/24" and ct["mac"] == mac and ct["dns"] == "8.8.8.8"
+    assert ct["nics"][0]["network"] == "vlan20" and ct["addresses"][0] == "10.0.0.50"
+    body["nics"] = [{"network": "nowhere"}]
+    assert client.put("/api/v1/containers/web/network", json=body).status_code == 409
+    one = {"nics": [{"network": "default"}]}
+    assert client.put("/api/v1/containers/web/network", json=one).json()["nics"] == []
+    assert "container-network" in [j["kind"] for j in client.get("/api/v1/backup/jobs").json()]

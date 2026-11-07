@@ -887,3 +887,5 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 #usage .usage-row + .usage-row { margin-top: 14px; }
 #usage .usage-row h4 { grid-column: 1 / -1; margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 @media (max-width: 800px) { #usage .usage-row { grid-template-columns: 1fr; } }
+.ct-net table input, .ct-net table select { width: 100%; min-width: 90px; }
+.ct-net > label { display: block; margin-top: 8px; }

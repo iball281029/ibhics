@@ -1222,6 +1222,14 @@
       <label class="check"><input type="checkbox" name="autostart"> Start when the node boots</label>
       <label class="wide">Description <input name="description" maxlength="500"></label>
       <p class="hint wide">CPU, memory and disk change live, without a restart.</p>
+      <div class="wide ct-net"><b>Network</b> <button type="button" class="small" id="ct-nic-add">+ Network card</button>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Card</th><th>Network (VLAN)</th><th>IP</th><th>Gateway</th><th>MAC</th><th>Now</th><th></th></tr></thead>
+          <tbody id="ct-nics"></tbody>
+        </table></div>
+        <label>DNS servers <input name="dns" placeholder="8.8.8.8 1.1.1.1"></label>
+        <p class="hint">IP is <code>dhcp</code> or an address with its prefix, e.g. <code>10.0.0.50/24</code>. Changing the network restarts a running container (a few seconds).</p>
+      </div>
       <div class="wide"><b>Snapshots</b> <button type="button" class="small" id="ct-snap-take">Take snapshot</button>
         <table><tbody id="ct-snaps"></tbody></table></div>
     </div>

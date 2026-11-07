@@ -100,19 +100,35 @@ sudo qemu-nbd -c /dev/nbd0 disk.qcow2
 # mounted (its device-mapper names would clash with the host's), then its own name back.
 TVG=ibhicstest
 lvm_nbd() { sudo "$@" --config 'devices { filter = [ "a|^/dev/nbd0|", "r|.*|" ] use_devicesfile = 0 }'; }
+pause() { read -rt "$1" <> <(:) || true; }  # bash's own timer: no external sleep
 put_back() {
-    lvm_nbd vgchange -q -an "$TVG" >/dev/null 2>&1 || true
-    lvm_nbd vgrename -q "$TVG" ibhics >/dev/null 2>&1 || true
+    # The VG must be inactive before it gets its name back: active, its device-mapper
+    # names (ibhics-root, ...) would clash with the host's, and the rename fails.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        lvm_nbd vgchange -q -an "$TVG" >/dev/null 2>&1 && break
+        pause 2
+    done
+    if lvm_nbd vgs "$TVG" >/dev/null 2>&1; then
+        lvm_nbd vgrename -q "$TVG" ibhics \
+            || echo "!! could not rename the test disk's VG $TVG back to ibhics"
+    fi
 }
 release_disk() {
+    local i
     sync
     sudo umount -q mnt/var/lib/ibhics 2>/dev/null || true
-    sudo umount mnt 2>/dev/null || { sleep 2; sudo umount -l mnt 2>/dev/null; } || true
+    for i in 1 2 3 4 5; do
+        mountpoint -q mnt || break
+        sudo umount mnt 2>/dev/null && break
+        pause 2
+    done
+    mountpoint -q mnt && { sudo umount -l mnt 2>/dev/null; pause 3; }
     put_back
     sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true
 }
 trap release_disk EXIT
-sleep 2
+pause 2
 lvm_nbd vgrename -q ibhics "$TVG" || { echo "!! no ibhics volume group on the installed disk"; exit 1; }
 lvm_nbd vgchange -q -ay "$TVG"
 mkdir -p mnt
@@ -159,7 +175,7 @@ for _ in $(seq 60); do
     if curl -skf "$API/health" -o health.json; then break; fi
     # QEMU stops at once when it cannot forward the port (or fails otherwise).
     kill -0 "$VM" 2>/dev/null || { echo "!! the VM stopped during first boot (port $PORT taken?)"; exit 1; }
-    sleep 10
+    pause 10
 done
 cat health.json 2>/dev/null || { echo "!! the web console did not answer on port $PORT"; exit 1; }
 echo
