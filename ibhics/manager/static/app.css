@@ -878,3 +878,6 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 .ct-head input { flex: 1; max-width: 340px; }
 .ct-catalog { max-height: 420px; overflow: auto; }
 .ct-group { grid-column: 1 / -1; margin: 8px 0 0; font-size: 13px; }
+/* "⋯" menus: placed by app.js inside the window; long names (an ISO) are cut short. */
+details.more .dropdown { max-width: min(320px, calc(100vw - 16px)); overflow-y: auto; }
+details.more .dropdown button, details.more .dropdown a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

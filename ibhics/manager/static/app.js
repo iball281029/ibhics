@@ -728,7 +728,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       <button data-vm="snapshots" data-id="${vm.uuid}">Restore snapshot…</button>
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
-      ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
+      ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}" title="Eject ${esc(vm.iso.split("/").pop())}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
       <button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
       ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
@@ -4493,3 +4493,29 @@ $("#ct-input").addEventListener("keydown", async (e) => {
   } catch (err) { out.textContent += `${err.message || err}\n`; }
   finally { input.disabled = false; input.focus(); out.parentElement.scrollTop = out.parentElement.scrollHeight; }
 });
+
+// "⋯" menus stay on screen: placed beside their button, flipped left/right/up to fit,
+// so a card at the screen's edge (or under the side rail) never cuts its menu off.
+document.addEventListener("toggle", (e) => {
+  const det = e.target;
+  if (!(det instanceof HTMLDetailsElement) || !det.open || !det.classList.contains("more")) return;
+  const menu = det.querySelector(":scope > .dropdown");
+  if (!menu) return;
+  const pad = 8, btn = det.querySelector("summary").getBoundingClientRect();
+  const rail = document.querySelector(".rail")?.getBoundingClientRect().right || 0;
+  Object.assign(menu.style, { position: "fixed", right: "auto", bottom: "auto", left: "0px", top: "0px", maxHeight: "" });
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  let left = btn.right - w;  // right edges lined up, as before
+  if (left < rail + pad) left = btn.left;  // not enough room: open to the right
+  left = Math.max(rail + pad, Math.min(left, innerWidth - w - pad));
+  let top = btn.bottom + 4;
+  if (top + h > innerHeight - pad && btn.top - h - 4 > pad) top = btn.top - h - 4;  // up
+  menu.style.left = `${left}px`;
+  menu.style.top = `${Math.max(pad, top)}px`;
+  menu.style.maxHeight = `${innerHeight - Math.max(pad, top) - pad}px`;
+}, true);
+// A fixed menu would float away from its button on scroll: close it instead.
+addEventListener("scroll", (e) => {
+  if (e.target instanceof Element && e.target.closest(".dropdown")) return;
+  $$("details.more[open]").forEach((d) => { d.open = false; });
+}, { passive: true, capture: true });
