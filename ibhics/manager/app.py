@@ -756,6 +756,17 @@ def create_app(
         member, _ = cluster.find_vm(uuid)
         return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
 
+    @api.post("/vms/{uuid}/sysprep", status_code=status.HTTP_202_ACCEPTED)
+    def sysprep_vm(uuid: str) -> dict:
+        """Generalize a running Windows VM (new SID per copy); it shuts down when done."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        if "windows" not in vm.spec.os_type.lower():
+            raise InvalidState("sysprep is for Windows VMs")
+        backups.run_task("sysprep", "generalize", vm.spec.name, member.name, uuid,
+                         lambda: member.driver.sysprep_vm(uuid))  # fmt: skip
+        return {"vm": vm.spec.name, "state": "generalizing"}
+
     @api.post("/vms/{uuid}/rename", response_model=VMOut)
     def rename_vm(uuid: str, body: RenameIn) -> VMOut:
         """A new name for a stopped VM; backup policies follow it."""

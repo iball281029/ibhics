@@ -149,6 +149,9 @@ class RemoteDriver(HypervisorDriver):
             raise ValueError(str(resp.json().get("detail")))
         return SnapshotInfo(**self._ok(resp, uuid).json())
 
+    def sysprep_vm(self, uuid: str) -> None:
+        self._ok(self._client.request("POST", f"/vms/{uuid}/sysprep", timeout=60), uuid)
+
     def rename_vm(self, uuid: str, name: str) -> VMInfo:
         resp = self._client.request("POST", f"/vms/{uuid}/rename", json={"name": name})
         if resp.status_code == 422:

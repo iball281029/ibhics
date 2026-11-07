@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -132,6 +133,25 @@ def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
     with rules.open("a") as f:
         f.write(("" if not text or text.endswith("\n") else "\n") + line + "\n")
     return True
+
+
+# What virt-sysprep resets on a deployed copy (users, data and settings stay).
+log = logging.getLogger("ibhics.libvirt")
+
+RESET_OPERATIONS = (
+    "machine-id",
+    "ssh-hostkeys",
+    "logfiles",
+    "bash-history",
+    "tmp-files",
+    "dhcp-client-state",
+    "net-hwaddr",
+    "udev-persistent-net",
+    "utmp",
+    "crash-data",
+    "package-manager-cache",
+    "customize",
+)
 
 
 class LibvirtDriver(HypervisorDriver):
@@ -513,6 +533,47 @@ class LibvirtDriver(HypervisorDriver):
             if name:
                 raise
 
+    def _reset_identity(self, disks: list[str]) -> None:
+        """virt-sysprep on a new copy's disks: users and data stay. A disk without a Linux
+        it recognises (an appliance, BSD) is left as it is."""
+        cmd = ["virt-sysprep", "--quiet", "--operations", ",".join(RESET_OPERATIONS)]
+        for disk in disks:
+            cmd += ["-a", disk]
+        # Debian and Ubuntu do not make new SSH host keys by themselves.
+        cmd += ["--delete", "/var/lib/cloud/instance", "--delete", "/var/lib/cloud/instances"]
+        cmd += ["--firstboot-command", "test -e /etc/ssh/ssh_host_ed25519_key || ssh-keygen -A;"
+                " systemctl restart ssh sshd 2>/dev/null || true"]  # fmt: skip
+        try:
+            self.run(cmd)
+        except FileNotFoundError:
+            log.warning("identity not reset: virt-sysprep (guestfs-tools) is not installed")
+        except RuntimeError as exc:
+            if "no operating systems" in str(exc).lower():
+                log.warning("identity not reset: %s", exc)
+                return
+            raise
+
+    def sysprep_vm(self, uuid: str) -> None:
+        dom = self._lookup(uuid)
+        if not dom.isActive():
+            raise InvalidState("start the VM (with its guest tools) to run sysprep")
+        import libvirt_qemu
+
+        command = {
+            "execute": "guest-exec",
+            "arguments": {
+                "path": r"C:\Windows\System32\Sysprep\sysprep.exe",
+                "arg": ["/generalize", "/oobe", "/shutdown", "/quiet"],
+            },
+        }
+        try:
+            libvirt_qemu.qemuAgentCommand(dom, json.dumps(command), 30, 0)
+        except libvirt.libvirtError as exc:
+            raise InvalidState(
+                f"the guest agent did not answer ({exc}): install the guest tools in the VM, "
+                "or run sysprep /generalize /oobe /shutdown there yourself"
+            ) from None
+
     def rename_vm(self, uuid: str, name: str) -> VMInfo:
         if not VM_NAME_RE.match(name):
             raise ValueError("VM names use letters (Thai too), digits and '_.-'")
@@ -668,6 +729,8 @@ class LibvirtDriver(HypervisorDriver):
                     ["qemu-img", "convert", "-n", "-f", src_fmt, "-O", dst_fmt]
                     + [base.path(), vol.path()]
                 )
+            if clone.reset_identity and "windows" not in spec.os_type.lower():
+                self._reset_identity([vol.path() for vol in created])
             if clone.customization:
                 seed = Path(self.seed_dir) / f"{file_name(spec.name)}-seed.iso"
                 files = customize.seed_files(clone.customization, spec.name, new_uuid)

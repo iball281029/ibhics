@@ -69,7 +69,7 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM",
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container" };
@@ -730,6 +730,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}" title="Eject ${esc(vm.iso.split("/").pop())}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
       <button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
+      ${vm.state === "running" && /windows/i.test(vm.os_type || "") ? `<button data-vm="sysprep" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Generalize (sysprep) for a template…</button>` : ""}
       ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
       ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
@@ -1186,8 +1187,16 @@ async function vmAction(e) {
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
     }
     if (act === "eject") await post(`/vms/${id}/cdrom`, { iso: null });
+    if (act === "sysprep") {
+      if (!confirm(`Run sysprep /generalize /oobe /shutdown in ${name}?\n\nWindows removes its SID, computer name and drivers' hardware ties, then shuts down. Convert it to a template after that: every VM deployed from it gets its own SID. Needs the guest tools (guest agent) in the VM. Do this on a copy if you still need this VM as it is.`)) return;
+      await post(`/vms/${id}/sysprep`);
+      toast(`Sysprep started in ${name}: it shuts down when done, then convert it to a template`);
+      return;
+    }
     if (act === "totemplate") {
-      if (!confirm(`Convert ${name} to a template? A template cannot be powered on; new VMs are deployed from it. You can convert it back later.`)) return;
+      const v = state.vms.find((x) => x.uuid === id);
+      const win = /windows/i.test(v?.os_type || "") ? `\n\nWindows: was it generalized with sysprep (⋯ → Generalize, or sysprep /generalize /oobe /shutdown)? If not, every VM deployed from it has the same SID, which breaks joining a domain.` : "";
+      if (!confirm(`Convert ${name} to a template? A template cannot be powered on; new VMs are deployed from it. You can convert it back later.${win}`)) return;
       await post(`/vms/${id}/template`, { template: true });
       toast(`${name} is now a template`);
       location.hash = "templates";
@@ -1288,7 +1297,7 @@ function openDeploy(uuid) {
 }
 handlers["deploy-dialog"] = async (f, ctx) => {
   const custom = f.get("custom");
-  const body = { name: f.get("name"), power_on: f.get("power_on") === "on" };
+  const body = { name: f.get("name"), power_on: f.get("power_on") === "on", reset_identity: f.get("reset_identity") === "on" };
   if (f.get("description")) body.description = f.get("description");
   if (f.get("pool")) body.pool = f.get("pool");
   if (custom !== "none") {

@@ -133,3 +133,18 @@ def test_libvirt_rename_keeps_snapshots(monkeypatch):
     dom.active = False
     assert d.rename_vm("u", "dee").spec.name == "dee" and dom.name() == "dee"
     assert "ซี" not in dom.xml
+
+
+def test_sysprep_windows_through_api():
+    client = TestClient(create_app(FakeDriver()))
+    win = client.post(
+        f"{API}/vms",
+        json={"name": "w22", "os_type": "Windows Server 2022", "disks": [{"size_gb": 1}]},
+    ).json()
+    lin = make_vm(client, "lin")
+    assert client.post(f"{API}/vms/{win['uuid']}/sysprep").status_code == 409  # off
+    client.post(f"{API}/vms/{win['uuid']}/start")
+    assert client.post(f"{API}/vms/{win['uuid']}/sysprep").status_code == 202
+    assert client.get(f"{API}/vms/{win['uuid']}").json()["state"] == "stopped"
+    client.post(f"{API}/vms/{lin['uuid']}/start")
+    assert client.post(f"{API}/vms/{lin['uuid']}/sysprep").status_code == 409

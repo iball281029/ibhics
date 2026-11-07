@@ -1285,7 +1285,9 @@
       </div>
       <p class="hint" data-for="linux">The VM gets a small CD that cloud-init reads on its first boot: host name, the admin user with sudo, password and SSH keys. The template needs cloud-init installed.</p>
       <p class="hint" data-for="windows">The VM gets a CD with an answer file that Windows reads when it first starts after sysprep: computer name, Administrator password and, if given, a local admin user. Time zone uses Windows names, e.g. <em>SE Asia Standard Time</em>.</p>
-      <label class="check" style="margin-top:12px"><input type="checkbox" name="power_on" checked> Power on when deployed</label>
+      <label class="check" style="margin-top:12px"><input type="checkbox" name="reset_identity" checked> Give the new VM its own identity</label>
+      <p class="hint" id="deploy-identity">Always new: VM UUID and MAC addresses. Linux, before its first boot: machine-id, SSH host keys, cloud-init state, logs and shell history, DHCP leases and persistent NIC names (users and data stay). Windows: a new SID and computer name come from sysprep; deploy from a template that was generalized.</p>
+      <label class="check"><input type="checkbox" name="power_on" checked> Power on when deployed</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Deploy VM</button></footer>
   </form>

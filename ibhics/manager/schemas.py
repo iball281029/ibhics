@@ -397,6 +397,7 @@ class CloneIn(BaseModel):
     description: str | None = Field(default=None, max_length=1024)
     customization: CustomizationIn | None = None
     power_on: bool = False  # manager only: start the VM once it is deployed
+    reset_identity: bool = True
 
     def to_clone(self) -> CloneSpec:
         return CloneSpec(
@@ -405,6 +406,7 @@ class CloneIn(BaseModel):
             pool=self.pool or None,
             description=self.description,
             customization=self.customization.to_customization() if self.customization else None,
+            reset_identity=self.reset_identity,
         )
 
 

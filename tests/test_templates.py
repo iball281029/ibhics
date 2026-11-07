@@ -318,7 +318,7 @@ def test_libvirt_linked_clone_makes_overlay(lvd):
     vol = ET.fromstring(d._conn.pool.created[0])
     assert vol.findtext("name") == "web1-disk0.qcow2"
     assert vol.findtext("backingStore/path") == "/pool/tpl-disk0.qcow2"
-    assert d.commands == []  # nothing copied
+    assert [c[0] for c in d.commands] == ["virt-sysprep"]  # nothing copied, identity reset
     assert vm.spec.linked_to == "src" and d.linked_clones("src") == ["web1"]
     with pytest.raises(InvalidState, match="web1"):
         d.set_template("src", False)
@@ -326,11 +326,23 @@ def test_libvirt_linked_clone_makes_overlay(lvd):
 
 def test_libvirt_full_clone_copies_into_block_pool(lvd):
     d = lvd(kind="logical")  # the template's disk is qcow2; the target pool is LVM
-    d.clone_vm("src", CloneSpec(name="db1"))
+    d.clone_vm("src", CloneSpec(name="db1", reset_identity=False))
     assert d.commands == [
         ["qemu-img", "convert", "-n", "-f", "qcow2", "-O", "raw"]
         + ["/pool/tpl-disk0.qcow2", "/pool/db1-disk0"]
     ]
+
+
+def test_libvirt_deploy_resets_linux_identity(lvd):
+    d = lvd()
+    d.clone_vm("src", CloneSpec(name="web2"))
+    sysprep = d.commands[-1]
+    assert sysprep[0] == "virt-sysprep" and "/pool/web2-disk0.qcow2" in sysprep
+    ops = sysprep[sysprep.index("--operations") + 1].split(",")
+    assert {"machine-id", "ssh-hostkeys", "net-hwaddr", "udev-persistent-net"} <= set(ops)
+    assert "user-account" not in ops  # users and data stay
+    assert "/var/lib/cloud/instances" in sysprep
+    assert any("ssh-keygen -A" in a for a in sysprep)
 
 
 def test_libvirt_linked_clone_refused_on_block_pool(lvd):

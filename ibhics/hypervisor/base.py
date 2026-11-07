@@ -148,6 +148,10 @@ class CloneSpec:
     pool: str | None = None  # full clones: put every disk here; None: beside the source's
     customization: Customization | None = None
     description: str | None = None  # None: the source's
+    # Linux: give the copy its own identity before it first boots (machine-id, SSH host
+    # keys, cloud-init state, logs, persistent NIC names). Windows gets a new SID only
+    # from sysprep (see sysprep_vm).
+    reset_identity: bool = True
 
     def validate(self) -> None:
         if not VM_NAME_RE.match(self.name):
@@ -563,6 +567,11 @@ class HypervisorDriver(abc.ABC):
 
         `restart`: a running UEFI VM that cannot be snapshotted live yet may be shut down
         and started again first."""
+        raise NotImplementedError
+
+    def sysprep_vm(self, uuid: str) -> None:
+        """Start sysprep /generalize /oobe /shutdown in the running Windows VM, through its
+        guest agent: the VM shuts down, ready to become a template."""
         raise NotImplementedError
 
     def rename_vm(self, uuid: str, name: str) -> VMInfo:

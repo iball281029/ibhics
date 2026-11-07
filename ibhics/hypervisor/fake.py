@@ -222,6 +222,15 @@ class FakeDriver(HypervisorDriver):
             snaps.append((info, copy.deepcopy(vm.spec), disks, vm.state))
             return copy.deepcopy(info)
 
+    def sysprep_vm(self, uuid: str) -> None:
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                raise InvalidState("start the VM (with its guest tools) to run sysprep")
+            if "windows" not in vm.spec.os_type.lower():
+                raise InvalidState("sysprep is for Windows VMs")
+            vm.state = VMState.STOPPED
+
     def rename_vm(self, uuid: str, name: str) -> VMInfo:
         if not VM_NAME_RE.match(name):
             raise ValueError("VM names use letters (Thai too), digits and '_.-'")
