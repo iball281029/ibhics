@@ -1008,7 +1008,8 @@ def create_app(
     )
     def migrate_vm(uuid: str, body: MigrateRequest | None = None) -> MigrationOut:
         body = body or MigrateRequest()
-        job = migrations.start(uuid, body.node, body.copy_storage, body.bandwidth_mib)
+        pools = {d.index: d.pool for d in body.disks} if body.disks else None
+        job = migrations.start(uuid, body.node, body.copy_storage, body.bandwidth_mib, pools)
         return MigrationOut(**job.__dict__)
 
     @api.get("/migrations", response_model=list[MigrationOut])

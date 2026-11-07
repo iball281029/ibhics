@@ -37,6 +37,10 @@ class Migration:
     state: str = "queued"  # queued, running, done, failed
     finished: str | None = None
     error: str | None = None
+    step: str = ""
+    # Change host and storage: after the move, these disks (by order) go to these pools
+    # on the new node.
+    disk_pools: dict[int, str] | None = None
 
 
 @dataclass
@@ -172,13 +176,28 @@ class MigrationManager:
         node: str | None = None,
         copy_storage: bool | None = None,
         bandwidth_mib: int | None = None,
+        disk_pools: dict[int, str] | None = None,
     ) -> Migration:
         plan = self.plan(uuid, node, copy_storage)
+        if disk_pools:
+            disks = plan.vm.spec.disks
+            pools = {p.name: p for p in plan.target.driver.list_pools()}
+            for i, pool in disk_pools.items():
+                if not 0 <= i < len(disks):
+                    raise ValueError(f"{plan.vm.spec.name} has no disk {i + 1}")
+                if pool not in pools or not pools[pool].active:
+                    raise InvalidState(f"{plan.target.name} has no active storage pool {pool!r}")
+            moving = any(disks[i].pool != p for i, p in disk_pools.items())
+            if moving and plan.source.driver.list_snapshots(uuid):
+                raise InvalidState(
+                    f"{plan.vm.spec.name} has snapshots: delete them before moving its disks"
+                )
         with self._lock:
             if uuid in self._moving:
                 raise InvalidState(f"VM {plan.vm.spec.name!r} is already being migrated")
             self._moving.add(uuid)
             job = self._new(plan.vm, plan.source.name, plan.target.name, plan.copy_storage)
+            job.disk_pools = dict(disk_pools) if disk_pools else None
         self._executor.submit(self._run, job, plan, bandwidth_mib)
         return job
 
@@ -214,6 +233,7 @@ class MigrationManager:
     def _run(self, job: Migration, plan: Plan, bandwidth_mib: int | None) -> None:
         job.state = "running"
         try:
+            job.step = f"Moving to {plan.target.name}"
             plan.source.driver.migrate_vm(
                 job.uuid,
                 self.uri(plan.target),
@@ -221,6 +241,13 @@ class MigrationManager:
                 bandwidth_mib,
                 self.migration_address(plan.target),
             )
+            disks = plan.vm.spec.disks
+            moves = {i: p for i, p in (job.disk_pools or {}).items() if disks[i].pool != p}
+            if moves:
+                # Then onto the pools picked on the new node (the VM keeps running).
+                job.step = "Moving disks to " + ", ".join(sorted(set(moves.values())))
+                plan.target.driver.move_disks(job.uuid, moves)
+            job.step = ""
         except Exception as exc:  # the job records every failure; nothing else is waiting
             job.state, job.error = "failed", str(exc) or type(exc).__name__
         else:

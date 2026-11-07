@@ -437,6 +437,11 @@ class DeployOut(BaseModel):
     result: str | None = None  # the new VM's uuid
 
 
+class DiskMoveIn(BaseModel):
+    index: int = Field(ge=0, le=63)  # the disk's place in the VM, 0 = the first
+    pool: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+
+
 class MigrateRequest(BaseModel):
     node: str | None = Field(default=None, description="destination; omit to pick one")
     copy_storage: bool | None = Field(
@@ -444,6 +449,8 @@ class MigrateRequest(BaseModel):
         description="copy disks that are not on shared storage; omit to decide automatically",
     )
     bandwidth_mib: int | None = Field(default=None, ge=1, description="limit in MiB/s")
+    # Change host and storage: after the move, disks go to these pools on the new node.
+    disks: list[DiskMoveIn] | None = Field(default=None, max_length=64)
 
 
 class MigrationOut(BaseModel):
@@ -458,6 +465,8 @@ class MigrationOut(BaseModel):
     created: str
     finished: str | None
     error: str | None
+    step: str = ""
+    disk_pools: dict[int, str] | None = None
 
 
 class AgentMigrate(BaseModel):
@@ -519,11 +528,6 @@ class PoolCreate(BaseModel):
 
     def to_spec(self) -> PoolSpec:
         return PoolSpec(**self.model_dump())
-
-
-class DiskMoveIn(BaseModel):
-    index: int = Field(ge=0, le=63)  # the disk's place in the VM, 0 = the first
-    pool: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
 
 
 class DiskMovesIn(BaseModel):

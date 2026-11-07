@@ -1330,14 +1330,16 @@
       <div class="type-cards">
         <label class="type-card"><input type="radio" name="mode" value="host">
           <svg><use href="#i-nodes"/></svg><span><b>Change host</b><em class="mig-host-why">Move the VM to another node; a running VM keeps running.</em></span></label>
+        <label class="type-card"><input type="radio" name="mode" value="both">
+          <svg><use href="#i-migrate"/></svg><span><b>Change host and storage</b><em class="mig-both-why">Move the VM to another node and its disks to pools you pick there.</em></span></label>
         <label class="type-card"><input type="radio" name="mode" value="storage">
           <svg><use href="#i-storage"/></svg><span><b>Change storage</b><em>Move its disks to another pool on the same node, running or not.</em></span></label>
       </div>
-      <div data-mig="storage">
+      <div data-mig="storage both">
         <div class="table-wrap disk-table"><table><thead><tr><th>Disk</th><th>Size</th><th>Now in</th><th>Move to</th></tr></thead><tbody class="mig-disks"></tbody></table></div>
         <p class="hint">A running VM keeps running: its disk is copied, then QEMU switches to the copy. The old volume is deleted afterwards. Follow it in Tasks. VMs with snapshots must delete them first.</p>
       </div>
-    <div class="form-grid" data-mig="host">
+    <div class="form-grid" data-mig="host both">
       <label>Destination node <select name="node" class="node-list-auto"></select></label>
       <label>Disk copy
         <select name="copy_storage">

@@ -373,7 +373,7 @@ function allTasks() {
     })),
     ...state.moves.map((m) => ({
       kind: m.live ? "Live migration" : "Move", title: m.vm, sub: `${m.source} → ${m.target || "auto"}`,
-      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
+      state: m.state, step: m.step || "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
     })),
     ...state.deploys.map((d) => ({
       kind: "Deploy VM", title: d.vm, sub: `from ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
@@ -1622,23 +1622,40 @@ function openMigrate(id, name, node) {
   const form = $("#migrate-form"), sel = $("select[name=node]", form);
   [...sel.options].forEach((o) => { if (o.value === node) o.remove(); });
   $("#migrate-title").textContent = `Migrate ${name}`;
-  const host = $("input[name=mode][value=host]", form), others = sel.options.length > 0;
-  host.disabled = !others;
-  host.closest(".type-card").classList.toggle("disabled", !others);
-  $(".mig-host-why", form).textContent = others ? "Move the VM to another node; a running VM keeps running."
-    : "Only one node in the cluster: add a node to move VMs between hosts.";
+  const others = sel.options.length > 0, one = "Only one node in the cluster: add a node to move VMs between hosts.";
+  for (const mode of ["host", "both"]) {
+    const r = $(`input[name=mode][value=${mode}]`, form);
+    r.disabled = !others;
+    r.closest(".type-card").classList.toggle("disabled", !others);
+  }
+  $(".mig-host-why", form).textContent = others ? "Move the VM to another node; a running VM keeps running." : one;
+  $(".mig-both-why", form).textContent = others ? "Move the VM to another node and its disks to pools you pick there." : one;
   $(`input[name=mode][value=${others ? "host" : "storage"}]`, form).checked = true;
-  const pools = [...new Set(state.pools.filter((p) => p.node === node && p.active).map((p) => p.name))];
-  $(".mig-disks", form).innerHTML = (vm.disks || []).map((d, i) => `<tr><td>Disk ${i + 1}</td><td>${num(d.size_gb)} GB</td><td>${esc(d.pool)}</td>
-    <td><select data-disk="${i}" data-from="${esc(d.pool)}">${[d.pool, ...pools.filter((p) => p !== d.pool)].map((p) => `<option value="${esc(p)}">${p === d.pool ? `${esc(p)} (stay)` : esc(p)}</option>`).join("")}</select></td></tr>`).join("")
-    || empty(4, "This VM has no disks");
+  migState.vm = vm;
+  migState.node = node;
   migShow();
+}
+const migState = { vm: null, node: "" };
+// The disks and the pools they can go to: on the VM's node (storage), or on the chosen
+// destination (host and storage), where a disk stays in the pool of the same name.
+function migDisks() {
+  const form = $("#migrate-form"), mode = form.elements.mode.value, vm = migState.vm || { disks: [] };
+  const node = mode === "both" ? form.elements.node.value : migState.node;
+  const pools = [...new Set(state.pools.filter((p) => p.node === node && p.active).map((p) => p.name))];
+  $(".mig-disks", form).innerHTML = (vm.disks || []).map((d, i) => {
+    const opts = [d.pool, ...pools.filter((p) => p !== d.pool)];
+    return `<tr><td>Disk ${i + 1}</td><td>${num(d.size_gb)} GB</td><td>${esc(d.pool)}</td>
+    <td><select data-disk="${i}" data-from="${esc(d.pool)}">${opts.map((p) => `<option value="${esc(p)}">${p === d.pool ? `${esc(p)} (same pool)` : esc(p)}</option>`).join("")}</select></td></tr>`;
+  }).join("") || empty(4, "This VM has no disks");
 }
 function migShow() {
   const form = $("#migrate-form"), mode = form.elements.mode.value;
-  $$("[data-mig]", form).forEach((el) => { el.hidden = el.dataset.mig !== mode; });
+  $$("[data-mig]", form).forEach((el) => { el.hidden = !el.dataset.mig.split(" ").includes(mode); });
+  migDisks();
 }
-$("#migrate-form").addEventListener("change", (e) => { if (e.target.name === "mode") migShow(); });
+$("#migrate-form").addEventListener("change", (e) => {
+  if (e.target.name === "mode" || (e.target.name === "node" && $("#migrate-form").elements.mode.value === "both")) migShow();
+});
 handlers["migrate-dialog"] = async (f, ctx) => {
   if (f.get("mode") === "storage") {
     const moves = $$("#migrate-form select[data-disk]").filter((s) => s.value !== s.dataset.from).map((s) => ({ index: Number(s.dataset.disk), pool: s.value }));
@@ -1651,6 +1668,9 @@ handlers["migrate-dialog"] = async (f, ctx) => {
     return;
   }
   const body = { node: f.get("node") || null };
+  if (f.get("mode") === "both") {
+    body.disks = $$("#migrate-form select[data-disk]").filter((s) => s.value !== s.dataset.from).map((s) => ({ index: Number(s.dataset.disk), pool: s.value }));
+  }
   if (f.get("copy_storage") === "false") body.copy_storage = false;
   if (f.get("bandwidth_mib")) body.bandwidth_mib = Number(f.get("bandwidth_mib"));
   const job = await post(`/vms/${ctx.id}/migrate`, body);

@@ -197,3 +197,19 @@ def test_agent_rejects_other_destinations(env):
     agent = env.agents.client("http://node2:8007", TOKEN)
     resp = agent.request("POST", "/vms/x/migrate", json={"dest_uri": "file:///etc/passwd"})
     assert resp.status_code == 422
+
+
+def test_change_host_and_storage(env):
+    # VMware's "change both": to node2, then its disk onto node2's hybrid pool.
+    resp = env.client.post("/api/v1/nodes/node2/pools", json={"name": "hybrid01", "type": "dir"})
+    assert resp.status_code == 201, resp.text
+    uuid = env.create_vm("npm-vm")
+    bad = env.migrate(uuid, node="node2", disks=[{"index": 0, "pool": "nope"}])
+    assert bad.status_code == 409 and "no active storage pool" in bad.json()["detail"]
+    resp = env.migrate(uuid, node="node2", disks=[{"index": 0, "pool": "hybrid01"}])
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["disk_pools"] == {"0": "hybrid01"}
+    vm = env.client.get(f"/api/v1/vms/{uuid}").json()
+    assert vm["node"] == "node2" and vm["disks"][0]["pool"] == "hybrid01"
+    [done] = env.client.get("/api/v1/migrations").json()
+    assert done["state"] == "done" and done["step"] == ""
