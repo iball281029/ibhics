@@ -56,9 +56,11 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v1.2
+Beta 2 (1.2.0b2): legacy Windows drivers from virtio-win 0.1.189 (0.1.229 is test-signed for 2012 R2: Code 52)
+
 Beta 1 (1.2.0b1):
 - VMs: USB tablet by default (the console mouse follows the cursor), display adapter choice in Edit (VirtIO GPU, Standard VGA, QXL, Cirrus), "Switch disks to VirtIO" for Windows on SATA after its guest tools are in
-- Windows Setup sees the disk without "Load driver" ($WinPEDriver$ on the guest tools CD, Server 2016+/10/11); Server 2012 R2 and older, 7 and 8.1 install on SATA + e1000e + VGA, with virtio-win 0.1.229 drivers and installer on the CD (legacy folder)
+- Windows Setup sees the disk without "Load driver" ($WinPEDriver$ on the guest tools CD, Server 2016+/10/11); Server 2012 R2 and older, 7 and 8.1 install on SATA + e1000e + VGA, with virtio-win 0.1.189 drivers and installer on the CD (legacy folder)
 - Containers: Pool column, pool and folder in Settings, move a stopped container to another pool; memory use read from cgroup v2; Docker host works unprivileged (overlay2, or fuse-overlayfs, never vfs); Nginx Proxy Manager template; console commands run up to an hour with live output and Stop (Ctrl+C)
 - test-install.sh writes the answers file with guestfish, so it runs on an ibHiCS node (VG ibhics on both)
 

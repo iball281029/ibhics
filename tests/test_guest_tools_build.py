@@ -1,4 +1,4 @@
-"""The guest tools CD: current virtio-win for 2016+/10/11, 0.1.229 for older Windows,
+"""The guest tools CD: current virtio-win for 2016+/10/11, 0.1.189 for older Windows,
 and $WinPEDriver$ so Windows Setup sees the disk without "Load driver"."""
 
 import subprocess
@@ -38,3 +38,24 @@ def test_current_legacy_and_winpe(tmp_path):
     winpe = {p.parent.parent.name for p in (tools / "$WinPEDriver$").glob("viostor/*/amd64/*.inf")}
     assert winpe == {"2k16", "2k22", "w11"}
     assert not (tools / "$WinPEDriver$" / "Balloon").exists()
+
+
+def test_legacy_hard_links_become_whole_files(tmp_path):
+    # virtio-win 0.1.189: the 2k12R2 drivers are hard links to the w8.1 ones.
+    src, out = fake_iso(tmp_path / "old", ["w8.1"]), tmp_path / "virtio-win"
+    (src / "viostor/w8.1/amd64/viostor.sys").write_bytes(b"driver")
+    for drv in ("viostor", "NetKVM", "vioscsi", "Balloon"):
+        (src / drv / "2k12R2" / "amd64").mkdir(parents=True)
+        for f in (src / drv / "w8.1" / "amd64").iterdir():
+            (src / drv / "2k12R2" / "amd64" / f.name).hardlink_to(f)
+    run(src, out, "--legacy")
+    sys_file = out / "viostor/2k12R2/amd64/viostor.sys"
+    assert sys_file.read_bytes() == b"driver" and sys_file.stat().st_nlink == 1
+    (src / "viostor/w8.1/amd64/viostor.sys").write_bytes(b"")
+    (out / "viostor").rename(tmp_path / "gone")
+    import shutil
+
+    shutil.rmtree(out)
+    r = subprocess.run([sys.executable, str(SCRIPT), str(src), str(out), "--legacy"],
+                       capture_output=True, text=True)  # fmt: skip
+    assert r.returncode and "empty files" in r.stderr

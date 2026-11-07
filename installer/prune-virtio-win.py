@@ -1,6 +1,6 @@
 """Keep from an extracted virtio-win ISO only what virt-v2v uses for 64-bit Windows: about
 40 MB instead of 700. The current release covers Server 2016+ and Windows 10/11; Server
-2012 R2 and older come from virtio-win 0.1.229 (later drivers are not signed for them).
+2012 R2 and older come from virtio-win 0.1.189 (later drivers are not signed for them).
 
     python3 prune-virtio-win.py EXTRACTED_ISO OUT_DIR [--legacy]
     python3 prune-virtio-win.py --winpe DRIVERS_DIR TOOLS_DIR
@@ -49,7 +49,13 @@ def main(src: Path, out: Path, legacy: bool = False) -> None:
         for version in driver.iterdir():
             arch = version / "amd64"
             if version.name in windows and arch.is_dir():
-                shutil.copytree(arch, out / driver.name / version.name / "amd64")
+                dest = out / driver.name / version.name / "amd64"
+                # copytree copies file contents, so hard links (0.1.189's 2k12R2 files
+                # are links to w8.1's) become whole files of their own.
+                shutil.copytree(arch, dest)
+                empty = [p.name for p in dest.iterdir() if p.is_file() and not p.stat().st_size]
+                if empty:
+                    sys.exit(f"{dest}: empty files {empty}: the ISO did not extract right")
                 kept += 1
     agent = src / "guest-agent" / "qemu-ga-x86_64.msi"
     if legacy:

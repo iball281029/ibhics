@@ -4,7 +4,7 @@ Windows 10/11 and Server 2016 and later: run virtio-win-guest-tools.exe. It inst
 virtio drivers (disk, network, memory balloon, display) and the QEMU guest agent.
 
 Windows Server 2012 R2, 2012, 2008 R2, 8.1 and 7: run legacy\virtio-win-guest-tools.exe
-(virtio-win 0.1.229; the current installer needs Windows 10 or later). Drivers for these
+(virtio-win 0.1.189; the current installer needs Windows 10 or later). Drivers for these
 are in the folders named 2k12R2, w8.1, ... After installing, "Switch disks to VirtIO" in
 the VM's menu moves its disks from SATA to the faster VirtIO.
 

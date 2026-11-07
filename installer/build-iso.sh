@@ -18,7 +18,7 @@ MIRROR=${DEBIAN_CD_MIRROR:-https://cdimage.debian.org/debian-cd/current/amd64/is
 TARGET_PYTHON=3.13  # Debian 13's python3: the wheels must match it
 VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso}
 # Server 2012 R2, 8.1 and older: the last release whose drivers are signed for them.
-VIRTIO_WIN_LEGACY_URL=${VIRTIO_WIN_LEGACY_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.229-1/virtio-win-0.1.229.iso}
+VIRTIO_WIN_LEGACY_URL=${VIRTIO_WIN_LEGACY_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.189-1/virtio-win-0.1.189.iso}
 NO_VIRTIO_WIN=""
 SOURCE=""
 OUT=""
@@ -96,7 +96,7 @@ if [ -z "$NO_VIRTIO_WIN" ]; then
     xorriso -osirrox on -indev "$WORK/virtio-win.iso" -extract / "$WORK/virtio-all" >/dev/null 2>&1
     chmod -R u+w "$WORK/virtio-all"
     python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-all" "$PAYLOAD/virtio-win"
-    echo ">> Adding virtio-win 0.1.229 for Windows Server 2012 R2, 8.1 and older"
+    echo ">> Adding virtio-win 0.1.189 for Windows Server 2012 R2, 8.1 and older"
     curl -fL --retry 3 -o "$WORK/virtio-legacy.iso" "$VIRTIO_WIN_LEGACY_URL"
     mkdir -p "$WORK/virtio-legacy"
     xorriso -osirrox on -indev "$WORK/virtio-legacy.iso" -extract / "$WORK/virtio-legacy" >/dev/null 2>&1
