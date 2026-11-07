@@ -674,6 +674,12 @@ class LibvirtDriver(HypervisorDriver):
                 meta.set("pool", pool_name)
                 meta.set("volume", name)
         self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        vm_meta = root.find(f"metadata/{{{META_NS}}}vm")
+        if dom.isActive() and vm_meta is not None:
+            # The running domain keeps its own copy of the metadata, which VMInfo reads.
+            dom.setMetadata(libvirt.VIR_DOMAIN_METADATA_ELEMENT,
+                            ET.tostring(vm_meta, encoding="unicode"), "ibhics", META_NS,
+                            libvirt.VIR_DOMAIN_AFFECT_LIVE)  # fmt: skip
         src.delete(0)
         progress(100)
 

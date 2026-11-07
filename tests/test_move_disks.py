@@ -37,11 +37,13 @@ class Vol:
 def setup(monkeypatch, active):
     monkeypatch.setattr(lv, "libvirt", types.SimpleNamespace(
         libvirtError=RuntimeError, VIR_DOMAIN_XML_INACTIVE=2, VIR_DOMAIN_BLOCK_COPY_REUSE_EXT=1,
-        VIR_DOMAIN_BLOCK_COPY_TRANSIENT_JOB=4, VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT=2))  # fmt: skip
+        VIR_DOMAIN_BLOCK_COPY_TRANSIENT_JOB=4, VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT=2,
+        VIR_DOMAIN_METADATA_ELEMENT=2, VIR_DOMAIN_AFFECT_LIVE=1))  # fmt: skip
     monkeypatch.setattr(lv, "BLOCK_COPY_POLL", 0)
     disks = [DiskSpec(size_gb=10), DiskSpec(size_gb=5)]
     dom = Dom(build_domain_xml(VMSpec(name="npm-vm", disks=disks)), active=active)
     dom.snapshotNum = lambda _f: 0
+    dom.setMetadata = lambda *a: None
     made, old = [], Vol("npm-vm-disk0.qcow2", "default")
 
     def pool(name, kind):
@@ -176,3 +178,33 @@ def test_pool_of_a_disk_moved_by_hand(monkeypatch):
     assert d._pool_of_path("/var/lib/ibhics/pools/hybrid01/npm-vm.qcow2") == "hybrid01"
     assert d._pool_of_path("/var/lib/ibhics/pools/hybrid01x/a.qcow2") == ""
     assert d._pool_of_path(None) == ""
+
+
+def test_live_move_returns_the_new_pool(monkeypatch):
+    # A running VM's VMInfo comes from its live XML, whose metadata must change too.
+    d, dom, _made, _old = setup(monkeypatch, active=True)
+    live = {"xml": dom.xml}
+    dom.XMLDesc = lambda f=0: dom.xml if f == 2 else live["xml"]
+
+    def set_meta(kind, xml, key, uri, flags):
+        assert (kind, key, uri, flags) == (2, "ibhics", META_NS, 1)
+        root = ET.fromstring(live["xml"])
+        md = root.find("metadata")
+        md.remove(md.find(f"{{{META_NS}}}vm"))
+        md.append(ET.fromstring(xml))
+        live["xml"] = ET.tostring(root, encoding="unicode")
+
+    dom.setMetadata = set_meta
+    dom.blockCopy = lambda *a: None
+    dom.blockJobInfo = lambda dev, _f: {"cur": 1, "end": 1}
+    dom.blockJobAbort = lambda dev, flags: None
+    # The pivoted live disk names the new file, outside any <source pool>.
+    d._info = lambda _dom: types.SimpleNamespace(spec=lv._spec_from_xml(_dom.XMLDesc(0)))
+    root = ET.fromstring(live["xml"])
+    src = root.find("devices/disk[@device='disk']/source")
+    src.attrib.clear()
+    src.set("file", "/hybrid01/npm-vm-disk0.qcow2")
+    root.find("devices/disk[@device='disk']").set("type", "file")
+    live["xml"] = ET.tostring(root, encoding="unicode")
+    info = d.move_disks("u", {0: "hybrid01"})
+    assert info.spec.disks[0].pool == "hybrid01"
