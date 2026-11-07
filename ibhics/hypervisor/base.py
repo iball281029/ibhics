@@ -192,6 +192,7 @@ def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpe
         os_type=source.os_type,
         boot=["hd"],
         linked_to=source_uuid if clone.linked else "",
+        video=source.video,
     )
 
 
