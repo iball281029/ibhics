@@ -1549,7 +1549,7 @@ function vmWizOs(form) {
   $(".fw-hint", form).textContent = legacy ? `Windows Setup of this version does not take the virtio drivers on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
     : uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "BIOS suits this OS.";
   $(".win-driver-note", form).innerHTML = legacy ? "No driver CD needed: Windows has its own SATA and Intel network drivers."
-    : `Windows VMs get a second CD with the virtio drivers. When Windows Setup shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;
+    : `Windows VMs get a second CD with the virtio drivers: Setup finds the disk and network drivers on it by itself. If it still shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;
   f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
   $(".win-driver-note", form).hidden = family !== "windows";
 }
