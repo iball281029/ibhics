@@ -56,7 +56,7 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v1.3
-Backlog (asked 2026-11-07, start when told): Tasks page logs every activity (VM create/delete/start/shutdown/restart/edit/rename/snapshot, containers, storage, network, nodes/hardware, logins) with time, user, object, action, result/error and duration; filters by time range (today/7/30 days/custom), type, object, user, status and search; kept in SQLite (retention configurable, default forever), CSV export; built on audit.log.
+Backlog (asked 2026-11-07, start when told): Tasks page logs every activity (VM create/delete/start/shutdown/restart/edit/rename/snapshot, containers, storage, network, nodes/hardware, logins) with time, user, object, action, result/error and duration; filters by time range (today/7/30 days/custom), type, object, user, status and search; kept in SQLite (retention configurable, default forever), CSV export; built on audit.log. Every task shown as Sangfor does, with Cancel on the ones that can stop (move disks, migrate, backup, import, upload).
 
 Beta 2 (1.3.0b2): Migrate… on every VM's menu: Change host (live migration; disabled with the reason on a one-node cluster) or Change storage: each disk to a pool of its node, running (block copy, then QEMU switches to the copy) or off (qemu-img), as a task with %, the old volume deleted after. dm-cache chunk size picked for big SSDs.
 
