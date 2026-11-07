@@ -59,3 +59,12 @@ def test_legacy_hard_links_become_whole_files(tmp_path):
     r = subprocess.run([sys.executable, str(SCRIPT), str(src), str(out), "--legacy"],
                        capture_output=True, text=True)  # fmt: skip
     assert r.returncode and "empty files" in r.stderr
+
+
+def test_legacy_install_script_on_the_cd():
+    cmd = Path("installer/guest-tools/install-legacy.cmd").read_bytes().decode()
+    assert "\r\n" in cmd  # Windows line ends
+    for step in ("pnputil -f -d", "Red Hat", "qemu-ga-x86_64.msi", "/qn", "pnputil -i -a",
+                 "viogpudo", "qxldod", "blnsvr.exe\" -i", "2k12R2", "w8.1"):  # fmt: skip
+        assert step in cmd, step
+    assert "install-legacy.cmd" in Path("installer/build-iso.sh").read_text()

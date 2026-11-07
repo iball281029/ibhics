@@ -109,6 +109,7 @@ if [ -z "$NO_VIRTIO_WIN" ]; then
     python3 "$HERE/prune-virtio-win.py" --winpe "$PAYLOAD/virtio-win" "$WORK/tools"
     cp "$HERE/guest-tools/install.sh" "$WORK/tools/linux/install.sh"
     cp "$HERE/guest-tools/README.txt" "$WORK/tools/README.txt"
+    cp "$HERE/guest-tools/install-legacy.cmd" "$WORK/tools/legacy/install-legacy.cmd"
     xorriso -as mkisofs -quiet -J -R -V IBHICS_TOOLS -o "$PAYLOAD/guest-tools.iso" "$WORK/tools"
 
     # virt-v2v sets up a converted Windows guest at its first boot with rhsrvany.exe and
