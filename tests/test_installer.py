@@ -362,3 +362,13 @@ def test_custom_folder_pool_added_to_apparmor(tmp_path):
     assert not allow_qemu_path("/data/vms", rules)  # once only
     assert not allow_qemu_path("/var/lib/ibhics/pools/big", rules)  # already covered
     assert rules.read_text().splitlines()[-1] == "/data/vms/** rwk,"
+
+
+def test_test_install_opens_the_disk_with_libguestfs_first():
+    # On an ibHiCS node the host's VG is also "ibhics": renaming the test disk's VG
+    # (the nbd path) can fail, so virt-customize, which every node has, comes first.
+    text = (INSTALLER / "test-install.sh").read_text()
+    vc, nbd = text.index("if command -v virt-customize"), text.index("qemu-nbd -c /dev/nbd0")
+    assert vc < text.index("elif command -v guestfish") < nbd
+    assert "--upload answers.conf:/etc/ibhics/answers.conf" in text
+    assert 'RENAME_FAILED' in text  # a failed rename stops before first boot, not hangs

@@ -56,6 +56,8 @@ Still to do:
 - Storage policy per VM disk (thin/thick, cache)
 
 ## v1.2
+Beta 4 (1.2.0b4): test-install.sh opens the installed disk with virt-customize (on every node), so a host VG named ibhics never clashes; a failed VG rename stops the test instead of hanging at first boot
+
 Beta 3 (1.2.0b3): legacy\install-legacy.cmd on the guest tools CD for Windows before 10 (removes leftover Red Hat drivers, installs the guest agent, 0.1.189 drivers and the balloon service)
 
 Beta 2 (1.2.0b2): legacy Windows drivers from virtio-win 0.1.189 (0.1.229 is test-signed for 2012 R2: Code 52)

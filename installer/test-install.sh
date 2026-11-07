@@ -104,7 +104,28 @@ ROOT_PASSWORD=Root-pw-123
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 EOF
 }
-if command -v guestfish >/dev/null; then
+need() { echo "test -e $1 || { echo '!! $2 is missing'; exit 1; }"; }
+if command -v virt-customize >/dev/null; then
+# ibHiCS nodes have virt-customize (guestfs-tools), not always guestfish. libguestfs opens
+# the disk in its own small VM: the host's LVM never sees the test disk's volume group
+# (also called ibhics on an ibHiCS node), so nothing clashes and nothing is renamed.
+answers >answers.conf
+checks="$(need /opt/ibhics/venv/bin/ibhics-manager "ibHiCS in /opt/ibhics")
+$(need /usr/share/virtio-win/viostor/2k19/amd64/viostor.sys "virtio-win drivers (Windows imports)")
+$(need /var/lib/ibhics/tools/guest-tools.iso "the guest tools CD")
+$(need /usr/share/virt-tools/rhsrvany.exe "rhsrvany.exe (virt-v2v)")
+$(need /usr/share/virt-tools/pnp_wait.exe "pnp_wait.exe (virt-v2v)")
+$(need /usr/bin/virt-customize "virt-customize (guestfs-tools)")
+ls /usr/lib/*/nbdkit/plugins/nbdkit-ssh-plugin.so >/dev/null 2>&1 || { echo '!! nbdkit ssh plugin is missing'; exit 1; }
+ls /usr/lib/*/nbdkit/plugins/nbdkit-curl-plugin.so >/dev/null 2>&1 || { echo '!! nbdkit curl plugin is missing'; exit 1; }
+cat /etc/ibhics/version"
+LIBGUESTFS_BACKEND=direct virt-customize -a disk.qcow2 --no-network \
+    --run-command "$checks" \
+    --upload answers.conf:/etc/ibhics/answers.conf \
+    --chmod 0600:/etc/ibhics/answers.conf \
+    || { rm -f answers.conf; echo "!! the installed disk failed its checks (see above)"; exit 1; }
+rm -f answers.conf
+elif command -v guestfish >/dev/null; then
 # libguestfs opens the disk in its own small VM: the host's LVM never sees the test
 # disk's volume group (also called ibhics on an ibHiCS node), so nothing clashes.
 answers >answers.conf
@@ -152,8 +173,9 @@ put_back() {
         pause 2
     done
     if lvm_nbd vgs "$TVG" >/dev/null 2>&1; then
+        # Without its own name back the test VM cannot find its root at first boot.
         lvm_nbd vgrename -q "$TVG" ibhics \
-            || echo "!! could not rename the test disk's VG $TVG back to ibhics"
+            || { echo "!! could not rename the test disk's VG $TVG back to ibhics"; RENAME_FAILED=1; }
     fi
 }
 release_disk() {
@@ -197,6 +219,7 @@ sudo chmod 600 mnt/etc/ibhics/answers.conf
 cat mnt/etc/ibhics/version
 trap - EXIT
 release_disk
+[ -z "${RENAME_FAILED:-}" ] || exit 1
 fi
 
 echo ">> 3/4 First boot"
