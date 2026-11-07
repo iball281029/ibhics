@@ -46,6 +46,7 @@ def test_config_is_unprivileged_with_limits():
     assert "lxc.cgroup2.cpu.max = 200000 100000" in cfg
     assert "lxc.net.0.ipv4.address = 10.0.0.5/24" in cfg
     assert "rootfs.path = loop:/p/containers/web/rootfs.img" in cfg
+    assert "rootfs.path" not in lxc_config(spec, "br0")  # for lxc-create -B loop
     script = first_boot_script(
         ContainerSpec("web", template="app:nginx", password="p'w", ssh_key="ssh-ed25519 AAA x")
     )
@@ -57,6 +58,16 @@ def test_lxc_create_runs_download_template(tmp_path):
 
     def run(cmd):
         calls.append(cmd)
+        if cmd[0] == "lxc-create":  # like lxc: the -f config has no rootfs, it makes rootdev
+            conf = (tmp_path / cmd[cmd.index("-f") + 1]).read_text()
+            assert "rootfs.path" not in conf
+            home = tmp_path / "default/containers/web"
+            home.mkdir()
+            (home / "rootdev").write_bytes(b"x")
+            (home / "config").write_text(
+                f"lxc.include = /usr/share/lxc/config/debian.common.conf\n"
+                f"lxc.rootfs.path = loop:{home}/rootdev\n"
+            )
         if cmd[0] == "lxc-info":
             return 0, "State: RUNNING\nIP: 10.0.0.9\nMemory use: 52428800\n"
         return 0, ""
@@ -66,7 +77,13 @@ def test_lxc_create_runs_download_template(tmp_path):
     create = next(c for c in calls if c[0] == "lxc-create")
     assert create[create.index("--fssize") + 1] == "4G" and "trixie" in create
     assert info.state == "running" and info.addresses == ["10.0.0.9"]
-    meta = json.loads((tmp_path / "default/containers/web/ibhics.json").read_text())
+    home = tmp_path / "default/containers/web"
+    assert (home / "rootfs.img").exists() and not (home / "rootdev").exists()
+    cfg = (home / "config").read_text()
+    assert f"lxc.rootfs.path = loop:{home}/rootfs.img" in cfg and "rootdev" not in cfg
+    assert "debian.common.conf" in cfg
+    assert not list((tmp_path / "default/containers").glob(".*create.conf"))
+    meta = json.loads((home / "ibhics.json").read_text())
     assert meta["password"] == ""  # never stored
     assert any(c[:1] == ["timeout"] and "chpasswd" in c[-1] for c in calls)
     with pytest.raises(Exception, match="shrink"):

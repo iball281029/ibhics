@@ -168,7 +168,7 @@ class ContainerInfo:
         }
 
 
-def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str) -> str:
+def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str = "") -> str:
     """The container's LXC config, after the distribution's own includes."""
     lines = [
         "# Written by ibHiCS: change the container in the web console.",
@@ -182,7 +182,7 @@ def lxc_config(spec: ContainerSpec, bridge: str, rootfs: str) -> str:
         ]
     lines += [
         f"lxc.uts.name = {spec.name}",
-        f"lxc.rootfs.path = loop:{rootfs}",
+        *([f"lxc.rootfs.path = loop:{rootfs}"] if rootfs else []),
         "lxc.net.0.type = veth",
         f"lxc.net.0.link = {bridge}",
         "lxc.net.0.flags = up",
@@ -316,11 +316,13 @@ class LxcContainers:
         bridge = self._bridge_of(spec.network)
         base = self._dir(spec.pool)
         home = base / spec.name
-        home.mkdir(parents=True, exist_ok=True)
+        base.mkdir(parents=True, exist_ok=True)
         image = home / "rootfs.img"
         distro, release = spec.distro
-        conf = home / "create.conf"
-        conf.write_text(lxc_config(spec, bridge, str(image)))
+        # No rootfs.path here: with one, lxc-create -B loop expects the image to exist.
+        # It makes <home>/rootdev itself; ibHiCS renames that to rootfs.img afterwards.
+        conf = base / f".{spec.name}.create.conf"
+        conf.write_text(lxc_config(spec, bridge))
         try:
             self._lxc(
                 "create",
@@ -342,6 +344,8 @@ class LxcContainers:
                 "-a",
                 "amd64",
             )
+            if (home / "rootdev").exists():
+                (home / "rootdev").rename(image)
             (home / "config").write_text(
                 _keep_template_lines(home / "config", lxc_config(spec, bridge, str(image)))
             )
@@ -353,6 +357,8 @@ class LxcContainers:
             self._lxc("stop", base, spec.name, "-k", check=False)
             self._lxc("destroy", base, spec.name, check=False)
             raise
+        finally:
+            conf.unlink(missing_ok=True)
         return self._info(base, spec)
 
     def _wait_running(self, base: Path, name: str, timeout: float = 30) -> None:
