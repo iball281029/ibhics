@@ -70,7 +70,17 @@ def attach(run: Run, vg: str, cache: list[str], mode: str, cache_gb: int | None)
     size = ["-L", f"{cache_gb}G"] if cache_gb else ["-l", "100%PVS"]
     run(["lvcreate", "-y", "-n", "cache", *size, vg, *cache])
     run(["lvconvert", "-y", "--type", "cache", "--cachevol", "cache", "--cachemode", mode,
-         f"{vg}/data"])  # fmt: skip
+         "--chunksize", chunk_size(run, vg), f"{vg}/data"])  # fmt: skip
+
+
+def chunk_size(run: Run, vg: str, max_chunks: int = 1_000_000) -> str:
+    """dm-cache allows about a million chunks: big SSDs need chunks bigger than 64 KiB."""
+    out = run(["lvs", "--noheadings", "--units", "b", "--nosuffix", "-o", "lv_size", f"{vg}/cache"])
+    size = int(float((out or "0").strip() or 0))
+    chunk = 64 * 1024
+    while size // chunk > max_chunks:
+        chunk *= 2
+    return f"{chunk // 1024}k"
 
 
 def add_cache(run: Run, vg: str, cache: list[str], mode: str, cache_gb: int | None) -> None:
