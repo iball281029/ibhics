@@ -1348,7 +1348,7 @@ async function openEdit(uuid) {
     vm,
     vcpus: vm.vcpus,
     memory_mb: vm.memory_mb,
-    disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool })),
+    disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool, bus: d.bus })),
     nics: vm.nics.map((n) => ({ mac: n.mac, network: n.network, model: n.model || "virtio" })),
     iso: vm.iso || "",
     boot: vm.boot || ["hd"],
@@ -1372,7 +1372,7 @@ function editItems() {
   return [
     { key: "cpu", icon: "i-cpu", label: "Processor", value: `${e.vcpus} vCPU` },
     { key: "mem", icon: "i-mem", label: "Memory", value: gbText(e.memory_mb) },
-    ...e.disks.map((d, i) => ({ key: `disk${i}`, icon: "i-hdd", label: `Hard disk ${i + 1}`, value: `${d.size_gb} GB${d.index == null ? " · new" : ""}` })),
+    ...e.disks.map((d, i) => ({ key: `disk${i}`, icon: "i-hdd", label: `Hard disk ${i + 1}`, value: `${d.size_gb} GB${d.pool ? ` · ${esc(d.pool)}` : ""}${d.index == null ? " · new" : ""}` })),
     ...e.nics.map((n, i) => ({ key: `nic${i}`, icon: "i-nic", label: `Network adapter ${i + 1}`, value: `${esc(n.network)}${n.mac ? "" : " · new"}` })),
     { key: "cd", icon: "i-cd", label: "CD/DVD drive", value: e.iso ? esc(e.iso.split("/").pop()) : "Empty" },
     { key: "video", icon: "i-compute", label: "Display", value: VIDEO_NAMES[e.video] || e.video },
@@ -1401,7 +1401,7 @@ function renderEdit() {
     pane.innerHTML = `<h4>Hard disk ${i + 1}</h4>
       <label>Size (GB) <input type="number" min="${d.min || 1}" value="${d.size_gb}" data-disk="${i}" data-field="size_gb"></label>
       ${d.index == null ? `<label>Storage pool <select data-disk="${i}" data-field="pool">${poolOpts(d.pool)}</select></label>`
-        : `<p class="hint">Pool ${esc(d.pool)}. A disk can grow but not shrink; grow the partition inside the guest afterwards.</p>`}
+        : `<p class="hint">Storage pool: <b>${esc(d.pool || "unknown (outside ibHiCS pools)")}</b>${d.bus ? ` · ${esc(d.bus === "sata" ? "SATA" : "VirtIO")}` : ""}. To move it to another pool use ⋯ → Migrate… → Change storage. A disk can grow but not shrink; grow the partition inside the guest afterwards.</p>`}
       ${e.disks.length > 1 ? `<button type="button" class="danger small" data-remove="disk" data-i="${i}">Remove this disk</button>` : ""}`;
   } else if (s.startsWith("nic")) {
     const i = Number(s.slice(3)), n = e.nics[i];
@@ -3321,7 +3321,7 @@ async function renderVMDetail() {
     ["i-server", "Memory", gbText(vm.memory_mb), `${vm.memory_mb} MB`],
     ...vm.disks.map((d, i) => ["i-disk", `Hard disk ${i + 1}`,
       d.used_gb != null && d.used_gb < d.size_gb ? `${num(d.used_gb)} GB / ${d.size_gb} GB` : `${d.size_gb} GB`,
-      `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
+      `Pool <b>${esc(d.pool || "unknown")}</b> · ${esc(d.backend)}${d.bus === "sata" ? " · SATA" : ""}`]),
     ...vm.nics.map((n, i) => ["i-migrate", `Network adapter ${i + 1}`, esc(n.network), `${esc(n.model)} · <span class="mono">${esc(n.mac || "auto")}</span>`]),
     ["i-disk", "CD/DVD drive", vm.iso ? "ISO attached" : "Empty", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : ""],
     ...(vm.driver_iso ? [["i-disk", "CD/DVD drive 2", "Drivers (virtio)", `<span class="mono">${esc(vm.driver_iso)}</span>`]] : []),

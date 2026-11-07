@@ -156,3 +156,23 @@ def test_offline_copy_reads_qemu_img_progress(monkeypatch):
     seen = []
     lv.LibvirtDriver._offline_copy("/a", "qcow2", "/b", "file", seen.append)
     assert 12.5 in seen and seen[-1] == 100.0
+
+
+def test_pool_of_a_disk_moved_by_hand(monkeypatch):
+    # npm-vm was moved with virsh: <source file='/var/lib/ibhics/pools/hybrid01/...'/>
+    # and no metadata for it; the VM page still shows hybrid01.
+    monkeypatch.setattr(lv, "libvirt", types.SimpleNamespace(libvirtError=RuntimeError))
+
+    def pool(name, path):
+        return types.SimpleNamespace(
+            name=lambda: name,
+            XMLDesc=lambda _f=0: f"<pool><target><path>{path}</path></target></pool>",
+        )
+
+    d = object.__new__(lv.LibvirtDriver)
+    d._conn = types.SimpleNamespace(listAllStoragePools=lambda: [
+        pool("default", "/var/lib/ibhics/pools/default"),
+        pool("hybrid01", "/var/lib/ibhics/pools/hybrid01")])  # fmt: skip
+    assert d._pool_of_path("/var/lib/ibhics/pools/hybrid01/npm-vm.qcow2") == "hybrid01"
+    assert d._pool_of_path("/var/lib/ibhics/pools/hybrid01x/a.qcow2") == ""
+    assert d._pool_of_path(None) == ""

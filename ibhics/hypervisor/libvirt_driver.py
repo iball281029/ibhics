@@ -1608,9 +1608,11 @@ class LibvirtDriver(HypervisorDriver):
         source = disk.find("source")
         if source is not None and source.get("volume"):
             return self._pool(source.get("pool")).storageVolLookupByName(source.get("volume"))
-        if source is not None and source.get("dev"):
+        # <source dev> (LVM) or <source file>: a disk moved or added by hand (virsh).
+        path = (source.get("dev") or source.get("file")) if source is not None else None
+        if path:
             try:
-                return self._conn.storageVolLookupByPath(source.get("dev"))
+                return self._conn.storageVolLookupByPath(path)
             except libvirt.libvirtError:
                 pass
         raise InvalidState("only disks in ibHiCS storage pools can be backed up")
@@ -1640,6 +1642,19 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             raise VMNotFound(uuid) from None
 
+    def _pool_of_path(self, path: str | None) -> str:
+        """The pool whose folder holds this file (a volume libvirt has not listed yet)."""
+        if not path:
+            return ""
+        for pool in self._conn.listAllStoragePools():
+            try:
+                target = ET.fromstring(pool.XMLDesc(0)).findtext("target/path") or ""
+            except libvirt.libvirtError:
+                continue
+            if target and path.startswith(target.rstrip("/") + "/"):
+                return pool.name()
+        return ""
+
     def _info(self, dom) -> VMInfo:
         state, _reason = dom.state()
         xml = dom.XMLDesc(0)
@@ -1657,6 +1672,7 @@ class LibvirtDriver(HypervisorDriver):
                 # Not in a pool we know (a hand-written disk): ask QEMU/libvirt directly.
                 source = el.find("source")
                 path = source.get("dev") or source.get("file") if source is not None else None
+                disk.pool = disk.pool or self._pool_of_path(path)
                 try:
                     capacity, allocation, _physical = dom.blockInfo(path)
                 except (TypeError, libvirt.libvirtError):
