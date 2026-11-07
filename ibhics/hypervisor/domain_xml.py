@@ -18,6 +18,15 @@ META_NS = "https://ibhics.org/xmlns/vm/1"  # ibHiCS's own facts about a VM, kept
 ET.register_namespace("ibhics", META_NS)
 
 
+def video_element(model: str) -> ET.Element:
+    video = ET.Element("video")
+    attrs = {"type": model}
+    if model in ("vga", "qxl", "cirrus"):
+        attrs["vram"] = "16384"
+    ET.SubElement(video, "model", **attrs)
+    return video
+
+
 def file_name(vm_name: str) -> str:
     """The VM's name for files and LVM volumes: as is when ASCII; a Thai name becomes
     vm-<hash> (LVM, QEMU job IDs and other tools want ASCII)."""
@@ -193,8 +202,10 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
 
     # The console is reached through the manager's noVNC proxy, never directly.
     ET.SubElement(devices, "graphics", type="vnc", autoport="yes", listen="127.0.0.1")
-    video = ET.SubElement(devices, "video")
-    ET.SubElement(video, "model", type="virtio")
+    devices.append(video_element(spec.video))
+    # An absolute pointer: the mouse in the console follows the cursor exactly (a PS/2
+    # mouse alone drifts away from it).
+    ET.SubElement(devices, "input", type="tablet", bus="usb")
     ET.SubElement(devices, "serial", type="pty")
     channel = ET.SubElement(devices, "channel", type="unix")
     ET.SubElement(channel, "target", type="virtio", name="org.qemu.guest_agent.0")

@@ -212,6 +212,10 @@ def create_agent_app(
             snap = driver.create_snapshot(uuid, body.name, body.description, body.restart)
             return SnapshotOut(**asdict(snap))
 
+        @api.post("/vms/{uuid}/to-virtio", response_model=VMOut)
+        def switch_to_virtio(uuid: str) -> VMOut:
+            return VMOut.from_info(driver.switch_to_virtio(uuid))
+
         @api.post("/vms/{uuid}/sysprep", status_code=status.HTTP_204_NO_CONTENT)
         def sysprep_vm(uuid: str) -> None:
             driver.sysprep_vm(uuid)

@@ -69,7 +69,7 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container", "container-network": "Container network" };
@@ -748,6 +748,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}" title="Eject ${esc(vm.iso.split("/").pop())}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
       <button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
+      ${(vm.disks || []).some((d) => d.bus === "sata") && /windows/i.test(vm.os_type || "") ? `<button data-vm="tovirtio" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Switch disks to VirtIO…</button>` : ""}
       ${vm.state === "running" && /windows/i.test(vm.os_type || "") ? `<button data-vm="sysprep" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Generalize (sysprep) for a template…</button>` : ""}
       ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
@@ -1205,6 +1206,15 @@ async function vmAction(e) {
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
     }
     if (act === "eject") await post(`/vms/${id}/cdrom`, { iso: null });
+    if (act === "tovirtio") {
+      if (!confirm(`Switch ${name}'s disks to VirtIO for speed? (The network card stays as it is, so its IP settings stay.)\n\nInstall the guest tools in Windows first (⋯ → Insert guest tools CD, run the installer for this Windows). ibHiCS then shuts ${name} down, starts it once with a small VirtIO disk so Windows loads the driver, shuts it down again and moves the disks over. Takes a few minutes; follow it in Tasks.`)) return;
+      toast(`Switching ${name} to VirtIO… (see Tasks)`);
+      setTimeout(() => load("jobs").catch(() => {}), 800);
+      await post(`/vms/${id}/to-virtio`);
+      toast(`${name} now uses VirtIO disks`);
+      await refresh(currentPage());
+      return;
+    }
     if (act === "sysprep") {
       if (!confirm(`Run sysprep /generalize /oobe /shutdown in ${name}?\n\nWindows removes its SID, computer name and drivers' hardware ties, then shuts down. Convert it to a template after that: every VM deployed from it gets its own SID. Needs the guest tools (guest agent) in the VM. Do this on a copy if you still need this VM as it is.`)) return;
       await post(`/vms/${id}/sysprep`);
@@ -1347,6 +1357,7 @@ async function openEdit(uuid) {
     nics: vm.nics.map((n) => ({ mac: n.mac, network: n.network, model: n.model || "virtio" })),
     iso: vm.iso || "",
     boot: vm.boot || ["hd"],
+    video: vm.video || "virtio",
     removedDisks: 0,
     selected: "cpu",
   };
@@ -1369,8 +1380,10 @@ function editItems() {
     ...e.disks.map((d, i) => ({ key: `disk${i}`, icon: "i-hdd", label: `Hard disk ${i + 1}`, value: `${d.size_gb} GB${d.index == null ? " · new" : ""}` })),
     ...e.nics.map((n, i) => ({ key: `nic${i}`, icon: "i-nic", label: `Network adapter ${i + 1}`, value: `${esc(n.network)}${n.mac ? "" : " · new"}` })),
     { key: "cd", icon: "i-cd", label: "CD/DVD drive", value: e.iso ? esc(e.iso.split("/").pop()) : "Empty" },
+    { key: "video", icon: "i-compute", label: "Display", value: VIDEO_NAMES[e.video] || e.video },
   ];
 }
+const VIDEO_NAMES = { virtio: "VirtIO GPU", vga: "Standard VGA", qxl: "QXL", cirrus: "Cirrus" };
 
 function renderEdit() {
   const e = editing;
@@ -1380,7 +1393,10 @@ function renderEdit() {
   const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(p.name)}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
   const pane = $("#edit-pane");
   const s = e.selected;
-  if (s === "cpu") {
+  if (s === "video") {
+    pane.innerHTML = `<h4>Display</h4><label>Display adapter <select data-set="video">${Object.entries(VIDEO_NAMES).map(([k, v]) => `<option value="${k}" ${k === e.video ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <p class="hint">VirtIO GPU suits Linux and Windows 10/Server 2016 and later. Older Windows (Server 2012 R2 and before, 7, 8.1) shows a black or slow screen with it: use Standard VGA. Applies after a restart.</p>`;
+  } else if (s === "cpu") {
     pane.innerHTML = `<h4>Processor</h4><label>vCPU <input type="number" min="1" max="256" value="${e.vcpus}" data-set="vcpus"></label>
       <p class="hint">Host CPU model is passed through (host-model), so the VM can still live-migrate between nodes.</p>`;
   } else if (s === "mem") {
@@ -1444,6 +1460,7 @@ function renderEdit() {
     if (t.dataset.set === "vcpus") e.vcpus = Number(t.value);
     if (t.dataset.set === "memory_gb") e.memory_mb = Math.round(Number(t.value) * 1024);
     if (t.dataset.set === "iso") e.iso = t.value;
+    if (t.dataset.set === "video") e.video = t.value;
     if (t.dataset.disk) e.disks[Number(t.dataset.disk)][t.dataset.field] = t.dataset.field === "size_gb" ? Number(t.value) : t.value;
     if (t.dataset.nic) e.nics[Number(t.dataset.nic)][t.dataset.field] = t.value;
     if (t.dataset.boot) {
@@ -1462,7 +1479,7 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
   const body = {
     os_type: f.get("os_type"), description: f.get("description"),
     vcpus: e.vcpus, memory_mb: e.memory_mb, boot: e.boot.length ? e.boot : ["hd"],
-    autostart: f.get("autostart") === "on",
+    autostart: f.get("autostart") === "on", video: e.video,
     disks: e.disks.map((d) => (d.index == null ? { size_gb: d.size_gb, pool: d.pool } : { index: d.index, size_gb: d.size_gb })),
     nics: e.nics.map((n) => (n.mac ? { mac: n.mac, network: n.network, model: n.model } : { network: n.network, model: n.model })),
     delete_removed_disks: deleteDisks,
@@ -1573,6 +1590,7 @@ handlers["vm-dialog"] = async (f) => {
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default", bus: legacy ? "sata" : "virtio" })),
     nics: [{ network: f.get("network") || "default", model: nic }],
     node: f.get("node") || null,
+    video: legacy ? "vga" : "virtio",
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);

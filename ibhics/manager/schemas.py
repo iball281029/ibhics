@@ -50,6 +50,7 @@ class DiskOut(BaseModel):
     backend: str
     pool: str
     used_gb: float | None = None
+    bus: str = "virtio"
 
 
 class NicOut(BaseModel):
@@ -71,6 +72,7 @@ class VMCreate(BaseModel):
     driver_iso: str | None = None
     description: str = Field(default="", max_length=1024)
     os_type: str = Field(default="", max_length=64)
+    video: str = Field(default="virtio", pattern="^(virtio|vga|qxl|cirrus)$")
     # Manager only: which compute node to place the VM on. Empty picks automatically.
     node: str | None = None
 
@@ -86,6 +88,7 @@ class VMCreate(BaseModel):
             driver_iso=self.driver_iso or None,
             description=self.description,
             os_type=self.os_type,
+            video=self.video,
         )
 
 
@@ -109,6 +112,7 @@ class VMOut(BaseModel):
     linked_to: str = ""  # uuid of the template a linked clone's disks are based on
     recycled: str = ""  # when it went into the recycle bin; empty: in use
     node: str | None = None
+    video: str = "virtio"
 
     @classmethod
     def from_info(cls, info: VMInfo, node: str | None = None) -> VMOut:
@@ -122,7 +126,9 @@ class VMOut(BaseModel):
             memory_mb=spec.memory_mb,
             firmware=spec.firmware,
             disks=[
-                DiskOut(size_gb=d.size_gb, backend=d.backend, pool=d.pool, used_gb=d.used_gb)
+                DiskOut(
+                    size_gb=d.size_gb, backend=d.backend, pool=d.pool, used_gb=d.used_gb, bus=d.bus
+                )
                 for d in spec.disks
             ],
             nics=[NicOut(network=n.network, model=n.model, mac=n.mac) for n in spec.nics],
@@ -136,6 +142,7 @@ class VMOut(BaseModel):
             template=spec.template,
             linked_to=spec.linked_to,
             recycled=spec.recycled,
+            video=spec.video,
         )
 
 
@@ -255,6 +262,7 @@ class VMEditIn(BaseModel):
     memory_mb: int | None = Field(default=None, ge=128)
     boot: list[str] | None = None
     autostart: bool | None = None
+    video: str | None = Field(default=None, pattern="^(virtio|vga|qxl|cirrus)$")
     disks: list[DiskEditIn] | None = Field(default=None, max_length=26)
     nics: list[NicEditIn] | None = Field(default=None, max_length=16)
     delete_removed_disks: bool = False

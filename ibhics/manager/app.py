@@ -756,6 +756,15 @@ def create_app(
         member, _ = cluster.find_vm(uuid)
         return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
 
+    @api.post("/vms/{uuid}/to-virtio", response_model=VMOut)
+    def switch_to_virtio(uuid: str) -> VMOut:
+        """SATA disks of a Windows VM onto VirtIO, after its guest tools are installed."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        info = backups.run_task("to-virtio", "disks", vm.spec.name, member.name, uuid,
+                                lambda: member.driver.switch_to_virtio(uuid))  # fmt: skip
+        return VMOut.from_info(info, member.name)
+
     @api.post("/vms/{uuid}/sysprep", status_code=status.HTTP_202_ACCEPTED)
     def sysprep_vm(uuid: str) -> dict:
         """Generalize a running Windows VM (new SID per copy); it shuts down when done."""

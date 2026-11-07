@@ -151,6 +151,10 @@ class RemoteDriver(HypervisorDriver):
             raise ValueError(str(resp.json().get("detail")))
         return SnapshotInfo(**self._ok(resp, uuid).json())
 
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/to-virtio", timeout=None)
+        return info_from_json(self._ok(resp, uuid).json())
+
     def sysprep_vm(self, uuid: str) -> None:
         self._ok(self._client.request("POST", f"/vms/{uuid}/sysprep", timeout=60), uuid)
 

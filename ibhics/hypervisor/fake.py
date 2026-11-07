@@ -223,6 +223,15 @@ class FakeDriver(HypervisorDriver):
             snaps.append((info, copy.deepcopy(vm.spec), disks, vm.state))
             return copy.deepcopy(info)
 
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if not any(d.bus == "sata" for d in vm.spec.disks):
+                raise InvalidState("this VM's disks are VirtIO already")
+            for d in vm.spec.disks:
+                d.bus = "virtio"
+            return copy.deepcopy(vm)
+
     def sysprep_vm(self, uuid: str) -> None:
         with self._lock:
             vm = self._get(uuid)
@@ -618,4 +627,4 @@ def _random_mac() -> str:
 
 
 def _restart_key(spec: VMSpec) -> tuple:
-    return (spec.vcpus, spec.memory_mb, spec.boot)
+    return (spec.vcpus, spec.memory_mb, spec.boot, spec.video)

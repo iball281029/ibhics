@@ -57,6 +57,9 @@ class NicSpec:
     mac: str | None = None
 
 
+VIDEO_MODELS = ("virtio", "vga", "qxl", "cirrus")
+
+
 @dataclass
 class VMSpec:
     name: str
@@ -83,8 +86,13 @@ class VMSpec:
     # When the VM went into the recycle bin (ISO 8601); empty while it is in use. A recycled
     # VM keeps its disks but cannot start until it is restored.
     recycled: str = ""
+    # The display adapter: virtio (fast, Windows 10/2016+ and Linux), vga (standard VGA:
+    # older Windows, which shows a black screen with virtio), qxl or cirrus.
+    video: str = "virtio"
 
     def validate(self) -> None:
+        if self.video not in VIDEO_MODELS:
+            raise ValueError(f"video is one of {', '.join(VIDEO_MODELS)}")
         if len(self.os_type) > 64:
             raise ValueError("os_type is at most 64 characters")
         if not VM_NAME_RE.match(self.name):
@@ -376,6 +384,7 @@ class VMEdit:
     memory_mb: int | None = None
     boot: list[str] | None = None
     autostart: bool | None = None
+    video: str | None = None
     disks: list[DiskEdit] | None = None
     nics: list[NicEdit] | None = None
     # Removing a disk detaches it; this also deletes its volume and data.
@@ -384,7 +393,7 @@ class VMEdit:
     def apply_to(self, spec: VMSpec) -> VMSpec:
         """The VMSpec this edit asks for, validated; disks and NICs are checked apart."""
         new = VMSpec(**{**spec.__dict__})
-        for name in ("description", "os_type", "vcpus", "memory_mb", "boot", "autostart"):
+        for name in ("description", "os_type", "vcpus", "memory_mb", "boot", "autostart", "video"):
             if getattr(self, name) is not None:
                 setattr(new, name, getattr(self, name))
         new.validate()
@@ -570,6 +579,11 @@ class HypervisorDriver(abc.ABC):
 
         `restart`: a running UEFI VM that cannot be snapshotted live yet may be shut down
         and started again first."""
+        raise NotImplementedError
+
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        """Move a Windows VM's SATA disks to VirtIO once its guest tools are in: start it
+        once with a small VirtIO disk so Windows binds the driver, then switch the bus."""
         raise NotImplementedError
 
     def sysprep_vm(self, uuid: str) -> None:

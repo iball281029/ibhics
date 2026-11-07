@@ -20,6 +20,7 @@ from xml.sax.saxutils import escape as xml_escape
 
 from . import customize, edge, terminal, vmstats
 from .base import (
+    VIDEO_MODELS,
     VM_NAME_RE,
     CloneSpec,
     DiskSpec,
@@ -64,6 +65,7 @@ from .domain_xml import (
     set_recycled_mark,
     set_template_flag,
     template_facts,
+    video_element,
     vm_meta,
     volume_name,
 )
@@ -138,6 +140,7 @@ def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
 # What virt-sysprep resets on a deployed copy (users, data and settings stay).
 log = logging.getLogger("ibhics.libvirt")
 RESTART_TIMEOUT = 180  # s a guest has to shut down for a restart that applies changes
+PROBE_SETTLE = 60  # s Windows gets to install the VirtIO disk driver
 
 RESET_OPERATIONS = (
     "machine-id",
@@ -270,6 +273,10 @@ class LibvirtDriver(HypervisorDriver):
             if el is not None:
                 el.set("unit", "KiB")
                 el.text = str(new.memory_mb * 1024)
+        if edit.video is not None:
+            for old in root.findall("devices/video"):
+                root.find("devices").remove(old)
+            root.find("devices").append(video_element(new.video))
         if edit.boot is not None:
             os_el = root.find("os")
             for boot in os_el.findall("boot"):
@@ -399,8 +406,18 @@ class LibvirtDriver(HypervisorDriver):
         if recycled_at(root):
             raise InvalidState("this VM is in the recycle bin: restore it first")
         self._nvram_qcow2(dom)
+        self._add_tablet(dom)
         dom.create()
         return self._info(dom)
+
+    def _add_tablet(self, dom) -> None:
+        """VMs made before 1.2 (and imported ones) get the USB tablet when they start."""
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        devices = root.find("devices")
+        if devices is None or devices.find("input[@type='tablet']") is not None:
+            return
+        ET.SubElement(devices, "input", type="tablet", bus="usb")
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
 
     def stop_vm(self, uuid: str, force: bool = False) -> VMInfo:
         dom = self._lookup(uuid)
@@ -569,6 +586,99 @@ class LibvirtDriver(HypervisorDriver):
                 log.warning("identity not reset: %s", exc)
                 return
             raise
+
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        dom = self._lookup(uuid)
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        sata = [
+            d
+            for d in root.findall("devices/disk[@device='disk']")
+            if d.find("target") is not None and d.find("target").get("bus") == "sata"
+        ]
+        if not sata:
+            raise InvalidState("this VM's disks are VirtIO already")
+        was_running = bool(dom.isActive())
+        if was_running:
+            try:
+                self._power_off(dom, timeout=RESTART_TIMEOUT)
+            except InvalidState:
+                dom.destroy()
+        # 1. Once with a small VirtIO disk: Windows finds it and binds viostor (from the
+        #    guest tools), which then loads at boot.
+        pool = self._pool(disk_source(root, sata[0])[0] or "default")
+        probe_disk = DiskSpec(size_gb=1, backend=_backend(pool))
+        name = root.findtext("name")
+        vol_xml = ET.fromstring(build_volume_xml(name, 99, probe_disk))
+        vol_xml.find("name").text = f"{file_name(name)}-virtio-probe" + (
+            ".qcow2" if probe_disk.backend == "file" else ""
+        )
+        probe = pool.createXML(ET.tostring(vol_xml, encoding="unicode"), 0)
+        try:
+            with_probe = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+            el = disk_element(probe_disk, probe.name(), "vdz")
+            source = el.find("source")
+            for k in list(source.attrib):
+                del source.attrib[k]
+            source.set("file" if probe_disk.backend == "file" else "dev", probe.path())
+            if probe_disk.backend == "file":
+                el.set("type", "file")
+            else:
+                el.set("type", "block")
+            with_probe.find("devices").append(el)
+            self._conn.defineXML(ET.tostring(with_probe, encoding="unicode"))
+            dom = self._lookup(uuid)
+            self.start_vm(uuid)
+            self._wait_guest_agent(dom, timeout=900)
+            time.sleep(PROBE_SETTLE)  # Plug and Play installs the driver for the new disk
+            try:
+                self._power_off(dom, timeout=RESTART_TIMEOUT)
+            except InvalidState:
+                dom.destroy()
+        finally:
+            # 2. Probe disk out, SATA disks onto VirtIO (vda, vdb, ...).
+            root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+            devices = root.find("devices")
+            for d in devices.findall("disk[@device='disk']"):
+                if d.find("target") is not None and d.find("target").get("dev") == "vdz":
+                    devices.remove(d)
+            probe.delete(0)
+        used = {d.find("target").get("dev") for d in devices.findall("disk[@device='disk']")}
+        free = (f"vd{c}" for c in DISK_DEVS if f"vd{c}" not in used)
+        meta = root.find(f"metadata/{{{META_NS}}}vm")
+        for d in devices.findall("disk[@device='disk']"):
+            target = d.find("target")
+            if target.get("bus") != "sata":
+                continue
+            old, new = target.get("dev"), next(free)
+            target.set("dev", new)
+            target.set("bus", "virtio")
+            address = d.find("address")
+            if address is not None:
+                d.remove(address)
+            if meta is not None:
+                for entry in meta.findall(f"{{{META_NS}}}disk"):
+                    if entry.get("dev") == old:
+                        entry.set("dev", new)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        if was_running:
+            return self.start_vm(uuid)
+        return self._info(self._lookup(uuid))
+
+    def _wait_guest_agent(self, dom, timeout: float) -> None:
+        import libvirt_qemu
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                libvirt_qemu.qemuAgentCommand(dom, '{"execute":"guest-ping"}', 5, 0)
+                return
+            except libvirt.libvirtError:
+                if time.monotonic() > deadline:
+                    raise InvalidState(
+                        "Windows did not start its guest agent: install the guest tools in it "
+                        "first (⋯ → Insert guest tools CD). Nothing was switched."
+                    ) from None
+                time.sleep(5)
 
     def sysprep_vm(self, uuid: str) -> None:
         dom = self._lookup(uuid)
@@ -1454,12 +1564,19 @@ def _random_mac() -> str:
     return "52:54:00:" + ":".join(f"{b:02x}" for b in os.urandom(3))
 
 
+def _video_of(root) -> str:
+    model = root.find("devices/video/model")
+    kind = model.get("type", "virtio") if model is not None else "virtio"
+    return kind if kind in VIDEO_MODELS else "virtio"
+
+
 def _restart_key(root) -> tuple:
     memory = root.find("memory")
     return (
         root.findtext("vcpu"),
         memory.text if memory is not None else None,
         [b.get("dev") for b in root.findall("os/boot")],
+        _video_of(root),
     )
 
 
@@ -1515,6 +1632,9 @@ def _spec_from_xml(xml: str) -> VMSpec:
                 size_gb=0,  # capacity lives on the volume, not in the domain XML
                 backend=backend,
                 pool=disk_source(root, disk)[0],
+                bus="sata"
+                if (disk.find("target") is not None and disk.find("target").get("bus") == "sata")
+                else "virtio",
             )
         )
     nics = [
@@ -1539,6 +1659,7 @@ def _spec_from_xml(xml: str) -> VMSpec:
     firmware = Firmware.UEFI if uefi else Firmware.BIOS
     return VMSpec(
         name=root.findtext(f"metadata/{{{NAME_NS}}}name") or root.findtext("name", ""),
+        video=_video_of(root),
         vcpus=int(root.findtext("vcpu", "1")),
         memory_mb=memory_mb,
         firmware=firmware,
