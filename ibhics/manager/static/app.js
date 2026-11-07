@@ -69,7 +69,7 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot",
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container" };
@@ -363,7 +363,7 @@ function allTasks() {
       step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
     })),
     ...state.jobs.map((j) => ({
-      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind.startsWith("container") ? `container · ${j.target}` : j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
+      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind === "rename" ? j.target : j.kind.startsWith("container") ? `container · ${j.target}` : j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
       state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
@@ -729,7 +729,8 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
       ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
-      ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
+      ${vm.state === "stopped" ? `<button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
+        <button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
       ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
     </div></details>`;
@@ -1141,6 +1142,15 @@ function renderMoves() {
     <td class="vm-sub" style="display:table-cell">${esc(m.error || "")}</td></tr>`).join("");
 }
 
+// Rename a stopped VM (Thai names too); backup policies follow the new name.
+async function renameVM(uuid, old) {
+  const name = (prompt(`New name for ${old}`, old) || "").trim();
+  if (!name || name === old) return;
+  if (!/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(name)) throw new Error("Use letters (Thai too), digits and _ . - (no spaces)");
+  await post(`/vms/${uuid}/rename`, { name });
+  toast(`${old} is now ${name}`);
+  await refresh(currentPage());
+}
 async function vmAction(e) {
   const btn = e.target.closest("button[data-vm]");
   if (!btn) return;
@@ -1154,6 +1164,7 @@ async function vmAction(e) {
   if (act === "snapshot") { openSnapshot(id); return; }
   if (act === "snapshots") { location.hash = `vm/${id}`; setTimeout(() => selectTab("vm-tabs", "vm-snapshots"), 400); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
+  if (act === "rename") { renameVM(id, name).catch(fail); return; }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
     return;

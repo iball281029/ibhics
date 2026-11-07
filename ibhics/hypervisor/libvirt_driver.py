@@ -18,6 +18,7 @@ from xml.sax.saxutils import escape, quoteattr
 
 from . import customize, edge, terminal, vmstats
 from .base import (
+    VM_NAME_RE,
     CloneSpec,
     DiskSpec,
     Firmware,
@@ -498,6 +499,46 @@ class LibvirtDriver(HypervisorDriver):
             raise
         Path(src).unlink(missing_ok=True)
         return True
+
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        if not VM_NAME_RE.match(name):
+            raise ValueError("VM names use letters (Thai too), digits and '_.-'")
+        dom = self._lookup(uuid)
+        if dom.name() == name:
+            return self._info(dom)
+        try:
+            self._conn.lookupByName(name)
+        except libvirt.libvirtError:
+            pass
+        else:
+            raise VMExists(f"VM named {name!r} already exists")
+        if dom.isActive():
+            raise InvalidState("shut the VM down to rename it")
+        # libvirt renames only a domain without snapshots: keep their XML, drop only the
+        # metadata, rename, then define them again under the new name.
+        topo = getattr(libvirt, "VIR_DOMAIN_SNAPSHOT_LIST_TOPOLOGICAL", 0)
+        snaps = dom.listAllSnapshots(topo)
+        current = dom.snapshotCurrent(0).getName() if dom.hasCurrentSnapshot(0) else ""
+        saved = [(s.getName(), s.getXMLDesc(0)) for s in snaps]
+        for snap in reversed(snaps):
+            snap.delete(libvirt.VIR_DOMAIN_SNAPSHOT_DELETE_METADATA_ONLY)
+        renamed = False
+        try:
+            dom.rename(name, 0)
+            renamed = True
+        finally:
+            dom = self._lookup(uuid)
+            for snap_name, xml in saved:
+                root = ET.fromstring(xml)
+                for tag in ("domain/name", "inactiveDomain/name"):
+                    el = root.find(tag)
+                    if el is not None and renamed:
+                        el.text = name
+                flags = libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REDEFINE
+                if snap_name == current:
+                    flags |= libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_CURRENT
+                dom.snapshotCreateXML(ET.tostring(root, encoding="unicode"), flags)
+        return self._info(dom)
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         dom = self._lookup(uuid)

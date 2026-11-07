@@ -241,6 +241,10 @@ class NicEditIn(BaseModel):
     model: str = Field(default="virtio", pattern=r"^(virtio|e1000e|e1000|rtl8139)$")
 
 
+class RenameIn(BaseModel):
+    name: str = Field(pattern=VM_NAME_PATTERN)
+
+
 class VMEditIn(BaseModel):
     """New settings for a VM. Fields left out stay as they are; disks and nics, when
     given, are the whole list (existing ones left out are removed)."""

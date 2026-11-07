@@ -73,6 +73,7 @@ from .schemas import (
     PowerIn,
     RecycleBinOut,
     RecycledOut,
+    RenameIn,
     RestoreRequest,
     RouterIn,
     SnapshotIn,
@@ -754,6 +755,27 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
+
+    @api.post("/vms/{uuid}/rename", response_model=VMOut)
+    def rename_vm(uuid: str, body: RenameIn) -> VMOut:
+        """A new name for a stopped VM; backup policies follow it."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        old = vm.spec.name
+        if body.name != old:
+            for _, other in cluster.all_vms():
+                if other.spec.name == body.name:
+                    raise VMExists(f"VM named {body.name!r} already exists in the cluster")
+        info = backups.run_task(
+            "rename",
+            f"{old} → {body.name}",
+            old,
+            member.name,
+            uuid,
+            lambda: member.driver.rename_vm(uuid, body.name),
+        )
+        backups.rename_vm(old, body.name)
+        return VMOut.from_info(info, member.name)
 
     @api.post("/vms/{uuid}/guest-tools", response_model=VMOut)
     def insert_guest_tools(uuid: str) -> VMOut:

@@ -55,6 +55,9 @@ Still to do:
 - Shared disks between VMs (clusters), iSCSI target serving VM disks
 - Storage policy per VM disk (thin/thick, cache)
 
+## v1.1
+Beta 1 (1.1.0b1) ✅: rename a VM (Thai names too) when it is off; its snapshots and backup policies follow the new name
+
 ## v1.0 — Containers ⏳
 Beta 1 (1.0.0b1) ✅: LXC system containers beside VMs: one-click template catalog (Debian, Ubuntu, Rocky, Alma, Alpine) and app templates (Nginx, MariaDB, Docker host, Zabbix agent, WordPress), 3-step wizard (template → CPU/RAM/disk/network with IP at create → root password/SSH key), unprivileged by default, disk as an image file in any folder pool, live resize of CPU/memory/disk (grow), console (commands as root, admins), snapshots/restore, everything in Tasks
 

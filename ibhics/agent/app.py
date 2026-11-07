@@ -33,6 +33,7 @@ from ..manager.schemas import (
     NetworkIn,
     PoolCreate,
     PoolOut,
+    RenameIn,
     SnapshotIn,
     SnapshotOut,
     StopRequest,
@@ -210,6 +211,10 @@ def create_agent_app(
         def create_snapshot(uuid: str, body: SnapshotIn) -> SnapshotOut:
             snap = driver.create_snapshot(uuid, body.name, body.description, body.restart)
             return SnapshotOut(**asdict(snap))
+
+        @api.post("/vms/{uuid}/rename", response_model=VMOut)
+        def rename_vm(uuid: str, body: RenameIn) -> VMOut:
+            return VMOut.from_info(driver.rename_vm(uuid, body.name))
 
         @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
         def revert_snapshot(uuid: str, name: str) -> VMOut:

@@ -565,6 +565,10 @@ class HypervisorDriver(abc.ABC):
         and started again first."""
         raise NotImplementedError
 
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        """Give the stopped VM a new name (Thai allowed). Its disk files keep theirs."""
+        raise NotImplementedError
+
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         """Put the VM back as it was at the snapshot: running if memory was included."""
         raise NotImplementedError

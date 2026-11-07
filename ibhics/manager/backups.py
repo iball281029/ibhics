@@ -149,6 +149,17 @@ class BackupManager:
             self._save()
         return policy
 
+    def rename_vm(self, old: str, new: str) -> None:
+        """Policies that name the VM follow its new name."""
+        with self._lock:
+            changed = False
+            for policy in self._policies.values():
+                if old in policy.vms:
+                    policy.vms = [new if v == old else v for v in policy.vms]
+                    changed = True
+            if changed:
+                self._save()
+
     def remove_policy(self, name: str) -> None:
         with self._lock:
             if name not in self._policies:

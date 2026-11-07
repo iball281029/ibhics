@@ -149,6 +149,14 @@ class RemoteDriver(HypervisorDriver):
             raise ValueError(str(resp.json().get("detail")))
         return SnapshotInfo(**self._ok(resp, uuid).json())
 
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/rename", json={"name": name})
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        if resp.status_code == 409 and "already exists" in resp.json().get("detail", ""):
+            raise VMExists(resp.json()["detail"])
+        return info_from_json(self._ok(resp, uuid).json())
+
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         resp = self._client.request(
             "POST", f"/vms/{uuid}/snapshots/{quote(name)}/revert", timeout=None

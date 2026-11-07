@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from . import customize
 from .base import (
+    VM_NAME_RE,
     CloneSpec,
     DiskSpec,
     GuestInfo,
@@ -220,6 +221,19 @@ class FakeDriver(HypervisorDriver):
             disks = [bytearray(d) for d in self._disks[uuid]]
             snaps.append((info, copy.deepcopy(vm.spec), disks, vm.state))
             return copy.deepcopy(info)
+
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        if not VM_NAME_RE.match(name):
+            raise ValueError("VM names use letters (Thai too), digits and '_.-'")
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.spec.name != name:
+                if any(v.spec.name == name for v in self._vms.values()):
+                    raise VMExists(f"VM named {name!r} already exists")
+                if vm.state == VMState.RUNNING:
+                    raise InvalidState("shut the VM down to rename it")
+                vm.spec.name = name
+            return copy.deepcopy(vm)
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         with self._lock:
