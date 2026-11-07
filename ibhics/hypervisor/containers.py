@@ -62,7 +62,7 @@ DOCKER = (
 )
 NPM_COMPOSE = (
     "services:\n  app:\n    image: jc21/nginx-proxy-manager:latest\n"
-    "    restart: unless-stopped\n    ports: [\"80:80\", \"81:81\", \"443:443\"]\n"
+    '    restart: unless-stopped\n    ports: ["80:80", "81:81", "443:443"]\n'
     "    volumes: [./data:/data, ./letsencrypt:/etc/letsencrypt]\n"
 )
 DOCKER_APPS = {"docker", "npm"}  # these turn nesting on

@@ -31,6 +31,7 @@ from ..manager.schemas import (
     HostOut,
     HostSettingsIn,
     NetworkIn,
+    PoolCacheIn,
     PoolCreate,
     PoolOut,
     RenameIn,
@@ -259,6 +260,11 @@ def create_agent_app(
         @api.post("/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
         def create_pool(body: PoolCreate) -> PoolOut:
             return PoolOut.from_info(driver.create_pool(body.to_spec()))
+
+        @api.post("/pools/{name}/cache", response_model=PoolOut)
+        def pool_cache(name: str, body: PoolCacheIn) -> PoolOut:
+            return PoolOut.from_info(driver.pool_cache(name, body.action, body.devices,
+                                                       body.mode, body.size_gb))  # fmt: skip
 
         @api.delete("/pools/{name}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_pool(name: str) -> None:

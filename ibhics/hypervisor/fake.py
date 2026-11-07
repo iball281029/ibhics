@@ -61,6 +61,7 @@ class FakeDriver(HypervisorDriver):
             "default": (PoolSpec(name="default", type=PoolType.DIR), 1000.0)
         }
         self._disks: dict[str, list[bytearray]] = {}
+        self._caches: dict[str, dict | None] = {}  # hybrid pools: their cache, or None
         # Set to a folder to give file-based fake pools real files (datastore browser).
         self.files_root: Path | None = None
         # Where each VM's "screen" is. By default a running VM gets a small built-in VNC
@@ -363,7 +364,39 @@ class FakeDriver(HypervisorDriver):
             if spec.name in self._pools:
                 raise InvalidState(f"a pool named {spec.name!r} already exists")
             self._pools[spec.name] = (copy.deepcopy(spec), 500.0)
+            if spec.cache_devices:
+                self._caches[spec.name] = _fake_cache(spec.cache_mode, spec.cache_gb or 100)
             return self._pool_info(spec.name)
+
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        with self._lock:
+            if name not in self._pools:
+                raise PoolNotFound(name)
+            if name not in self._caches:
+                raise InvalidState(f"{name} is not a hybrid pool")
+            have = self._caches[name]
+            if mode not in ("writethrough", "writeback"):
+                raise ValueError("cache mode is writethrough or writeback")
+            if action == "add":
+                if have:
+                    raise InvalidState("this pool has a cache already; remove it first")
+                if not devices:
+                    raise ValueError("pick the SSDs for the cache")
+                self._caches[name] = _fake_cache(mode, size_gb or 100)
+            elif action in ("remove", "mode"):
+                if not have:
+                    raise InvalidState("this pool has no cache")
+                self._caches[name] = None if action == "remove" else {**have, "mode": mode}
+            else:
+                raise ValueError("action is add, remove or mode")
+            return self._pool_info(name)
 
     def delete_pool(self, name: str) -> None:
         with self._lock:
@@ -613,6 +646,8 @@ class FakeDriver(HypervisorDriver):
             allocation_gb=float(used),
             available_gb=capacity - used,
             source=source,
+            hybrid=bool(spec.cache_devices) or name in self._caches,
+            cache=self._caches.get(name),
         )
 
     def _get(self, uuid: str) -> VMInfo:
@@ -628,3 +663,8 @@ def _random_mac() -> str:
 
 def _restart_key(spec: VMSpec) -> tuple:
     return (spec.vcpus, spec.memory_mb, spec.boot, spec.video)
+
+
+def _fake_cache(mode: str, size_gb: int) -> dict:
+    return {"mode": mode, "size_gb": float(size_gb), "used_pct": 42.0, "dirty_gb": 0.0,
+            "read_hit_pct": 87.5, "write_hit_pct": 61.0, "hit_pct": 80.2}  # fmt: skip

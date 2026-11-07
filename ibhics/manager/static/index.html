@@ -868,6 +868,7 @@
     <div class="subpage active body" id="tab-pv-summary">
       <div class="pv-stats stats" style="padding:0"></div>
       <dl class="kv pv-kv" style="padding:18px 0 0"></dl>
+      <div class="pv-cache" hidden></div>
       <p class="wiz-label">VM disks in this pool</p>
       <div class="table-wrap disk-table"><table><thead><tr><th>VM</th><th>Disk</th><th>Size</th><th>Status</th></tr></thead><tbody class="pv-disks"></tbody></table></div>
     </div>
@@ -899,6 +900,8 @@
         <div class="type-cards">
           <label class="type-card"><input type="radio" name="kind" value="local" checked>
             <svg><use href="#i-hdd"/></svg><span><b>Local disks</b><em>Disks inside a node: SSD, HDD or NVMe. No RAID needed.</em></span></label>
+          <label class="type-card"><input type="radio" name="kind" value="hybrid">
+            <svg><use href="#i-hdd"/></svg><span><b>Hybrid (HDD + SSD cache)</b><em>Large HDDs or a RAID for data, an SSD in front for speed.</em></span></label>
           <label class="type-card"><input type="radio" name="kind" value="nfs">
             <svg><use href="#i-storage"/></svg><span><b>NFS</b><em>A folder shared by a NAS. Can be added to every node.</em></span></label>
           <label class="type-card"><input type="radio" name="kind" value="iscsi">
@@ -910,7 +913,7 @@
         </div>
       </section>
 
-      <section class="wiz-page" data-page="2" data-kinds="local fc">
+      <section class="wiz-page" data-page="2" data-kinds="local fc hybrid">
         <div class="wiz-bar">
           <label class="inline">Node <select name="node" class="node-list"></select></label>
           <div class="chips" role="group" aria-label="Disk type">
@@ -950,6 +953,13 @@
             <span><b>Thin (XFS)</b><em>VM disks take only the space written. One disk only.</em></span></label>
           <label class="type-card small"><input type="radio" name="format" value="lvm">
             <span><b>Thick (LVM)</b><em>Fast block storage. Joins several disks into one pool.</em></span></label>
+        </div>
+        <div class="form-grid" data-kinds="hybrid">
+          <label>Cache mode <select name="cache_mode">
+            <option value="writethrough" selected>Writethrough (safe): writes go to the HDDs at once</option>
+            <option value="writeback">Writeback (faster writes): needs a mirrored SSD</option></select></label>
+          <label>Cache size (GB) <input name="cache_gb" type="number" min="1" placeholder="All of the SSD"></label>
+          <p class="hint wide">The SSD keeps the blocks VMs use most; the HDDs hold everything. The cache can be removed or added later in the pool's Summary.</p>
         </div>
         <dl class="kv wiz-summary"></dl>
         <div class="wiz-warn"></div>

@@ -285,6 +285,23 @@ class RemoteDriver(HypervisorDriver):
             raise ValueError(str(resp.json().get("detail")))
         return _pool_info(self._ok(resp).json())
 
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        body = {"action": action, "devices": devices, "mode": mode, "size_gb": size_gb,
+                "confirm_wipe": True}  # fmt: skip
+        resp = self._client.request("POST", f"/pools/{name}/cache", json=body, timeout=None)
+        if resp.status_code == 404:
+            raise PoolNotFound(name)
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        return _pool_info(self._ok(resp).json())
+
     def delete_pool(self, name: str) -> None:
         resp = self._client.request("DELETE", f"/pools/{name}")
         if resp.status_code == 404:

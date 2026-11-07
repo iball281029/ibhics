@@ -55,6 +55,10 @@ Still to do:
 - Shared disks between VMs (clusters), iSCSI target serving VM disks
 - Storage policy per VM disk (thin/thick, cache)
 
+## v1.3
+Beta 1 (1.3.0b1): Hybrid pool (HDD + SSD cache). Add storage → Hybrid: HDDs or an md RAID hold the data, SSDs cache it (LVM dm-cache on a volume group of the pool's own, XFS on top, thin qcow2 disks). Writethrough (default, safe) or writeback (faster writes, needs a mirrored SSD), cache size; the pool's Summary shows hit ratio (reads/writes), cache use and dirty data, and adds or removes the cache (dirty blocks flushed first) or switches mode later. Disks holding data must be emptied first (move VMs off).
+Next: an SSD cache for LVM (thick) pools.
+
 ## v1.2
 Beta 4 (1.2.0b4): test-install.sh opens the installed disk with virt-customize (on every node), so a host VG named ibhics never clashes; a failed VG rename stops the test instead of hanging at first boot
 

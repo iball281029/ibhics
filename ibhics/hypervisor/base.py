@@ -240,6 +240,11 @@ class PoolSpec:
     devices: list[str] | None = None
     # Creating an LVM volume group erases the device; callers must say they mean it.
     confirm_wipe: bool = False
+    # disk only: a hybrid pool. `devices` (HDDs or an md RAID) hold the data and these
+    # SSDs cache it (LVM dm-cache); cache_gb None uses all of them.
+    cache_devices: list[str] | None = None
+    cache_mode: str = "writethrough"
+    cache_gb: int | None = None
 
     @property
     def disk_backend(self) -> str:
@@ -275,8 +280,19 @@ class PoolSpec:
                 raise ValueError(f"{self.type} pool needs a block device path under /dev/")
             if len(set(devices)) != len(devices):
                 raise ValueError("the same disk is listed twice")
-            if self.type == PoolType.DISK and len(devices) > 1:
+            if self.type == PoolType.DISK and len(devices) > 1 and not self.cache_devices:
                 raise ValueError("a thin (XFS) pool takes one disk; use LVM for several")
+            if self.cache_devices:
+                if self.type != PoolType.DISK:
+                    raise ValueError("an SSD cache goes on a thin (XFS) pool")
+                if not all(DEV_RE.match(d) for d in self.cache_devices):
+                    raise ValueError("cache disks are block device paths under /dev/")
+                if set(self.cache_devices) & set(devices):
+                    raise ValueError("a disk cannot hold data and cache both")
+                if self.cache_mode not in ("writethrough", "writeback"):
+                    raise ValueError("cache mode is writethrough or writeback")
+                if self.cache_gb is not None and self.cache_gb < 1:
+                    raise ValueError("the cache is at least 1 GB")
         if self.type in WIPE_POOL_TYPES and not self.confirm_wipe:
             raise ValueError("this pool erases its device; set confirm_wipe to true")
 
@@ -290,6 +306,10 @@ class PoolInfo:
     allocation_gb: float
     available_gb: float
     source: str = ""  # human-readable origin: path, host:/export, iqn/lun, device
+    # Hybrid pools: their SSD cache (mode, size_gb, used_pct, dirty_gb, hit ratios).
+    # hybrid is true for any pool on its own volume group, with a cache or without.
+    hybrid: bool = False
+    cache: dict | None = None
 
 
 class PoolNotFound(LookupError):
@@ -523,6 +543,18 @@ class HypervisorDriver(abc.ABC):
 
     @abc.abstractmethod
     def create_pool(self, spec: PoolSpec) -> PoolInfo: ...
+
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        """A hybrid pool's SSD cache: add (erases the SSDs), remove (flushes first) or
+        mode (writethrough/writeback)."""
+        raise NotImplementedError
 
     @abc.abstractmethod
     def delete_pool(self, name: str) -> None:

@@ -18,7 +18,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 from xml.sax.saxutils import escape as xml_escape
 
-from . import customize, edge, terminal, vmstats
+from . import customize, edge, hybrid, terminal, vmstats
 from .base import (
     VIDEO_MODELS,
     VM_NAME_RE,
@@ -890,6 +890,7 @@ class LibvirtDriver(HypervisorDriver):
                 continue
             kind, source = described
             _state, capacity, allocation, available = pool.info()
+            vg = hybrid.vg_of(source) if kind == PoolType.DISK else None
             result.append(
                 PoolInfo(
                     name=pool.name(),
@@ -899,16 +900,65 @@ class LibvirtDriver(HypervisorDriver):
                     allocation_gb=round(allocation / GIB, 1),
                     available_gb=round(available / GIB, 1),
                     source=source,
+                    hybrid=vg is not None,
+                    cache=hybrid.stats(self.lvm, vg) if vg else None,
                 )
             )
         return result
+
+    lvm = staticmethod(hybrid.run_lvm)
+
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        described = describe_pool_xml(self._pool(name).XMLDesc(0), {})
+        vg = hybrid.vg_of(described[1]) if described else None
+        if not vg:
+            raise InvalidState(
+                f"{name} is not a hybrid pool: an SSD cache needs a pool made as Hybrid. "
+                "Move its VMs to another pool, remove it and add it again as Hybrid."
+            )
+        if action == "add":
+            if not devices:
+                raise ValueError("pick the SSDs for the cache")
+            self.clear_disks(devices)
+            hybrid.add_cache(self.lvm, vg, devices, mode, size_gb)
+        elif action == "remove":
+            hybrid.remove_cache(self.lvm, vg)
+        elif action == "mode":
+            hybrid.set_mode(self.lvm, vg, mode)
+        else:
+            raise ValueError("action is add, remove or mode")
+        return next(p for p in self.list_pools() if p.name == name)
 
     def create_pool(self, spec: PoolSpec) -> PoolInfo:
         spec.validate()
         if spec.name in self._pool_names() or iscsi_session_name(spec.name) in self._pool_names():
             raise InvalidState(f"a pool named {spec.name!r} already exists")
 
-        if spec.type == PoolType.LVM:
+        made_vg = None
+        if spec.type == PoolType.DISK and spec.cache_devices:
+            # Hybrid: HDDs + SSD cache in a volume group of its own; XFS goes on its data
+            # volume below, as on a plain thin pool's disk.
+            data, cache = spec.all_devices(), list(spec.cache_devices)
+            self.clear_disks([*data, *cache])
+            made_vg = hybrid.vg_name(spec.name)
+            try:
+                device = hybrid.build(self.lvm, spec.name, data, cache, spec.cache_mode,
+                                      spec.cache_gb)  # fmt: skip
+            except Exception:
+                try:
+                    hybrid.destroy(self.lvm, made_vg)
+                except RuntimeError:
+                    pass
+                raise
+            spec = replace(spec, device=device, devices=None, cache_devices=None)
+        elif spec.type == PoolType.LVM:
             # libvirt finds the volume group by the device name pvs reports (/dev/sda), so a
             # /dev/disk/by-id link would make the pool fail to start after vgcreate.
             # (/dev/mapper names are what pvs reports for multipath, so they stay.)
@@ -916,10 +966,10 @@ class LibvirtDriver(HypervisorDriver):
                 os.path.realpath(d) if d.startswith("/dev/disk/") else d for d in spec.all_devices()
             ]
             spec = replace(spec, device=devices[0], devices=devices)
-        if spec.type == PoolType.DISK:
+        if spec.type == PoolType.DISK and not made_vg:
             # The pool mounts its disk on every start, so it must not follow /dev/sdX letters.
             spec = replace(spec, device=stable_device(spec.all_devices()[0]), devices=None)
-        if spec.type in (PoolType.LVM, PoolType.DISK):
+        if spec.type in (PoolType.LVM, PoolType.DISK) and not made_vg:
             # Old partitions, another system's LVM or a Ceph OSD would make the build fail;
             # the caller confirmed the erase, so clear them first.
             self.clear_disks(spec.all_devices())
@@ -960,6 +1010,11 @@ class LibvirtDriver(HypervisorDriver):
         except Exception:
             if session is not None:
                 _undefine(session)
+            if made_vg:
+                try:
+                    hybrid.destroy(self.lvm, made_vg)
+                except RuntimeError:
+                    pass
             raise
         if spec.type == PoolType.DIR and spec.path:
             allow_qemu_path(spec.path)
@@ -1189,7 +1244,11 @@ class LibvirtDriver(HypervisorDriver):
             disks = root.findall("./devices/disk[@device='disk']")
             if any(disk_source(root, d)[0] == name for d in disks):
                 raise InvalidState(f"VM {dom.name()!r} still has disks in pool {name!r}")
+        described = describe_pool_xml(pool.XMLDesc(0), {})
+        vg = hybrid.vg_of(described[1]) if described else None
         _undefine(pool)
+        if vg:  # a hybrid pool's volume group is its own: free its disks with it
+            hybrid.destroy(self.lvm, vg)
         try:
             _undefine(self._conn.storagePoolLookupByName(iscsi_session_name(name)))
         except libvirt.libvirtError:

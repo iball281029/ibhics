@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
@@ -511,9 +511,28 @@ class PoolCreate(BaseModel):
     confirm_wipe: bool = Field(
         default=False, description="required for iscsi, lvm and disk: the device is erased"
     )
+    cache_devices: list[str] | None = Field(
+        default=None, max_length=16, description="disk: SSDs that cache the pool (hybrid)"
+    )
+    cache_mode: str = Field(default="writethrough", pattern="^(writethrough|writeback)$")
+    cache_gb: int | None = Field(default=None, ge=1)
 
     def to_spec(self) -> PoolSpec:
         return PoolSpec(**self.model_dump())
+
+
+class PoolCacheIn(BaseModel):
+    action: str = Field(pattern="^(add|remove|mode)$")
+    devices: list[str] | None = Field(default=None, max_length=16)
+    mode: str = Field(default="writethrough", pattern="^(writethrough|writeback)$")
+    size_gb: int | None = Field(default=None, ge=1)
+    confirm_wipe: bool = False
+
+    @model_validator(mode="after")
+    def _wipe(self) -> PoolCacheIn:
+        if self.action == "add" and not self.confirm_wipe:
+            raise ValueError("adding a cache erases its SSDs; set confirm_wipe to true")
+        return self
 
 
 class LocalDiskOut(BaseModel):
@@ -535,6 +554,8 @@ class PoolOut(BaseModel):
     allocation_gb: float
     available_gb: float
     source: str
+    hybrid: bool = False
+    cache: dict | None = None
     node: str | None = None
 
     @classmethod

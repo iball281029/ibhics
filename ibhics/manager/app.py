@@ -67,6 +67,7 @@ from .schemas import (
     PasswordChange,
     PolicyIn,
     PolicyOut,
+    PoolCacheIn,
     PoolCreate,
     PoolFileOut,
     PoolOut,
@@ -601,6 +602,18 @@ def create_app(
         cluster.require_quorum()
         member = cluster.member(name)
         return PoolOut.from_info(member.driver.create_pool(body.to_spec()), member.name)
+
+    @api.post("/nodes/{name}/pools/{pool}/cache", response_model=PoolOut)
+    def pool_cache(name: str, pool: str, body: PoolCacheIn) -> PoolOut:
+        """A hybrid pool's SSD cache: add, remove (flushes dirty blocks first) or mode."""
+        cluster.require_quorum()
+        member = cluster.member(name)
+        info = backups.run_task(
+            "pool-cache", f"{body.action} {body.mode if body.action != 'remove' else ''}".strip(),
+            pool, member.name, f"pool:{pool}",
+            lambda: member.driver.pool_cache(pool, body.action, body.devices, body.mode,
+                                             body.size_gb))  # fmt: skip
+        return PoolOut.from_info(info, member.name)
 
     @api.delete("/nodes/{name}/pools/{pool}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_pool(name: str, pool: str) -> None:

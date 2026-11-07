@@ -72,7 +72,7 @@ const canOperate = () => !state.me || state.me.role !== "viewer";
 const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
-  "container-delete": "Delete container", "ct-move": "Move container", "container-network": "Container network" };
+  "container-delete": "Delete container", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 
 // ---------- theme and user menu ----------
@@ -2206,7 +2206,7 @@ function renderPools() {
     return `<tr>
       <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
       <td>${esc(p.node)}</td>
-      <td><span class="badge info plain">${esc(POOL_TYPES[p.type] || p.type)}</span></td>
+      <td><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
       <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
       <td><div class="actions">${admin ? `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>` : ""}</div></td>
@@ -2243,12 +2243,12 @@ function pvSummary() {
   $(".pv-title", pvDlg).textContent = `${p.name} on ${p.node}`;
   const used = pct(p.allocation_gb, p.capacity_gb), free = p.available_gb ?? p.capacity_gb - p.allocation_gb;
   $(".pv-stats", pvDlg).innerHTML = `
-    <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(POOL_TYPES[p.type] || p.type)}</em></div>
+    <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(poolTypeText(p))}</em></div>
     <div class="stat"><span>Used</span><b>${sizeText(p.allocation_gb)} <small>${used}%</small></b>${bar(used)}</div>
     <div class="stat"><span>Free</span><b>${sizeText(free)}</b><em>${p.active ? "Online" : "Offline"}</em></div>`;
   const disks = state.vms.filter((v) => v.node === p.node).flatMap((v) => v.disks.map((d, i) => ({ vm: v, d, i }))).filter((x) => x.d.pool === p.name);
   const isos = state.isos.filter((i) => i.pool === p.name);
-  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(p.node)], ["Type", esc(POOL_TYPES[p.type] || p.type)], ["Source", `<span class="mono">${esc(p.source)}</span>`],
+  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(p.node)], ["Type", esc(poolTypeText(p))], ["Source", `<span class="mono">${esc(p.source)}</span>`],
     ["VM disks", `${disks.length} (${sizeText(disks.reduce((s, x) => s + x.d.size_gb, 0))} provisioned)`], ["ISOs", String(isos.length)]]
     .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   $(".pv-disks", pvDlg).innerHTML = disks.length ? disks.map((x) => `<tr><td class="vm-name"><a class="vm-link" href="#vm/${esc(x.vm.uuid)}">${esc(x.vm.name)}</a></td>
@@ -2256,7 +2256,54 @@ function pvSummary() {
     : empty(4, "No VM disks here yet");
   const files = ["dir", "disk", "nfs"].includes(p.type);
   $('#pv-tabs [data-tab="pv-files"]').hidden = !files;
+  pvCache(p);
 }
+// A hybrid pool's SSD cache: how well it works, and changing it.
+function pvCache(p) {
+  const box = $(".pv-cache", pvDlg), c = p.cache;
+  box.hidden = !p.hybrid;
+  if (!p.hybrid) return;
+  const pctText = (v) => (v == null ? "–" : `${v}%`);
+  box.innerHTML = `<p class="wiz-label">SSD cache</p>` + (c ? `<div class="stats" style="padding:0">
+    <div class="stat"><span>Hit ratio</span><b>${pctText(c.hit_pct)}</b><em>Reads ${pctText(c.read_hit_pct)} · writes ${pctText(c.write_hit_pct)}</em></div>
+    <div class="stat"><span>Cache size</span><b>${sizeText(c.size_gb)} <small>${c.used_pct}% used</small></b>${bar(c.used_pct)}</div>
+    <div class="stat"><span>Mode</span><b>${esc(c.mode)}</b><em>Dirty: ${c.dirty_gb} GB not yet on the HDDs</em></div></div>
+    <div class="wiz-bar operator-only" style="margin-top:10px">
+      <button type="button" data-cache="mode" data-mode="${c.mode === "writeback" ? "writethrough" : "writeback"}">Switch to ${c.mode === "writeback" ? "writethrough" : "writeback"}</button>
+      <button type="button" class="danger" data-cache="remove">Remove cache</button></div>`
+    : `<p class="hint">No cache: the pool runs at the speed of its HDDs.</p>
+    <div class="wiz-bar operator-only"><label class="inline">SSD <select class="pv-cache-dev"><option value="">Loading…</option></select></label>
+      <label class="inline">Mode <select class="pv-cache-mode"><option>writethrough</option><option>writeback</option></select></label>
+      <label class="inline">Size GB <input type="number" min="1" class="pv-cache-gb" placeholder="all" style="width:80px"></label>
+      <button type="button" data-cache="add">Add cache</button></div>`);
+  if (!c) api(`/nodes/${enc(p.node)}/disks`).then((disks) => {
+    const sel = $(".pv-cache-dev", box);
+    if (sel) sel.innerHTML = disks.filter((d) => d.empty).map((d) => `<option value="${esc(d.path)}">${esc(d.path)} ${sizeText(d.size_gb)} ${esc((d.media || "").toUpperCase())}</option>`).join("") || `<option value="">No empty disk</option>`;
+  }).catch(() => {});
+}
+$(".pv-cache", pvDlg).addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-cache]");
+  if (!b) return;
+  const p = pvInfo(), act = b.dataset.cache, box = $(".pv-cache", pvDlg);
+  const body = { action: act, mode: b.dataset.mode || "writethrough" };
+  if (act === "add") {
+    body.devices = [$(".pv-cache-dev", box).value].filter(Boolean);
+    body.mode = $(".pv-cache-mode", box).value;
+    body.size_gb = Number($(".pv-cache-gb", box).value) || null;
+    body.confirm_wipe = true;
+    if (!body.devices.length) { toast("Pick an empty SSD", true); return; }
+    if (!confirm(`Erase ${body.devices[0]} and use it as the cache of ${p.name}?`)) return;
+  }
+  if (act === "remove" && !confirm(`Remove the SSD cache of ${p.name}? Dirty blocks are written to the HDDs first; VMs keep running.`)) return;
+  if (body.mode === "writeback" && act !== "remove" && !confirm("Writeback keeps new writes only on the SSD until they are copied to the HDDs: use it only with a mirrored (RAID 1) SSD. Continue?")) return;
+  b.disabled = true;
+  try {
+    await post(`/nodes/${enc(p.node)}/pools/${enc(p.name)}/cache`, body);
+    toast(`${p.name}: cache ${act === "mode" ? `now ${body.mode}` : act === "add" ? "added" : "removed"}`);
+    await refresh("storage");
+    pvSummary();
+  } catch (err) { fail(err); } finally { b.disabled = false; }
+});
 async function pvFiles() {
   const p = pvInfo();
   if (!p || !["dir", "disk", "nfs"].includes(p.type)) return;
@@ -2432,7 +2479,11 @@ const poolWiz = {
   media: "",
   nameTouched: false,
 };
-const KIND_LABEL = { local: "Local disks", fc: "Fibre Channel", nfs: "NFS", iscsi: "iSCSI", dir: "Folder" };
+const KIND_LABEL = { local: "Local disks", hybrid: "Hybrid (HDD + SSD cache)", fc: "Fibre Channel", nfs: "NFS", iscsi: "iSCSI", dir: "Folder" };
+const DISK_KINDS = ["local", "fc", "hybrid"];
+const poolTypeText = (p) => (p.hybrid ? (p.cache ? "Hybrid · SSD cache" : "Hybrid · no cache") : POOL_TYPES[p.type] || p.type);
+// Hybrid pools: SSD/NVMe disks cache, the rest (HDD, md RAID) hold data, unless changed.
+const wizIsCache = (d) => (poolWiz.role[d.path] ?? (d.media === "ssd" || d.media === "nvme")) === true;
 const sizeText = (gb) => (gb >= 1000 ? `${(gb / 1024).toFixed(gb >= 10240 ? 1 : 2)} TB` : `${Math.round(gb)} GB`);
 const isFcDisk = (d) => d.transport === "fc" || d.path.startsWith("/dev/mapper/");
 
@@ -2445,7 +2496,7 @@ function wizDiskList() {
 function wizPicked() { return wizDiskList().filter((d) => poolWiz.picked.has(d.path)); }
 
 function wizStart() {
-  Object.assign(poolWiz, { step: 1, disks: {}, picked: new Set(), media: "", nameTouched: false });
+  Object.assign(poolWiz, { step: 1, disks: {}, picked: new Set(), media: "", nameTouched: false, role: {} });
   $$(".chips button", poolWiz.form).forEach((b) => b.classList.toggle("on", b.dataset.media === ""));
   $(".disk-search", poolWiz.form).value = "";
   $(".node-check-list", poolWiz.form).innerHTML = computeMembers().filter((m) => m.healthy).map((m, i) =>
@@ -2461,7 +2512,7 @@ function wizShow() {
     li.classList.toggle("on", n === step);
     li.classList.toggle("done", n < step);
   });
-  $(".wiz-step2", form).textContent = ["local", "fc"].includes(kind) ? "Disks" : kind === "dir" ? "Folder" : "Connection";
+  $(".wiz-step2", form).textContent = DISK_KINDS.includes(kind) ? "Disks" : kind === "dir" ? "Folder" : "Connection";
   $$(".wiz-page", form).forEach((p) => {
     p.hidden = Number(p.dataset.page) !== step || (p.dataset.kinds && !p.dataset.kinds.split(" ").includes(kind));
   });
@@ -2469,7 +2520,7 @@ function wizShow() {
   $(".wiz-back", form).hidden = step === 1;
   $(".wiz-next", form).hidden = step === 3;
   $(".wiz-ok", form).hidden = step !== 3;
-  if (step === 2 && ["local", "fc"].includes(kind)) wizLoadDisks();
+  if (step === 2 && DISK_KINDS.includes(kind)) wizLoadDisks();
   if (step === 3) wizReview();
 }
 
@@ -2522,6 +2573,12 @@ function wizPickText() {
   const box = $(".wiz-pick", poolWiz.form);
   if (!picked.length) { box.innerHTML = `<span class="muted">Tick the disks for the new pool.</span>`; return; }
   const total = picked.reduce((s, d) => s + d.size_gb, 0);
+  if (wizKind() === "hybrid") {
+    const sum = (cache) => sizeText(picked.filter((d) => wizIsCache(d) === cache).reduce((s, d) => s + d.size_gb, 0));
+    box.innerHTML = `<b>Data ${sum(false)} · Cache ${sum(true)}</b><div class="hybrid-roles">${picked.map((d) => `<label class="inline"><span class="mono">${esc(d.path)}</span>
+      <select data-role="${esc(d.path)}"><option value="data" ${wizIsCache(d) ? "" : "selected"}>Data (HDD / RAID)</option><option value="cache" ${wizIsCache(d) ? "selected" : ""}>SSD cache</option></select></label>`).join("")}</div>`;
+    return;
+  }
   box.innerHTML = `<b>${picked.length} disk${picked.length > 1 ? "s" : ""} selected</b> · ${sizeText(total)} in total${wizMixNote(picked)}`;
 }
 
@@ -2530,9 +2587,9 @@ function wizSuggestName() {
   if (poolWiz.nameTouched && el.value) return;
   const kind = wizKind(), picked = wizPicked(), f = poolWiz.form.elements;
   const media = new Set(picked.map((d) => d.media));
-  let base = { nfs: "nas", iscsi: "iscsi", fc: "san", dir: "local" }[kind] || (media.size === 1 ? `${[...media][0] || "data"}` : "data");
+  let base = { nfs: "nas", iscsi: "iscsi", fc: "san", dir: "local", hybrid: "hybrid" }[kind] || (media.size === 1 ? `${[...media][0] || "data"}` : "data");
   if (kind === "nfs" && f.host.value) base = `nas-${f.host.value.split(".").pop()}`;
-  if (kind === "local") base += `-${wizNode()}`;
+  if (kind === "local" || kind === "hybrid") base += `-${wizNode()}`;
   base = base.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^[^a-zA-Z0-9]+/, "") || "pool";
   const taken = new Set(state.pools.map((p) => p.name));
   let name = base;
@@ -2550,7 +2607,12 @@ function wizReview() {
     if (!$('input[name="format"]:checked', form) || thin.disabled) fmt.find((r) => r.value === (picked.length > 1 ? "lvm" : "disk")).checked = true;
   }
   const rows = [["Type", KIND_LABEL[kind]]];
-  if (["local", "fc"].includes(kind)) {
+  if (kind === "hybrid") {
+    const line = (d) => `${esc(d.path)} (${sizeText(d.size_gb)}${d.media ? ` ${d.media.toUpperCase()}` : ""})`;
+    const data = picked.filter((d) => !wizIsCache(d)), cache = picked.filter(wizIsCache);
+    rows.push(["Node", wizNode()], ["Data disks", data.map(line).join("<br>")], ["Cache disks", cache.map(line).join("<br>")],
+      ["Capacity", `About ${sizeText(data.reduce((s, d) => s + d.size_gb, 0))}`]);
+  } else if (DISK_KINDS.includes(kind)) {
     rows.push(["Node", wizNode()], ["Disks", picked.map((d) => `${d.path} (${sizeText(d.size_gb)}${d.media ? ` ${d.media.toUpperCase()}` : ""})`).join("<br>")],
       ["Capacity", `About ${sizeText(picked.reduce((s, d) => s + d.size_gb, 0))}`]);
   } else {
@@ -2562,9 +2624,9 @@ function wizReview() {
   }
   $(".wiz-summary", form).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${k === "Node" || k === "Type" ? esc(v) : v}</dd>`).join("");
   const withData = picked.filter((d) => !d.empty);
-  const erases = ["local", "fc", "iscsi"].includes(kind);
+  const erases = ["local", "fc", "iscsi", "hybrid"].includes(kind);
   $(".wiz-warn", form).innerHTML = (withData.length ? `<div class="wiz-note bad"><div><b>These disks still hold data, which will be erased:</b><ul>${withData.map((d) =>
-    `<li><span class="mono">${esc(d.path)}</span>: ${esc(d.contents)}</li>`).join("")}</ul></div></div>` : "") + wizMixNote(picked);
+    `<li><span class="mono">${esc(d.path)}</span>: ${esc(d.contents)}</li>`).join("")}</ul><p>Move the VMs on them to another pool first.</p></div></div>` : "") + (kind === "hybrid" ? "" : wizMixNote(picked));
   $(".wiz-confirm", form).hidden = !erases;
   $(".wiz-confirm span", form).textContent = kind === "iscsi"
     ? "I understand everything on this LUN will be erased"
@@ -2573,8 +2635,13 @@ function wizReview() {
 
 function wizCheck(step) {
   const f = poolWiz.form.elements, kind = wizKind();
-  if (step === 2 && ["local", "fc"].includes(kind) && !wizPicked().length) throw new Error("Tick at least one disk.");
-  if (step === 2 && !["local", "fc"].includes(kind)) {
+  if (step === 2 && DISK_KINDS.includes(kind) && !wizPicked().length) throw new Error("Tick at least one disk.");
+  if (step === 2 && kind === "hybrid") {
+    const cache = wizPicked().filter(wizIsCache).length;
+    if (!cache || cache === wizPicked().length) throw new Error("A hybrid pool needs at least one data disk (HDD or RAID) and one SSD for the cache.");
+  }
+  if (step === 3 && kind === "hybrid" && f.cache_mode.value === "writeback" && !confirm("Writeback keeps new writes only on the SSD until they are copied to the HDDs. If that SSD fails, VMs lose data. Use it only with a mirrored (RAID 1) SSD. Continue?")) throw new Error("Pick writethrough, or confirm writeback.");
+  if (step === 2 && !DISK_KINDS.includes(kind)) {
     if (["nfs", "iscsi"].includes(kind) && !f.host.value.trim()) throw new Error("Enter the server address.");
     if (kind === "nfs" && !f.export.value.trim().startsWith("/")) throw new Error("Enter the export path, starting with /.");
     if (kind === "iscsi" && !f.iqn.value.trim()) throw new Error("Enter the target IQN.");
@@ -2612,6 +2679,10 @@ function wizCheck(step) {
     if (poolWiz.picked.has(p)) poolWiz.picked.delete(p); else poolWiz.picked.add(p);
     wizRenderDisks();
   });
+  $(".wiz-pick", form).addEventListener("change", (e) => {
+    const sel = e.target.closest("select[data-role]");
+    if (sel) { poolWiz.role[sel.dataset.role] = sel.value === "cache"; wizPickText(); }
+  });
   $(".disk-all", form).addEventListener("change", (e) => {
     $$(".disk-rows tr[data-path]", form).forEach((tr) => {
       if (e.target.checked) poolWiz.picked.add(tr.dataset.path); else poolWiz.picked.delete(tr.dataset.path);
@@ -2629,7 +2700,14 @@ wizards["pool-dialog"] = { start: wizStart };
 handlers["pool-dialog"] = async (f) => {
   wizCheck(3);
   const kind = wizKind(), name = f.get("name"), confirm_wipe = f.get("confirm_wipe") === "on";
-  if (["local", "fc"].includes(kind)) {
+  if (kind === "hybrid") {
+    const picked = wizPicked(), gb = Number(f.get("cache_gb"));
+    await post(`/nodes/${enc(wizNode())}/pools`, {
+      name, type: "disk", confirm_wipe, devices: picked.filter((d) => !wizIsCache(d)).map((d) => d.path),
+      cache_devices: picked.filter(wizIsCache).map((d) => d.path), cache_mode: f.get("cache_mode"), cache_gb: gb > 0 ? gb : null,
+    });
+    toast(`Hybrid storage ${name} added on ${wizNode()}`);
+  } else if (DISK_KINDS.includes(kind)) {
     const devices = wizPicked().map((d) => d.path);
     const type = kind === "local" ? f.get("format") : "lvm";
     const body = type === "disk" ? { name, type, device: devices[0], confirm_wipe } : { name, type, devices, confirm_wipe };
