@@ -55,11 +55,16 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
         -drive file=raid.qcow2,if=none,id=raid -device virtio-blk-pci,drive=raid,serial=RAID0 \
         -drive file=disk.qcow2,if=none,id=boot -device "virtio-blk-pci,drive=boot,serial=BOOT$BOOT_DISK" \
         -monitor unix:mon.sock,server,nowait "$@" &
-    local pid=$! i=0 shot last="" same=0
+    local pid=$! i=0 shot last="" same=0 start=$SECONDS
     while kill -0 $pid 2>/dev/null; do
-        sleep 60
-        i=$((i + 1))
+        # Wait a minute with bash's own timer (an external sleep that returns at once
+        # would make every limit below pass in a moment), and count real time.
+        read -rt 60 <> <(:) || true
+        kill -0 $pid 2>/dev/null || break
+        i=$(( (SECONDS - start) / 60 ))
+        [ $i -ge 1 ] || continue
         shot=shots/$name-$(printf %03d $i).ppm
+        [ -e "$shot" ] && continue
         monitor "screendump $shot" 2>/dev/null || true
         # A screen that has not changed for STALL_MINUTES means the installer waits for input.
         if [ -s "$shot" ] && [ "$(md5sum <"$shot")" = "$last" ]; then
