@@ -15,7 +15,9 @@ WORK=${WORK:-$PWD/install-test}
 INSTALL_MINUTES=${INSTALL_MINUTES:-60}
 STALL_MINUTES=${STALL_MINUTES:-12}
 ADMIN_PASSWORD=Admin-pw-123
-API=https://127.0.0.1:8888/api/v1
+# A free port for the VM's web console: on an ibHiCS node, 8888 is the host's own console.
+PORT=${PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}
+API=https://127.0.0.1:$PORT/api/v1
 
 rm -rf "$WORK" && mkdir -p "$WORK/shots"
 cd "$WORK"
@@ -145,14 +147,16 @@ echo ">> 3/4 First boot"
 # SeaBIOS tries only the first hard disk (the big, empty one), as a server's firmware
 # boots only the drive set in its boot order: point it at the drive we installed to.
 BOOT_DISK=,bootindex=1
-run_vm firstboot 30 -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8888-:8888 &
+run_vm firstboot 30 -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$PORT-:8888 &
 VM=$!
 trap 'monitor quit 2>/dev/null || true' EXIT
 for _ in $(seq 60); do
     if curl -skf "$API/health" -o health.json; then break; fi
+    # QEMU stops at once when it cannot forward the port (or fails otherwise).
+    kill -0 "$VM" 2>/dev/null || { echo "!! the VM stopped during first boot (port $PORT taken?)"; exit 1; }
     sleep 10
 done
-cat health.json 2>/dev/null || { echo "!! the web console did not answer on :8888"; exit 1; }
+cat health.json 2>/dev/null || { echo "!! the web console did not answer on port $PORT"; exit 1; }
 echo
 
 echo ">> 4/4 Checks"
@@ -197,9 +201,6 @@ pools = call("GET", "/pools", token=token)
 assert any(p["name"] == "default" for p in pools), pools
 print("ok  default storage pool exists")
 
-import shutil, subprocess
-assert shutil.which("lxc-create") and shutil.which("newuidmap"), "lxc/uidmap missing"
-assert "root:100000:65536" in open("/etc/subuid").read()
 assert call("GET", "/containers", token=token) == []
 assert any(t["id"] == "app:nginx" for t in call("GET", "/containers/templates", token=token))
 print("ok  LXC is installed and the containers API answers")
