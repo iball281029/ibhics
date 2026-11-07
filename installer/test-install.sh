@@ -92,6 +92,7 @@ raid_used=$(qemu-img info --output=json raid.qcow2 | python3 -c 'import json,sys
     || { echo "!! the installer wrote to the big disk ($raid_used bytes): it must use the small one"; exit 1; }
 echo ">> The big disk is untouched; ibHiCS went on the small one"
 
+pause() { read -rt "$1" <> <(:) || true; }  # bash's own timer: no external sleep
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
 answers() {
     cat <<EOF
@@ -163,7 +164,6 @@ sudo qemu-nbd -c /dev/nbd0 disk.qcow2
 # mounted (its device-mapper names would clash with the host's), then its own name back.
 TVG=ibhicstest
 lvm_nbd() { sudo "$@" --config 'devices { filter = [ "a|^/dev/nbd0|", "r|.*|" ] use_devicesfile = 0 }'; }
-pause() { read -rt "$1" <> <(:) || true; }  # bash's own timer: no external sleep
 put_back() {
     # The VG must be inactive before it gets its name back: active, its device-mapper
     # names (ibhics-root, ...) would clash with the host's, and the rename fails.

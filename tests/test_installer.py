@@ -372,3 +372,9 @@ def test_test_install_opens_the_disk_with_libguestfs_first():
     assert vc < text.index("elif command -v guestfish") < nbd
     assert "--upload answers.conf:/etc/ibhics/answers.conf" in text
     assert 'RENAME_FAILED' in text  # a failed rename stops before first boot, not hangs
+
+
+def test_test_install_defines_pause_on_every_path():
+    # pause is used in step 3 too, so it is defined before step 2's branches.
+    text = (INSTALLER / "test-install.sh").read_text()
+    assert text.index("pause() {") < text.index('echo ">> 2/4')
