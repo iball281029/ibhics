@@ -562,7 +562,7 @@
         <div class="ct-head"><h3 class="ct-sub">Templates</h3><input id="ct-search" type="search" placeholder="Search templates: ubuntu, nginx, alpine…" autocomplete="off"></div>
         <div class="ct-catalog" id="ct-catalog"></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Name</th><th>State</th><th>Node</th><th>Template</th><th>vCPU</th><th>Memory</th><th>Disk</th><th>IP</th><th>Snapshots</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>State</th><th>Node</th><th>Template</th><th>vCPU</th><th>Memory</th><th>Disk</th><th>Pool</th><th>IP</th><th>Snapshots</th><th></th></tr></thead>
           <tbody id="ct-rows"></tbody>
         </table></div>
       </div>
@@ -1230,6 +1230,7 @@
         <label>DNS servers <input name="dns" placeholder="8.8.8.8 1.1.1.1"></label>
         <p class="hint">IP is <code>dhcp</code> or an address with its prefix, e.g. <code>10.0.0.50/24</code>. Changing the network restarts a running container (a few seconds).</p>
       </div>
+      <div class="wide ct-storage"><b>Storage</b><div id="ct-storage"></div></div>
       <div class="wide"><b>Snapshots</b> <button type="button" class="small" id="ct-snap-take">Take snapshot</button>
         <table><tbody id="ct-snaps"></tbody></table></div>
     </div>
@@ -1244,7 +1245,7 @@
       <div class="term"><pre id="ct-out"></pre>
         <div class="ct-line"><span class="term-prompt" id="ct-prompt">#</span><input id="ct-input" spellcheck="false" placeholder="apt update" maxlength="4000" autocomplete="off"></div>
       </div>
-      <p class="hint">Runs as root inside the container (admins only). Each line runs on its own, like ssh host 'command'.</p>
+      <p class="hint">Runs as root inside the container (admins only). Each line runs on its own, like ssh host 'command'; long commands (apt upgrade, docker pull) stream their output and may run up to an hour. <button type="button" class="small danger" id="ct-stop" hidden>Stop (Ctrl+C)</button></p>
     </div>
     <footer><button value="cancel" formnovalidate>Close</button></footer>
   </form>

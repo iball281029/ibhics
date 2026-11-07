@@ -57,6 +57,10 @@ class ContainerExec(BaseModel):
     command: str = Field(min_length=1, max_length=4000)
 
 
+class ContainerMove(BaseModel):
+    pool: str = Field(min_length=1, max_length=64)
+
+
 class ContainerRename(BaseModel):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -235,6 +239,33 @@ def install(api, cluster, backups) -> None:
         member, _ = find(name)
         code, output = member.driver.containers().exec(name, body.command)
         return {"code": code, "output": output}
+
+    @api.post("/containers/{name}/jobs")
+    def ct_job_start(name: str, body: ContainerExec) -> dict:
+        """A console command that may run long; read its output with GET .../jobs/{job}."""
+        member, _ = find(name)
+        return {"job": cts(member).exec_start(name, body.command)}
+
+    @api.get("/containers/{name}/jobs/{job}")
+    def ct_job_read(name: str, job: str, offset: int = 0) -> dict:
+        member, _ = find(name)
+        return cts(member).exec_read(name, job, offset)
+
+    @api.delete("/containers/{name}/jobs/{job}", status_code=status.HTTP_204_NO_CONTENT)
+    def ct_job_stop(name: str, job: str) -> None:
+        member, _ = find(name)
+        cts(member).exec_stop(name, job)
+
+    @api.post("/containers/{name}/move")
+    def ct_move(name: str, body: ContainerMove) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        return out(
+            member,
+            task(
+                "ct-move", f"→ {body.pool}", name, member, lambda: cts(member).move(name, body.pool)
+            ),  # fmt: skip
+        )
 
     @api.post("/containers/{name}/snapshots", status_code=status.HTTP_201_CREATED)
     def ct_snapshot(name: str, body: ContainerSnapIn) -> dict:

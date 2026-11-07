@@ -72,7 +72,7 @@ const canOperate = () => !state.me || state.me.role !== "viewer";
 const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
-  "container-delete": "Delete container", "container-network": "Container network" };
+  "container-delete": "Delete container", "ct-move": "Move container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 
 // ---------- theme and user menu ----------
@@ -4419,7 +4419,7 @@ function renderContainers() {
     <td><span class="badge ${on ? "running" : "plain"}">${esc(c.state)}</span></td>
     <td>${esc(c.node)}</td><td>${esc(title(c.template))}${c.unprivileged ? "" : ` <span class="badge plain">privileged</span>`}</td>
     <td>${c.vcpus}</td><td>${on ? `${gbText(c.memory_used_mb)} / ` : ""}${gbText(c.memory_mb)}</td>
-    <td>${c.disk_used_gb} / ${c.disk_gb} GB</td><td class="mono">${esc((c.addresses || []).join(" ") || (c.ip === "dhcp" ? "" : c.ip))}</td>
+    <td>${c.disk_used_gb} / ${c.disk_gb} GB</td><td>${esc(c.pool)}</td><td class="mono">${esc((c.addresses || []).join(" ") || (c.ip === "dhcp" ? "" : c.ip))}</td>
     <td>${(c.snapshots || []).length}</td>
     <td class="actions" data-ct="${esc(c.name)}">
       ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
@@ -4428,7 +4428,7 @@ function renderContainers() {
       ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
       <button class="small danger" data-act="delete">Delete</button>
     </td></tr>`;
-  }).join("") : empty(10, "No containers yet. Pick a template above to create one in a minute.");
+  }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
 }
 function openCtWizard(tpl = "debian-13") {
   const label = { app: "Applications", os: "Popular systems", image: "All images" };
@@ -4438,7 +4438,7 @@ function openCtWizard(tpl = "debian-13") {
   }).join("");
   $("#ct-template").innerHTML = opts;
   openDialog("ct-dialog", null, { template: tpl });
-  $("#ct-form").elements.nesting.checked = tpl === "app:docker";
+  $("#ct-form").elements.nesting.checked = ["app:docker", "app:npm"].includes(tpl);
 }
 $("#ct-new").addEventListener("click", () => openCtWizard());
 $("#ct-search").addEventListener("input", renderContainers);
@@ -4473,6 +4473,7 @@ $("#ct-rows").addEventListener("click", async (e) => {
       $("#ct-edit-form").elements.autostart.checked = c.autostart;
       $("#ct-edit-form").elements.dns.value = c.dns || "";
       ctNics(c);
+      ctStorage(c);
       $("#ct-edit-title").textContent = `Container ${name}`;
       ctSnaps(c);
       return;
@@ -4501,6 +4502,28 @@ $("#ct-rows").addEventListener("click", async (e) => {
     toast(`${name}: ${act} done`);
     await refresh("containers");
   } catch (err) { fail(err); } finally { b.disabled = false; }
+});
+// Where a container's disk lives, and moving it to another pool (stopped only).
+function ctStorage(c) {
+  const pools = [...new Set(state.pools.filter((p) => p.active && p.node === c.node).map((p) => p.name))];
+  $("#ct-storage").innerHTML = `<p>Pool <b>${esc(c.pool)}</b> · <span class="mono">${esc(c.path || "")}/rootfs.img</span></p>
+    <label>Move to <select id="ct-move-pool">${pools.filter((p) => p !== c.pool).map((p) => `<option>${esc(p)}</option>`).join("")}</select></label>
+    <button type="button" class="small" id="ct-move" ${c.state === "running" || pools.length < 2 ? "disabled" : ""}>Move</button>
+    <span class="hint">${c.state === "running" ? "Stop the container to move it." : "Copies the disk, config and snapshots, then removes the old folder."}</span>`;
+}
+$("#ct-storage").addEventListener("click", async (e) => {
+  if (!e.target.closest("#ct-move")) return;
+  const name = ctCurrent, pool = $("#ct-move-pool").value;
+  if (!pool || !confirm(`Move ${name} to pool ${pool}?`)) return;
+  e.target.disabled = true;
+  toast(`Moving ${name} to ${pool}… (see Tasks)`);
+  setTimeout(() => load("jobs").catch(() => {}), 800);
+  try {
+    const c = await post(`/containers/${enc(name)}/move`, { pool });
+    toast(`${name} is now on ${pool}`);
+    await refresh("containers");
+    ctStorage(c);
+  } catch (err) { fail(err); } finally { e.target.disabled = false; }
 });
 // Network cards of a container: one row each, eth0 first.
 function ctNicRow(card, i, now = "") {
@@ -4571,12 +4594,30 @@ $("#ct-input").addEventListener("keydown", async (e) => {
   if (line === "clear") { out.textContent = ""; return; }
   out.textContent += `root@${ctCurrent} # ${line}\n`;
   input.disabled = true;
+  // The command runs on the node in the background (up to an hour); its output shows as
+  // it comes, and Stop (or Ctrl+C) ends it.
+  const name = ctCurrent, scroll = () => { out.parentElement.scrollTop = out.parentElement.scrollHeight; };
+  let text = "";
   try {
-    const r = await post(`/containers/${enc(ctCurrent)}/exec`, { command: line });
-    out.textContent += (r.output || "").replace(/\n?$/, "\n") + (r.code ? `(exit ${r.code})\n` : "");
+    const { job } = await post(`/containers/${enc(name)}/jobs`, { command: line });
+    ctJob = { name, job };
+    $("#ct-stop").hidden = false;
+    let offset = 0;
+    for (;;) {
+      const r = await api(`/containers/${enc(name)}/jobs/${job}?offset=${offset}`);
+      offset = r.offset;
+      if (r.output) { text += r.output; out.textContent += r.output; scroll(); }
+      if (r.done) { out.textContent += (text && !text.endsWith("\n") ? "\n" : "") + (r.code ? `(exit ${r.code})\n` : ""); break; }
+      if (!$("#ct-console-dialog").open) { await del(`/containers/${enc(name)}/jobs/${job}`).catch(() => {}); break; }
+      await new Promise((res) => setTimeout(res, 700));
+    }
   } catch (err) { out.textContent += `${err.message || err}\n`; }
-  finally { input.disabled = false; input.focus(); out.parentElement.scrollTop = out.parentElement.scrollHeight; }
+  finally { ctJob = null; $("#ct-stop").hidden = true; input.disabled = false; input.focus(); scroll(); }
 });
+let ctJob = null;
+const ctStop = () => { if (ctJob) del(`/containers/${enc(ctJob.name)}/jobs/${ctJob.job}`).catch(() => {}); };
+$("#ct-stop").addEventListener("click", ctStop);
+$("#ct-console-dialog").addEventListener("keydown", (e) => { if (e.ctrlKey && e.key === "c" && ctJob) { e.preventDefault(); ctStop(); } });
 
 // "⋯" menus stay on screen: placed beside their button, flipped left/right/up to fit,
 // so a card at the screen's edge (or under the side rail) never cuts its menu off.

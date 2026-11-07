@@ -14,7 +14,10 @@ import json
 import logging
 import re
 import shlex
+import subprocess
+import threading
 import time
+import uuid as uuidlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -43,12 +46,38 @@ DISTROS = {
     "alpine-3.20": ("alpine", "3.20", "Alpine Linux 3.20"),
 }
 APT = "apt-get update && apt-get install -y "
+# Docker in an unprivileged container: overlay2 when the kernel lets the container mount
+# overlay (tried on the same disk as /var/lib/docker), else fuse-overlayfs, never vfs
+# (vfs copies every layer and fills the disk on the first pull).
+DOCKER = (
+    APT + "docker.io docker-compose fuse-overlayfs && "
+    "mkdir -p /var/lib/ovl-test/l /var/lib/ovl-test/u /var/lib/ovl-test/w /var/lib/ovl-test/m && "
+    "if mount -t overlay overlay -o lowerdir=/var/lib/ovl-test/l,upperdir=/var/lib/ovl-test/u,"
+    "workdir=/var/lib/ovl-test/w /var/lib/ovl-test/m 2>/dev/null; "
+    "then umount /var/lib/ovl-test/m; "
+    "else mkdir -p /etc/docker && "
+    """echo '{"storage-driver": "fuse-overlayfs"}' > /etc/docker/daemon.json; fi; """
+    "rm -rf /var/lib/ovl-test; systemctl restart docker && "
+    "echo Docker storage driver: $(docker info --format '{{.Driver}}')"
+)
+NPM_COMPOSE = (
+    "services:\n  app:\n    image: jc21/nginx-proxy-manager:latest\n"
+    "    restart: unless-stopped\n    ports: [\"80:80\", \"81:81\", \"443:443\"]\n"
+    "    volumes: [./data:/data, ./letsencrypt:/etc/letsencrypt]\n"
+)
+DOCKER_APPS = {"docker", "npm"}  # these turn nesting on
 APPS = {
     "nginx": ("debian-13", "Nginx web server", APT + "nginx"),
     "mariadb": ("debian-13", "MariaDB database", APT + "mariadb-server"),
     "postgresql": ("debian-13", "PostgreSQL database", APT + "postgresql"),
     "redis": ("debian-13", "Redis cache", APT + "redis-server"),
-    "docker": ("debian-13", "Docker host (nesting on)", APT + "docker.io docker-compose"),
+    "docker": ("debian-13", "Docker host (nesting on)", DOCKER),
+    "npm": (
+        "debian-13",
+        "Nginx Proxy Manager (Docker; admin on port 81)",
+        DOCKER + " && mkdir -p /opt/npm && cd /opt/npm && "
+        f"printf '{NPM_COMPOSE}' > docker-compose.yml && docker-compose up -d",
+    ),
     "zabbix-agent": ("debian-13", "Zabbix agent", APT + "zabbix-agent2"),
     "zabbix": (
         "debian-13",
@@ -211,7 +240,7 @@ class ContainerSpec:
             raise ValueError("the SSH key is one line starting with ssh-ed25519, ssh-rsa, ...")
         if "\n" in self.password:
             raise ValueError("the password is one line")
-        if self.template.removeprefix("app:") == "docker":
+        if self.template.removeprefix("app:") in DOCKER_APPS:
             self.nesting = True
 
     @property
@@ -236,6 +265,7 @@ class ContainerInfo:
     memory_used_mb: int = 0
     disk_used_gb: float = 0.0
     snapshots: list[str] = field(default_factory=list)
+    path: str = ""  # its folder on the node: <pool>/containers/<name>
 
     def to_dict(self) -> dict:
         return {
@@ -246,6 +276,7 @@ class ContainerInfo:
             "memory_used_mb": self.memory_used_mb,
             "disk_used_gb": self.disk_used_gb,
             "snapshots": self.snapshots,
+            "path": self.path,
             "kind": "container",
         }
 
@@ -321,8 +352,22 @@ def lxc_config(spec: ContainerSpec, bridge, rootfs: str = "") -> str:
         if card["mac"]:
             lines.append(f"lxc.net.{i}.hwaddr = {card['mac']}")
     if spec.nesting:
-        lines.append("lxc.include = /usr/share/lxc/config/nesting.conf")
+        lines += [
+            "lxc.include = /usr/share/lxc/config/nesting.conf",
+            # Docker: overlay mounts and /dev/fuse (fuse-overlayfs). The device list
+            # repeats LXC's defaults, so adding /dev/fuse keeps /dev/null, ttys, ...
+            "lxc.apparmor.raw = mount fstype=overlay,",
+            "lxc.apparmor.raw = mount fstype=fuse.fuse-overlayfs,",
+            *(f"lxc.cgroup2.devices.allow = {d}" for d in NESTING_DEVICES),
+            "lxc.mount.entry = /dev/fuse dev/fuse none bind,create=file,optional 0 0",
+        ]
     return "\n".join(lines) + "\n"
+
+
+NESTING_DEVICES = (
+    "c *:* m", "b *:* m", "c 1:3 rwm", "c 1:5 rwm", "c 1:7 rwm", "c 1:8 rwm", "c 1:9 rwm",
+    "c 5:0 rwm", "c 5:1 rwm", "c 5:2 rwm", "c 136:* rwm", "c 10:200 rwm", "c 10:229 rwm",
+)  # fmt: skip
 
 
 def guest_network_script(spec: ContainerSpec) -> str:
@@ -403,6 +448,67 @@ def first_boot_script(spec: ContainerSpec) -> str:
 
 
 EXEC_TIMEOUT = 120
+JOB_TIMEOUT = 3600  # s a console command may run (apt upgrade, docker pull, ...)
+JOB_OUTPUT = 1 << 20  # bytes of output kept per command (the rest scrolls away)
+
+
+class ExecJobs:
+    """Console commands that run long: started in the background, their output read as
+    it comes (offset in, new text out), and stoppable."""
+
+    def __init__(self, popen=subprocess.Popen) -> None:
+        self._popen = popen
+        self._jobs: dict[str, dict] = {}
+        self._lock = threading.Lock()
+
+    def start(self, argv: list[str]) -> str:
+        self._expire()
+        proc = self._popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           stdin=subprocess.DEVNULL)  # fmt: skip
+        job = {"proc": proc, "buf": bytearray(), "dropped": 0, "done": False, "code": None,
+               "ended": 0.0}  # fmt: skip
+        jid = uuidlib.uuid4().hex[:12]
+        with self._lock:
+            self._jobs[jid] = job
+
+        def pump() -> None:
+            read = getattr(proc.stdout, "read1", proc.stdout.read)
+            while chunk := read(65536):
+                with self._lock:
+                    job["buf"] += chunk
+                    over = len(job["buf"]) - JOB_OUTPUT
+                    if over > 0:
+                        del job["buf"][:over]
+                        job["dropped"] += over
+            code = proc.wait()
+            with self._lock:
+                job.update(done=True, code=code, ended=time.monotonic())
+
+        threading.Thread(target=pump, daemon=True, name=f"exec-{jid}").start()
+        return jid
+
+    def read(self, jid: str, offset: int = 0) -> dict:
+        with self._lock:
+            job = self._jobs.get(jid)
+            if job is None:
+                raise InvalidState("that command has ended and its output is gone")
+            start = max(0, offset - job["dropped"])
+            text = bytes(job["buf"][start:]).decode(errors="replace")
+            return {"output": text, "offset": job["dropped"] + len(job["buf"]),
+                    "done": job["done"], "code": job["code"]}  # fmt: skip
+
+    def stop(self, jid: str) -> None:
+        with self._lock:
+            job = self._jobs.get(jid)
+        if job and not job["done"]:
+            job["proc"].kill()
+
+    def _expire(self) -> None:
+        with self._lock:
+            old = [j for j, v in self._jobs.items()
+                   if v["done"] and time.monotonic() - v["ended"] > 600]  # fmt: skip
+            for j in old:
+                del self._jobs[j]
 
 
 class LxcContainers:
@@ -415,11 +521,15 @@ class LxcContainers:
         bridge_of: Callable[[str], str],
         run: Callable[[list[str]], tuple[int, str]],
         pools: Callable[[], list[str]],
+        jobs: ExecJobs | None = None,
+        cgroup_root: Path = Path("/sys/fs/cgroup"),
     ) -> None:
         self._pool_path = pool_path
         self._bridge_of = bridge_of
         self._run = run
         self._pools = pools
+        self._jobs = jobs or ExecJobs()
+        self._cgroup = cgroup_root
 
     def _dir(self, pool: str) -> Path:
         path = self._pool_path(pool)
@@ -475,6 +585,10 @@ class LxcContainers:
                     info.cpu_seconds = round(int(value) / 1e9, 1)
                 elif key == "Memory use" and value:
                     info.memory_used_mb = int(value) // 2**20
+        if info.state == "running" and not info.memory_used_mb:
+            # lxc-info leaves Memory use out on cgroup v2 hosts: read the cgroup itself.
+            info.memory_used_mb = self._cgroup_memory(spec.name) // 2**20
+        info.path = str(base / spec.name)
         image = base / spec.name / "rootfs.img"
         if image.exists():
             info.disk_used_gb = round(image.stat().st_blocks * 512 / 2**30, 2)
@@ -482,6 +596,14 @@ class LxcContainers:
         if snaps.is_dir():
             info.snapshots = sorted(p.name for p in snaps.iterdir() if p.is_dir())
         return info
+
+    def _cgroup_memory(self, name: str) -> int:
+        for rel in (f"lxc.payload.{name}", f"lxc.payload/{name}", f"lxc/{name}"):
+            try:
+                return int((self._cgroup / rel / "memory.current").read_text().strip())
+            except (OSError, ValueError):
+                continue
+        return 0
 
     def create(self, spec: ContainerSpec) -> ContainerInfo:
         spec.validate()
@@ -554,6 +676,8 @@ class LxcContainers:
 
     def action(self, name: str, act: str) -> ContainerInfo:
         base, spec = self._find(name)
+        if act in ("start", "restart"):  # settings of newer releases (Docker's, ...) apply
+            self._write_config(base, spec)
         if act == "start":
             self._lxc("start", base, name)
         elif act == "stop":
@@ -569,6 +693,38 @@ class LxcContainers:
             self._wait_running(base, name)
             self._apply_network(spec)
         return self._info(base, spec)
+
+    def _write_config(self, base: Path, spec: ContainerSpec) -> None:
+        home = base / spec.name
+        cfg = home / "config"
+        if cfg.is_file():
+            cfg.write_text(_keep_template_lines(
+                cfg, lxc_config(spec, self._bridge_of, str(home / "rootfs.img"))))  # fmt: skip
+
+    def move(self, name: str, pool: str) -> ContainerInfo:
+        """A stopped container's folder (disk image, config, snapshots) to another pool."""
+        base, spec = self._find(name)
+        if pool == spec.pool:
+            return self._info(base, spec)
+        if pool not in self._pools():
+            raise ValueError(f"no storage pool named {pool!r}")
+        if self._info(base, spec).state == "running":
+            raise InvalidState("stop the container to move it")
+        new_base = self._dir(pool)
+        old_home, home = base / name, new_base / name
+        if home.exists():
+            raise InvalidState(f"{home} already exists")
+        new_base.mkdir(parents=True, exist_ok=True)
+        code, out = self._run(["cp", "-a", "--sparse=always", str(old_home), str(home)])
+        if code:
+            self._run(["rm", "-rf", str(home)])
+            raise InvalidState(f"could not copy the container: {out.strip()[-300:]}")
+        for cfg in [home / "config", *home.glob("snaps/*/config")]:
+            cfg.write_text(cfg.read_text().replace(f"{old_home}/", f"{home}/"))
+        moved = replace(spec, pool=pool)
+        (home / "ibhics.json").write_text(json.dumps(asdict(moved)))
+        self._run(["rm", "-rf", str(old_home)])
+        return self._info(new_base, moved)
 
     def set_network(self, name: str, cards: list[dict], dns: str | None) -> ContainerInfo:
         """New network cards (network/VLAN, DHCP or fixed IP, gateway), applied by
@@ -689,6 +845,22 @@ class LxcContainers:
         )
         return code, out
 
+    def exec_start(self, name: str, script: str) -> str:
+        base, _spec = self._find(name)
+        if self._info(base, _spec).state != "running":
+            raise InvalidState(f"{name} is not running")
+        env = "export TERM=dumb HOME=/root PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        argv = ["timeout", str(JOB_TIMEOUT), "lxc-attach", "-P", str(base), "-n", name]
+        return self._jobs.start(
+            [*argv, "--clear-env", "--", "/bin/sh", "-c", f"{env}; cd; {script}"]
+        )
+
+    def exec_read(self, name: str, job: str, offset: int = 0) -> dict:
+        return self._jobs.read(job, offset)
+
+    def exec_stop(self, name: str, job: str) -> None:
+        self._jobs.stop(job)
+
     def snapshot(self, name: str, snap: str) -> ContainerInfo:
         if not SNAP_RE.match(snap):
             raise ValueError("snapshot names use letters, digits and '_.-'")
@@ -731,6 +903,7 @@ class FakeContainers:
 
     def __init__(self, networks: Callable[[], set[str]], pools: Callable[[], set[str]]) -> None:
         self._cts: dict[str, ContainerInfo] = {}
+        self._jobs: dict[str, dict] = {}
         self._networks = networks
         self._pools = pools
 
@@ -812,6 +985,31 @@ class FakeContainers:
         if info.state != "running":
             raise InvalidState(f"{name} is not running")
         return 0, f"(fake container {name}) {script}"
+
+    def exec_start(self, name: str, script: str) -> str:
+        code, out = self.exec(name, script)
+        jid = f"job{len(self._jobs) + 1}"
+        self._jobs[jid] = {"output": out + "\n", "code": code}
+        return jid
+
+    def exec_read(self, name: str, job: str, offset: int = 0) -> dict:
+        if job not in self._jobs:
+            raise InvalidState("that command has ended and its output is gone")
+        out = self._jobs[job]["output"]
+        return {"output": out[offset:], "offset": len(out), "done": True,
+                "code": self._jobs[job]["code"]}  # fmt: skip
+
+    def exec_stop(self, name: str, job: str) -> None:
+        self._jobs.pop(job, None)
+
+    def move(self, name: str, pool: str) -> ContainerInfo:
+        info = self.get(name)
+        if pool not in self._pools():
+            raise ValueError(f"no storage pool named {pool!r}")
+        if pool != info.spec.pool and info.state == "running":
+            raise InvalidState("stop the container to move it")
+        info.spec = replace(info.spec, pool=pool)
+        return info
 
     def snapshot(self, name: str, snap: str) -> ContainerInfo:
         if not SNAP_RE.match(snap):
@@ -907,6 +1105,19 @@ class RemoteContainers:
         data = self._call("POST", f"/{name}/exec", json={"command": script}, timeout=timeout + 30)
         return data["code"], data["output"]
 
+    def exec_start(self, name: str, script: str) -> str:
+        return self._call("POST", f"/{name}/jobs", json={"command": script})["job"]
+
+    def exec_read(self, name: str, job: str, offset: int = 0) -> dict:
+        return self._call("GET", f"/{name}/jobs/{job}", params={"offset": offset})
+
+    def exec_stop(self, name: str, job: str) -> None:
+        self._call("DELETE", f"/{name}/jobs/{job}")
+
+    def move(self, name: str, pool: str) -> ContainerInfo:
+        return info_from_dict(self._call("POST", f"/{name}/move", json={"pool": pool},
+                                         timeout=None))  # fmt: skip
+
     def snapshot(self, name: str, snap: str) -> ContainerInfo:
         return info_from_dict(
             self._call("POST", f"/{name}/snapshots", json={"name": snap}, timeout=1800)
@@ -965,6 +1176,22 @@ def install_agent_routes(api, get_containers) -> None:
     def ct_exec(name: str, body: dict) -> dict:
         code, out = get_containers().exec(name, str(body.get("command", "")))
         return {"code": code, "output": out}
+
+    @api.post("/containers/{name}/jobs")
+    def ct_job_start(name: str, body: dict) -> dict:
+        return {"job": get_containers().exec_start(name, str(body.get("command", "")))}
+
+    @api.get("/containers/{name}/jobs/{job}")
+    def ct_job_read(name: str, job: str, offset: int = 0) -> dict:
+        return get_containers().exec_read(name, job, offset)
+
+    @api.delete("/containers/{name}/jobs/{job}", status_code=204)
+    def ct_job_stop(name: str, job: str) -> None:
+        get_containers().exec_stop(name, job)
+
+    @api.post("/containers/{name}/move")
+    def ct_move(name: str, body: dict) -> dict:
+        return get_containers().move(name, str(body.get("pool", ""))).to_dict()
 
     @api.post("/containers/{name}/snapshots")
     def ct_snapshot(name: str, body: dict) -> dict:
