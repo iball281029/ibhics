@@ -55,6 +55,13 @@ Still to do:
 - Shared disks between VMs (clusters), iSCSI target serving VM disks
 - Storage policy per VM disk (thin/thick, cache)
 
+## v1.2
+Beta 1 (1.2.0b1):
+- VMs: USB tablet by default (the console mouse follows the cursor), display adapter choice in Edit (VirtIO GPU, Standard VGA, QXL, Cirrus), "Switch disks to VirtIO" for Windows on SATA after its guest tools are in
+- Windows Setup sees the disk without "Load driver" ($WinPEDriver$ on the guest tools CD, Server 2016+/10/11); Server 2012 R2 and older, 7 and 8.1 install on SATA + e1000e + VGA, with virtio-win 0.1.229 drivers and installer on the CD (legacy folder)
+- Containers: Pool column, pool and folder in Settings, move a stopped container to another pool; memory use read from cgroup v2; Docker host works unprivileged (overlay2, or fuse-overlayfs, never vfs); Nginx Proxy Manager template; console commands run up to an hour with live output and Stop (Ctrl+C)
+- test-install.sh writes the answers file with guestfish, so it runs on an ibHiCS node (VG ibhics on both)
+
 ## v1.1
 Beta 3 (1.1.0b3): container network settings after create: network/VLAN per card, DHCP or fixed IP with gateway, DNS, up to 8 cards with fixed MACs, applied with a short restart
 Beta 2 (1.1.0b2): Restart applies saved CPU/memory/boot changes (power off and on, not a guest reboot)

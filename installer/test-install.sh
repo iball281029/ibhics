@@ -93,6 +93,48 @@ raid_used=$(qemu-img info --output=json raid.qcow2 | python3 -c 'import json,sys
 echo ">> The big disk is untouched; ibHiCS went on the small one"
 
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
+answers() {
+    cat <<EOF
+ROLE=manager
+HOSTNAME=node1
+ADDRESS=10.0.2.15/24
+GATEWAY=10.0.2.2
+DNS=10.0.2.3
+ROOT_PASSWORD=Root-pw-123
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+EOF
+}
+if command -v guestfish >/dev/null; then
+# libguestfs opens the disk in its own small VM: the host's LVM never sees the test
+# disk's volume group (also called ibhics on an ibHiCS node), so nothing clashes.
+answers >answers.conf
+out=$(LIBGUESTFS_BACKEND=direct guestfish --rw -a disk.qcow2 -i <<'GF'
+is-file /opt/ibhics/venv/bin/ibhics-manager
+is-file /usr/share/virtio-win/viostor/2k19/amd64/viostor.sys
+is-file /var/lib/ibhics/tools/guest-tools.iso
+is-file /usr/share/virt-tools/rhsrvany.exe
+is-file /usr/share/virt-tools/pnp_wait.exe
+is-file /usr/bin/virt-customize
+glob-expand /usr/lib/*/nbdkit/plugins/nbdkit-ssh-plugin.so
+glob-expand /usr/lib/*/nbdkit/plugins/nbdkit-curl-plugin.so
+upload answers.conf /etc/ibhics/answers.conf
+chmod 0600 /etc/ibhics/answers.conf
+cat /etc/ibhics/version
+GF
+) || { echo "!! guestfish could not open the installed disk"; exit 1; }
+rm -f answers.conf
+mapfile -t found <<<"$out"
+missing=("ibHiCS in /opt/ibhics" "virtio-win drivers (Windows imports)" "the guest tools CD"
+         "rhsrvany.exe (virt-v2v)" "pnp_wait.exe (virt-v2v)" "virt-customize (guestfs-tools)")
+for i in "${!missing[@]}"; do
+    [ "${found[$i]}" = true ] || { echo "!! ${missing[$i]} is missing"; exit 1; }
+done
+for plugin in ssh curl; do
+    grep -q "nbdkit-$plugin-plugin.so" <<<"$out" \
+        || { echo "!! nbdkit $plugin plugin is missing: VMware imports would fail"; exit 1; }
+done
+grep -v -e '^true$' -e '^false$' -e nbdkit <<<"$out"  # the version file
+else
 sudo modprobe nbd max_part=16
 sudo qemu-nbd -c /dev/nbd0 disk.qcow2
 # The test VM's volume group is called ibhics, like the host's when the test runs on an
@@ -150,19 +192,12 @@ for plugin in ssh curl; do
     ls mnt/usr/lib/*/nbdkit/plugins/nbdkit-$plugin-plugin.so >/dev/null 2>&1 \
         || { echo "!! nbdkit $plugin plugin is missing: VMware imports would fail"; exit 1; }
 done
-sudo tee mnt/etc/ibhics/answers.conf >/dev/null <<EOF
-ROLE=manager
-HOSTNAME=node1
-ADDRESS=10.0.2.15/24
-GATEWAY=10.0.2.2
-DNS=10.0.2.3
-ROOT_PASSWORD=Root-pw-123
-ADMIN_PASSWORD=$ADMIN_PASSWORD
-EOF
+answers | sudo tee mnt/etc/ibhics/answers.conf >/dev/null
 sudo chmod 600 mnt/etc/ibhics/answers.conf
 cat mnt/etc/ibhics/version
 trap - EXIT
 release_disk
+fi
 
 echo ">> 3/4 First boot"
 # SeaBIOS tries only the first hard disk (the big, empty one), as a server's firmware
@@ -198,7 +233,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 1.1", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 1.2", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
