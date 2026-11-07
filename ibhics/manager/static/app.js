@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
+const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -348,6 +348,11 @@ const loaders = {
   imports: async () => { state.imports = await api("/migrate/jobs"); },
   containers: async () => { state.containers = await api("/containers"); },
   ctTemplates: async () => { if (!state.ctTemplates?.length) state.ctTemplates = await api("/containers/templates"); },
+  summaries: async () => {
+    const got = await Promise.all(computeMembers().filter((m) => m.healthy).map((m) =>
+      api(`/nodes/${enc(m.name)}/summary`).then((s) => [m.name, s]).catch(() => null)));
+    state.summaries = Object.fromEntries(got.filter(Boolean));
+  },
   users: async () => { state.users = isAdmin() && state.me ? await api("/users") : []; },
 };
 const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
@@ -562,7 +567,7 @@ async function refresh(page, auto = false) {
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
-  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
+  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
@@ -584,14 +589,17 @@ async function refresh(page, auto = false) {
 // ---------- home ----------
 
 function totals() {
-  let cpus = 0, mem = 0;
+  let cpus = 0, mem = 0, sockets = 0, cores = 0, memUsed = 0, cpuBusy = 0, measured = 0;
   for (const m of computeMembers()) {
-    const h = state.hosts[m.name];
-    if (h) { cpus += h.cpus; mem += h.memory_mb; }
+    const h = state.hosts[m.name], s = state.summaries[m.name];
+    if (h) { cpus += h.cpus; mem += h.memory_mb; sockets += h.sockets || 0; cores += h.cores || 0; }
+    if (s) { memUsed += s.memory_used_mb; cpuBusy += (s.cpu_percent / 100) * (h?.cpus || s.threads); measured += h?.cpus || s.threads; }
   }
   const live = state.vms.filter((v) => v.state !== "stopped");
   return {
-    cpus, mem,
+    cpus, mem, sockets, cores, memUsed, measured,
+    cpuPct: measured ? Math.round((cpuBusy / measured) * 100) : null,
+    vdisk: state.vms.reduce((s, v) => s + (v.disks || []).reduce((a, d) => a + (d.size_gb || 0), 0), 0),
     vcpus: live.reduce((s, v) => s + v.vcpus, 0),
     vmem: live.reduce((s, v) => s + v.memory_mb, 0),
     cap: state.pools.reduce((s, p) => s + p.capacity_gb, 0),
@@ -601,7 +609,7 @@ function totals() {
 
 function activities() {
   const items = [
-    ...state.jobs.map((j) => ({ kind: j.kind === "backup" ? "Backup" : "Restore", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
+    ...state.jobs.map((j) => ({ kind: JOB_KINDS[j.kind] || "Backup", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
     ...state.moves.map((m) => ({ kind: "Live migration", icon: "i-migrate", what: m.vm, where: `${m.source} → ${m.target || "?"}`, state: m.state, created: m.created, error: m.error })),
     ...state.imports.map((j) => ({ kind: "Import", icon: "i-compute", what: j.name, where: j.source, state: j.state, created: j.created, error: j.error })),
     ...state.deploys.map((d) => ({ kind: "Deploy VM", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
@@ -642,7 +650,7 @@ function renderHome() {
     row("High availability", c.ha_capable ? "Yes" : "No"),
     row("Members online", `${members.length - offline.length} / ${members.length}`),
     row("Quorum", `<span class="dot ${c.quorum ? "ok" : "bad"}"></span> ${c.quorum ? "OK" : "Lost"}`),
-    row("Physical cores", t.cpus),
+    row("Processors", t.cores ? `${t.sockets} socket${t.sockets === 1 ? "" : "s"} · ${t.cores} cores · ${t.cpus} threads` : `${t.cpus} threads`),
     row("Physical memory", gbText(t.mem)),
     `<div class="hint">${c.ha_capable ? "VMs can be moved between nodes while running." : "Add a second compute node and a witness for high availability."}</div>`,
   ].join("");
@@ -658,18 +666,28 @@ function renderHome() {
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
   ].join("");
 
-  const meter = (name, p, detail) => `<div class="meter"><div class="top"><b>${esc(name)}</b><span>${detail}</span></div>${segments(p)}</div>`;
-  $("#usage").innerHTML = [
-    meter("CPU", pct(t.vcpus, t.cpus), `${t.vcpus} vCPU of ${t.cpus} cores · ${pct(t.vcpus, t.cpus)}%`),
-    meter("Memory", pct(t.vmem, t.mem), `${gbText(t.vmem)} of ${gbText(t.mem)} · ${pct(t.vmem, t.mem)}%`),
+  // Two rows: what VMs are given (allocation, may exceed the hardware: overcommit) and
+  // what the nodes really use now.
+  const meter = (name, p, detail, cls = level(p)) => `<div class="meter"><div class="top"><b>${esc(name)}</b><span>${detail}</span></div>${segments(p).replace(`segments ${level(p)}`, `segments ${cls}`)}</div>`;
+  const ratio = (a, b) => (b > 0 ? (a / b).toFixed(2).replace(/\.?0+$/, "") : "0");
+  const cpuRatio = t.cpus ? t.vcpus / t.cpus : 0, memRatio = t.mem ? t.vmem / t.mem : 0;
+  $("#usage").innerHTML = `<div class="usage-row"><h4>Allocated to running VMs</h4>${[
+    meter("vCPU", pct(t.vcpus, t.cpus), `${t.vcpus} vCPU on ${t.cpus} threads · ${ratio(t.vcpus, t.cpus)}:1`, cpuRatio > 4 ? "bad" : cpuRatio > 2 ? "warn" : ""),
+    meter("Memory", pct(t.vmem, t.mem), `${gbText(t.vmem)} of ${gbText(t.mem)} · ${ratio(t.vmem, t.mem)}:1`, memRatio > 1 ? "bad" : memRatio > 0.9 ? "warn" : ""),
+    meter("VM disks", pct(t.vdisk, t.cap), `${Math.round(t.vdisk)} of ${Math.round(t.cap)} GB · ${ratio(t.vdisk, t.cap)}:1 (thin)`, t.vdisk > t.cap * 1.5 ? "warn" : ""),
+  ].join("")}</div><div class="usage-row"><h4>Actual use now</h4>${[
+    meter("CPU", t.cpuPct ?? 0, t.cpuPct == null ? "–" : `${t.cpuPct}% of ${t.measured} threads`),
+    meter("Memory", pct(t.memUsed, t.mem), t.measured ? `${gbText(t.memUsed)} of ${gbText(t.mem)} · ${pct(t.memUsed, t.mem)}%` : "–"),
     meter("Storage", storagePct, `${Math.round(t.used)} of ${Math.round(t.cap)} GB · ${storagePct}%`),
-  ].join("");
+  ].join("")}</div>`;
 
   $("#home-nodes").innerHTML = members.map((m) => {
     const h = state.hosts[m.name];
     const vms = state.vms.filter((v) => v.node === m.name && v.state !== "stopped");
-    const cpu = h ? pct(vms.reduce((s, v) => s + v.vcpus, 0), h.cpus) : 0;
-    const mem = h ? pct(vms.reduce((s, v) => s + v.memory_mb, 0), h.memory_mb) : 0;
+    // Actual use when the node reports it; otherwise what its VMs are given.
+    const s = state.summaries[m.name];
+    const cpu = s ? Math.round(s.cpu_percent) : h ? pct(vms.reduce((a, v) => a + v.vcpus, 0), h.cpus) : 0;
+    const mem = s ? pct(s.memory_used_mb, s.memory_mb) : h ? pct(vms.reduce((a, v) => a + v.memory_mb, 0), h.memory_mb) : 0;
     const usage = m.role === "compute" && h
       ? `<div class="mini">CPU ${cpu}%${bar(cpu)}</div><div class="mini">Memory ${mem}%${bar(mem)}</div>`
       : `<div class="mini">${m.role === "witness" ? "Quorum vote only" : "No data"}</div><div></div>`;
@@ -3503,7 +3521,7 @@ function renderPolicies() {
 function renderJobs() {
   const jobs = state.jobs.slice(0, 50);
   $("#jobs").innerHTML = jobs.length ? jobs.map((j) => `<tr>
-    <td>${j.kind === "backup" ? "Backup" : "Restore"}${j.policy ? ` <span class="vm-sub" style="display:inline">(${esc(j.policy)})</span>` : ""}</td>
+    <td>${esc(JOB_KINDS[j.kind] || j.kind)}${j.policy ? ` <span class="vm-sub" style="display:inline">(${esc(j.policy)})</span>` : ""}</td>
     <td class="vm-name">${esc(j.vm)}</td>
     <td>${esc(j.target)}</td>
     <td>${esc(j.node || "")}</td>

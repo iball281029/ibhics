@@ -143,3 +143,22 @@ def test_migration_data_goes_over_the_migration_interface(tmp_path):
     assert mm.migration_address(member) == "10.9.0.12"
     net.interfaces[1].roles = []
     assert mm.migration_address(member) == ""
+
+
+def test_host_info_counts_sockets_cores_threads():
+    """2 × E5-2620 v4: 16 cores, 32 threads; vCPUs are compared with threads."""
+    from types import SimpleNamespace
+
+    import ibhics.hypervisor.libvirt_driver as lv
+
+    d = object.__new__(lv.LibvirtDriver)
+    d._conn = SimpleNamespace(
+        getInfo=lambda: ["x86_64", 193280, 32, 2100, 1, 2, 8, 2],
+        getHostname=lambda: "ibhics-test",
+        getLibVersion=lambda: 9000000,
+    )
+    h = d.host_info()
+    assert (h.sockets, h.cores, h.threads, h.cpus) == (2, 16, 32, 32)
+    js = open("ibhics/manager/static/app.js").read()
+    assert "threads ·" in js or "threads`" in js
+    assert 'kind: JOB_KINDS[j.kind] || "Backup", icon: "i-backup"' in js  # not "Restore"

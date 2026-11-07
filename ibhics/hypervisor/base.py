@@ -456,9 +456,12 @@ class GuestInfo:
 @dataclass
 class HostInfo:
     hostname: str
-    cpus: int
+    cpus: int  # logical CPUs (threads): what vCPUs run on
     memory_mb: int
     hypervisor: str
+    sockets: int = 0
+    cores: int = 0  # physical cores, all sockets
+    threads: int = 0  # = cpus
 
 
 class VMNotFound(LookupError):

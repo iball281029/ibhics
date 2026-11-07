@@ -331,6 +331,9 @@ class HostOut(BaseModel):
     cpus: int
     memory_mb: int
     hypervisor: str
+    sockets: int = 0
+    cores: int = 0
+    threads: int = 0
 
     @classmethod
     def from_info(cls, info: HostInfo) -> HostOut:

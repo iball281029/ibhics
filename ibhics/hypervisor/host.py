@@ -740,8 +740,16 @@ class LinuxHost(HostSystem):
             os=os_release.get("PRETTY_NAME", "").strip('"'),
             version=__version__,
             timezone=self._timezone(),
-            system_disk=system_disk_health(root=str(self.root)),
+            system_disk=self._system_disk(),
         )
+
+    def _system_disk(self) -> dict:
+        """SMART is slow to ask: once every 10 minutes is enough for the dashboard."""
+        cached = getattr(self, "_disk_cache", None)
+        if cached is None or time.monotonic() - cached[0] > 600:
+            cached = (time.monotonic(), system_disk_health(root=str(self.root)))
+            self._disk_cache = cached
+        return cached[1]
 
     def _cpu_percent(self) -> float:
         def sample() -> tuple[int, int]:

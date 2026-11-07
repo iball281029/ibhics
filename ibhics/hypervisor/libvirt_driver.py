@@ -175,12 +175,17 @@ class LibvirtDriver(HypervisorDriver):
         self._balloon_asked: set[str] = set()
 
     def host_info(self) -> HostInfo:
-        _model, memory_mb, cpus, *_ = self._conn.getInfo()
+        # model, memory, logical CPUs, MHz, NUMA nodes, sockets per node, cores per socket,
+        # threads per core
+        _model, memory_mb, cpus, _mhz, nodes, sockets, cores, threads = self._conn.getInfo()[:8]
         return HostInfo(
             hostname=self._conn.getHostname(),
             cpus=cpus,
             memory_mb=memory_mb,
             hypervisor=f"kvm (libvirt {self._conn.getLibVersion()})",
+            sockets=nodes * sockets,
+            cores=nodes * sockets * cores,
+            threads=cpus,
         )
 
     def list_vms(self) -> list[VMInfo]:

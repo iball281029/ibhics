@@ -881,3 +881,9 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 /* "⋯" menus: placed by app.js inside the window; long names (an ISO) are cut short. */
 details.more .dropdown { max-width: min(320px, calc(100vw - 16px)); overflow-y: auto; }
 details.more .dropdown button, details.more .dropdown a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Dashboard: allocation and actual use, one row each */
+#usage { display: block; }
+#usage .usage-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 32px; }
+#usage .usage-row + .usage-row { margin-top: 14px; }
+#usage .usage-row h4 { grid-column: 1 / -1; margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+@media (max-width: 800px) { #usage .usage-row { grid-template-columns: 1fr; } }
