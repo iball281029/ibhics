@@ -340,3 +340,12 @@ Persistent Home resource history
   44c935c3-85a3-465f-b555-45a543b28d40
 - Last user instruction: finish existing work, then STOP. Do not start additional
   features or enroll Node2 without a new request. GitHub remains blocked: no push.
+
+POST-DELIVERY UPDATE (latest; overrides earlier 'leave Node2 outside' state)
+- User manually added Node2 after receiving the delivery. Their screenshot shows
+  2 members, Online 2/2, Quorum OK, topology Incomplete (no witness).
+- Read-only SSH verification confirms Node1 persisted remote ibhics-node2 at
+  http://172.16.12.103:8007. No keys were printed. Node1's four VMs remain running.
+- Both servers remain 1.3.0b2+history1. Node2 manager/agent active, no VMs.
+- User has now requested STOP and a Claude handoff only. Clean current handoff:
+  docs/CLAUDE-HANDOFF.txt. Do not remove/re-add members or start new work.
