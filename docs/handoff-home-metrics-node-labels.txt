@@ -231,3 +231,8 @@ Second server updates (installation still in progress)
 - Hardware-health mobile 390px checked: panel visible, no horizontal overflow.
 - Latest SMB media reader rchar ~1.73GB; preseed copy still active. Keep the media
   service running until installation and boot are confirmed.
+
+Latest naming correction from user: display name of the new .103 server is
+ibhics-Node (exact case, no trailing 2), superseding ibhics-Node2 above.
+Stable node ID / Linux hostname remain ibhics-node2 as already provisioned;
+display names are separate from node identity. Apply the new label when joined.
