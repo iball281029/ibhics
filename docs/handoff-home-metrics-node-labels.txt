@@ -222,3 +222,12 @@ Second server updates (installation still in progress)
 - Temporary ISO share remains necessary and active. Original remote base ISO
   removed to reclaim 2GB; original local Mac ISO retained. .104 root now ~7GB free.
 - Latest UI display name on .104 is ibhics-Node1; preserve it (stable ID ibhics-test).
+- Follow-up: all four NICs now administratively UP but NO-CARRIER as of 16:43.
+  User is going onsite to connect the cable. Bootstrap requires a NIC with carrier;
+  if installation reaches late-command bootstrap before cabling, recover from VT2
+  rather than reinstalling or changing the first server. No cluster join done.
+- noVNC direct sendKey for ASCII pipe produces backslash on this keyboard; avoid
+  shell pipelines in console commands. Semicolons and plain commands work.
+- Hardware-health mobile 390px checked: panel visible, no horizontal overflow.
+- Latest SMB media reader rchar ~1.73GB; preseed copy still active. Keep the media
+  service running until installation and boot are confirmed.
