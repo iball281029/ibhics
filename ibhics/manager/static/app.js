@@ -127,7 +127,7 @@ async function loadMe() {
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
+const PAGES = ["home", "compute", "storage", "network", "nodes", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash.startsWith("vm/")) return "vm";
@@ -324,7 +324,7 @@ $$("form").forEach((form) => {
 async function loadCluster() {
   const c = await api("/cluster");
   state.cluster = c;
-  $("#topology").textContent = TOPOLOGY[c.topology] || c.topology;
+  $("#topology").textContent = c.name || TOPOLOGY[c.topology] || c.topology;
   $("#quorum").innerHTML = `<span class="dot ${c.quorum ? "ok" : "bad"}"></span> ${c.quorum ? "OK" : "Lost"}`;
   const hosts = await Promise.all(computeMembers().filter((m) => m.healthy).map((m) =>
     api(`/nodes/${enc(m.name)}/host`).then((h) => [m.name, h]).catch(() => [m.name, null])));
@@ -572,12 +572,13 @@ async function refresh(page, auto = false) {
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
-  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); renderHome(); }
+  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
   if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
   if (page === "nodes") { await load("vms", "summaries"); renderNodes(); }
+  if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
@@ -615,15 +616,28 @@ function totals() {
   };
 }
 
-// Only real samples collected while Home is open; gaps are never filled with invented data.
-const homeHistory = [];
+// History is collected on the server even when no browser is open.
+const HISTORY_RANGES = { now: ["Now · 10 min", 600000], "5m": ["5 min", 300000], "30m": ["30 min", 1800000], "1d": ["1 day", 86400000], "7d": ["7 days", 604800000], "30d": ["30 days", 2592000000] };
+let homeRange = "now", homeMetrics = null, homeHistoryError = "", homeHistoryRequest = 0;
+try { const saved = localStorage.getItem("ibhics-history-range"); if (HISTORY_RANGES[saved]) homeRange = saved; } catch { /* private mode */ }
 const allocationPct = (used, capacity) => capacity > 0 ? used / capacity * 100 : null;
 const percentText = (value) => value == null ? "–" : `${Number(value.toFixed(1))}%`;
-function recordHomeSample(t, now = Date.now()) {
-  if (homeHistory.length && now - homeHistory.at(-1).at < 1000) return;
-  homeHistory.push({ at: now, cpu: t.cpuPct, memory: allocationPct(t.memUsed, t.memMeasured), storage: allocationPct(t.used, t.cap) });
-  while (homeHistory.length > 60 || (homeHistory.length && now - homeHistory[0].at > 600000)) homeHistory.shift();
+async function loadHomeHistory() {
+  const range = homeRange, request = ++homeHistoryRequest;
+  try {
+    const data = await api(`/usage/history?range=${enc(range)}`);
+    if (request === homeHistoryRequest && range === homeRange) { homeMetrics = data; homeHistoryError = data.note || ""; }
+  } catch (err) {
+    if (request === homeHistoryRequest) homeHistoryError = `History unavailable: ${err.message}`;
+  }
 }
+$("#usage").addEventListener("change", async (event) => {
+  if (event.target.id !== "home-history-range" || !HISTORY_RANGES[event.target.value]) return;
+  homeRange = event.target.value;
+  try { localStorage.setItem("ibhics-history-range", homeRange); } catch { /* private mode */ }
+  await loadHomeHistory();
+  if (currentPage() === "home") renderHome();
+});
 
 function allocationMeter(label, used, capacity, detail) {
   const value = allocationPct(used, capacity), over = value != null && value > 100;
@@ -635,16 +649,19 @@ function allocationMeter(label, used, capacity, detail) {
 }
 
 function usageChart(key, label, value, detail) {
-  const samples = homeHistory, last = samples.at(-1)?.at || Date.now();
-  const start = last - 600000;
+  const history = homeMetrics?.range === homeRange ? homeMetrics : null;
+  const samples = history?.points || [], last = history?.end || Date.now();
+  const start = history?.start || last - HISTORY_RANGES[homeRange][1], duration = last - start;
+  const step = history?.step_ms || 10000;
+  const timeLabel = (at) => homeRange === "7d" || homeRange === "30d" ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const groups = [];
   for (const sample of samples) {
     if (sample[key] == null) { groups.push([]); continue; }
     let group = groups.at(-1);
-    if (!group || (group.length && sample.at - group.at(-1).at > 25000)) { group = []; groups.push(group); }
+    if (!group || (group.length && sample.at - group.at(-1).at > step * 2.5)) { group = []; groups.push(group); }
     group.push(sample);
   }
-  const x = (sample) => 38 + (sample.at - start) / 600000 * 312;
+  const x = (sample) => 38 + (sample.at - start) / duration * 312;
   const y = (sample) => 132 - Math.min(100, Math.max(0, sample[key])) / 100 * 120;
   const path = (group) => group.map((sample, i) => `${i ? "L" : "M"}${x(sample).toFixed(1)},${y(sample).toFixed(1)}`).join(" ");
   const status = value == null ? "unavailable" : value >= 90 ? "bad" : value >= 75 ? "warn" : "";
@@ -659,17 +676,17 @@ function usageChart(key, label, value, detail) {
     <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div><span class="chart-current-label">in use now</span></div>
     <div class="actual-capacity-bar" role="img" aria-label="${esc(label)}: ${percentText(value)} used"><i style="width:${value == null ? 0 : used}%"></i></div>
     <div class="capacity-legend"><span><i></i>Used</span><span>${remaining}: <b>${value == null ? "–" : percentText(100 - used)}</b></span></div>
-    <div class="chart-history-heading"><b>Last 10 minutes</b><span>Usage (%)</span></div>
-    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: 10 minutes ago to now.">
+    <div class="chart-history-heading"><b>${esc(HISTORY_RANGES[homeRange][0])}</b><span>Usage (%)${step > 10000 ? " · average" : ""}</span></div>
+    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: selected ${esc(HISTORY_RANGES[homeRange][0])} window.">
       <defs><linearGradient id="home-area-${key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
       <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="38" y1="0" x2="350" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
       ${[0, 25, 50, 75, 100].map((p) => `<path class="chart-grid" d="M38 ${132 - p * 1.2} H350"/><text class="chart-axis" x="30" y="${136 - p * 1.2}" text-anchor="end">${p}%</text>`).join("")}
       ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},132 L${x(g[0]).toFixed(1)},132 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
       ${groups.filter((g) => g.length).map((g) => `<circle cx="${x(g.at(-1)).toFixed(1)}" cy="${y(g.at(-1)).toFixed(1)}" r="3.5" fill="currentColor"/>`).join("")}
-      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.at).toLocaleTimeString())}: ${percentText(s[key])}</title></circle>`).join("")}
-      ${known.length < 2 ? `<text class="chart-empty" x="194" y="74" text-anchor="middle">${value == null ? "No current reading" : "Collecting history…"}</text>` : ""}
-      <text class="chart-axis" x="38" y="154">10 min ago</text><text class="chart-axis" x="194" y="154" text-anchor="middle">5 min ago</text><text class="chart-axis" x="350" y="154" text-anchor="end">Now</text>
-    </svg><div class="chart-caption">History starts when Home opens<span>Updates every 10 sec</span></div></article>`;
+      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.at).toLocaleString())}: ${percentText(s[key])}</title></circle>`).join("")}
+      ${known.length < 2 ? `<text class="chart-empty" x="194" y="74" text-anchor="middle">${homeHistoryError ? "History unavailable" : known.length ? "First recorded reading" : "No recorded data in this period"}</text>` : ""}
+      <text class="chart-axis" x="38" y="154">${esc(timeLabel(start))}</text><text class="chart-axis" x="194" y="154" text-anchor="middle">${esc(timeLabel(start + duration / 2))}</text><text class="chart-axis" x="350" y="154" text-anchor="end">${esc(timeLabel(last))}</text>
+    </svg><div class="chart-caption">Saved on server · 30-day retention<span>${step > 10000 ? `Average per ${Math.round(step / 60000)} min` : "Sample every 10 sec"}</span></div></article>`;
 }
 
 function activities() {
@@ -706,12 +723,13 @@ function renderHome() {
   else if (storagePct >= 85 || failed.length) mood = ["warn", "Needs ", "Attention"];
   if ($("#health")) $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
 
+  $("#home-cluster-name").textContent = c.name || "Standalone server";
   const cs = $("#cluster-state");
   cs.textContent = c.quorum ? (c.ha_capable ? "Highly available" : "Healthy") : "No quorum";
   cs.className = `val ${c.quorum ? "ok" : "bad"}`;
   const row = (k, v) => `<div class="row"><span>${esc(k)}</span><b>${v}</b></div>`;
   $("#cluster-box").innerHTML = [
-    row("Deployment", esc(TOPOLOGY[c.topology] || c.topology)),
+    row("Deployment", c.cluster_id ? `Cluster · ${esc(c.name)} (${c.members.length} node${c.members.length === 1 ? "" : "s"})` : esc(TOPOLOGY[c.topology] || c.topology)),
     row("High availability", c.ha_capable ? "Yes" : "No"),
     row("Members online", `${members.length - offline.length} / ${members.length}`),
     row("Quorum", `<span class="dot ${c.quorum ? "ok" : "bad"}"></span> ${c.quorum ? "OK" : "Lost"}`),
@@ -731,13 +749,12 @@ function renderHome() {
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
   ].join("");
 
-  recordHomeSample(t);
   const partial = t.measured < t.cpus || t.memMeasured < t.mem;
   $("#usage").innerHTML = `<div class="usage-row"><h4>Allocated to running VMs</h4>${[
     allocationMeter("vCPU", t.vcpus, t.cpus, `${t.vcpus} vCPU / ${t.cpus} hardware threads`),
     allocationMeter("Memory", t.vmem, t.mem, `${gbText(t.vmem)} / ${gbText(t.mem)}`),
     allocationMeter("VM disks", t.vdisk, t.cap, `${num(t.vdisk)} / ${num(t.cap)} GB · all VMs &amp; templates, thin provisioned`),
-  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4>${[
+  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4><div class="history-controls"><label for="home-history-range">History</label><select id="home-history-range">${Object.entries(HISTORY_RANGES).map(([key, [label]]) => `<option value="${key}" ${homeRange === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select><span class="hint">Collected on server · kept for 30 days${homeMetrics?.storage_bytes ? ` · ${(homeMetrics.storage_bytes / 1048576).toFixed(1)} MB stored` : ""}${homeMetrics?.recording_since ? ` · Recording since ${esc(new Date(homeMetrics.recording_since).toLocaleString())}` : ""}${homeHistoryError ? ` · ${esc(homeHistoryError)}` : ""}</span></div>${[
     usageChart("cpu", "CPU usage", t.cpuPct, `${t.measured} hardware threads in total`),
     usageChart("memory", "Memory usage", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} used / ${gbText(t.memMeasured)} total` : "Waiting for node metrics"),
     usageChart("storage", "Storage usage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} GB used / ${num(t.cap)} GB total` : "Waiting for storage metrics"),
@@ -2853,10 +2870,8 @@ function ipmiText(info = {}) {
   return `<span class="muted">${esc(info.note || "Unavailable")}</span>`;
 }
 
-function renderNodes() {
-  const c = state.cluster, admin = isAdmin();
-  $("#nodes-sub").textContent = `${TOPOLOGY[c.topology] || c.topology} · ${c.ha_capable ? "HA capable" : "no HA"} · ${c.quorum ? "quorum OK" : "no quorum"}`;
-  $("#nodes").innerHTML = c.members.map((m) => {
+function nodeRows(c, admin) {
+  return c.members.map((m) => {
     const h = state.hosts[m.name];
     const vms = state.vms.filter((v) => v.node === m.name).length;
     const buttons = [
@@ -2872,6 +2887,7 @@ function renderNodes() {
       <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
       <td>${m.role === "compute" ? ipmiText(state.summaries[m.name]?.ipmi) : '<span class="muted">Not applicable</span>'}</td>
       <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>${m.maintenance ? ` <span class="badge plain">maintenance</span>` : ""}</td>
+      <td data-hardware-node="${esc(m.name)}">${m.role === "compute" ? '<span class="muted">Checking…</span>' : '<span class="muted">Not applicable</span>'}</td>
       <td>${h ? `${h.cpus} cores` : "–"}</td>
       <td>${h ? gbText(h.memory_mb) : "–"}</td>
       <td>${m.role === "compute" ? vms : "–"}</td>
@@ -2880,11 +2896,70 @@ function renderNodes() {
   }).join("");
 }
 
-$("#nodes").addEventListener("click", async (e) => {
+function renderCluster() {
+  const c = state.cluster, local = c.members.find((m) => m.local), created = Boolean(c.cluster_id) || c.members.length > 1;
+  const kv = (rows) => rows.map(([key,value]) => `<dt>${esc(key)}</dt><dd>${value}</dd>`).join("");
+  $("#cluster-page-create").hidden = created;
+  $("#cluster-page-add").hidden = !created;
+  $("#cluster-details").innerHTML = kv([
+    ["Name", esc(c.name || "Standalone server")],
+    ["Cluster ID", c.cluster_id ? `<span class="mono cluster-id">${esc(c.cluster_id)}</span>` : "Create a cluster to begin"],
+    ["Management node", esc(local ? nodeLabel(local.name) : "Unavailable")],
+    ["Members", String(c.members.length)],
+  ]);
+  $("#cluster-health").innerHTML = kv([
+    ["Online", `${c.members.filter((m) => m.healthy).length} / ${c.members.length}`],
+    ["Quorum", `<span class="badge ${c.quorum ? "online" : "offline"}">${c.quorum ? "OK" : "Lost"}</span>`],
+    ["Topology", created && c.members.length === 1 ? "Single-node cluster" : esc(TOPOLOGY[c.topology] || c.topology)],
+    ["Automatic VM failover", "Not implemented"],
+  ]);
+  $("#cluster-pairing").hidden = created;
+  $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
+  $("#cluster-members").innerHTML = nodeRows(c, isAdmin());
+  for (const m of c.members.filter((m) => m.role === "compute")) void loadHardwareBadge(m.name);
+}
+
+$("#cluster-copy-key").addEventListener("click", async () => {
+  try {
+    const data = await api("/cluster/pairing");
+    await navigator.clipboard.writeText(data.agent_token);
+    toast("Pairing key copied. Paste it into Add node on the cluster manager.");
+  } catch (err) { fail(err); }
+});
+
+function renderNodes() {
+  const c = state.cluster, admin = isAdmin();
+  const created = Boolean(c.cluster_id) || c.members.length > 1;
+  $("#cluster-create-button").hidden = created;
+  $("#cluster-add-button").hidden = !created;
+  $("#cluster-setup-hint").textContent = created ? `${c.name || "Cluster"} · ${c.members.length} member${c.members.length === 1 ? "" : "s"}. Add other independently installed nodes when ready.` : "Standalone server. Create a cluster here first, then add other independently installed nodes.";
+  $("#nodes-sub").textContent = `${created ? c.name || "Cluster" : "Standalone"} · ${c.members.length} node${c.members.length === 1 ? "" : "s"} · ${c.ha_capable ? "HA capable" : "no HA"} · ${c.quorum ? "quorum OK" : "no quorum"}`;
+  $("#nodes").innerHTML = nodeRows(c, admin);
+  for (const m of c.members.filter((m) => m.role === "compute")) void loadHardwareBadge(m.name);
+}
+
+async function loadHardwareBadge(name) {
+  const targets = [...document.querySelectorAll('[data-hardware-node]')].filter((e) => e.dataset.hardwareNode === name);
+  if (!targets.length) return;
+  try {
+    const data = await api(`/nodes/${enc(name)}/hardware`), items = data.items || [];
+    const faults = items.filter((x) => x.status === "critical"), warnings = items.filter((x) => x.status === "warning");
+    const unknown = items.filter((x) => x.status === "unknown").length;
+    const status = faults.length ? "critical" : warnings.length ? "warning" : unknown || !items.length ? "unknown" : "ok";
+    let html = hardwareBadge(status) + `<span class="vm-sub">${esc(faults[0]?.name || warnings[0]?.name || (data.collecting ? "Collecting readings…" : unknown ? `${unknown} unavailable readings` : data.note || "Supported readings within limits"))}</span>`;
+    if (!items.length && !data.collecting && !data.note) html = hardwareBadge("unknown");
+    targets.forEach((target) => { if (target.isConnected) target.innerHTML = html; });
+  } catch {
+    targets.forEach((target) => { if (target.isConnected) target.innerHTML = hardwareBadge("unknown") + '<span class="vm-sub">Status unavailable</span>'; });
+  }
+}
+
+const handleNodeAction = async (e) => {
   const label = e.target.closest("button[data-node-label]");
   const ev = e.target.closest("button[data-evacuate]");
   const rm = e.target.closest("button[data-node]");
   const mt = e.target.closest("button[data-maint]");
+  if (!label && !ev && !rm && !mt) return;
   try {
     if (label) {
       const name = label.dataset.nodeLabel;
@@ -2909,14 +2984,23 @@ $("#nodes").addEventListener("click", async (e) => {
       if (!confirm(`Remove ${rm.dataset.node} from the cluster?`)) return;
       await del(`/cluster/nodes/${enc(rm.dataset.node)}`);
     } else return;
-    await refresh("nodes");
+    await refresh(currentPage() === "cluster" ? "cluster" : "nodes");
   } catch (err) { fail(err); }
-});
+};
+$("#nodes").addEventListener("click", handleNodeAction);
+$("#cluster-members").addEventListener("click", handleNodeAction);
+
+handlers["cluster-create-dialog"] = async (f) => {
+  await post("/cluster/create", { name: f.get("name").trim() });
+  toast("Cluster created. You can now add other nodes.");
+  if (currentPage() === "cluster") await refresh("cluster");
+  else location.hash = "cluster";
+};
 
 handlers["node-dialog"] = async (f) => {
-  await post("/cluster/nodes", { name: f.get("name"), role: f.get("role"), address: f.get("address") });
+  await post("/cluster/nodes", { name: f.get("name"), role: f.get("role"), address: f.get("address"), agent_token: f.get("agent_token") || null });
   toast(`${f.get("name")} joined the cluster`);
-  await refresh("nodes");
+  await refresh(currentPage() === "cluster" ? "cluster" : "nodes");
 };
 
 // ---------- one node: Summary, Network, Settings ----------

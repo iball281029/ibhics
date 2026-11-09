@@ -8,11 +8,13 @@ next step; the quorum rule here is the same one etcd will enforce.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import unicodedata
+import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..backup import NodeBackup
@@ -44,6 +46,7 @@ class Member:
     # Maintenance mode: no new VM is placed, started or moved here (v0.9).
     maintenance: bool = False
     display_name: str = ""
+    agent_token: str = field(default="", repr=False)
 
     @property
     def local(self) -> bool:
@@ -69,6 +72,8 @@ class Cluster:
         self._clock = clock
         self._members: dict[str, Member] = {}
         self._lock = threading.RLock()
+        self.cluster_id = ""
+        self.cluster_name = ""
 
     @classmethod
     def standalone(cls, name: str, driver: HypervisorDriver, **kwargs) -> Cluster:
@@ -77,6 +82,38 @@ class Cluster:
         return cluster
 
     # Membership
+
+    def pairing(self) -> dict:
+        if self.cluster_id or len(self._members) != 1:
+            raise MembershipError("only a standalone server can supply a pairing key")
+        if not self._token:
+            raise MembershipError("this server has no agent key configured")
+        local = next(iter(self._members.values()))
+        return {
+            "name": local.name,
+            "display_name": local.display_name or local.name,
+            "agent_token": self._token,
+        }
+
+    def create_cluster(self, name: str) -> None:
+        name = name.strip()
+        if (
+            not name
+            or len(name) > 80
+            or any(unicodedata.category(char).startswith("C") for char in name)
+        ):
+            raise MembershipError("cluster name must be 1–80 characters without control characters")
+        with self._lock:
+            if self.cluster_id:
+                raise MembershipError("this node already belongs to a created cluster")
+            if len(self._members) != 1 or not next(iter(self._members.values())).local:
+                raise MembershipError("create a cluster from a standalone node first")
+            self.cluster_id, self.cluster_name = str(uuid.uuid4()), name
+            try:
+                self._save()
+            except Exception:
+                self.cluster_id = self.cluster_name = ""
+                raise
 
     _maintenance: set[str] = set()
 
@@ -100,10 +137,11 @@ class Cluster:
             self._members[name] = member
             return member
 
-    def join(self, name: str, role: NodeRole, address: str) -> Member:
-        if not self._token:
+    def join(self, name: str, role: NodeRole, address: str, agent_token: str = "") -> Member:
+        token = agent_token or self._token
+        if not token:
             raise MembershipError("set a cluster token before adding remote nodes")
-        client = self._client_factory(address, self._token)
+        client = self._client_factory(address, token)
         health = client.health()  # raises NodeUnavailable if unreachable
         if health.get("name") != name:
             raise MembershipError(
@@ -120,6 +158,7 @@ class Cluster:
             ):
                 raise MembershipError("the cluster already has a witness")
             member = Member(
+                agent_token=agent_token,
                 name=name,
                 role=role,
                 address=address,
@@ -148,18 +187,22 @@ class Cluster:
         if not self._state_path or not self._state_path.exists():
             return
         data = json.loads(self._state_path.read_text())
+        metadata = data.get("cluster", {})
+        self.cluster_id = metadata.get("id", "")
+        self.cluster_name = metadata.get("name", "")
         self._maintenance = set(data.get("maintenance", []))
         display_names = data.get("display_names", {})
         for member in self._members.values():
             member.maintenance = member.name in self._maintenance
             member.display_name = display_names.get(member.name, "")
         for entry in data["members"]:
-            client = self._client_factory(entry["address"], self._token)
+            client = self._client_factory(entry["address"], entry.get("agent_token") or self._token)
             role = NodeRole(entry["role"])
             with self._lock:
                 if entry["name"] in self._members:
                     continue
                 self._members[entry["name"]] = Member(
+                    agent_token=entry.get("agent_token", ""),
                     display_name=display_names.get(entry["name"], ""),
                     maintenance=entry["name"] in self._maintenance,
                     name=entry["name"],
@@ -311,7 +354,12 @@ class Cluster:
         if not self._state_path:
             return
         entries = [
-            {"name": m.name, "role": str(m.role), "address": m.address}
+            {
+                "name": m.name,
+                "role": str(m.role),
+                "address": m.address,
+                **({"agent_token": m.agent_token} if m.agent_token else {}),
+            }
             for m in self._members.values()
             if not m.local
         ]
@@ -319,10 +367,11 @@ class Cluster:
         tmp = self._state_path.with_suffix(".tmp")
         maintenance = sorted(m.name for m in self._members.values() if m.maintenance)
         display_names = {m.name: m.display_name for m in self._members.values() if m.display_name}
-        tmp.write_text(
-            json.dumps(
-                {"members": entries, "maintenance": maintenance, "display_names": display_names},
-                indent=2,
-            )
-        )
+        data = {"members": entries, "maintenance": maintenance, "display_names": display_names}
+        if self.cluster_id:
+            data["cluster"] = {"id": self.cluster_id, "name": self.cluster_name}
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(data, f, indent=2)
         tmp.replace(self._state_path)

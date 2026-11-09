@@ -211,12 +211,55 @@ def bmc(run=read) -> tuple[list[dict], list[dict], str]:
     return observed, events, "unavailable" if code else "available"
 
 
+def recorded_issues(root: Path) -> list[dict]:
+    """Confirmed POST/service findings that runtime sensors cannot rediscover.
+
+    Explicitly labelled as recorded evidence; remove after repair and verification.
+    """
+    path = root / "etc/ibhics/hardware-issues.json"
+    try:
+        records = json.loads(path.read_text())
+        if not isinstance(records, list) or len(records) > 64:
+            raise ValueError("invalid records")
+        out = []
+        for row in records:
+            if not isinstance(row, dict) or row.get("status") not in ("warning", "critical"):
+                raise ValueError("invalid issue")
+            for key in ("category", "name", "detail", "source", "observed_at"):
+                if not isinstance(row.get(key), str) or not row[key] or len(row[key]) > 1000:
+                    raise ValueError("invalid issue field")
+            datetime.fromisoformat(row["observed_at"])
+            out.append(
+                item(
+                    row["category"],
+                    row["name"],
+                    row["status"],
+                    f"{row['detail']} · Recorded: {row['observed_at']}. "
+                    "Clear after verified repair.",
+                    f"{row['source']} (recorded)",
+                )
+            )
+        return out
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, TypeError):
+        return [
+            item(
+                "System",
+                "Recorded hardware issues",
+                "unknown",
+                "Cannot read recorded findings; check /etc/ibhics/hardware-issues.json",
+                "Node",
+            )
+        ]
+
+
 def collect(root=Path("/"), run=read) -> dict:
     with ThreadPoolExecutor(max_workers=2) as pool:
         bmc_job = pool.submit(bmc, run)
         disk_job = pool.submit(disks, run)
         observed, events, event_status = bmc_job.result()
-        observed += disk_job.result() + memory(root)
+        observed += disk_job.result() + memory(root) + recorded_issues(root)
     for category in ("Fans", "Power supplies", "Temperature"):
         if not any(i["category"] == category for i in observed):
             observed.append(

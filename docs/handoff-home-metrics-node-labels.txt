@@ -236,3 +236,107 @@ Latest naming correction from user: display name of the new .103 server is
 ibhics-Node (exact case, no trailing 2), superseding ibhics-Node2 above.
 Stable node ID / Linux hostname remain ibhics-node2 as already provisioned;
 display names are separate from node identity. Apply the new label when joined.
+
+User clarified again: .103 is ibhics-Node2. This overrides the intermediate
+ibhics-Node correction. Use display name ibhics-Node2; stable ID ibhics-node2.
+User reports LAN cable connected. New host rebooted after installation, still
+shows POST uncorrectable memory error P2-DIMMF1 on this boot. Screenshot saved
+as ../node2-ram-post-error.png. Awaiting OS boot and checking networking.
+
+FINAL STATE 2026-11-09 17:19 Asia/Bangkok (supersedes earlier in-progress notes)
+- User clarified the architecture: install each server independently with its own
+  web console; create a cluster on the first server, then explicitly add others.
+- Node2 was installed successfully; OS and SSH at 172.16.12.103, BMC .107,
+  serial ZM174S017043 verified. eno1 is bridged through br0 with .103/24,
+  gateway .254, DNS 172.16.10.1 and 8.8.8.8. New OS disk SATADOM /dev/sdc.
+- Node2 is named ibhics-Node2 (display), ibhics-node2 (stable ID and hostname).
+- User explicitly accepts faulty P2-DIMMF1 RAM for test use. Do not treat it as a
+  newly discovered blocker. BIOS POST error is recorded transparently in
+  /etc/ibhics/hardware-issues.json and shown red in Node Summary and node lists.
+  Source is Verified BIOS POST (recorded), timestamp 2026-11-09T16:46:00+07:00.
+  Clear this finding only after verified repair. Runtime counters can be zero
+  even though BIOS disabled faulty memory; do not use temperature as a RAM test.
+- Tested a temporary VM on Node2 through the manager: create, start, force stop,
+  permanent delete all succeeded. UUID 23689ef9-f22f-44c6-a091-79e3c5a099d7
+  was a one-off installation check and no longer exists.
+- IMPORTANT: user then requested Node2 be removed. Removal completed and persists.
+  Latest explicit instruction: update Node2 identically, leave it standalone;
+  USER will click Add node themselves. DO NOT re-add Node2 automatically.
+- Node1 .104 now has ONLY local member ibhics-test (display ibhics-Node1), 4 VMs.
+  User clicked Create cluster on Node1; preserve their existing metadata:
+  name ibhics-cluster; ID eb3ddd52-df98-47dc-8acd-71ea7e0e30d3.
+- Node2 .103 has ONLY local member ibhics-node2, no Cluster ID, no VMs. Its own
+  HTTPS console is https://172.16.12.103:8888 with admin credentials matching the
+  previously supplied admin account. Seeded ONLY admin password hash/user record,
+  no sessions/audit history. Root SSH remains public-key-only.
+- Node2 has its own independently generated agent token, not Node1's token.
+  Tokens are protected in /etc/ibhics/ibhics.env. Never print/copy them to artifacts.
+  Both manager and agent enabled on Node2. Default libvirt bridge network and
+  default directory pool are active and autostart; root/data ~28GB/22GB.
+- Standalone installer now defaults to console + compute, starts manager + agent;
+  old agent-only compute mode remains an advanced/legacy option.
+- Temporary BMC ISO detached. SMB media service stopped, port 445 no longer
+  listening. Both temporary remote ISO copies removed; original Mac ISO retained.
+  Samba standard services remain disabled. Node1 root has ~9GB free.
+
+Final deployed package on BOTH servers: 1.3.0b2+history1
+- Wheel SHA256: b5bd450c297e4668c8a112c6158d3eb451108f9b74ffb1a1bbb38d4f52f63030
+- Backup on each server: /opt/ibhics/history1-backup-20261109-171542/venv
+- Manager health checks passed on .104 and .103; Node2 agent restarted on latest.
+- Intermediate backups: .104 node3-backup-20261109-165046 and
+  cluster1-backup-20261109-170041. Earlier home/node backups remain available.
+
+Cluster create / management / independent admission
+- Admin POST /api/v1/cluster/create persists UUID/name on a standalone local
+  node without renaming node IDs or changing VMs. Duplicate create rejected;
+  persistence failure rolls back in-memory creation.
+- Dedicated #cluster page shows name, ID, management node, online members, quorum,
+  hardware status and Add/Remove/maintenance/rename links/actions.
+- Home shows the cluster name and Manage cluster link. Sidebar and top-bar
+  cluster name also link directly to #cluster. Creation navigates to #cluster.
+- Node1 URL: https://172.16.12.104:8888/#cluster ; Node2 URL:
+  https://172.16.12.103:8888/#cluster . Both actual pages verified on desktop/mobile.
+- Standalone Cluster page: admin Copy pairing key, Node ID and agent URL displayed.
+  GET /api/v1/cluster/pairing is admin-only/no-store; created clusters cannot
+  disclose a pairing key via this route. No raw keys in normal cluster replies.
+- Add node accepts optional per-node agent_token (SecretStr request); primary
+  stores it in root-readable 0600 cluster.json and reloads it across restarts.
+  Legacy shared-key agents still work. Per-node admission was tested with
+  separate agent credentials in-process, including persistence and non-disclosure.
+- Actual Node2 pairing credential was checked against its agent health endpoint:
+  HTTP 200, name ibhics-node2, address http://172.16.12.103:8007. NOT enrolled.
+- User entry flow: on Node2 Cluster page copy pairing key, then on Node1 Add node
+  enter Node ID ibhics-node2, role compute, agent URL http://172.16.12.103:8007,
+  paste its pairing key. User can adjust its display label using Rename.
+- Single-node created cluster is labelled Single-node cluster. No automatic
+  VM failover, fencing, distributed storage or manager HA is implemented.
+  Cross-host migration transport/storage configuration has not been validated.
+
+Persistent Home resource history
+- File: /var/lib/ibhics/usage.sqlite3 per manager; override IBHICS_USAGE_FILE.
+- Background sampling every 10 seconds independent of browser sessions. CPU is
+  weighted by reporting hardware threads, memory/storage percentages by totals.
+  Missing readings are null/gaps and incomplete node counts retained.
+- 30-day retention enforced on startup and writes. SQLite WAL; per-operation
+  connections; no external database/dependencies. Allocation still has NO charts.
+- Read API /api/v1/usage/history?range=now|5m|30m|1d|7d|30d . Up to ~181 chart
+  points with averages for long periods; browser selection persists locally.
+- Shows collection start date and actual history disk use. Does not invent older
+  measurements: history starts at this update (~17:15:40 Asia/Bangkok).
+- Capacity benchmark: 259200 samples (30d at 10s), actual schema 20512768 bytes,
+  19.56 MiB excluding WAL. Practical estimate ~20MB plus temporary files;
+  allow ~25-30MB per manager for this data pattern.
+- Verified on BOTH real servers: 16+ history points retained across logout/login,
+  all six filters work, no Home/Cluster horizontal overflow at 390px, no allocation
+  charts, no JS page errors in fresh review contexts. UI screenshots in
+  ../history1-release/ (node1/node2 Home, Cluster desktop/mobile).
+- Tests: 117 passed, 1 pre-existing AppArmor test deselected. That known
+  test_custom_folder_pool_added_to_apparmor failure was already reproduced on
+  untouched dev earlier; this revision does not fix/change it. Ruff/JS/bash/diff pass.
+- Final VM UUIDs on Node1 unchanged:
+  50d7cc51-7d23-4ff0-99f0-01ab5324c15e
+  29464a25-2c35-42a8-845a-af67edd45fb1
+  9ba33616-9d77-4e69-b994-52d4a89baf9a
+  44c935c3-85a3-465f-b555-45a543b28d40
+- Last user instruction: finish existing work, then STOP. Do not start additional
+  features or enroll Node2 without a new request. GitHub remains blocked: no push.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 import socket
 from dataclasses import asdict
@@ -39,6 +40,7 @@ from .schemas import (
     BackupTargetOut,
     CdromRequest,
     CloneIn,
+    ClusterCreate,
     ClusterOut,
     DeployOut,
     DiskMovesIn,
@@ -102,6 +104,7 @@ from .schemas import (
     VMSnapshotOut,
     VMStatsOut,
 )
+from .usage import UsageHistory
 from .vmgroups import VMGroups
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -141,6 +144,8 @@ async def receive_file(request: Request, target: Path) -> int:
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
+    ("GET", f"{API}/cluster/pairing"),
+    ("POST", f"{API}/cluster/create"),
     ("PATCH", f"{API}/cluster/nodes/{{name}}"),
     ("POST", f"{API}/cluster/nodes"),
     ("DELETE", f"{API}/cluster/nodes/{{name}}"),
@@ -215,6 +220,7 @@ def create_app(
     deploys: DeployManager | None = None,
     recycle_days: int = 0,
     edge_state: Path | None = None,
+    usage: UsageHistory | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -243,6 +249,18 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
+        metrics_task = None
+        if usage is not None:
+
+            async def sample_usage():
+                while True:
+                    try:
+                        await asyncio.to_thread(usage.collect, cluster)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Resource history collection failed")
+                    await asyncio.sleep(10)
+
+            metrics_task = asyncio.create_task(sample_usage())
         task = None
         if heartbeat_interval > 0:
 
@@ -263,7 +281,7 @@ def create_app(
 
             scheduler = asyncio.create_task(schedule())
         yield
-        for t in (task, scheduler):
+        for t in (task, scheduler, metrics_task):
             if t:
                 t.cancel()
 
@@ -413,6 +431,8 @@ def create_app(
     def cluster_status() -> ClusterOut:
         topology = cluster.topology()
         return ClusterOut(
+            cluster_id=cluster.cluster_id,
+            name=cluster.cluster_name,
             topology=topology,
             quorum=cluster.has_quorum(),
             ha_capable=topology in (Topology.TWO_NODE_WITNESS, Topology.CLUSTER),
@@ -431,9 +451,36 @@ def create_app(
             ],
         )
 
+    @api.get("/usage/history")
+    def usage_history(range: str = "now") -> dict:
+        if usage is None:
+            return {"points": [], "range": range, "note": "Server history is not configured"}
+        try:
+            return usage.history(range)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.post("/cluster/create", response_model=ClusterOut, status_code=status.HTTP_201_CREATED)
+    def create_cluster(body: ClusterCreate) -> ClusterOut:
+        cluster.create_cluster(body.name)
+        return cluster_status()
+
+    @api.get("/cluster/pairing")
+    def cluster_pairing(request: Request, response: Response) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        host = request.url.hostname
+        if ":" in host:
+            host = f"[{host}]"
+        return {**cluster.pairing(), "address": f"http://{host}:8007"}
+
     @api.post("/cluster/nodes", response_model=MemberOut, status_code=status.HTTP_201_CREATED)
     def join_node(body: NodeJoin) -> MemberOut:
-        member = cluster.join(body.name, body.role, body.address)
+        member = cluster.join(
+            body.name,
+            body.role,
+            body.address,
+            body.agent_token.get_secret_value() if body.agent_token else "",
+        )
         return MemberOut(
             name=member.name,
             display_name=member.display_name or member.name,

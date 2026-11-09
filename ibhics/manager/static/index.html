@@ -69,6 +69,7 @@
     <a href="#storage" data-page="storage" data-label="Storage"><svg><use href="#i-storage"/></svg></a>
     <a href="#network" data-page="network" data-label="Network"><svg><use href="#i-nic"/></svg></a>
     <a href="#nodes" data-page="nodes" data-label="Nodes"><svg><use href="#i-nodes"/></svg></a>
+    <a href="#cluster" data-page="cluster" data-label="Cluster"><svg><use href="#i-nodes"/></svg></a>
     <a href="#backup" data-page="backup" data-label="Backup"><svg><use href="#i-backup"/></svg></a>
     <a href="#migrate" data-page="migrate" data-label="Migrate"><svg><use href="#i-migrate"/></svg></a>
     <a href="#terminal" data-page="terminal" data-label="Terminal" class="admin-only"><svg><use href="#i-term"/></svg></a>
@@ -83,7 +84,7 @@
       <small>Tasks</small><span id="tasks-count"><span class="dot"></span> None running</span>
       <div class="dropdown tasks-panel" id="tasks-panel"></div>
     </div>
-    <div class="meta wide"><small>Cluster</small><span id="topology">…</span></div>
+    <div class="meta wide"><small>Cluster</small><a href="#cluster" id="topology">…</a></div>
     <div class="meta wide"><small>Quorum</small><span id="quorum"><span class="dot"></span> …</span></div>
     <div class="menu-btn meta" id="user-menu" tabindex="0">
       <small>Username</small><span><span id="whoami">…</span><svg class="chev"><use href="#i-chev"/></svg></span>
@@ -107,6 +108,7 @@
         <div class="overview">
           <div>
             <div class="block-title">Cluster: <span class="val" id="cluster-state">…</span></div>
+            <div class="home-cluster-navigation"><strong id="home-cluster-name"></strong><a href="#cluster">Manage cluster →</a></div>
             <div class="cluster-box" id="cluster-box"></div>
           </div>
           <div>
@@ -345,18 +347,38 @@
       </div>
     </section>
 
+    <section class="page" id="page-cluster">
+      <div class="sheet">
+        <div class="page-head"><h1>Cluster management</h1><span class="spacer"></span>
+          <button class="primary admin-only" id="cluster-page-create" data-open="cluster-create-dialog">Create cluster</button>
+          <button class="primary admin-only" id="cluster-page-add" data-open="node-dialog" hidden>+ Add node</button>
+        </div>
+        <div class="cards"><div class="card"><h3>Cluster</h3><dl class="kv" id="cluster-details"></dl></div>
+          <div class="card"><h3>Health and quorum</h3><dl class="kv" id="cluster-health"></dl></div></div>
+        <div class="card wide" id="cluster-pairing"><h3>Connect this standalone server</h3><div class="body">
+          <p class="hint">To add this server to a cluster, copy its pairing key and use its Node ID and agent address on the cluster's Add node form.</p>
+          <p id="cluster-pairing-address"></p><button class="admin-only" id="cluster-copy-key">Copy pairing key</button>
+        </div></div>
+        <div class="toolbar"><h3>Members</h3><span class="spacer"></span><a href="#nodes">Node inventory →</a></div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Address</th><th>IPMI / BMC</th><th>Status</th><th>Device health</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead><tbody id="cluster-members"></tbody></table></div>
+        <p class="hint section">Create a cluster on the first server, then add other independently installed servers. A two-node cluster needs an independent witness for resilient quorum. Automatic VM failover is not implemented.</p>
+      </div>
+    </section>
+
     <section class="page" id="page-nodes">
       <div class="sheet">
         <div class="page-head">
           <h1>Nodes</h1><span class="sub" id="nodes-sub"></span>
           <span class="spacer"></span>
-          <button class="primary admin-only" data-open="node-dialog">+ Add node</button>
+          <button class="primary admin-only" id="cluster-create-button" data-open="cluster-create-dialog">Create cluster</button>
+          <button class="primary admin-only" id="cluster-add-button" data-open="node-dialog" hidden>+ Add node</button>
         </div>
+        <p class="hint section" id="cluster-setup-hint">Start with this standalone server. Create a cluster here, then add other independently installed nodes.</p>
         <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>Name</th><th>Role</th><th>Address</th><th>IPMI / BMC</th><th>Status</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Role</th><th>Address</th><th>IPMI / BMC</th><th>Status</th><th>Device health</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead>
           <tbody id="nodes"></tbody>
         </table></div>
-        <p class="hint section" style="padding-top:14px">High availability needs at least two compute nodes and a witness. Changes need a majority of members online (quorum). Evacuate moves every VM off a node before maintenance.</p>
+        <p class="hint section" style="padding-top:14px">A cluster starts with one node. Add independently installed nodes when ready. A two-node cluster needs an independent witness for resilient quorum. Automatic VM failover is not implemented.</p>
       </div>
     </section>
 
@@ -1028,13 +1050,26 @@
   </form>
 </dialog>
 
+<dialog id="cluster-create-dialog">
+  <form method="dialog" id="cluster-create-form">
+    <header><h3>Create cluster</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid one">
+      <label>Cluster name <input name="name" required maxlength="80" value="ibhics-cluster" autocomplete="off"></label>
+      <p class="hint">This server becomes the first member and runs cluster management. Existing VMs stay on this server. Add other nodes after they have been installed independently.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create cluster</button></footer>
+  </form>
+</dialog>
+
 <dialog id="node-dialog">
   <form method="dialog" id="node-form">
     <header><h3>Add node to cluster</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
-      <label>Node name <input name="name" required placeholder="node2"></label>
+      <label>Node ID <input name="name" required placeholder="ibhics-node2"></label>
       <label>Role <select name="role"><option value="compute">Compute</option><option value="witness">Witness</option></select></label>
       <label>Agent URL <input name="address" required placeholder="http://10.0.0.12:8007"></label>
+      <label>Pairing key <input name="agent_token" type="password" autocomplete="off" placeholder="Copy from the standalone server's Cluster page"></label>
+      <p class="hint">Each independently installed server keeps its own key. A legacy agent using this cluster's shared key may leave this blank.</p>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add node</button></footer>
   </form>

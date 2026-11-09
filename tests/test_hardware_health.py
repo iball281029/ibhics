@@ -146,3 +146,36 @@ def test_hardware_endpoint_manager_agent_and_old_agent():
     )
     remote = RemoteDriver(AgentClient("http://agent", "secret", http=old))
     assert "Upgrade" in remote.host_system().hardware_health()["note"]
+
+
+def test_verified_post_issue_survives_runtime_sensor_health(tmp_path):
+    path = tmp_path / "etc/ibhics/hardware-issues.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "category": "Memory",
+                    "name": "P2-DIMMF1",
+                    "status": "critical",
+                    "detail": "Uncorrectable memory component found during BIOS POST",
+                    "source": "Verified BIOS POST",
+                    "observed_at": "2026-11-09T16:46:00+07:00",
+                }
+            ]
+        )
+    )
+    issue = hardware.recorded_issues(tmp_path)[0]
+    assert issue["status"] == "critical"
+    assert issue["name"] == "P2-DIMMF1"
+    assert "(recorded)" in issue["source"]
+    assert "2026-11-09" in issue["detail"]
+    path.unlink()
+    assert hardware.recorded_issues(tmp_path) == []
+
+
+def test_invalid_issue_file_is_unknown_not_a_clean_bill(tmp_path):
+    path = tmp_path / "etc/ibhics/hardware-issues.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{broken")
+    assert hardware.recorded_issues(tmp_path)[0]["status"] == "unknown"

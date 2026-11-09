@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
@@ -480,6 +480,7 @@ class NodeJoin(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     role: NodeRole
     address: str = Field(pattern=r"^https?://", description="Agent URL, e.g. http://10.0.0.12:8007")
+    agent_token: SecretStr | None = None
 
 
 class MemberOut(BaseModel):
@@ -502,7 +503,13 @@ class MaintenanceIn(BaseModel):
     evacuate: bool = True  # move the node's VMs to other nodes first
 
 
+class ClusterCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
 class ClusterOut(BaseModel):
+    cluster_id: str = ""
+    name: str = ""
     topology: Topology
     quorum: bool
     ha_capable: bool

@@ -332,3 +332,37 @@ a normal temperature does not prove RAM integrity. BMC history may describe
 repaired faults and uses the BMC clock. RAID controllers can hide physical disks.
 Missing or older agents show monitoring unavailable instead of a healthy status.
 No SMART self-tests, counter resets, SEL clears or IPMI configuration writes run.
+
+Verified POST or service findings that runtime sensors cannot rediscover can be
+recorded on that node in root-owned `/etc/ibhics/hardware-issues.json`. This is a
+JSON array of objects with `category`, `name`, `status` (`warning` or `critical`),
+`detail`, `source` and ISO8601 `observed_at`. These findings are explicitly labelled
+as recorded evidence and remain visible until removed after verified repair.
+The Nodes overview also shows hardware health separately from agent connectivity.
+
+A standalone server can become the first cluster member from **Nodes → Create
+cluster**. The admin enters a name; ibHiCS persists a new Cluster ID and keeps the
+local node, its display name and VMs. The **Add node** action appears afterwards.
+Creating a one-node cluster does not enable HA or add other servers automatically.
+Default installation starts each server with its own web console and agent;
+agent-only installation remains an advanced legacy option.
+
+Home resource charts use persistent server history in
+`/var/lib/ibhics/usage.sqlite3` (override with `IBHICS_USAGE_FILE`). The manager
+samples CPU, RAM and physical pool usage every 10 seconds even without an open
+browser. Samples older than 30 days are purged on startup and subsequent writes.
+History survives logout and manager restarts. Choose live/10 minutes, 5 minutes,
+30 minutes, 1 day, 7 days or 30 days; long periods use average buckets and roughly
+180 plotted points. Missing readings remain gaps. Allocation has no charts.
+History storage use is visible beside the filter. A 259,200-row/30-day benchmark
+with this schema used 19.56 MiB excluding temporary WAL files. Retention does not
+create data for periods before the feature was installed.
+
+Open **Cluster management** from the sidebar, the cluster name in the top bar, or
+**Home → Manage cluster**. It shows cluster identity, controller, membership,
+quorum and node actions. On a standalone server, an admin can copy its pairing
+key from this page. Add its Node ID, agent URL and pairing key on the controller.
+Each node keeps its own agent credential; per-node keys are stored only in the
+controller's root-readable membership file and are omitted from normal API replies.
+The legacy shared-key agent flow remains compatible. Adding a node still requires
+an explicit Add action; installing/upgrading a server never enrolls it automatically.

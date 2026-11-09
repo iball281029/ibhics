@@ -87,6 +87,10 @@ a:hover { text-decoration: underline; }
 .health-group .table-wrap { margin-top: 12px; }
 .health-event { overflow-wrap: anywhere; font-size: 12px; }
 .health-error { color: var(--bad); }
+.home-cluster-navigation { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin: 12px 0; }
+.home-cluster-navigation strong { font-size: 18px; overflow-wrap: anywhere; }
+.home-cluster-navigation a { font-size: 13px; }
+.cluster-id { overflow-wrap: anywhere; }
 
 /* Pages */
 main { flex: 1; padding: 0 28px 40px; }
@@ -935,6 +939,9 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 .chart-line { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 .chart-axis { fill: var(--muted); font-size: 10px; }
 .chart-empty { fill: var(--muted); font-size: 11px; }
+.history-controls { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; }
+.history-controls label { font-size: 12px; font-weight: 600; }
+.history-controls select { width: auto; min-width: 140px; }
 .chart-hit { fill: transparent; cursor: crosshair; }
 .chart-hit:hover { fill: var(--chart-color); stroke: var(--panel); stroke-width: 2; }
 .chart-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }

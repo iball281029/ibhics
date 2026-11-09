@@ -24,8 +24,8 @@ from .. import RELEASE_NAME
 PRODUCT = "ibHiCS Hyper-Converged Infrastructure"
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 ROLES = {
-    "manager": "First node: web console + compute (start a new cluster)",
-    "compute": "Additional compute node (join an existing cluster)",
+    "manager": "Standalone server: web console + compute (create a cluster later)",
+    "compute": "Agent-only compute node (advanced / legacy setup)",
     "witness": "Witness (quorum vote for a 2-node cluster, runs no VMs)",
 }
 MANAGER_PORT = 8888
@@ -315,6 +315,9 @@ def apply(
     step("Starting ibHiCS")
     write("/etc/ibhics/configured", f"{cfg.role}\n")
     sh("systemctl", "enable", "--now", service)
+    if cfg.role == "manager":
+        # Each standalone server has its own console and an agent ready for admission.
+        sh("systemctl", "enable", "--now", "ibhics-agent.service")
     sh("systemctl", "disable", "ibhics-firstboot.service", check=False)
 
 
