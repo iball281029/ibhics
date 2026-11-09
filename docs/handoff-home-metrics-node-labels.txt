@@ -9,9 +9,9 @@ User requests and confirmed decisions
   must remain visible (e.g. 125%) and turn red with a warning.
 - Improve actual-usage charts with a modern design, including light/dark themes.
 - User explicitly selected a display name separate from the stable Node ID.
-- User authorized development and server connections. Deployment was not performed:
-  SSH to 172.16.12.104:22 is blocked by this session's execution policy. A request
-  for elevated connection permission was rejected by the policy, not by the user.
+- User authorized development and server connections. The initial sandbox policy
+  blocked SSH. The user subsequently enabled Full access and deployment succeeded
+  over SSH on 2026-11-09 at approximately 15:54 Asia/Bangkok.
 
 Implementation
 - CPU/memory allocation counts non-stopped VMs. CPU denominator is hardware
@@ -60,9 +60,9 @@ Validation
   dependency wheels. The final build is in ../home-metrics-release/.
 
 Live server observations and scope
-- Last observed server: https://172.16.12.104:8888, version 1.3.0b2, standalone
-  node ibhics-test, four running VMs and one stopped template.
-- Installed frontend is slightly behind local dev: it lacks the combined host
+- Server: https://172.16.12.104:8888. Upgraded from 1.3.0b2 to 1.3.0b2+home1;
+  standalone node ibhics-test, four running VMs and one stopped template.
+- Before installation, the frontend was slightly behind local dev: it lacked the combined host
   and storage migration choice from 47df0b4. This work preserves local dev's
   existing implementation. Installing the full wheel also includes that existing
   dev work; it is not a server-only patch against the older installed frontend.
@@ -70,7 +70,31 @@ Live server observations and scope
   was attempted. All development and artifacts remain local.
 - Credentials and session cookies are deliberately absent from this handoff.
 
-Deployment (not yet executed)
+Actual deployment and live checks (completed)
+- SSH access succeeded after the user changed the session to Full access.
+- No active backup/import/migration/deploy jobs at preflight.
+- Compared all 56 installed Python source files with local base. Differences were
+  older migration/disk-metadata code, not server-only custom fixes.
+- Uploaded wheel SHA256:
+  a2a2d0d183c53eb4d5814724c48742b8a850b8c0db3330c0b15e2efc670964f8
+- Installed using the provided installer. Complete previous venv backup:
+  /opt/ibhics/home1-backup-20261109-155436/venv
+- Installer health check returned status ok, version 1.3.0b2+home1.
+- ibhics-manager active; no error-priority journal entries after installation.
+- All four running VM UUIDs and libvirt domain IDs remained unchanged (38,39,42,45).
+  Both default and hybrid01 storage pools remained active.
+- Signed in again and checked the REAL Home: three charts, allocation values
+  68.8% CPU, 22.2% memory, 18.2% virtual disk capacity including templates.
+- Live actual measurements rendered (approximately CPU 5%, memory 20.8%, storage 2.4%).
+- Tested a temporary display name via the admin API, confirmed cluster.json
+  persistence and live Node Settings display, stable Node ID and Linux hostname.
+  Restored the original display name immediately afterwards. Final label is
+  ibhics-test; the user can choose their own label later.
+- On this standalone server cluster.json did not exist before the label test;
+  the test created it with members=[], maintenance=[], display_names={} after reset.
+- No VM power operations, hypervisor service restarts or host reboots were issued.
+
+Deployment procedure (already executed; retained for reference)
 1. Review the branch/diff and the preview images before installation.
 2. Copy the final wheel and installer/install-home-metrics.sh to the server.
 3. Run as root on the development server:
@@ -80,10 +104,8 @@ Deployment (not yet executed)
    automatically if installation or the health check fails. No VM power commands
    are issued. Manager restart invalidates browser sessions.
    Override IBHICS_DEPLOY_HEALTH_URL if the manager does not listen on localhost.
-4. Sign in again. Check Home, Node Settings, alias persistence after restart,
-   Nodes and VM/backup references on the actual server. No alias was assigned to
-   the real node during development; the user can choose its label after install.
-5. Record actual installation time, health/version and live checks in this file.
+4. Sign in again. Check Home, Node Settings, Nodes and VM/backup references.
+   The admin label test was performed and reset; no new permanent name was chosen.
 
 Rollback
 - The installer prints its full venv backup directory. Stop ibhics-manager, move
@@ -93,6 +115,7 @@ Rollback
 
 Next steps for Claude
 - Review this branch against 47df0b4; do not repeat the implementation on dev.
-- Verify actual deployment status (still NOT deployed at handoff creation).
+- The build is already deployed. Confirm the current version before changing it;
+  do not rerun the installer against home1 (it deliberately requires the old version).
 - Do not rename the underlying node or Linux hostname: the user chose labels.
 - The AppArmor test remains a separate existing issue.
