@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,7 @@ class Member:
     last_error: str | None = None
     # Maintenance mode: no new VM is placed, started or moved here (v0.9).
     maintenance: bool = False
+    display_name: str = ""
 
     @property
     def local(self) -> bool:
@@ -147,8 +149,10 @@ class Cluster:
             return
         data = json.loads(self._state_path.read_text())
         self._maintenance = set(data.get("maintenance", []))
+        display_names = data.get("display_names", {})
         for member in self._members.values():
             member.maintenance = member.name in self._maintenance
+            member.display_name = display_names.get(member.name, "")
         for entry in data["members"]:
             client = self._client_factory(entry["address"], self._token)
             role = NodeRole(entry["role"])
@@ -156,6 +160,7 @@ class Cluster:
                 if entry["name"] in self._members:
                     continue
                 self._members[entry["name"]] = Member(
+                    display_name=display_names.get(entry["name"], ""),
                     maintenance=entry["name"] in self._maintenance,
                     name=entry["name"],
                     role=role,
@@ -165,6 +170,28 @@ class Cluster:
                     backups=RemoteBackup(client) if role == NodeRole.COMPUTE else None,
                     imports=RemoteImport(client) if role == NodeRole.COMPUTE else None,
                 )
+
+    def set_display_name(self, name: str, display_name: str) -> Member:
+        """Change a label without changing membership keys or VM/job references."""
+        display_name = display_name.strip()
+        if len(display_name) > 80 or any(
+            unicodedata.category(char).startswith("C") for char in display_name
+        ):
+            raise ValueError(
+                "display name must be at most 80 characters without control characters"
+            )
+        with self._lock:
+            member = self._members.get(name)
+            if member is None:
+                raise MembershipError(f"no node named {name!r}")
+            previous = member.display_name
+            member.display_name = display_name
+            try:
+                self._save()
+            except Exception:
+                member.display_name = previous
+                raise
+            return member
 
     # Health and quorum
 
@@ -291,5 +318,11 @@ class Cluster:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state_path.with_suffix(".tmp")
         maintenance = sorted(m.name for m in self._members.values() if m.maintenance)
-        tmp.write_text(json.dumps({"members": entries, "maintenance": maintenance}, indent=2))
+        display_names = {m.name: m.display_name for m in self._members.values() if m.display_name}
+        tmp.write_text(
+            json.dumps(
+                {"members": entries, "maintenance": maintenance, "display_names": display_names},
+                indent=2,
+            )
+        )
         tmp.replace(self._state_path)

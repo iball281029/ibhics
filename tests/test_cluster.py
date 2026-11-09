@@ -1,5 +1,6 @@
 """Manager + agents end to end, with agents served in-process through TestClient."""
 
+import json
 from concurrent.futures import Executor, Future
 
 import pytest
@@ -86,6 +87,32 @@ def test_two_node_witness_topology(env):
         "node2": True,
         "witness": True,
     }
+
+
+def test_display_names_for_remote_and_witness_survive_restart(env, tmp_path):
+    client, cluster, agents, clock = env
+    build_two_node_witness(client)
+    for name, label in [("node1", "Manager"), ("node2", "Compute B"), ("witness", "Quorum")]:
+        result = client.patch(f"/api/v1/cluster/nodes/{name}", json={"display_name": label})
+        assert result.status_code == 200, result.text
+        assert result.json()["name"] == name
+        assert result.json()["display_name"] == label
+    restored = Cluster(
+        token=TOKEN,
+        state_path=tmp_path / "cluster.json",
+        client_factory=agents.client,
+        clock=clock,
+    )
+    restored.add_local("node1", FakeDriver())
+    restored.load()
+    assert {m.name: m.display_name for m in restored.members()} == {
+        "node1": "Manager",
+        "node2": "Compute B",
+        "witness": "Quorum",
+    }
+    assert cluster.member("node2").client.health()["name"] == "node2"
+    restored.remove("node2")
+    assert "node2" not in json.loads((tmp_path / "cluster.json").read_text())["display_names"]
 
 
 def test_join_checks_identity_and_duplicates(env):

@@ -484,12 +484,17 @@ class NodeJoin(BaseModel):
 
 class MemberOut(BaseModel):
     name: str
+    display_name: str = ""
     role: NodeRole
     address: str | None
     local: bool
     healthy: bool
     last_error: str | None
     maintenance: bool = False
+
+
+class NodeDisplayNameIn(BaseModel):
+    display_name: str = Field(max_length=80)
 
 
 class MaintenanceIn(BaseModel):

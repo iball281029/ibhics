@@ -64,6 +64,7 @@ from .schemas import (
     NetTestIn,
     NetworkIn,
     NetworkOut,
+    NodeDisplayNameIn,
     NodeJoin,
     PasswordChange,
     PolicyIn,
@@ -140,6 +141,7 @@ async def receive_file(request: Request, target: Path) -> int:
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
+    ("PATCH", f"{API}/cluster/nodes/{{name}}"),
     ("POST", f"{API}/cluster/nodes"),
     ("DELETE", f"{API}/cluster/nodes/{{name}}"),
     ("POST", f"{API}/nodes/{{name}}/pools"),
@@ -417,6 +419,7 @@ def create_app(
             members=[
                 MemberOut(
                     name=m.name,
+                    display_name=m.display_name or m.name,
                     role=m.role,
                     address=m.address,
                     local=m.local,
@@ -433,11 +436,26 @@ def create_app(
         member = cluster.join(body.name, body.role, body.address)
         return MemberOut(
             name=member.name,
+            display_name=member.display_name or member.name,
             role=member.role,
             address=member.address,
             local=member.local,
             healthy=cluster.is_healthy(member),
             last_error=None,
+        )
+
+    @api.patch("/cluster/nodes/{name}", response_model=MemberOut)
+    def update_node_display_name(name: str, body: NodeDisplayNameIn) -> MemberOut:
+        member = cluster.set_display_name(name, body.display_name)
+        return MemberOut(
+            name=member.name,
+            display_name=member.display_name or member.name,
+            role=member.role,
+            address=member.address,
+            local=member.local,
+            healthy=cluster.is_healthy(member),
+            last_error=member.last_error,
+            maintenance=member.maintenance,
         )
 
     @api.delete("/cluster/nodes/{name}", status_code=status.HTTP_204_NO_CONTENT)

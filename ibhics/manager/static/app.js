@@ -74,6 +74,8 @@ const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", 
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
+const nodeLabel = (name) => state.cluster?.members.find((m) => m.name === name)?.display_name || name;
+const nodeOptionText = (name) => nodeLabel(name) === name ? name : `${nodeLabel(name)} (${name})`;
 
 // ---------- theme and user menu ----------
 
@@ -266,9 +268,12 @@ $$("dialog").forEach((dlg) => {
 
 function fillSelects() {
   const online = computeMembers().filter((m) => m.healthy);
-  const opts = online.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
-  $$(".node-list").forEach((s) => { s.innerHTML = opts; });
-  $$(".node-list-auto").forEach((s) => { s.innerHTML = `<option value="">Automatic</option>${opts}`; });
+  const opts = online.map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
+  $$(".node-list, .node-list-auto").forEach((s) => {
+    const was = s.value;
+    s.innerHTML = `${s.matches(".node-list-auto") ? '<option value="">Automatic</option>' : ""}${opts}`;
+    if ([...s.options].some((o) => o.value === was)) s.value = was;
+  });
   const keep = (sel, items) => $$(sel).forEach((s) => {
     const was = s.value;
     s.innerHTML = items.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
@@ -589,22 +594,82 @@ async function refresh(page, auto = false) {
 // ---------- home ----------
 
 function totals() {
-  let cpus = 0, mem = 0, sockets = 0, cores = 0, memUsed = 0, cpuBusy = 0, measured = 0;
+  let cpus = 0, mem = 0, sockets = 0, cores = 0, memUsed = 0, cpuBusy = 0, measured = 0, memMeasured = 0;
   for (const m of computeMembers()) {
     const h = state.hosts[m.name], s = state.summaries[m.name];
     if (h) { cpus += h.cpus; mem += h.memory_mb; sockets += h.sockets || 0; cores += h.cores || 0; }
-    if (s) { memUsed += s.memory_used_mb; cpuBusy += (s.cpu_percent / 100) * (h?.cpus || s.threads); measured += h?.cpus || s.threads; }
+    if (s) {
+      if (Number.isFinite(s.memory_used_mb) && s.memory_mb > 0) { memUsed += s.memory_used_mb; memMeasured += s.memory_mb; }
+      if (Number.isFinite(s.cpu_percent)) { cpuBusy += (s.cpu_percent / 100) * (h?.cpus || s.threads); measured += h?.cpus || s.threads; }
+    }
   }
   const live = state.vms.filter((v) => v.state !== "stopped");
   return {
-    cpus, mem, sockets, cores, memUsed, measured,
+    cpus, mem, sockets, cores, memUsed, measured, memMeasured,
     cpuPct: measured ? Math.round((cpuBusy / measured) * 100) : null,
-    vdisk: state.vms.reduce((s, v) => s + (v.disks || []).reduce((a, d) => a + (d.size_gb || 0), 0), 0),
+    vdisk: [...state.vms, ...(state.templates || [])].reduce((s, v) => s + (v.disks || []).reduce((a, d) => a + (d.size_gb || 0), 0), 0),
     vcpus: live.reduce((s, v) => s + v.vcpus, 0),
     vmem: live.reduce((s, v) => s + v.memory_mb, 0),
     cap: state.pools.reduce((s, p) => s + p.capacity_gb, 0),
     used: state.pools.reduce((s, p) => s + p.allocation_gb, 0),
   };
+}
+
+// Only real samples collected while Home is open; gaps are never filled with invented data.
+const homeHistory = [];
+const allocationPct = (used, capacity) => capacity > 0 ? used / capacity * 100 : null;
+const percentText = (value) => value == null ? "–" : `${Number(value.toFixed(1))}%`;
+function recordHomeSample(t, now = Date.now()) {
+  if (homeHistory.length && now - homeHistory.at(-1).at < 1000) return;
+  homeHistory.push({ at: now, cpu: t.cpuPct, memory: allocationPct(t.memUsed, t.memMeasured), storage: allocationPct(t.used, t.cap) });
+  while (homeHistory.length > 60 || (homeHistory.length && now - homeHistory[0].at > 600000)) homeHistory.shift();
+}
+
+function allocationMeter(label, used, capacity, detail) {
+  const value = allocationPct(used, capacity), over = value != null && value > 100;
+  const width = value == null ? 0 : Math.min(100, Math.max(0, value));
+  return `<div class="allocation-meter${over ? " overallocated" : ""}">
+    <div class="allocation-top"><b>${esc(label)}</b><strong>${percentText(value)}</strong></div>
+    <div class="allocation-track" role="img" aria-label="${esc(label)} allocated ${percentText(value)}"><i style="width:${width}%"></i></div>
+    <span class="allocation-detail">${detail}</span>
+    ${over ? `<span class="allocation-warning"><svg aria-hidden="true"><use href="#i-alert"/></svg>Overallocated by ${percentText(value - 100)}</span>` : ""}
+    ${value == null ? '<span class="allocation-detail">Capacity unavailable</span>' : ""}</div>`;
+}
+
+function usageChart(key, label, value, detail) {
+  const samples = homeHistory, first = samples[0]?.at || Date.now(), last = samples.at(-1)?.at || first;
+  const start = Math.min(first, last - 60000), span = Math.max(60000, last - start);
+  const groups = [];
+  for (const sample of samples) {
+    if (sample[key] == null) { groups.push([]); continue; }
+    let group = groups.at(-1);
+    if (!group || (group.length && sample.at - group.at(-1).at > 25000)) { group = []; groups.push(group); }
+    group.push(sample);
+  }
+  const peak = Math.max(value || 0, ...samples.map((s) => s[key] || 0));
+  const ceiling = Math.min(100, Math.max(10, Math.ceil(peak / 10) * 10));
+  const x = (sample) => 8 + (sample.at - start) / span * 284;
+  const y = (sample) => 103 - Math.min(ceiling, Math.max(0, sample[key])) / ceiling * 88;
+  const path = (group) => group.map((sample, i) => `${i ? "L" : "M"}${x(sample).toFixed(1)},${y(sample).toFixed(1)}`).join(" ");
+  const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const status = value == null ? "unavailable" : value >= 90 ? "bad" : value >= 75 ? "warn" : "";
+  const icon = { cpu: "i-cpu", memory: "i-mem", storage: "i-storage" }[key];
+  const ring = 2 * Math.PI * 26, filled = ring * Math.min(100, Math.max(0, value || 0)) / 100;
+  return `<article class="usage-chart chart-${key} ${status}">
+    <div class="chart-top"><span class="chart-label"><span class="chart-icon"><svg aria-hidden="true"><use href="#${icon}"/></svg></span>${esc(label)}</span><span class="chart-live"><i></i>${value == null ? "No data" : "Live"}</span></div>
+    <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div>
+      <svg class="chart-ring" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="home-ring-${key}"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs><circle class="ring-track" cx="32" cy="32" r="26"/><circle class="ring-fill" cx="32" cy="32" r="26" opacity="${filled > 0 ? 1 : 0}" stroke="url(#home-ring-${key})" stroke-dasharray="${filled.toFixed(2)} ${ring.toFixed(2)}" transform="rotate(-90 32 32)"/></svg>
+    </div>
+    <svg class="resource-chart" viewBox="0 0 300 120" role="img" aria-label="${esc(label)} usage: ${value == null ? "unavailable" : percentText(value)}. Recent live samples.">
+      <defs><linearGradient id="home-area-${key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+      <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="8" y1="0" x2="292" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
+      ${[15, 59, 103].map((at) => `<path class="chart-grid" d="M8 ${at} H292"/>`).join("")}
+      <text class="chart-axis" x="8" y="11">${ceiling}%</text>
+      ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},103 L${x(g[0]).toFixed(1)},103 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
+      ${groups.filter((g) => g.length).map((g) => `<circle cx="${x(g.at(-1)).toFixed(1)}" cy="${y(g.at(-1)).toFixed(1)}" r="3.5" fill="currentColor"/>`).join("")}
+      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.at).toLocaleTimeString())}: ${percentText(s[key])}</title></circle>`).join("")}
+      <text class="chart-axis" x="8" y="118">${samples.length > 1 ? time(first) : "Collecting samples"}</text><text class="chart-axis" x="292" y="118" text-anchor="end">Now</text>
+    </svg><div class="chart-caption">Usage trend<span>Scale 0–${ceiling}%</span></div></article>`;
 }
 
 function activities() {
@@ -666,19 +731,16 @@ function renderHome() {
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
   ].join("");
 
-  // Two rows: what VMs are given (allocation, may exceed the hardware: overcommit) and
-  // what the nodes really use now.
-  const meter = (name, p, detail, cls = level(p)) => `<div class="meter"><div class="top"><b>${esc(name)}</b><span>${detail}</span></div>${segments(p).replace(`segments ${level(p)}`, `segments ${cls}`)}</div>`;
-  const ratio = (a, b) => (b > 0 ? (a / b).toFixed(2).replace(/\.?0+$/, "") : "0");
-  const cpuRatio = t.cpus ? t.vcpus / t.cpus : 0, memRatio = t.mem ? t.vmem / t.mem : 0;
+  recordHomeSample(t);
+  const partial = t.measured < t.cpus || t.memMeasured < t.mem;
   $("#usage").innerHTML = `<div class="usage-row"><h4>Allocated to running VMs</h4>${[
-    meter("vCPU", pct(t.vcpus, t.cpus), `${t.vcpus} vCPU on ${t.cpus} threads · ${ratio(t.vcpus, t.cpus)}:1`, cpuRatio > 4 ? "bad" : cpuRatio > 2 ? "warn" : ""),
-    meter("Memory", pct(t.vmem, t.mem), `${gbText(t.vmem)} of ${gbText(t.mem)} · ${ratio(t.vmem, t.mem)}:1`, memRatio > 1 ? "bad" : memRatio > 0.9 ? "warn" : ""),
-    meter("VM disks", pct(t.vdisk, t.cap), `${Math.round(t.vdisk)} of ${Math.round(t.cap)} GB · ${ratio(t.vdisk, t.cap)}:1 (thin)`, t.vdisk > t.cap * 1.5 ? "warn" : ""),
-  ].join("")}</div><div class="usage-row"><h4>Actual use now</h4>${[
-    meter("CPU", t.cpuPct ?? 0, t.cpuPct == null ? "–" : `${t.cpuPct}% of ${t.measured} threads`),
-    meter("Memory", pct(t.memUsed, t.mem), t.measured ? `${gbText(t.memUsed)} of ${gbText(t.mem)} · ${pct(t.memUsed, t.mem)}%` : "–"),
-    meter("Storage", storagePct, `${Math.round(t.used)} of ${Math.round(t.cap)} GB · ${storagePct}%`),
+    allocationMeter("vCPU", t.vcpus, t.cpus, `${t.vcpus} vCPU / ${t.cpus} hardware threads`),
+    allocationMeter("Memory", t.vmem, t.mem, `${gbText(t.vmem)} / ${gbText(t.mem)}`),
+    allocationMeter("VM disks", t.vdisk, t.cap, `${num(t.vdisk)} / ${num(t.cap)} GB · all VMs &amp; templates, thin provisioned`),
+  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Live samples · up to 10 minutes${partial ? " · Some node metrics unavailable" : ""}</span></h4>${[
+    usageChart("cpu", "CPU", t.cpuPct, `${t.measured} hardware threads reporting`),
+    usageChart("memory", "Memory", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} / ${gbText(t.memMeasured)}` : "Waiting for node metrics"),
+    usageChart("storage", "Storage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} / ${num(t.cap)} GB used` : "Waiting for storage metrics"),
   ].join("")}</div>`;
 
   $("#home-nodes").innerHTML = members.map((m) => {
@@ -692,7 +754,7 @@ function renderHome() {
       ? `<div class="mini">CPU ${cpu}%${bar(cpu)}</div><div class="mini">Memory ${mem}%${bar(mem)}</div>`
       : `<div class="mini">${m.role === "witness" ? "Quorum vote only" : "No data"}</div><div></div>`;
     return `<div class="node-row">${avatar("i-nodes")}
-      <div><span class="vm-name">${esc(m.name)}</span> <span class="dot ${m.healthy ? "ok" : "bad"}"></span>
+      <div><a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a> <span class="dot ${m.healthy ? "ok" : "bad"}"></span>
       <span class="vm-sub">${esc(m.role)}${m.local ? " · manager" : ""} · ${esc(m.address || "local")}</span></div>${usage}</div>`;
   }).join("");
   $("#home-feed").innerHTML = feed(6) || `<li class="hint">No jobs yet. Backups, migrations and imports show up here.</li>`;
@@ -836,7 +898,7 @@ const VM_COLUMNS = {
     ["Description", (v) => v.description || "", (v) => `<span class="clip" title="${esc(v.description)}">${esc(v.description || "–")}</span>`],
   ],
   node: [
-    ["Node", (v) => v.node || "", (v) => `<a href="#node/${enc(v.node || "")}">${esc(v.node || "")}</a>`],
+    ["Node", (v) => nodeLabel(v.node || ""), (v) => `<a href="#node/${enc(v.node || "")}" title="Node ID: ${esc(v.node || "")}">${esc(nodeLabel(v.node || ""))}</a>`],
     ["Node load", (v) => v.node || "", (v) => {
       const h = state.hosts[v.node];
       if (!h) return `<span class="muted">–</span>`;
@@ -2254,7 +2316,7 @@ function renderPools() {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
       <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
-      <td>${esc(p.node)}</td>
+      <td title="Node ID: ${esc(p.node)}">${esc(nodeLabel(p.node))}</td>
       <td><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
       <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
@@ -2297,7 +2359,7 @@ function pvSummary() {
     <div class="stat"><span>Free</span><b>${sizeText(free)}</b><em>${p.active ? "Online" : "Offline"}</em></div>`;
   const disks = state.vms.filter((v) => v.node === p.node).flatMap((v) => v.disks.map((d, i) => ({ vm: v, d, i }))).filter((x) => x.d.pool === p.name);
   const isos = state.isos.filter((i) => i.pool === p.name);
-  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(p.node)], ["Type", esc(poolTypeText(p))], ["Source", `<span class="mono">${esc(p.source)}</span>`],
+  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(nodeOptionText(p.node))], ["Type", esc(poolTypeText(p))], ["Source", `<span class="mono">${esc(p.source)}</span>`],
     ["VM disks", `${disks.length} (${sizeText(disks.reduce((s, x) => s + x.d.size_gb, 0))} provisioned)`], ["ISOs", String(isos.length)]]
     .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   $(".pv-disks", pvDlg).innerHTML = disks.length ? disks.map((x) => `<tr><td class="vm-name"><a class="vm-link" href="#vm/${esc(x.vm.uuid)}">${esc(x.vm.name)}</a></td>
@@ -2459,7 +2521,7 @@ function fillIsoDest() {
   const initialized = sel.options.length > 0;
   const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
   sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
-    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(p.node)} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
+    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(nodeOptionText(p.node))} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
   if (initialized && [...sel.options].some((o) => o.value === was)) sel.value = was;
   else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
 }
@@ -2549,7 +2611,7 @@ function wizStart() {
   $$(".chips button", poolWiz.form).forEach((b) => b.classList.toggle("on", b.dataset.media === ""));
   $(".disk-search", poolWiz.form).value = "";
   $(".node-check-list", poolWiz.form).innerHTML = computeMembers().filter((m) => m.healthy).map((m, i) =>
-    `<label class="check"><input type="checkbox" name="nodes" value="${esc(m.name)}" ${i === 0 ? "checked" : ""}> ${esc(m.name)}</label>`).join("")
+    `<label class="check"><input type="checkbox" name="nodes" value="${esc(m.name)}" ${i === 0 ? "checked" : ""}> ${esc(nodeOptionText(m.name))}</label>`).join("")
     || `<p class="hint">No node is online.</p>`;
   wizShow();
 }
@@ -2791,12 +2853,13 @@ function renderNodes() {
     const vms = state.vms.filter((v) => v.node === m.name).length;
     const buttons = [
       m.role === "compute" ? `<a class="btn small" href="#node/${enc(m.name)}">Summary</a>` : "",
+      admin ? `<button class="small" data-node-label="${esc(m.name)}">Rename</button>` : "",
       admin && m.role === "compute" ? `<button class="small" data-maint="${esc(m.name)}" data-on="${m.maintenance ? "" : "1"}">${m.maintenance ? "Exit maintenance" : "Maintenance"}</button>` : "",
       admin && m.role === "compute" && vms && computeMembers().length > 1 ? `<button class="small" data-evacuate="${esc(m.name)}">Evacuate</button>` : "",
       admin && !m.local ? `<button class="small danger" data-node="${esc(m.name)}">Remove</button>` : "",
     ].join("");
     return `<tr>
-      <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(m.name)}</a>` : `<span class="vm-name">${esc(m.name)}</span>`}${m.local ? '<span class="vm-sub">runs the manager</span>' : ""}</div></div></td>
+      <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a>` : `<span class="vm-name">${esc(nodeLabel(m.name))}</span>`}<span class="vm-sub">${esc(m.name)}${m.local ? " · runs the manager" : ""}</span></div></div></td>
       <td>${esc(m.role)}</td>
       <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
       <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>${m.maintenance ? ` <span class="badge plain">maintenance</span>` : ""}</td>
@@ -2809,11 +2872,18 @@ function renderNodes() {
 }
 
 $("#nodes").addEventListener("click", async (e) => {
+  const label = e.target.closest("button[data-node-label]");
   const ev = e.target.closest("button[data-evacuate]");
   const rm = e.target.closest("button[data-node]");
   const mt = e.target.closest("button[data-maint]");
   try {
-    if (mt) {
+    if (label) {
+      const name = label.dataset.nodeLabel;
+      const value = prompt(`Display name for ${name} (leave blank to use the Node ID):`, nodeLabel(name));
+      if (value == null) return;
+      await patch(`/cluster/nodes/${enc(name)}`, { display_name: value.trim() });
+      toast("Node display name saved");
+    } else if (mt) {
       const on = Boolean(mt.dataset.on), n = mt.dataset.maint;
       const others = computeMembers().filter((x) => x.name !== n && !x.maintenance).length;
       const vmsHere = state.vms.filter((v) => v.node === n).length;
@@ -2878,7 +2948,7 @@ function systemDiskText(d) {
 async function renderNodeDetail(auto = false) {
   const name = nodeFromHash();
   const m = state.cluster.members.find((x) => x.name === name);
-  $("#node-crumb").textContent = name;
+  $("#node-crumb").textContent = nodeLabel(name);
   const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-vms", "#node-ifaces", "#node-net-banner"].forEach((id) => { $(id).innerHTML = ""; });
   if (!m || m.role !== "compute") {
     $("#node-title").textContent = m ? name : "Node not found";
@@ -2898,7 +2968,7 @@ async function renderNodeDetail(auto = false) {
     fillNodeSettings();
   }
   const s = summary;
-  $("#node-title").innerHTML = `${esc(name)} <span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>`;
+  $("#node-title").innerHTML = `${esc(nodeLabel(name))} <span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>`;
   $("#node-subtitle").textContent = [[s.vendor, s.model].filter(Boolean).join(" "), m.local ? "runs the manager" : m.address, `ibHiCS ${s.version}`].filter(Boolean).join(" · ");
 
   const vms = state.vms.filter((v) => v.node === name);
@@ -3124,6 +3194,9 @@ $("#iface-delete").addEventListener("click", async () => {
 
 function fillNodeSettings() {
   const s = node.settings, form = $("#node-settings-form");
+  $("#node-label-form").elements.display_name.value = nodeLabel(node.name);
+  $("#node-label-form").elements.display_name.disabled = !isAdmin();
+  $("#node-stable-id").textContent = node.name;
   form.elements.hostname.value = s.hostname;
   $("#node-tz").innerHTML = node.timezones.map((z) => `<option${z === s.timezone ? " selected" : ""}>${esc(z)}</option>`).join("");
   form.elements.ntp.value = s.ntp.join(", ");
@@ -3132,6 +3205,21 @@ function fillNodeSettings() {
   $("#node-time").textContent = `Node time: ${new Date(s.time).toLocaleString()}${sync}`;
   $$("input, select", form).forEach((el) => { if (el.name !== "hostname") el.disabled = !isAdmin(); });
 }
+
+$("#node-label-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = $("button[type=submit]", e.target);
+  button.disabled = true;
+  try {
+    await patch(`/cluster/nodes/${enc(node.name)}`, { display_name: e.target.elements.display_name.value.trim() });
+    await loadCluster();
+    await renderNodeDetail(true);
+    e.target.elements.display_name.value = nodeLabel(node.name);
+    fillSelects();
+    toast("Node display name saved");
+  } catch (err) { fail(err); }
+  finally { button.disabled = false; }
+});
 
 $("#node-settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -3302,7 +3390,7 @@ async function renderVMDetail() {
   $("#vm-general").innerHTML = kv([
     ["Name", esc(vm.name)],
     ["Status", `<span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`],
-    ["Node", esc(vm.node || "–")],
+    ["Node", esc(nodeOptionText(vm.node || "–"))],
     ["Group", groupOf(vm) ? `<span class="g-tag">${esc(groupPath(groupOf(vm)))}</span>` : `<span class="muted">Ungrouped</span>`],
     ["Operating system", vm.os_type ? esc(vm.os_type) : `<span class="muted">Not set</span>`],
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
@@ -4216,7 +4304,7 @@ const importWiz = wizard("import-dialog", {
     const ctx = dialogContext;
     Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() });
     $("#import-submit-status").textContent = "";
-    importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+    importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
     importTargetPools();
   },
   check(step) {

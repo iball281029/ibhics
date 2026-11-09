@@ -1,0 +1,98 @@
+ibHiCS development handoff: Home metrics and Node display names
+Date: 2026-11-09 (Asia/Bangkok)
+Branch: codex/home-metrics-node-name
+Base: dev commit 47df0b4 (Migrate: change host and storage together)
+Build: 1.3.0b2+home1 (local development build, not a GitHub release)
+
+User requests and confirmed decisions
+- Home: show CPU, memory and disk allocation as percentages. Values over 100%
+  must remain visible (e.g. 125%) and turn red with a warning.
+- Improve actual-usage charts with a modern design, including light/dark themes.
+- User explicitly selected a display name separate from the stable Node ID.
+- User authorized development and server connections. Deployment was not performed:
+  SSH to 172.16.12.104:22 is blocked by this session's execution policy. A request
+  for elevated connection permission was rejected by the policy, not by the user.
+
+Implementation
+- CPU/memory allocation counts non-stopped VMs. CPU denominator is hardware
+  threads, matching the existing dashboard. Percentages are not capped at 100.
+- Disk allocation counts all regular VMs AND templates, including stopped VMs;
+  stopped disks still reserve storage. The disk card explicitly labels this.
+- Overallocated cards show the full percentage, a red border/value/bar, an alert
+  icon and the excess percentage. Unknown capacity displays a dash, never NaN.
+- Actual CPU, memory and storage have SVG area/line charts and gradient rings.
+  Values are sampled by the existing 10-second Home refresh, up to 60 samples /
+  10 minutes in browser memory. No historical backend data is invented. Reloading
+  starts a new history; missing measurements and gaps over 25 seconds break lines.
+  Charts use labelled adaptive axes (minimum ceiling 10%) and hover timestamps.
+- Memory measurements use reporting nodes' capacity, and partial reports are
+  labelled. Existing Home per-node fallback bars are otherwise unchanged.
+- PATCH /api/v1/cluster/nodes/{stable_name} accepts {"display_name": "..."}.
+  This route is ADMIN ONLY and uses the existing audit middleware.
+- Labels are trimmed, limited to 80 characters, reject Unicode control characters,
+  allow Thai, and can be reset with an empty string. HTML is escaped in the UI.
+- Cluster JSON has a new optional display_names mapping keyed by Node ID. Local,
+  remote and witness labels persist; legacy cluster JSON loads without migration.
+  Failed persistence restores the old label in memory.
+- No membership key, Linux hostname, agent identity, VM node reference, backup
+  reference or task reference is renamed. Same-label names may coexist; selectors
+  show the stable ID beside a differing label to distinguish them.
+- Edit labels in Nodes > Rename or Node > Settings > Node display name. Home,
+  Nodes, breadcrumbs, VM detail/node column, storage and common node pickers use
+  the label while keeping original IDs as values and URLs.
+
+Validation
+- Focused API/cluster/auth/host/dashboard checks: 79 passed before final chart
+  visual refinements. Chart refinements were checked again in Node and Playwright.
+- Broad suite: 508 passed, 1 pre-existing failure, 4 deselected socket tests.
+  Existing failure: tests/test_installer.py::test_custom_folder_pool_added_to_apparmor
+  reproduced independently on the untouched dev checkout. Not changed in this work.
+  Socket tests excluded because local listening sockets are disallowed here:
+  test_console_relays_local_vm; test_agent_console_needs_token;
+  test_demo_console_speaks_rfb; test_unreachable_vmware_host_fails_fast.
+- Ruff checks, node --check and git diff --check passed.
+- Playwright: separate isolated preview domain using a captured read-only API
+  snapshot. No browser test mutated the live server. Checked 3 charts/rings,
+  over-100 warnings, display-name save, stable Node ID/hostname/URL, dark theme,
+  and 390px mobile width without horizontal overflow. Charts use fixtures in
+  this test environment. Screenshots are previews, not a deployed server.
+- Wheel build and packaging tests succeeded offline using verified PyPI build
+  dependency wheels. The final build is in ../home-metrics-release/.
+
+Live server observations and scope
+- Last observed server: https://172.16.12.104:8888, version 1.3.0b2, standalone
+  node ibhics-test, four running VMs and one stopped template.
+- Installed frontend is slightly behind local dev: it lacks the combined host
+  and storage migration choice from 47df0b4. This work preserves local dev's
+  existing implementation. Installing the full wheel also includes that existing
+  dev work; it is not a server-only patch against the older installed frontend.
+- GitHub account reinstatement request is ticket #4975680. No push/PR/release
+  was attempted. All development and artifacts remain local.
+- Credentials and session cookies are deliberately absent from this handoff.
+
+Deployment (not yet executed)
+1. Review the branch/diff and the preview images before installation.
+2. Copy the final wheel and installer/install-home-metrics.sh to the server.
+3. Run as root on the development server:
+   bash install-home-metrics.sh ./ibhics-1.3.0b2+home1-py3-none-any.whl
+   The installer checks installed version 1.3.0b2, backs up the entire venv,
+   restarts only ibhics-manager, verifies /api/v1/health and restores the backup
+   automatically if installation or the health check fails. No VM power commands
+   are issued. Manager restart invalidates browser sessions.
+   Override IBHICS_DEPLOY_HEALTH_URL if the manager does not listen on localhost.
+4. Sign in again. Check Home, Node Settings, alias persistence after restart,
+   Nodes and VM/backup references on the actual server. No alias was assigned to
+   the real node during development; the user can choose its label after install.
+5. Record actual installation time, health/version and live checks in this file.
+
+Rollback
+- The installer prints its full venv backup directory. Stop ibhics-manager, move
+  the new venv aside, move the saved venv back to its original location, and start
+  ibhics-manager. The additive display_names map is ignored by the old code.
+- Browser chart history resets on reload and is not persisted on the server.
+
+Next steps for Claude
+- Review this branch against 47df0b4; do not repeat the implementation on dev.
+- Verify actual deployment status (still NOT deployed at handoff creation).
+- Do not rename the underlying node or Linux hostname: the user chose labels.
+- The AppArmor test remains a separate existing issue.

@@ -403,6 +403,13 @@
           </table></div>
         </div>
         <div class="subpage" id="tab-node-settings">
+          <form id="node-label-form" class="settings-form node-label-form">
+            <div class="card wide"><h3>Node display name</h3><div class="body form-grid one">
+              <label>Display name <input name="display_name" maxlength="80" placeholder="e.g. Production Server 01" autocomplete="off"></label>
+              <p class="hint">Node ID: <code id="node-stable-id"></code>. This ID and the Linux hostname stay the same. Leave the display name blank to use the Node ID.</p>
+              <div><button class="primary admin-only" type="submit">Save display name</button></div>
+            </div></div>
+          </form>
           <form id="node-settings-form" class="settings-form">
             <div class="cards">
               <div class="card"><h3>Name and time</h3><div class="body form-grid one">
