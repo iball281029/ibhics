@@ -349,3 +349,8 @@ POST-DELIVERY UPDATE (latest; overrides earlier 'leave Node2 outside' state)
 - Both servers remain 1.3.0b2+history1. Node2 manager/agent active, no VMs.
 - User has now requested STOP and a Claude handoff only. Clean current handoff:
   docs/CLAUDE-HANDOFF.txt. Do not remove/re-add members or start new work.
+
+LATEST: history2 deployed to both nodes; see final section of CLAUDE-HANDOFF.txt.
+Clock-aligned resolution ticks and ib-logo expandable rail verified on both servers.
+Stop requested after finishing the active update. Virtual Storage and Arbiter ISO
+remain unimplemented pending storage/migration decision; no disks were altered.

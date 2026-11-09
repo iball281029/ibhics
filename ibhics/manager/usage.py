@@ -12,6 +12,14 @@ from pathlib import Path
 RANGES = {"now": 600, "5m": 300, "30m": 1800, "1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
 RETENTION = 30 * 86400
 SAMPLE_SECONDS = 10
+RESOLUTIONS = {
+    # window, sample bucket, labelled time-grid interval (seconds)
+    "now": (600, 10, 300),
+    "5m": (1800, 300, 300),
+    "30m": (10800, 1800, 1800),
+    "1d": (7 * 86400, 86400, 86400),
+    "7d": (30 * 86400, 7 * 86400, 7 * 86400),
+}
 
 
 def percent(used, total):
@@ -81,7 +89,7 @@ class UsageHistory:
             expected,
         )
 
-    def history(self, period="now"):
+    def history(self, period="now", resolution=None, utc_offset=0):
         if period not in RANGES:
             raise ValueError("choose now, 5m, 30m, 1d, 7d or 30d")
         end = int(self.clock())
@@ -89,13 +97,21 @@ class UsageHistory:
         step = max(
             SAMPLE_SECONDS, math.ceil(RANGES[period] / 180 / SAMPLE_SECONDS) * SAMPLE_SECONDS
         )
+        tick = step
+        if resolution is not None:
+            if resolution not in RESOLUTIONS or not -840 <= utc_offset <= 840:
+                raise ValueError("invalid resolution or UTC offset")
+            window, step, tick = RESOLUTIONS[resolution]
+            start = end - window
+        shift = int(utc_offset) * 60
         with closing(self.connect()) as db:
             first = db.execute("SELECT MIN(ts) FROM samples").fetchone()[0]
             rows = db.execute(
-                """SELECT AVG(ts), AVG(cpu), AVG(memory), AVG(storage),
-                MIN(nodes), MAX(expected), COUNT(*) FROM samples WHERE ts >= ? AND ts <= ?
-                GROUP BY CAST((ts - ?) / ? AS INTEGER) ORDER BY MIN(ts)""",
-                (start, end, start, step),
+                """SELECT CAST((ts + ?) / ? AS INTEGER) * ? - ? AS bucket,
+                AVG(cpu), AVG(memory), AVG(storage), MIN(nodes), MAX(expected), COUNT(*),
+                MIN(ts), MAX(ts) FROM samples WHERE ts >= ? AND ts <= ?
+                GROUP BY bucket ORDER BY bucket""",
+                (shift, step, step, shift, start, end),
             ).fetchall()
         disk_bytes = 0
         for path in (self.path, Path(str(self.path) + "-wal")):
@@ -107,6 +123,9 @@ class UsageHistory:
             "recording_since": first * 1000 if first is not None else None,
             "storage_bytes": disk_bytes,
             "range": period,
+            "resolution": resolution,
+            "tick_ms": tick * 1000,
+            "utc_offset": utc_offset,
             "start": start * 1000,
             "end": end * 1000,
             "step_ms": step * 1000,
@@ -114,7 +133,11 @@ class UsageHistory:
             "retention_days": 30,
             "points": [
                 dict(
-                    at=round(t * 1000),
+                    at=max(t, first_actual) * 1000,
+                    bucket_start=t * 1000,
+                    bucket_end=(t + step) * 1000,
+                    first_sample=first_actual * 1000,
+                    last_sample=last_actual * 1000,
                     cpu=c,
                     memory=m,
                     storage=s,
@@ -122,6 +145,6 @@ class UsageHistory:
                     expected=e,
                     samples=count,
                 )
-                for t, c, m, s, n, e, count in rows
+                for t, c, m, s, n, e, count, first_actual, last_actual in rows
             ],
         }

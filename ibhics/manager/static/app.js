@@ -125,6 +125,29 @@ async function loadMe() {
   document.body.classList.toggle("can-operate", canOperate());
 }
 
+
+// Expand the icon rail without navigating away from the current page.
+const railToggle = document.getElementById("rail-toggle");
+for (const link of document.querySelectorAll(".rail nav a[data-label]")) {
+  const label = document.createElement("span");
+  label.className = "rail-label";
+  label.textContent = link.dataset.label;
+  link.append(label);
+  link.setAttribute("aria-label", link.dataset.label);
+}
+function setRailExpanded(expanded) {
+  document.body.classList.toggle("rail-expanded", expanded);
+  railToggle.setAttribute("aria-expanded", String(expanded));
+  railToggle.setAttribute("aria-label", expanded ? "Collapse navigation" : "Expand navigation");
+}
+try { setRailExpanded(localStorage.getItem("ibhics-rail-expanded") === "true"); } catch { setRailExpanded(false); }
+railToggle.addEventListener("click", () => {
+  const expanded = !document.body.classList.contains("rail-expanded");
+  setRailExpanded(expanded);
+  try { localStorage.setItem("ibhics-rail-expanded", String(expanded)); } catch { /* private mode */ }
+});
+railToggle.addEventListener("keydown", (event) => { if (event.key === "Escape") setRailExpanded(false); });
+
 // ---------- navigation ----------
 
 const PAGES = ["home", "compute", "storage", "network", "nodes", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
@@ -617,7 +640,7 @@ function totals() {
 }
 
 // History is collected on the server even when no browser is open.
-const HISTORY_RANGES = { now: ["Now · 10 min", 600000], "5m": ["5 min", 300000], "30m": ["30 min", 1800000], "1d": ["1 day", 86400000], "7d": ["7 days", 604800000], "30d": ["30 days", 2592000000] };
+const HISTORY_RANGES = HistoryTime.profiles;
 let homeRange = "now", homeMetrics = null, homeHistoryError = "", homeHistoryRequest = 0;
 try { const saved = localStorage.getItem("ibhics-history-range"); if (HISTORY_RANGES[saved]) homeRange = saved; } catch { /* private mode */ }
 const allocationPct = (used, capacity) => capacity > 0 ? used / capacity * 100 : null;
@@ -625,7 +648,7 @@ const percentText = (value) => value == null ? "–" : `${Number(value.toFixed(1
 async function loadHomeHistory() {
   const range = homeRange, request = ++homeHistoryRequest;
   try {
-    const data = await api(`/usage/history?range=${enc(range)}`);
+    const data = await api(`/usage/history?resolution=${enc(range)}&utc_offset=${-new Date().getTimezoneOffset()}`);
     if (request === homeHistoryRequest && range === homeRange) { homeMetrics = data; homeHistoryError = data.note || ""; }
   } catch (err) {
     if (request === homeHistoryRequest) homeHistoryError = `History unavailable: ${err.message}`;
@@ -649,11 +672,13 @@ function allocationMeter(label, used, capacity, detail) {
 }
 
 function usageChart(key, label, value, detail) {
-  const history = homeMetrics?.range === homeRange ? homeMetrics : null;
+  const history = homeMetrics?.resolution === homeRange ? homeMetrics : null;
   const samples = history?.points || [], last = history?.end || Date.now();
-  const start = history?.start || last - HISTORY_RANGES[homeRange][1], duration = last - start;
+  const start = history?.start || last - HISTORY_RANGES[homeRange].windowMs, duration = last - start;
   const step = history?.step_ms || 10000;
-  const timeLabel = (at) => homeRange === "7d" || homeRange === "30d" ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const timeLabel = (at) => ["1d", "7d"].includes(homeRange) ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const tickMs = history?.tick_ms || HISTORY_RANGES[homeRange].tickMs;
+  const timeTicks = HistoryTime.ticks(start, last, tickMs, history?.utc_offset ?? -new Date().getTimezoneOffset());
   const groups = [];
   for (const sample of samples) {
     if (sample[key] == null) { groups.push([]); continue; }
@@ -676,17 +701,17 @@ function usageChart(key, label, value, detail) {
     <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div><span class="chart-current-label">in use now</span></div>
     <div class="actual-capacity-bar" role="img" aria-label="${esc(label)}: ${percentText(value)} used"><i style="width:${value == null ? 0 : used}%"></i></div>
     <div class="capacity-legend"><span><i></i>Used</span><span>${remaining}: <b>${value == null ? "–" : percentText(100 - used)}</b></span></div>
-    <div class="chart-history-heading"><b>${esc(HISTORY_RANGES[homeRange][0])}</b><span>Usage (%)${step > 10000 ? " · average" : ""}</span></div>
-    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: selected ${esc(HISTORY_RANGES[homeRange][0])} window.">
+    <div class="chart-history-heading"><b>${esc(HISTORY_RANGES[homeRange].label)} · ${esc(HISTORY_RANGES[homeRange].windowLabel)}</b><span>Usage (%)${step > 10000 ? " · average" : ""}</span></div>
+    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: selected ${esc(HISTORY_RANGES[homeRange].label)} window.">
       <defs><linearGradient id="home-area-${key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
       <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="38" y1="0" x2="350" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
       ${[0, 25, 50, 75, 100].map((p) => `<path class="chart-grid" d="M38 ${132 - p * 1.2} H350"/><text class="chart-axis" x="30" y="${136 - p * 1.2}" text-anchor="end">${p}%</text>`).join("")}
       ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},132 L${x(g[0]).toFixed(1)},132 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
       ${groups.filter((g) => g.length).map((g) => `<circle cx="${x(g.at(-1)).toFixed(1)}" cy="${y(g.at(-1)).toFixed(1)}" r="3.5" fill="currentColor"/>`).join("")}
-      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.at).toLocaleString())}: ${percentText(s[key])}</title></circle>`).join("")}
+      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.first_sample ?? s.at).toLocaleString())}${s.samples > 1 ? ` – ${esc(new Date(s.last_sample).toLocaleTimeString())} · average` : ""}: ${percentText(s[key])}</title></circle>`).join("")}
       ${known.length < 2 ? `<text class="chart-empty" x="194" y="74" text-anchor="middle">${homeHistoryError ? "History unavailable" : known.length ? "First recorded reading" : "No recorded data in this period"}</text>` : ""}
-      <text class="chart-axis" x="38" y="154">${esc(timeLabel(start))}</text><text class="chart-axis" x="194" y="154" text-anchor="middle">${esc(timeLabel(start + duration / 2))}</text><text class="chart-axis" x="350" y="154" text-anchor="end">${esc(timeLabel(last))}</text>
-    </svg><div class="chart-caption">Saved on server · 30-day retention<span>${step > 10000 ? `Average per ${Math.round(step / 60000)} min` : "Sample every 10 sec"}</span></div></article>`;
+      ${timeTicks.map((at) => `<path class="chart-grid" d="M${x({at}).toFixed(1)} 12 V132"/><text class="chart-axis time-tick" data-at="${at}" x="${x({at}).toFixed(1)}" y="154" text-anchor="middle">${esc(timeLabel(at))}</text>`).join("")}
+    </svg><div class="chart-caption">Saved on server · 30-day retention<span>${step > 10000 ? `Average every ${homeRange === "1d" ? "day" : homeRange === "7d" ? "7 days" : `${Math.round(step / 60000)} min`}` : "Sample every 10 sec"}</span></div></article>`;
 }
 
 function activities() {
@@ -754,7 +779,7 @@ function renderHome() {
     allocationMeter("vCPU", t.vcpus, t.cpus, `${t.vcpus} vCPU / ${t.cpus} hardware threads`),
     allocationMeter("Memory", t.vmem, t.mem, `${gbText(t.vmem)} / ${gbText(t.mem)}`),
     allocationMeter("VM disks", t.vdisk, t.cap, `${num(t.vdisk)} / ${num(t.cap)} GB · all VMs &amp; templates, thin provisioned`),
-  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4><div class="history-controls"><label for="home-history-range">History</label><select id="home-history-range">${Object.entries(HISTORY_RANGES).map(([key, [label]]) => `<option value="${key}" ${homeRange === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select><span class="hint">Collected on server · kept for 30 days${homeMetrics?.storage_bytes ? ` · ${(homeMetrics.storage_bytes / 1048576).toFixed(1)} MB stored` : ""}${homeMetrics?.recording_since ? ` · Recording since ${esc(new Date(homeMetrics.recording_since).toLocaleString())}` : ""}${homeHistoryError ? ` · ${esc(homeHistoryError)}` : ""}</span></div>${[
+  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4><div class="history-controls"><label for="home-history-range">Resolution</label><select id="home-history-range">${Object.entries(HISTORY_RANGES).map(([key, {label}]) => `<option value="${key}" ${homeRange === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select><span class="hint">${esc(HISTORY_RANGES[homeRange].windowLabel)} · Time grid: every ${homeRange === "now" || homeRange === "5m" ? "5 min" : homeRange === "30m" ? "30 min" : homeRange === "1d" ? "day" : "7 days"} · Kept for 30 days${homeMetrics?.storage_bytes ? ` · ${homeMetrics.storage_bytes < 1048576 ? `${(homeMetrics.storage_bytes / 1024).toFixed(0)} KB` : `${(homeMetrics.storage_bytes / 1048576).toFixed(1)} MB`} stored` : ""}${homeMetrics?.recording_since ? ` · Recording since ${esc(new Date(homeMetrics.recording_since).toLocaleString())}` : ""}${homeHistoryError ? ` · ${esc(homeHistoryError)}` : ""}</span></div>${[
     usageChart("cpu", "CPU usage", t.cpuPct, `${t.measured} hardware threads in total`),
     usageChart("memory", "Memory usage", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} used / ${gbText(t.memMeasured)} total` : "Waiting for node metrics"),
     usageChart("storage", "Storage usage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} GB used / ${num(t.cap)} GB total` : "Waiting for storage metrics"),

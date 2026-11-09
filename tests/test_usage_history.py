@@ -109,3 +109,30 @@ def test_collection_runs_without_a_browser_visit(tmp_path):
     with TestClient(create_app(FakeDriver(), usage=store)):
         assert done.wait(2)
         assert store.history()["points"]
+
+
+def test_resolution_bucket_alignment_matches_clock_and_grid(tmp_path):
+    now = 1800000000 + 123
+    store = UsageHistory(tmp_path / "res.sqlite3", clock=lambda: now)
+    for i in range(200):
+        store.record(now - i * 10, 20, 40, 60)
+    for resolution, step, tick, window in [
+        ("now", 10, 300, 600),
+        ("5m", 300, 300, 1800),
+        ("30m", 1800, 1800, 10800),
+        ("1d", 86400, 86400, 604800),
+    ]:
+        h = store.history(resolution=resolution, utc_offset=420)
+        assert h["step_ms"] == step * 1000
+        assert h["tick_ms"] == tick * 1000
+        assert h["end"] - h["start"] == window * 1000
+        for p in h["points"]:
+            assert ((p["bucket_start"] // 1000) + 420 * 60) % step == 0
+            assert p["at"] >= p["first_sample"]
+            assert p["first_sample"] <= p["last_sample"]
+    client = TestClient(create_app(FakeDriver(), usage=store))
+    assert (
+        client.get("/api/v1/usage/history?resolution=30m&utc_offset=420").json()["tick_ms"]
+        == 1800000
+    )
+    assert client.get("/api/v1/usage/history?resolution=bad").status_code == 422

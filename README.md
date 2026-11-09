@@ -366,3 +366,11 @@ Each node keeps its own agent credential; per-node keys are stored only in the
 controller's root-readable membership file and are omitted from normal API replies.
 The legacy shared-key agent flow remains compatible. Adding a node still requires
 an explicit Add action; installing/upgrading a server never enrolls it automatically.
+
+History resolution and its time grid are now explicit: Now shows the last 10
+minutes with 5-minute clock ticks; Every 5 min shows 30 minutes with 5-minute
+buckets/ticks; Every 30 min shows 3 hours with 30-minute buckets/ticks; Daily
+shows 7 days and Every 7 days shows 30 days. Ticks and aggregate buckets align
+to clock boundaries using the browser UTC offset. Legacy range API requests
+remain compatible. The ib logo expands/collapses the navigation rail and saves
+that preference locally; narrow screens use an overlay.

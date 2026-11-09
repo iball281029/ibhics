@@ -146,3 +146,46 @@ Source / ส่งมอบ
 - หยุดพัฒนาและสรุปส่งต่อให้ Claude
 - ไม่มีคำสั่งให้เพิ่ม feature, ตั้ง witness/HA หรือย้าย VM ต่อ
 - งานถัดไปให้รอผู้ใช้สั่งก่อน
+
+อัปเดตล่าสุดหลัง handoff เดิม — 9 พ.ย. 2026 ~17:49
+- ทั้งสองเครื่องอัปเดตเป็น 1.3.0b2+history2 แล้ว
+- ผู้ใช้ชี้แจงว่าเมนูกราฟหมายถึง resolution/time-grid ไม่ใช่ช่วงย้อนหลังอย่างเดียว:
+  Now: แสดงย้อนหลัง 10 นาที, raw 10s, ป้ายทุก 5 นาที
+  Every 5 min: ย้อนหลัง 30 นาที, average/ป้ายทุก 5 นาที (แกนถี่กว่า Now)
+  Every 30 min: ย้อนหลัง 3 ชั่วโมง, average/ป้ายทุก 30 นาที
+  Daily: ย้อนหลัง 7 วัน, average/ป้ายรายวัน
+  Every 7 days: ย้อนหลัง 30 วัน, average/ป้ายทุก 7 วัน
+- ป้ายลงรอบจริง เช่น 17:00/17:30 และทั้งสามกราฟใช้เวลาเดียวกัน
+  API เพิ่ม resolution และ utc_offset; legacy range API ยังใช้ได้
+  ปรับ bucket ให้ตรงนาฬิกา, tooltip มีเวลาข้อมูลจริงและระบุ average
+  ไม่วาดข้อมูลก่อน sample แรก, retention/raw sample ไม่เปลี่ยน
+- เพิ่ม history-time.js และ Node tests สำหรับ interval/clock alignment
+- กดโลโก้ ib มุมซ้ายบนเพื่อขยายเมนูเป็น icon+ชื่อ กดอีกครั้งย่อ
+  desktop ขยาย 64->240px; mobile overlay; จำสถานะ localStorage
+  ไม่เปลี่ยนหน้าเวลากดโลโก้, มี aria-expanded/keyboard และ reduced-motion
+- พื้นที่ประวัติขนาดเล็กแสดง KB แทนการปัดเป็น 0.0 MB
+- ตรวจจริงทั้ง .104/.103: Now/5m tick 300000ms, 30m tick 1800000ms,
+  ทั้งสามกราฟป้ายตรงกัน, จำ rail หลัง reload, mobile 390px ไม่ overflow,
+  ไม่มี JS errors, DB เก่า/recording_since เดิมยังอยู่
+- 91 Python tests + 5 JavaScript tests ผ่าน; Ruff/JS/bash/diff checks ผ่าน
+- wheel SHA256 be00e9228f422c4a8af0ea4794ac42a200f70051f2b8c90a1f26fd8dbdab2d58
+- backup บนทั้งสองเครื่อง /opt/ibhics/history2-backup-20261109-174725/venv
+- installer/install-history-axis.sh ใช้ history1 -> history2 เท่านั้น
+- VM Node1 ทั้ง 4 UUID ยังทำงานเดิม; ไม่มีการเปลี่ยน membership/disk/VM
+
+งานใหม่ที่ยังค้างและยังไม่ได้ติดตั้ง
+- ผู้ใช้ขอ Virtual Storage สองโหนด + witness และไฟล์ติดตั้งบน VMware
+- ชื่อ witness ที่ผู้ใช้ยืนยันล่าสุดคือ Arbiter เท่านั้น (ไม่ใช่ ibHiCS Arbiter)
+- ยังไม่มีไฟล์ ISO/OVA ของ Arbiter และยังไม่มี replicated-storage backend
+- ตรวจอ่านอย่างเดียวพบ Node1 HDD /dev/sda,/dev/sdb เป็น md RAID1 + LVM/XFS
+  hybrid01 และ SSD /dev/sdc เป็น cache ของ pool เดียวกัน ทั้งชุดกำลังใช้งาน
+  กับ VM เดิม จึงไม่ใช่ดิสก์ว่างที่จะ provision Virtual Storage ได้ทันที
+- Node2 ดิสก์ข้อมูลยังมี Ceph OSD เก่า; OS อยู่ SATADOM /dev/sdc
+- ถามผู้ใช้เรื่องใช้ดิสก์ใหม่หรือย้ายข้อมูลเดิมแล้ว แต่ยังไม่ได้คำตอบประเด็นนี้
+  ห้ามเดาว่าอนุญาตล้าง hybrid01/Node1 จากคำอนุญาตล้างเครื่องเก่า .107 ก่อนหน้า
+- แนวทางที่ศึกษา: DRBD9 + diskless tiebreaker/LINSTOR ต้องมี storage data-plane
+  จริง; การเพิ่ม witness agent ปัจจุบันไม่ได้ทำ replication หรือ DRBD quorum ให้
+- worktree codex/virtual-storage-arbiter ถูกสร้างไว้แต่ยังไม่มี implementation
+  https://linbit.com/drbd-user-guide/drbd-guide-9_0-en/ อ้างอิง diskless tiebreaker
+- ล่าสุดผู้ใช้สั่ง: “เสร็จแล้วหยุดทุกอย่างเลย” จึงจบ/ตรวจ deployment กราฟและเมนู
+  ที่กำลังทำให้เรียบร้อยแล้วหยุด ไม่ได้เริ่มล้างดิสก์/ทำ Virtual Storage ต่อ

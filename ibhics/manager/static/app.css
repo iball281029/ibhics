@@ -952,3 +952,21 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 @media (max-width: 600px) { #usage .usage-row h4 > span { display: block; float: none; margin-top: 5px; } }
 .ct-net table input, .ct-net table select { width: 100%; min-width: 90px; }
 .ct-net > label { display: block; margin-top: 8px; }
+
+/* Branded icon-rail toggle: wide on desktop, overlay on narrow screens. */
+.rail .logo { border: 0; border-radius: 0; padding: 0; cursor: pointer; color: #fff; font: inherit; box-shadow: none; flex-shrink: 0; }
+.rail-label, .rail-title { display: none; }
+.rail { transition: width .18s ease; }
+.shell { transition: margin-left .18s ease; }
+.rail-expanded .rail { width: 240px; align-items: stretch; }
+.rail-expanded .shell { margin-left: 240px; }
+.rail-expanded .rail .logo { display: flex; justify-content: flex-start; gap: 18px; padding-left: 14px; width: 100%; }
+.rail-expanded .rail-title { display: inline; font-size: 21px; font-weight: 700; }
+.rail-expanded .rail nav a { display: flex; justify-content: flex-start; gap: 16px; padding: 0 22px; width: 100%; }
+.rail-expanded .rail nav a svg { flex: 0 0 24px; }
+.rail-expanded .rail-label { display: inline; position: relative; z-index: 1; white-space: nowrap; font-size: 14px; }
+.rail-expanded .rail a::after { display: none; }
+.rail-expanded .rail nav { overflow-y: auto; overflow-x: hidden; min-height: 0; }
+.time-tick { font-size: 9px; }
+@media (max-width: 700px) { .rail-expanded .shell { margin-left: 52px; } .rail-expanded .rail { box-shadow: 8px 0 30px rgb(0 0 0 / 25%); } }
+@media (prefers-reduced-motion: reduce) { .rail, .shell { transition: none; } }

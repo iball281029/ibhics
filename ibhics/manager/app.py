@@ -452,11 +452,13 @@ def create_app(
         )
 
     @api.get("/usage/history")
-    def usage_history(range: str = "now") -> dict:
+    def usage_history(
+        range: str = "now", resolution: str | None = None, utc_offset: int = 0
+    ) -> dict:
         if usage is None:
             return {"points": [], "range": range, "note": "Server history is not configured"}
         try:
-            return usage.history(range)
+            return usage.history(range, resolution=resolution, utc_offset=utc_offset)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

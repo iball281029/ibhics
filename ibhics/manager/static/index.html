@@ -60,7 +60,7 @@
 </svg>
 
 <aside class="rail">
-  <a class="logo" href="#home" aria-label="ibHiCS home" data-label="ibHiCS"><svg><use href="#logo"/></svg></a>
+  <button class="logo" id="rail-toggle" type="button" aria-label="Expand navigation" aria-expanded="false" aria-controls="menu"><svg><use href="#logo"/></svg><span class="rail-title">ibHiCS</span></button>
   <nav id="menu">
     <a href="#home" data-page="home" data-label="Dashboard"><svg><use href="#i-home"/></svg></a>
     <a href="#compute" data-page="compute" data-label="Virtual Machines"><svg><use href="#i-compute"/></svg></a>
@@ -1501,6 +1501,7 @@
 </dialog>
 
 <div id="toast"></div>
+<script src="history-time.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
