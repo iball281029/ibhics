@@ -2,12 +2,14 @@ ibHiCS development handoff: Home metrics and Node display names
 Date: 2026-11-09 (Asia/Bangkok)
 Branch: codex/home-metrics-node-name
 Base: dev commit 47df0b4 (Migrate: change host and storage together)
-Build: 1.3.0b2+home1 (local development build, not a GitHub release)
+Build: 1.3.0b2+home2 (local development build, not a GitHub release)
 
 User requests and confirmed decisions
 - Home: show CPU, memory and disk allocation as percentages. Values over 100%
   must remain visible (e.g. 125%) and turn red with a warning.
 - Improve actual-usage charts with a modern design, including light/dark themes.
+- Follow-up: user requested easier-to-understand charts and explicitly said the
+  ALLOCATION section must have NO charts. Allocation is now text-only.
 - User explicitly selected a display name separate from the stable Node ID.
 - User authorized development and server connections. The initial sandbox policy
   blocked SSH. The user subsequently enabled Full access and deployment succeeded
@@ -18,13 +20,17 @@ Implementation
   threads, matching the existing dashboard. Percentages are not capped at 100.
 - Disk allocation counts all regular VMs AND templates, including stopped VMs;
   stopped disks still reserve storage. The disk card explicitly labels this.
-- Overallocated cards show the full percentage, a red border/value/bar, an alert
+- Overallocated cards show the full percentage, a red border/value, an alert
   icon and the excess percentage. Unknown capacity displays a dash, never NaN.
-- Actual CPU, memory and storage have SVG area/line charts and gradient rings.
+- Actual CPU, memory and storage have SVG area/line charts, a current-use bar,
+  used/available (CPU: idle) legend and resource-specific explanations. Decorative
+  rings have been removed. Allocated resources have no bars, rings or charts.
   Values are sampled by the existing 10-second Home refresh, up to 60 samples /
   10 minutes in browser memory. No historical backend data is invented. Reloading
   starts a new history; missing measurements and gaps over 25 seconds break lines.
-  Charts use labelled adaptive axes (minimum ceiling 10%) and hover timestamps.
+  All three charts use identical fixed 0/25/50/75/100% vertical axes and the same
+  10-minute horizontal window (10 min ago / 5 min ago / Now). Hover timestamps
+  remain available. A first-reading message explains when history is collecting.
 - Memory measurements use reporting nodes' capacity, and partial reports are
   labelled. Existing Home per-node fallback bars are otherwise unchanged.
 - PATCH /api/v1/cluster/nodes/{stable_name} accepts {"display_name": "..."}.
@@ -70,7 +76,7 @@ Live server observations and scope
   was attempted. All development and artifacts remain local.
 - Credentials and session cookies are deliberately absent from this handoff.
 
-Actual deployment and live checks (completed)
+Initial home1 deployment and live checks (completed)
 - SSH access succeeded after the user changed the session to Full access.
 - No active backup/import/migration/deploy jobs at preflight.
 - Compared all 56 installed Python source files with local base. Differences were
@@ -94,12 +100,31 @@ Actual deployment and live checks (completed)
   the test created it with members=[], maintenance=[], display_names={} after reset.
 - No VM power operations, hypervisor service restarts or host reboots were issued.
 
-Deployment procedure (already executed; retained for reference)
+Latest revision: home2 (deployed 2026-11-09 16:04 Asia/Bangkok)
+- Trigger: user found the charts difficult to understand and explicitly requested
+  no graphs for allocated resources.
+- Removed allocation bars and all decorative rings. Allocation remains numeric
+  and retains the red over-100% warnings. Live usage has a labelled capacity bar,
+  used/idle/available legend, plain explanations and fixed 0-100% time-series axes.
+- Updated installer accepts home1 and installs home2; previous installer remains
+  available in Git history and the original home1 delivery artifacts.
+- 26 focused tests passed; JavaScript syntax, Ruff, bash syntax and diff checks passed.
+- Tested preview and actual server on desktop and 390px mobile: no horizontal
+  overflow, zero allocation charts, zero rings, three actual-use charts with
+  matching percentage/time labels, no page errors.
+- Wheel SHA256:
+  22880eeb8dda15a817b0c9c69b02366e2a83dc27b32ace3e795cc6a023ff63eb
+- Backup of home1: /opt/ibhics/home2-backup-20261109-160444/venv
+- Health is ok, installed version 1.3.0b2+home2. VM UUIDs and libvirt domain IDs
+  unchanged (38,39,42,45); no new manager errors in journal.
+- The display-name API and metadata format are unchanged by home2.
+
+Deployment procedure (home2 installer; retained for reference)
 1. Review the branch/diff and the preview images before installation.
 2. Copy the final wheel and installer/install-home-metrics.sh to the server.
 3. Run as root on the development server:
-   bash install-home-metrics.sh ./ibhics-1.3.0b2+home1-py3-none-any.whl
-   The installer checks installed version 1.3.0b2, backs up the entire venv,
+   bash install-home-metrics.sh ./ibhics-1.3.0b2+home2-py3-none-any.whl
+   The installer checks installed version 1.3.0b2+home1, backs up the entire venv,
    restarts only ibhics-manager, verifies /api/v1/health and restores the backup
    automatically if installation or the health check fails. No VM power commands
    are issued. Manager restart invalidates browser sessions.
@@ -115,7 +140,7 @@ Rollback
 
 Next steps for Claude
 - Review this branch against 47df0b4; do not repeat the implementation on dev.
-- The build is already deployed. Confirm the current version before changing it;
-  do not rerun the installer against home1 (it deliberately requires the old version).
+- Confirm the current version before changing it; do not rerun an installer
+  against its target version (each installer deliberately requires its previous version).
 - Do not rename the underlying node or Linux hostname: the user chose labels.
 - The AppArmor test remains a separate existing issue.

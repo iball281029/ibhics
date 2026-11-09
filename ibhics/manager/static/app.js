@@ -627,18 +627,16 @@ function recordHomeSample(t, now = Date.now()) {
 
 function allocationMeter(label, used, capacity, detail) {
   const value = allocationPct(used, capacity), over = value != null && value > 100;
-  const width = value == null ? 0 : Math.min(100, Math.max(0, value));
   return `<div class="allocation-meter${over ? " overallocated" : ""}">
     <div class="allocation-top"><b>${esc(label)}</b><strong>${percentText(value)}</strong></div>
-    <div class="allocation-track" role="img" aria-label="${esc(label)} allocated ${percentText(value)}"><i style="width:${width}%"></i></div>
     <span class="allocation-detail">${detail}</span>
     ${over ? `<span class="allocation-warning"><svg aria-hidden="true"><use href="#i-alert"/></svg>Overallocated by ${percentText(value - 100)}</span>` : ""}
     ${value == null ? '<span class="allocation-detail">Capacity unavailable</span>' : ""}</div>`;
 }
 
 function usageChart(key, label, value, detail) {
-  const samples = homeHistory, first = samples[0]?.at || Date.now(), last = samples.at(-1)?.at || first;
-  const start = Math.min(first, last - 60000), span = Math.max(60000, last - start);
+  const samples = homeHistory, last = samples.at(-1)?.at || Date.now();
+  const start = last - 600000;
   const groups = [];
   for (const sample of samples) {
     if (sample[key] == null) { groups.push([]); continue; }
@@ -646,30 +644,32 @@ function usageChart(key, label, value, detail) {
     if (!group || (group.length && sample.at - group.at(-1).at > 25000)) { group = []; groups.push(group); }
     group.push(sample);
   }
-  const peak = Math.max(value || 0, ...samples.map((s) => s[key] || 0));
-  const ceiling = Math.min(100, Math.max(10, Math.ceil(peak / 10) * 10));
-  const x = (sample) => 8 + (sample.at - start) / span * 284;
-  const y = (sample) => 103 - Math.min(ceiling, Math.max(0, sample[key])) / ceiling * 88;
+  const x = (sample) => 38 + (sample.at - start) / 600000 * 312;
+  const y = (sample) => 132 - Math.min(100, Math.max(0, sample[key])) / 100 * 120;
   const path = (group) => group.map((sample, i) => `${i ? "L" : "M"}${x(sample).toFixed(1)},${y(sample).toFixed(1)}`).join(" ");
-  const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const status = value == null ? "unavailable" : value >= 90 ? "bad" : value >= 75 ? "warn" : "";
   const icon = { cpu: "i-cpu", memory: "i-mem", storage: "i-storage" }[key];
-  const ring = 2 * Math.PI * 26, filled = ring * Math.min(100, Math.max(0, value || 0)) / 100;
+  const used = Math.min(100, Math.max(0, value || 0));
+  const remaining = key === "cpu" ? "Idle" : "Available";
+  const explanation = { cpu: "Processing power currently in use", memory: "RAM used by the server and VMs", storage: "Physical storage occupied by files" }[key];
+  const known = samples.filter((s) => s[key] != null);
   return `<article class="usage-chart chart-${key} ${status}">
     <div class="chart-top"><span class="chart-label"><span class="chart-icon"><svg aria-hidden="true"><use href="#${icon}"/></svg></span>${esc(label)}</span><span class="chart-live"><i></i>${value == null ? "No data" : "Live"}</span></div>
-    <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div>
-      <svg class="chart-ring" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="home-ring-${key}"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs><circle class="ring-track" cx="32" cy="32" r="26"/><circle class="ring-fill" cx="32" cy="32" r="26" opacity="${filled > 0 ? 1 : 0}" stroke="url(#home-ring-${key})" stroke-dasharray="${filled.toFixed(2)} ${ring.toFixed(2)}" transform="rotate(-90 32 32)"/></svg>
-    </div>
-    <svg class="resource-chart" viewBox="0 0 300 120" role="img" aria-label="${esc(label)} usage: ${value == null ? "unavailable" : percentText(value)}. Recent live samples.">
+    <p class="chart-explanation">${explanation}</p>
+    <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div><span class="chart-current-label">in use now</span></div>
+    <div class="actual-capacity-bar" role="img" aria-label="${esc(label)}: ${percentText(value)} used"><i style="width:${value == null ? 0 : used}%"></i></div>
+    <div class="capacity-legend"><span><i></i>Used</span><span>${remaining}: <b>${value == null ? "–" : percentText(100 - used)}</b></span></div>
+    <div class="chart-history-heading"><b>Last 10 minutes</b><span>Usage (%)</span></div>
+    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: 10 minutes ago to now.">
       <defs><linearGradient id="home-area-${key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
-      <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="8" y1="0" x2="292" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
-      ${[15, 59, 103].map((at) => `<path class="chart-grid" d="M8 ${at} H292"/>`).join("")}
-      <text class="chart-axis" x="8" y="11">${ceiling}%</text>
-      ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},103 L${x(g[0]).toFixed(1)},103 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
+      <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="38" y1="0" x2="350" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
+      ${[0, 25, 50, 75, 100].map((p) => `<path class="chart-grid" d="M38 ${132 - p * 1.2} H350"/><text class="chart-axis" x="30" y="${136 - p * 1.2}" text-anchor="end">${p}%</text>`).join("")}
+      ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},132 L${x(g[0]).toFixed(1)},132 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
       ${groups.filter((g) => g.length).map((g) => `<circle cx="${x(g.at(-1)).toFixed(1)}" cy="${y(g.at(-1)).toFixed(1)}" r="3.5" fill="currentColor"/>`).join("")}
       ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.at).toLocaleTimeString())}: ${percentText(s[key])}</title></circle>`).join("")}
-      <text class="chart-axis" x="8" y="118">${samples.length > 1 ? time(first) : "Collecting samples"}</text><text class="chart-axis" x="292" y="118" text-anchor="end">Now</text>
-    </svg><div class="chart-caption">Usage trend<span>Scale 0–${ceiling}%</span></div></article>`;
+      ${known.length < 2 ? `<text class="chart-empty" x="194" y="74" text-anchor="middle">${value == null ? "No current reading" : "Collecting history…"}</text>` : ""}
+      <text class="chart-axis" x="38" y="154">10 min ago</text><text class="chart-axis" x="194" y="154" text-anchor="middle">5 min ago</text><text class="chart-axis" x="350" y="154" text-anchor="end">Now</text>
+    </svg><div class="chart-caption">History starts when Home opens<span>Updates every 10 sec</span></div></article>`;
 }
 
 function activities() {
@@ -737,10 +737,10 @@ function renderHome() {
     allocationMeter("vCPU", t.vcpus, t.cpus, `${t.vcpus} vCPU / ${t.cpus} hardware threads`),
     allocationMeter("Memory", t.vmem, t.mem, `${gbText(t.vmem)} / ${gbText(t.mem)}`),
     allocationMeter("VM disks", t.vdisk, t.cap, `${num(t.vdisk)} / ${num(t.cap)} GB · all VMs &amp; templates, thin provisioned`),
-  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Live samples · up to 10 minutes${partial ? " · Some node metrics unavailable" : ""}</span></h4>${[
-    usageChart("cpu", "CPU", t.cpuPct, `${t.measured} hardware threads reporting`),
-    usageChart("memory", "Memory", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} / ${gbText(t.memMeasured)}` : "Waiting for node metrics"),
-    usageChart("storage", "Storage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} / ${num(t.cap)} GB used` : "Waiting for storage metrics"),
+  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4>${[
+    usageChart("cpu", "CPU usage", t.cpuPct, `${t.measured} hardware threads in total`),
+    usageChart("memory", "Memory usage", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} used / ${gbText(t.memMeasured)} total` : "Waiting for node metrics"),
+    usageChart("storage", "Storage usage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} GB used / ${num(t.cap)} GB total` : "Waiting for storage metrics"),
   ].join("")}</div>`;
 
   $("#home-nodes").innerHTML = members.map((m) => {

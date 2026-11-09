@@ -47,6 +47,15 @@ assert.equal((html.match(/overallocated"/g)||[]).length,3);
 assert.equal(html.split('<strong>125%</strong>').length-1,3);
 assert.equal((html.match(/Overallocated by 25%/g)||[]).length,3);
 assert.equal((html.match(/class="resource-chart"/g)||[]).length,3);
+assert(!html.includes('allocation-track'));
+assert(!html.includes('chart-ring'));
+assert.equal(html.split('100%</text>').length-1,3);
+assert.equal(html.split('50%</text>').length-1,3);
+assert.equal(html.split('10 min ago').length-1,3);
+assert.equal(html.split('5 min ago').length-1,3);
+assert(html.includes('Idle: <b>75%</b>'));
+assert(html.includes('Available: <b>75%</b>'));
+assert(html.includes('Collecting history'));
 assert(!html.includes('NaN'));
 assert(!allocationMeter('CPU',8,8,'').includes('overallocated'));
 assert(allocationMeter('CPU',8.01,8,'').includes('overallocated'));
@@ -67,6 +76,7 @@ recordHomeSample(totals(),1020000);
 const chart=usageChart('cpu','CPU',50,'');
 assert(!chart.includes('class="chart-line"')); // no line across unavailable data
 assert(!chart.includes('NaN'));
+assert(!usageChart('memory','Memory',null,'').includes('Available: <b>100%'));
 // Flat lines need a nonzero gradient space.
 assert(chart.includes('gradientUnits="userSpaceOnUse"'));
 homeHistory.length=0;

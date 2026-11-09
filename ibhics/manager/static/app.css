@@ -891,12 +891,9 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 .allocation-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .allocation-top b { font-size: 13px; font-weight: 600; }
 .allocation-top strong { font-size: 25px; font-weight: 700; letter-spacing: -.8px; font-variant-numeric: tabular-nums; }
-.allocation-track { height: 6px; background: var(--line); border-radius: 9px; overflow: hidden; }
-.allocation-track i { display: block; height: 100%; border-radius: inherit; background: var(--grad); }
 .allocation-detail { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
 .allocation-meter.overallocated { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 5%, var(--panel)); }
 .overallocated .allocation-top strong, .allocation-warning { color: var(--bad); }
-.overallocated .allocation-track i { background: var(--bad); }
 .allocation-warning { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; }
 .allocation-warning svg { width: 14px; height: 14px; flex: none; }
 .usage-chart { --chart-color: #08b9dc; --chart-end: #4d77f5; padding: 16px 18px 12px; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(160deg, color-mix(in srgb, var(--chart-color) 8%, var(--panel)), var(--panel) 75%); min-width: 0; box-shadow: 0 3px 14px rgb(30 41 90 / 3%); }
@@ -913,19 +910,26 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 .chart-reading > div { display: grid; gap: 3px; min-width: 0; }
 .chart-reading strong { font-size: 32px; line-height: 1.2; letter-spacing: -1.3px; font-variant-numeric: tabular-nums; }
 .chart-reading > div > span { color: var(--muted); font-size: 11.5px; }
-.chart-ring { width: 64px; height: 64px; flex: none; }
-.chart-ring circle { fill: none; stroke-width: 6; }
-.ring-track { stroke: color-mix(in srgb, var(--chart-color) 12%, var(--panel)); }
-.ring-fill { stroke-linecap: round; }
+.chart-explanation { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.chart-current-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.actual-capacity-bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+.actual-capacity-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--chart-color), var(--chart-end)); }
+.capacity-legend { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+.capacity-legend > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+.capacity-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: var(--chart-color); }
+.capacity-legend b { font-weight: 600; color: var(--text); }
+.chart-history-heading { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 16px; margin: 16px 0 10px; }
+.chart-history-heading b { color: var(--text); font-weight: 600; }
 .usage-chart.bad .chart-reading strong { color: var(--bad); }
 .usage-chart.warn .chart-reading strong { color: var(--warn); }
 .resource-chart { display: block; width: 100%; height: auto; color: var(--chart-color); overflow: visible; }
 .chart-grid { fill: none; stroke: var(--line); stroke-dasharray: 3 5; }
 .chart-line { fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.chart-axis { fill: var(--muted); font-size: 8px; }
+.chart-axis { fill: var(--muted); font-size: 10px; }
+.chart-empty { fill: var(--muted); font-size: 11px; }
 .chart-hit { fill: transparent; cursor: crosshair; }
 .chart-hit:hover { fill: var(--chart-color); stroke: var(--panel); stroke-width: 2; }
-.chart-caption { display: flex; justify-content: space-between; padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.chart-caption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .node-label-form .card { margin-top: 18px; }
 #page-home .lower > .sheet, #page-home .node-row > div { min-width: 0; }
 #page-home .node-row .vm-name, #page-home .node-row .vm-sub { overflow-wrap: anywhere; white-space: normal; }
