@@ -321,3 +321,14 @@ ibHiCS ใช้ license [GNU AGPLv3](LICENSE) ใช้งาน ติดต�
 Web console ใช้ [noVNC](https://github.com/novnc/noVNC) 1.6.0 (MPL-2.0) และ pako (MIT) ที่รวมไว้ใน `ibhics/manager/static/novnc/` พร้อมไฟล์ license ของแต่ละโครงการ
 
 ผู้ร่วมพัฒนาต้องยอมรับ [Contributor License Agreement](CLA.md) ก่อน PR แรกจะถูก merge ดูขั้นตอนใน [CONTRIBUTING.md](CONTRIBUTING.md)
+
+Node Summary also includes **Device health**: local IPMI SDR readings for fans,
+PSUs, temperature and voltage, Linux EDAC memory error counters, and read-only
+SMART health for discoverable disks. A background collector caches readings for
+60 seconds without blocking the normal node summary. The page shows collection
+time, normal/warning/fault/unknown counts, expandable device groups and a separate
+recent BMC event history. Unknown includes unsupported telemetry and empty slots;
+a normal temperature does not prove RAM integrity. BMC history may describe
+repaired faults and uses the BMC clock. RAID controllers can hide physical disks.
+Missing or older agents show monitoring unavailable instead of a healthy status.
+No SMART self-tests, counter resets, SEL clears or IPMI configuration writes run.

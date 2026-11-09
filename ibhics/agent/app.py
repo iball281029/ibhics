@@ -95,6 +95,10 @@ def create_agent_app(
         def host_nics() -> list[dict]:
             return [asdict(n) for n in driver.host_system().nics()]
 
+        @api.get("/host/hardware")
+        def host_hardware() -> dict:
+            return driver.host_system().hardware_health()
+
         @api.get("/host/network")
         def host_network() -> dict:
             return asdict(driver.host_system().network())

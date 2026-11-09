@@ -484,6 +484,10 @@ def create_app(
     def node_nics(name: str) -> list[dict]:
         return [asdict(n) for n in host_of(name).nics()]
 
+    @api.get("/nodes/{name}/hardware")
+    def node_hardware(name: str) -> dict:
+        return host_of(name).hardware_health()
+
     @api.get("/nodes/{name}/network")
     def node_network(name: str) -> dict:
         return asdict(host_of(name).network())

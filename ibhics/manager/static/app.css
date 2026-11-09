@@ -79,6 +79,14 @@ a:hover { text-decoration: underline; }
 .dropdown a:hover, .dropdown button:hover { background: var(--hover); text-decoration: none; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.health-counts { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; }
+.health-counts > span { display: flex; align-items: center; gap: 8px; }
+.health-group { border-top: 1px solid var(--line); padding: 14px 0; }
+.health-group > summary { cursor: pointer; font-weight: 600; }
+.health-group > summary .badge { margin: 0 8px; }
+.health-group .table-wrap { margin-top: 12px; }
+.health-event { overflow-wrap: anywhere; font-size: 12px; }
+.health-error { color: var(--bad); }
 
 /* Pages */
 main { flex: 1; padding: 0 28px 40px; }

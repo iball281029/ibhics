@@ -618,6 +618,15 @@ class HostSystem:
     def summary(self) -> NodeSummary:
         raise NotImplementedError
 
+    def hardware_health(self) -> dict:
+        return {
+            "items": [],
+            "events": [],
+            "collected_at": None,
+            "collecting": False,
+            "note": "Hardware monitoring unavailable on this node",
+        }
+
     def nics(self) -> list[HostNic]:
         raise NotImplementedError
 
@@ -736,6 +745,16 @@ class LinuxHost(HostSystem):
         self.run = run
         self.reattach = reattach  # puts VM ports back on bridges that were re-created
         self.sample_seconds = sample_seconds
+        from .hardware import Monitor
+
+        self._hardware_monitor = Monitor() if root == Path("/") else None
+
+    def hardware_health(self) -> dict:
+        return (
+            self._hardware_monitor.snapshot()
+            if self._hardware_monitor
+            else super().hardware_health()
+        )
 
     def _path(self, path: str) -> Path:
         return self.root / path.lstrip("/")

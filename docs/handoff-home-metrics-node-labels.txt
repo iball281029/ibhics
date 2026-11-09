@@ -178,3 +178,47 @@ Second-server installation (in progress; do NOT assume completed)
   join .104 manager and set display name ibhics-Node2; test actual cluster health.
 - Multi-node management is supported; no automatic VM failover, fencing, manager
   failover or distributed-storage replication. No witness deployed or identified.
+
+Latest revision: node2 (hardware-health feature; package suffix is a revision,
+not the second host's name; deployed 2026-11-09 16:38 Asia/Bangkok)
+- Device health on Node Summary, grouped expandable sensor/device table with
+  normal/warning/fault/unknown counts. Missing readings remain unknown.
+- Dedicated GET /nodes/{name}/hardware and token-protected /agent/v1/host/hardware;
+  remote old agents return an explicit upgrade note for 404. Existing summary
+  payload stays compatible. Background collector, independent lock, 60s cache.
+- Sources: read-only IPMI SDR; Linux EDAC per-controller and per-DIMM ECC counters;
+  smartctl health/attributes for detected disks. No self-tests, resets or writes.
+- Recent SEL records are separate historical evidence, not current health. BMC
+  clock and hardware coverage caveats are visible; sampled time is shown.
+- Tests: 73 focused passed; Ruff/JS/bash/diff checks pass. Real server page:
+  75 observations: 61 normal, 1 warning, 13 unknown, 0 current faults.
+  /dev/sda has Reallocated_Sector_Ct=9 while SMART overall passes: warning shown.
+- Actual .104 Nodes and Node Summary IPMI link verified. Device health desktop
+  screenshot: ../node-health-release/live-device-health.png. No desktop overflow.
+- Wheel SHA256: 7107a679496b6244d36d2f7e1ca35cea054fb6b25a882b02130b5a5139b8812e
+- Backup: /opt/ibhics/node2-backup-20261109-163837/venv. Health check passed.
+  VM UUIDs unchanged: 50d7cc51-7d23-4ff0-99f0-01ab5324c15e,
+  29464a25-2c35-42a8-845a-af67edd45fb1,9ba33616-9d77-4e69-b994-52d4a89baf9a,
+  44c935c3-85a3-465f-b555-45a543b28d40. Manager error journal empty.
+- New .103 installer media contains node1 revision, upgrade to node2 after install.
+
+Second server updates (installation still in progress)
+- POST explicitly reported 'Failing DIMM: DIMM location (Uncorrectable memory
+  component found) P2-DIMMF1'. Boot proceeded into Debian installer.
+- User notified, asynchronous question about onsite RAM service still unanswered.
+  Do not put workloads on or rely on this host until hardware is investigated.
+- Current installer is executing the late preseed command, copying offline
+  package repository through BMC virtual media. ISO is 2GB and transfer is slow.
+- Root installer shell available on VT2 via HTML5 noVNC UI.rfb.sendKey: Alt_L
+  0xffe9 + F2 0xffbf; Return 0xff0d. Direct Playwright keyboard modifier combinations
+  were unreliable, use RFB sendKey explicitly. Viewer lives in a temporary context
+  accessible from browser.contexts(), title begins Resolution:.
+- Installer NICs: eno1 MAC ac:1f:6b:16:57:e6; eno2 ac:1f:6b:16:57:e7;
+  ens1f0 00:e0:ed:6a:16:20, ens1f1 00:e0:ed:6a:16:21.
+- Set all four physical NICs UP in installer so bootstrap can detect carrier.
+  Initially all physical NICs were DOWN (offline netcfg disabled).
+- User says they will connect a cable; clarified that the OS LAN is separate
+  from IPMI. Need confirm carrier before bootstrap runs, or fix via installer shell.
+- Temporary ISO share remains necessary and active. Original remote base ISO
+  removed to reclaim 2GB; original local Mac ISO retained. .104 root now ~7GB free.
+- Latest UI display name on .104 is ibhics-Node1; preserve it (stable ID ibhics-test).

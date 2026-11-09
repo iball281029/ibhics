@@ -2923,6 +2923,56 @@ handlers["node-dialog"] = async (f) => {
 
 const nodeFromHash = () => decodeURIComponent(location.hash.slice(6));
 const node = { name: "", summary: null, nics: [], net: null, netState: null, settings: null, timezones: [], moved: "" };
+
+let hardwareRequest = 0;
+const hardwareStatus = {
+  ok: ["running", "Normal"], warning: ["waiting", "Warning"],
+  critical: ["failed", "Fault reported"], unknown: ["plain", "Unknown"],
+};
+function hardwareBadge(status) {
+  const [style, label] = hardwareStatus[status] || hardwareStatus.unknown;
+  return `<span class="badge ${style}">${label}</span>`;
+}
+function renderHardware(data) {
+  const box = $("#node-health-content");
+  const expanded = new Map([...box.querySelectorAll('details[data-health-group]')].map((d) => [d.dataset.healthGroup, d.open]));
+  const items = data.items || [], events = data.events || [];
+  const count = (s) => items.filter((x) => x.status === s).length;
+  const stamp = data.collected_at ? new Date(data.collected_at).toLocaleString() : "Not collected yet";
+  const summary = Object.keys(hardwareStatus).map((s) =>
+    `<span>${hardwareBadge(s)} <b>${count(s)}</b></span>`).join("");
+  const categories = [...new Set(items.map((x) => x.category))];
+  const order = { critical: 0, warning: 1, unknown: 2, ok: 3 };
+  const groups = categories.map((category) => {
+    const rows = items.filter((x) => x.category === category).sort((a,b) => (order[a.status] ?? 2) - (order[b.status] ?? 2));
+    const faults = rows.filter((x) => ["critical", "warning"].includes(x.status)).length;
+    const status = rows.some((x) => x.status === "critical") ? "critical" : faults ? "warning" : rows.some((x) => x.status === "unknown") ? "unknown" : "ok";
+    return `<details class="health-group" data-health-group="${esc(category)}" ${(expanded.get(category) ?? !!faults) ? "open" : ""}><summary>${esc(category)} ${hardwareBadge(status)} <span class="muted">${rows.length} readings</span></summary>
+      <div class="table-wrap"><table><thead><tr><th>Device / sensor</th><th>Status</th><th>Reading / details</th><th>Source</th></tr></thead><tbody>${rows.map((x) =>
+        `<tr><td>${esc(x.name)}</td><td>${hardwareBadge(x.status)}</td><td>${esc(x.detail)}</td><td>${esc(x.source)}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }).join("");
+  box.innerHTML = `<div class="health-counts">${summary}</div>
+    <p class="hint">${data.collecting ? "Refreshing hardware readings… · " : ""}Last collected: ${esc(stamp)} · Refresh every 60 seconds.</p>
+    ${data.error ? `<p class="health-error">${esc(data.error)}</p>` : ""}
+    ${data.note ? `<p class="hint">${esc(data.note)}</p>` : ""}
+    ${groups}
+    <p class="hint">Normal means the reported reading is within limits. Missing sensors and empty slots can show Unknown. DIMM temperature does not confirm RAM integrity; RAID controllers may hide physical disks.</p>
+    <details class="health-group" data-health-group="history" ${expanded.get("history") ? "open" : ""}><summary>BMC hardware event history <span class="muted">${events.length} matching recent events</span></summary>
+      <p class="hint">Historical events may have been repaired. They do not confirm a current fault. Dates come from the BMC clock. Only the latest 30 BMC records are checked.</p>
+      ${events.map((e) => `<p class="health-event mono">${esc(e.detail)}</p>`).join("") || `<p class="hint">${data.events_status === "available" ? "No matching hardware events in the recent records." : "Event history unavailable."}</p>`}</details>`;
+}
+async function loadNodeHardware(name, fresh) {
+  const request = ++hardwareRequest;
+  if (fresh) $("#node-health-content").innerHTML = '<p class="hint">Collecting device health…</p>';
+  try {
+    const data = await api(`/nodes/${enc(name)}/hardware`);
+    if (request === hardwareRequest && nodeFromHash() === name) renderHardware(data);
+  } catch (err) {
+    if (request === hardwareRequest && nodeFromHash() === name) renderHardware({
+      items: [], events: [], error: `Hardware status unavailable: ${err.message}`,
+    });
+  }
+}
 let netTick = null;
 
 const uptimeText = (s) => {
@@ -2958,7 +3008,7 @@ async function renderNodeDetail(auto = false) {
   const name = nodeFromHash();
   const m = state.cluster.members.find((x) => x.name === name);
   $("#node-crumb").textContent = nodeLabel(name);
-  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-vms", "#node-ifaces", "#node-net-banner"].forEach((id) => { $(id).innerHTML = ""; });
+  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-vms", "#node-ifaces", "#node-net-banner", "#node-health-content"].forEach((id) => { $(id).innerHTML = ""; });
   if (!m || m.role !== "compute") {
     $("#node-title").textContent = m ? name : "Node not found";
     $("#node-subtitle").textContent = m ? "A witness only votes for quorum; it has no host details to show." : "It may have been removed from the cluster.";
@@ -2971,6 +3021,7 @@ async function renderNodeDetail(auto = false) {
     api(`${base}/summary`), api(`${base}/nics`), api(`${base}/network`), api(`${base}/network/state`),
   ]);
   Object.assign(node, { name, summary, nics, net, netState });
+  void loadNodeHardware(name, fresh);
   if (fresh) {
     const [settings, timezones] = await Promise.all([api(`${base}/settings`), api(`${base}/timezones`)]);
     Object.assign(node, { settings, timezones, moved: "" });

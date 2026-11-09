@@ -472,6 +472,20 @@ class RemoteHost:
     def summary(self) -> host.NodeSummary:
         return host.NodeSummary(**self._call("GET", "/summary"))
 
+    def hardware_health(self) -> dict:
+        resp = self._client.request("GET", "/host/hardware")
+        if resp.status_code == 404:
+            return {
+                "items": [],
+                "events": [],
+                "collected_at": None,
+                "collecting": False,
+                "note": "Upgrade this node agent to enable hardware monitoring",
+            }
+        if resp.status_code >= 400:
+            raise NodeUnavailable(f"Hardware query: HTTP {resp.status_code}")
+        return resp.json()
+
     def nics(self) -> list[host.HostNic]:
         return [host.HostNic(**n) for n in self._call("GET", "/nics")]
 
