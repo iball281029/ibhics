@@ -577,7 +577,7 @@ async function refresh(page, auto = false) {
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
   if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
-  if (page === "nodes") { await load("vms"); renderNodes(); }
+  if (page === "nodes") { await load("vms", "summaries"); renderNodes(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
@@ -2845,6 +2845,14 @@ handlers["pool-dialog"] = async (f) => {
 
 // ---------- nodes ----------
 
+function ipmiText(info = {}) {
+  info = info || {};
+  const ip = info.ip_address || "";
+  const valid = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && ip.split(".").every((n) => Number(n) <= 255);
+  if (valid) return `<a href="https://${esc(ip)}/" target="_blank" rel="noopener noreferrer" title="Open BMC web console">${esc(ip)}</a>${info.source ? `<span class="vm-sub">${esc(info.source)}</span>` : ""}`;
+  return `<span class="muted">${esc(info.note || "Unavailable")}</span>`;
+}
+
 function renderNodes() {
   const c = state.cluster, admin = isAdmin();
   $("#nodes-sub").textContent = `${TOPOLOGY[c.topology] || c.topology} · ${c.ha_capable ? "HA capable" : "no HA"} · ${c.quorum ? "quorum OK" : "no quorum"}`;
@@ -2862,6 +2870,7 @@ function renderNodes() {
       <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a>` : `<span class="vm-name">${esc(nodeLabel(m.name))}</span>`}<span class="vm-sub">${esc(m.name)}${m.local ? " · runs the manager" : ""}</span></div></div></td>
       <td>${esc(m.role)}</td>
       <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
+      <td>${m.role === "compute" ? ipmiText(state.summaries[m.name]?.ipmi) : '<span class="muted">Not applicable</span>'}</td>
       <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>${m.maintenance ? ` <span class="badge plain">maintenance</span>` : ""}</td>
       <td>${h ? `${h.cpus} cores` : "–"}</td>
       <td>${h ? gbText(h.memory_mb) : "–"}</td>
@@ -2996,6 +3005,7 @@ async function renderNodeDetail(auto = false) {
   const mgmt = nics.flatMap((n) => n.addresses.map((a) => [n.name, a]));
   $("#node-sys").innerHTML = kv([
     ["Hostname", esc(s.hostname)],
+    ["IPMI / BMC IPv4", ipmiText(s.ipmi)],
     ["Role", m.local ? "Compute, runs the manager" : esc(m.role)],
     ["Management address", mgmt.map(([n, a]) => `<span class="mono">${esc(a)}</span> <span class="muted">${esc(n)}</span>`).join("<br>")],
     ["ibHiCS", esc(s.version)],

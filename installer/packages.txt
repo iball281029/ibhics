@@ -46,6 +46,7 @@ nftables
 iputils-ping
 iputils-tracepath
 smartmontools
+ipmitool
 # Containers (1.0): LXC, its "download" template (wget, gpg) and unprivileged id maps
 lxc
 uidmap

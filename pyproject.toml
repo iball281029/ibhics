@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ibhics"
-version = "1.3.0b2+home2"
+version = "1.3.0b2+node1"
 description = "Open-source hyper-converged infrastructure platform"
 readme = "README.md"
 license = "AGPL-3.0-or-later"

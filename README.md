@@ -72,11 +72,22 @@ sudo python -m ibhics.manager --driver libvirt --host 0.0.0.0
 
 ## รูปแบบการติดตั้ง
 
-| รูปแบบ | เครื่อง | HA |
+| รูปแบบ | เครื่อง | Quorum |
 | --- | --- | --- |
-| Standalone | 1 node | ไม่มี |
-| 2 node + witness | 2 compute + witness 1 เครื่อง (mini PC หรือ VM ที่อื่น) | ทน node ล่มได้ 1 เครื่อง |
-| Cluster | 3 compute ขึ้นไป | มี |
+| Standalone | 1 node | 1 จาก 1 |
+| 2 node + witness | 2 compute + witness 1 เครื่อง (mini PC หรือ VM ที่อื่น) | ต้อง online อย่างน้อย 2 จาก 3 |
+| Cluster | 3 compute ขึ้นไป | ต้อง online มากกว่าครึ่งของสมาชิกที่มีสิทธิ์โหวต |
+
+รุ่นปัจจุบันรองรับการบริหารหลาย node และการย้าย VM ระหว่างเครื่องที่ยังทำงานอยู่
+ตารางข้างต้นเป็นรูปแบบ quorum ไม่ใช่การรับรอง automatic VM failover:
+ยังไม่มีการ restart VM บน node อื่นอัตโนมัติเมื่อ host ล่ม, manager failover,
+fencing หรือ distributed storage replication ครบชุด การเพิ่ม compute node
+ไม่ได้ทำให้ดิสก์ local กลายเป็น shared storage; การย้าย VM ต้องเตรียม
+shared storage หรือคัดลอกดิสก์ พร้อม network และ libvirt migration transport ให้ตรงกัน
+
+หน้า Nodes และ Node Summary แสดง IPMI/BMC IPv4 จาก `ipmitool -I open lan print`
+ของแต่ละ node โดยอ่านอย่างเดียวและ cache 5 นาที ต้องติดตั้ง `ipmitool` บน compute
+node และมี local IPMI device หากอ่านไม่ได้จะแสดงสถานะ unavailable โดยไม่ทำให้ summary ล้มเหลว
 
 Manager รันบน compute node แรก ส่วนเครื่องอื่นรัน Agent ทุกเครื่องใช้ token เดียวกัน:
 

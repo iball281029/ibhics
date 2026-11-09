@@ -76,6 +76,54 @@ class NodeSummary:
     timezone: str
     # The disk the system runs from: SMART health, wear, temperature, free space (v0.9).
     system_disk: dict = field(default_factory=dict)
+    ipmi: dict = field(default_factory=dict)
+
+
+def _read_ipmi(cmd: list[str]) -> tuple[int, str]:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
+    except FileNotFoundError:
+        return 127, ""
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    except OSError:
+        return 126, ""
+    return result.returncode, result.stdout
+
+
+def ipmi_info(run: Callable[[list[str]], tuple[int, str]] = _read_ipmi) -> dict:
+    """Read the local BMC's first LAN channel; never change BMC configuration."""
+    code, text = run(["ipmitool", "-I", "open", "lan", "print"])
+    if code == 127:
+        return {"status": "unavailable", "note": "Install ipmitool on this node"}
+    if code:
+        return {
+            "status": "unavailable",
+            "note": "IPMI query timed out" if code == 124 else "Local IPMI interface unavailable",
+        }
+    fields = dict(_kv(line) for line in text.splitlines() if ":" in line)
+
+    def address(value: str) -> str:
+        try:
+            ip = ipaddress.IPv4Address(value.strip())
+        except ValueError:
+            return ""
+        return "" if ip.is_unspecified or ip.is_multicast or ip.is_loopback else str(ip)
+
+    ip = address(fields.get("IP Address", ""))
+    if not ip:
+        return {"status": "unconfigured", "note": "No valid IPMI IPv4 address configured"}
+    mac = fields.get("MAC Address", "")
+    return {
+        "status": "configured",
+        "ip_address": ip,
+        "netmask": fields.get("Subnet Mask", ""),
+        "gateway": address(fields.get("Default Gateway IP", "")),
+        "mac_address": mac.lower()
+        if re.fullmatch(r"(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}", mac)
+        else "",
+        "source": fields.get("IP Address Source", ""),
+    }
 
 
 def _raw(cmd: list[str]) -> tuple[int, str]:
@@ -741,7 +789,19 @@ class LinuxHost(HostSystem):
             version=__version__,
             timezone=self._timezone(),
             system_disk=self._system_disk(),
+            ipmi=self._ipmi(),
         )
+
+    def _ipmi(self) -> dict:
+        # Test/chroot filesystem roots must not query the host machine's BMC.
+        if self.root != Path("/"):
+            return {}
+        with self._lock:
+            cached = getattr(self, "_ipmi_cache", None)
+            if cached is None or time.monotonic() - cached[0] > 300:
+                cached = (time.monotonic(), ipmi_info())
+                self._ipmi_cache = cached
+            return cached[1]
 
     def _system_disk(self) -> dict:
         """SMART is slow to ask: once every 10 minutes is enough for the dashboard."""
