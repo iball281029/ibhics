@@ -9,6 +9,11 @@ window.VirtualStorageUI = (() => {
     $("#vs-form-error").hidden = !text;
   };
   const nodeName = (name) => latest?.nodes.find((n) => n.name === name)?.display_name || name;
+  function ownsPool(pool) {
+    const created = latest?.created;
+    return !!created && pool.name === created.spec.name && pool.type === "nfs"
+      && pool.source === `${created.spec.virtual_ip}:${created.export || `/srv/gateway-exports/${created.spec.name}`}`;
+  }
   function invalidate() {
     receipt = null;
     $("#vs-review").hidden = true;
@@ -153,6 +158,13 @@ window.VirtualStorageUI = (() => {
     if (event.target.id === "vs-cache-mode") desiredCacheMode = event.target.value;
   });
   $("#virtual-storage-status").addEventListener("click", async (event) => {
+    const browse = event.target.closest("[data-vs-browse]"), rename = event.target.closest("[data-vs-rename]");
+    const pool = StorageView.pools(state.pools).find(ownsPool);
+    if (browse && pool) { openPoolView(pool.node, pool.name); return; }
+    if (rename && pool) {
+      try { await renamePoolDisplayName(pool.node, pool.name); } catch (err) { fail(err); }
+      return;
+    }
     const button = event.target.closest("#vs-cache-apply");
     if (!button) return;
     button.disabled = true;
@@ -195,20 +207,27 @@ window.VirtualStorageUI = (() => {
       latest = data;
       if (data.created?.spec?.name && data.created.spec.name !== previousName) {
         await load("pools");
-        renderPools();
       }
+      renderPools();
       const running = busy(data.job), prepared = data.nodes.length === 3 && data.nodes.every((n) => n.healthy && n.software_ready);
       const topology = data.nodes.filter((n) => n.role === "compute").length === 2 && data.nodes.filter((n) => n.role === "witness" && n.healthy).length === 1;
       $("#vs-prepare").hidden = !!data.created || prepared;
       $("#vs-prepare").disabled = running || !topology;
-      $("#vs-create").hidden = !!data.created;
-      $("#vs-create").disabled = running || !prepared || !topology;
+      $("#vs-create").hidden = false;
+      $("#vs-create").disabled = !!data.created || running || !prepared || !topology;
+      $("#vs-create").title = data.created
+        ? "Additional Virtual Storage is not enabled on this installation yet."
+        : "Create Virtual Storage";
       const label = {ready: "Healthy", syncing: "Synchronizing replicas", degraded: "Needs attention", preparing: "Preparing software", creating: "Creating storage", "changing-cache": "Changing SSD cache"}[data.phase]
         || (prepared ? "Ready to create" : topology ? "Preparation required" : "Waiting for two nodes and Arbiter");
       const status = data.resource?.status;
+      const pool = StorageView.pools(state.pools).find(ownsPool);
       box.innerHTML = `<p><span class="badge ${data.phase === "ready" ? "online" : "warning"}">${esc(label)}</span></p>
+        ${data.created ? '<p class="hint">Additional Virtual Storage is not enabled on this installation yet.</p>' : ""}
         ${data.phase === "syncing" ? '<p class="hint">Storage is serving data while the second copy synchronizes. Full redundancy is not ready yet.</p>' : ""}
-        ${data.created ? `<div class="vs-overview"><div><small>Virtual Storage</small><b>${esc(data.created.spec.name)}</b></div><div><small>Storage VIP</small><b>${esc(data.created.spec.virtual_ip)}</b></div><div><small>Active node</small><b>${esc(status?.primary ? nodeName(status.primary) : "Unavailable")}</b></div><div><small>Usable capacity</small><b>${data.created.spec.size_gib.toLocaleString()} GiB</b></div></div>`
+        ${data.created ? `<div class="vs-overview"><div><small>Virtual Storage</small><b>${esc(pool?.display_name || data.created.spec.name)}</b></div><div><small>Storage VIP</small><b>${esc(data.created.spec.virtual_ip)}</b></div><div><small>Active node</small><b>${esc(status?.primary ? nodeName(status.primary) : "Unavailable")}</b></div><div><small>Usable capacity</small><b>${data.created.spec.size_gib.toLocaleString()} GiB</b></div></div>
+          ${pool ? `<div class="vs-overview"><div><small>Used</small><b>${num(pool.allocation_gb)} GB · ${pct(pool.allocation_gb, pool.capacity_gb)}%</b></div><div><small>Available</small><b>${num(pool.available_gb)} GB</b></div><div><small>Shared by</small><b>${pool.members.map((m) => esc(nodeName(m.node))).join(", ")}</b></div></div>
+          <div class="actions" style="justify-content:flex-start;margin:12px 0"><button data-vs-browse>Browse files</button>${isAdmin() ? '<button data-vs-rename>Rename</button>' : ""}</div>` : ""}`
           : `<p class="hint">${prepared ? "Choose the disks on both nodes, review what will be erased, then create your shared storage." : "Prepare the storage components first, then select the data disks and optional SSD cache yourself."} Arbiter votes in quorum and stores no VM data.</p>`}
         ${cacheControls(data, running)}
         ${running ? `<div class="vs-job"><b>${data.job.kind === "cache-mode" ? "Changing SSD cache" : data.job.kind === "software" ? "Preparing storage software" : "Creating Virtual Storage"}</b><p>${esc(data.job.step)}</p><div class="vs-working" aria-label="Operation in progress"></div><small>This operation continues if you close the page.</small></div>` : ""}
@@ -225,5 +244,5 @@ window.VirtualStorageUI = (() => {
     } catch (err) { box.textContent = `Could not check Virtual Storage: ${err.message}`; }
     finally { rendering = false; }
   }
-  return {render};
+  return {render, ownsPool};
 })();

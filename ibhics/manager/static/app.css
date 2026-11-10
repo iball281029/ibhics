@@ -892,6 +892,8 @@ body.can-operate #topo-svg .topo-link-handle:active { cursor: grabbing; }
 .ct-group { grid-column: 1 / -1; margin: 8px 0 0; font-size: 13px; }
 /* "⋯" menus: placed by app.js inside the window; long names (an ISO) are cut short. */
 details.more .dropdown { max-width: min(320px, calc(100vw - 16px)); overflow-y: auto; }
+details.more .dropdown[popover] { margin: 0; overscroll-behavior: contain; z-index: 10000; }
+details.more .dropdown[popover]::backdrop { background: transparent; pointer-events: none; }
 details.more .dropdown button, details.more .dropdown a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Dashboard: allocation and actual use, one row each */
 #usage { display: block; }

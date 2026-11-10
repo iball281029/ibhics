@@ -7,10 +7,10 @@ role=${2:?compute or witness required}
 venv=/opt/ibhics/venv
 current=$("$venv/bin/python" -c 'import ibhics; print(ibhics.__version__)')
 case "$current" in
-    1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
+    1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
     *) echo "Unexpected installed release: $current"; exit 1;;
 esac
-backup=/opt/ibhics/vstore3.5-backup-$(date +%Y%m%d-%H%M%S)
+backup=/opt/ibhics/vstore3.7-backup-$(date +%Y%m%d-%H%M%S)
 mkdir -m 700 "$backup"
 cp -a "$venv" "$backup/venv"
 services=(ibhics-agent)
@@ -47,7 +47,7 @@ for _ in range(20):
         req = urllib.request.Request(agent_url, headers={'X-Ibhics-Token': token})
         with urllib.request.urlopen(req, timeout=3) as response:
             agent = json.load(response)
-        assert agent['version'] == '1.3.0b2+vstore3.5'
+        assert agent['version'] == '1.3.0b2+vstore3.7'
         if sys.argv[1] == 'compute':
             with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
                                         context=context, timeout=3) as response:

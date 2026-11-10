@@ -1,3 +1,8 @@
+LATEST UI vstore3.7: Nodes consolidated into Cluster, scroll-safe action menus,
+Virtual Storage only shown above local/external storage. Multiple VS still pending.
+ACTIVE migration TLS setup follow-up: missing CA on both computes. Read latest
+docs/virtual-storage-rf2-handoff.txt. No GitHub push.
+
 LATEST vstore3.5: independent Full clone uses reflink automatically on supported
 file storage. Real 120GiB Windows template disk cloned in 0.0708s (disk step only).
 Both computes upgraded. Read docs/virtual-storage-rf2-handoff.txt. No GitHub push.

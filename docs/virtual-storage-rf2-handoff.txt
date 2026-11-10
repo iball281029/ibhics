@@ -1,3 +1,36 @@
+LATEST UI vstore3.7 — 2026-11-10
+Both computes now vstore3.7, Arbiter remains vstore3.3.
+Virtual Storage appears only in upper section with usage/free capacity/shared nodes,
+Browse files and shared Rename. Per-node API mounts retained; bottom local/external
+pools exclude only exact managed Virtual Storage name+NFS source (other NFS retained).
++ Add Virtual Storage stays visible, currently disabled with explicit additional-storage
+not-enabled explanation. Do NOT claim multiple Virtual Storage creation implemented.
+Owner asked future VirtualStorage2 with new disks on each data node. Confirmed correct
+design, needs independent disks/replicas and shared Arbiter. Current kernel Gateway
+allows only one kernel NFS resource (LINBIT v2.3.0 pkg/nfs/nfs.go checkExistingConfigs).
+Multiple instances need tested backend support (e.g. Ganesha), per-storage catalog,
+status/cache controls and VIP conflict checks; avoid breaking current reflink support.
+No current kernel/Ganesha migration attempted.
+
+Consolidated Nodes into Cluster; removed duplicate page/menu, existing full nodeRows
+with IPMI/hardware/maintenance/evacuate/rename/remove remain in Cluster. Individual
+node detail retained, active rail now Cluster, old #nodes bookmark redirects #cluster.
+Menu fix: removed duplicate positioning/scroll-dismiss handlers; manual popover top
+layer avoids clipping, viewport clamped max-height with internal scroll, repositions
+on scroll/resize, outside click/Escape/action closes. Auto refresh pauses while menu
+open, including in-flight compute refresh check. Browser verified long menu fits
+1351x710 and 390x460, remains open on scroll/auto refresh, outside/Escape dismiss.
+20 cluster+packaging tests passed, JS syntax passed. Live app health both computes OK.
+Backups Node2 /opt/ibhics/vstore3.7-backup-20261110-214331,
+Node1 /opt/ibhics/vstore3.7-backup-20261110-214333.
+New VM inventory currently npm-vm, EXWin2022, TEST-ib running on Node1; template
+Win2022-Template stopped. Preserve all. Older only-NPM inventories superseded.
+
+ACTIVE FOLLOW-UP: owner tried live migration TEST-ib -> Node2; fails immediately
+missing /etc/pki/CA/cacert.pem. Neither compute has libvirt TLS listener/certs.
+Investigating secure RPC+native QEMU migration TLS, preserving certificate validation.
+No successful real migration claimed yet.
+
 LATEST vstore3.5 — INDEPENDENT FULL CLONE ACCELERATION
 Owner complained full deploy slow; explicitly cancelled running deploy to install
 Guest Tools first, then requested fix. Exact qemu-img copy PID 193307 stopped via

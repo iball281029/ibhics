@@ -101,20 +101,65 @@ document.addEventListener("click", (e) => {
   const link = e.target.closest("[data-tab-link]");
   if (link) setTimeout(() => selectTab("system-tabs", link.dataset.tabLink), 0);
 });
-// Row menus sit inside scrolling tables, which would clip them: place the open menu on
-// the page itself, below the button, or above it when there is no room underneath.
-document.addEventListener("toggle", (e) => {
-  const d = e.target;
-  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("more") || !d.open) return;
-  const menu = d.querySelector(".dropdown"), r = d.querySelector("summary").getBoundingClientRect();
-  menu.style.cssText = "position:fixed;visibility:hidden;top:0;left:0;right:auto";
-  const h = menu.offsetHeight, w = menu.offsetWidth;
-  const below = window.innerHeight - r.bottom - 8 >= h || r.top < h + 8;
-  menu.style.top = `${below ? r.bottom + 4 : r.top - h - 4}px`;
-  menu.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
-  menu.style.visibility = "";
+// Manual popovers retain their DOM ancestry for delegated VM actions, while the
+// browser top layer prevents clipping by cards, panels and scrolling tables.
+function positionActionMenu(details) {
+  const menu = details.querySelector(":scope > .dropdown");
+  if (!menu || !details.open) return;
+  const pad = 8, width = innerWidth, height = innerHeight;
+  const anchor = details.querySelector("summary").getBoundingClientRect();
+  Object.assign(menu.style, {position: "fixed", margin: "0", inset: "auto",
+    left: "0px", top: "0px", minWidth: `${Math.min(210, width - 2 * pad)}px`,
+    maxWidth: `${width - 2 * pad}px`, maxHeight: `${height - 2 * pad}px`});
+  const naturalHeight = menu.scrollHeight + 2;
+  const below = Math.max(0, height - anchor.bottom - pad - 4);
+  const above = Math.max(0, anchor.top - pad - 4);
+  const down = below >= naturalHeight || below >= above;
+  const available = Math.min(height - 2 * pad, Math.max(below, above));
+  menu.style.maxHeight = `${Math.max(40, available)}px`;
+  const rect = menu.getBoundingClientRect();
+  const rail = document.querySelector(".rail")?.getBoundingClientRect().right || 0;
+  const minimumLeft = width - rail - pad >= rect.width ? rail + pad : pad;
+  const left = Math.max(minimumLeft, Math.min(anchor.right - rect.width, width - rect.width - pad));
+  const top = Math.max(pad, Math.min(down ? anchor.bottom + 4 : anchor.top - rect.height - 4,
+    height - rect.height - pad));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+document.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement) || !details.classList.contains("more")) return;
+  const menu = details.querySelector(":scope > .dropdown");
+  if (!menu) return;
+  if (!details.open) {
+    if (menu.hasAttribute("popover") && menu.matches(":popover-open")) menu.hidePopover();
+    return;
+  }
+  $$("details.more[open]").forEach((other) => { if (other !== details) other.open = false; });
+  if (typeof menu.showPopover === "function") {
+    menu.setAttribute("popover", "manual");
+    if (!menu.matches(":popover-open")) menu.showPopover();
+  }
+  positionActionMenu(details);
 }, true);
-window.addEventListener("scroll", () => $$("details.more[open]").forEach((d) => d.removeAttribute("open")), true);
+let actionMenuFrame = null;
+function repositionActionMenus(event) {
+  if (event?.target instanceof Element && event.target.closest(".dropdown")) return;
+  if (actionMenuFrame !== null) return;
+  actionMenuFrame = requestAnimationFrame(() => {
+    actionMenuFrame = null;
+    $$("details.more[open]").forEach(positionActionMenu);
+  });
+}
+addEventListener("scroll", repositionActionMenus, {passive: true, capture: true});
+addEventListener("resize", repositionActionMenus);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  $$("details.more[open]").forEach((details) => {
+    details.open = false;
+    details.querySelector("summary")?.focus();
+  });
+});
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
   location.href = "/login.html";
@@ -152,9 +197,10 @@ railToggle.addEventListener("keydown", (event) => { if (event.key === "Escape") 
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
+const PAGES = ["home", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
+  if (hash === "nodes") return "cluster"; // Preserve old node inventory bookmarks.
   if (hash.startsWith("vm/")) return "vm";
   if (hash.startsWith("node/")) return "node";
   return PAGES.includes(hash) ? hash : "home";
@@ -163,12 +209,13 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 
 function show() {
   const page = currentPage();
+  if (location.hash === "#nodes") history.replaceState(null, "", "#cluster");
   if (page !== "network" && ntopo.edit) {
     if (ntopo.edit.saving) { location.hash = "network"; toast("Wait for topology saving to finish.", true); return; }
     topoEndEdit(); // Leaving Network discards only the local draft.
   }
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  const section = { vm: "compute", node: "nodes", recycle: "compute" }[page] || page;
+  const section = { vm: "compute", node: "cluster", recycle: "compute" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
@@ -594,15 +641,15 @@ setInterval(async () => {
 }, 3000);
 
 async function refresh(page, auto = false) {
+  if (auto && document.querySelector("details.more[open]")) return;
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
-  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
+  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); if (!auto || !document.querySelector("details.more[open]")) { renderVMs(); renderMoves(); } }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); await renderVirtualStorage(); }
   if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
-  if (page === "nodes") { await load("vms", "summaries"); renderNodes(); }
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
@@ -771,7 +818,7 @@ function renderHome() {
   infra.className = `val ${infraLevel}`;
   const computes = computeMembers();
   $("#topology-strip").innerHTML = [
-    topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "nodes"),
+    topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "cluster"),
     topo("t-storage", StorageView.pools(state.pools).length, "Storage pools", `${storagePct}% used`, "storage", true),
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
   ].join("");
@@ -2402,7 +2449,8 @@ handlers["net-dialog"] = async (f) => {
 
 function renderPools() {
   const admin = isAdmin();
-  $("#pools").innerHTML = state.pools.length ? StorageView.pools(state.pools).map((p) => {
+  const pools = StorageView.pools(state.pools).filter((p) => !window.VirtualStorageUI?.ownsPool(p));
+  $("#pools").innerHTML = pools.length ? pools.map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
       <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.display_name || p.name)}${p.display_name ? `<span class="vm-sub">Pool ID: ${esc(p.name)}</span>` : ""}</span></div></td>
@@ -2412,23 +2460,26 @@ function renderPools() {
       <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
       <td><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button>${p.shared ? "" : `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>`}` : ""}</div></td>
     </tr>`;
-  }).join("") : empty(6, "No storage pools");
+  }).join("") : empty(6, "No local or external storage pools");
+}
+
+async function renamePoolDisplayName(node, name) {
+  const pool = state.pools.find((p) => p.name === name && p.node === node);
+  if (!pool) throw new Error("Storage pool is unavailable. Refresh and try again.");
+  const label = prompt(`Storage display name (${name}). Leave empty to use the Pool ID.`, pool.display_name || "");
+  if (label == null) return;
+  const group = StorageView.pools(state.pools).find((p) => p.members.some((m) => m.node === node && m.name === name));
+  for (const member of group?.members || [pool]) {
+    await patch(`/nodes/${enc(member.node)}/pools/${enc(member.name)}`, { display_name: label.trim() });
+  }
+  toast("Storage name updated"); await refresh("storage");
 }
 
 $("#pools").addEventListener("click", async (e) => {
   const rename = e.target.closest("[data-pool-rename]");
   if (rename) {
     const { node, poolRename: name } = rename.dataset;
-    const pool = state.pools.find((p) => p.name === name && p.node === node);
-    const label = prompt(`Storage display name (${name}). Leave empty to use the Pool ID.`, pool?.display_name || "");
-    if (label == null) return;
-    try {
-      const group = StorageView.pools(state.pools).find((p) => p.members.some((m) => m.node === node && m.name === name));
-      for (const member of group?.members || [pool]) {
-        await patch(`/nodes/${enc(member.node)}/pools/${enc(member.name)}`, { display_name: label.trim() });
-      }
-      toast("Storage name updated"); await refresh("storage");
-    } catch (err) { fail(err); }
+    try { await renamePoolDisplayName(node, name); } catch (err) { fail(err); }
     return;
   }
   const link = e.target.closest("[data-pool-view]");
@@ -3015,17 +3066,6 @@ $("#cluster-copy-key").addEventListener("click", async () => {
   } catch (err) { fail(err); }
 });
 
-function renderNodes() {
-  const c = state.cluster, admin = isAdmin();
-  const created = Boolean(c.cluster_id) || c.members.length > 1;
-  $("#cluster-create-button").hidden = created;
-  $("#cluster-add-button").hidden = !created;
-  $("#cluster-setup-hint").textContent = created ? `${c.name || "Cluster"} · ${c.members.length} member${c.members.length === 1 ? "" : "s"}. Add other independently installed nodes when ready.` : "Standalone server. Create a cluster here first, then add other independently installed nodes.";
-  $("#nodes-sub").textContent = `${created ? c.name || "Cluster" : "Standalone"} · ${c.members.length} node${c.members.length === 1 ? "" : "s"} · ${c.ha_capable ? "HA capable" : "no HA"} · ${c.quorum ? "quorum OK" : "no quorum"}`;
-  $("#nodes").innerHTML = nodeRows(c, admin);
-  for (const m of c.members.filter((m) => m.role === "compute")) void loadHardwareBadge(m.name);
-}
-
 async function loadHardwareBadge(name) {
   const targets = [...document.querySelectorAll('[data-hardware-node]')].filter((e) => e.dataset.hardwareNode === name);
   if (!targets.length) return;
@@ -3072,10 +3112,9 @@ const handleNodeAction = async (e) => {
       if (!confirm(`Remove ${rm.dataset.node} from the cluster?`)) return;
       await del(`/cluster/nodes/${enc(rm.dataset.node)}`);
     } else return;
-    await refresh(currentPage() === "cluster" ? "cluster" : "nodes");
+    await refresh("cluster");
   } catch (err) { fail(err); }
 };
-$("#nodes").addEventListener("click", handleNodeAction);
 $("#cluster-members").addEventListener("click", handleNodeAction);
 
 handlers["cluster-create-dialog"] = async (f) => {
@@ -3088,7 +3127,7 @@ handlers["cluster-create-dialog"] = async (f) => {
 handlers["node-dialog"] = async (f) => {
   await post("/cluster/nodes", { name: f.get("name"), role: f.get("role"), address: f.get("address"), agent_token: f.get("agent_token") || null });
   toast(`${f.get("name")} joined the cluster`);
-  await refresh(currentPage() === "cluster" ? "cluster" : "nodes");
+  await refresh("cluster");
 };
 
 // ---------- one node: Summary, Network, Settings ----------
@@ -4707,7 +4746,7 @@ $("#password-form").addEventListener("submit", async (e) => {
 
 loadMe().then(show).catch(fail);
 setInterval(() => {
-  if (!document.querySelector("dialog[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
+  if (!document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);
 
 
@@ -5066,29 +5105,3 @@ let ctJob = null;
 const ctStop = () => { if (ctJob) del(`/containers/${enc(ctJob.name)}/jobs/${ctJob.job}`).catch(() => {}); };
 $("#ct-stop").addEventListener("click", ctStop);
 $("#ct-console-dialog").addEventListener("keydown", (e) => { if (e.ctrlKey && e.key === "c" && ctJob) { e.preventDefault(); ctStop(); } });
-
-// "⋯" menus stay on screen: placed beside their button, flipped left/right/up to fit,
-// so a card at the screen's edge (or under the side rail) never cuts its menu off.
-document.addEventListener("toggle", (e) => {
-  const det = e.target;
-  if (!(det instanceof HTMLDetailsElement) || !det.open || !det.classList.contains("more")) return;
-  const menu = det.querySelector(":scope > .dropdown");
-  if (!menu) return;
-  const pad = 8, btn = det.querySelector("summary").getBoundingClientRect();
-  const rail = document.querySelector(".rail")?.getBoundingClientRect().right || 0;
-  Object.assign(menu.style, { position: "fixed", right: "auto", bottom: "auto", left: "0px", top: "0px", maxHeight: "" });
-  const w = menu.offsetWidth, h = menu.offsetHeight;
-  let left = btn.right - w;  // right edges lined up, as before
-  if (left < rail + pad) left = btn.left;  // not enough room: open to the right
-  left = Math.max(rail + pad, Math.min(left, innerWidth - w - pad));
-  let top = btn.bottom + 4;
-  if (top + h > innerHeight - pad && btn.top - h - 4 > pad) top = btn.top - h - 4;  // up
-  menu.style.left = `${left}px`;
-  menu.style.top = `${Math.max(pad, top)}px`;
-  menu.style.maxHeight = `${innerHeight - Math.max(pad, top) - pad}px`;
-}, true);
-// A fixed menu would float away from its button on scroll: close it instead.
-addEventListener("scroll", (e) => {
-  if (e.target instanceof Element && e.target.closest(".dropdown")) return;
-  $$("details.more[open]").forEach((d) => { d.open = false; });
-}, { passive: true, capture: true });
