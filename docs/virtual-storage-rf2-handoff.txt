@@ -1,3 +1,19 @@
+LATEST vstore3.3 UPDATE — 2026-11-10
+Shared NFS exports now display once in Storage, with cluster scope and member node names.
+Per-node API mounts retained for VM placement, browse uses active mount. Local default
+pools remain separate. Rename updates every member mount; per-node Remove hidden on
+shared row. Home pool count/capacity/usage and new server history samples count each
+NFS source once. Existing history is not rewritten. Virtual Storage status polls every
+10 seconds while idle so an externally repaired failed job does not remain stale.
+Browser verified 4 mounts -> 3 visible rows (two local defaults + one shared export).
+Regression suite 19 passed plus Node storage-view grouping checks; JS syntax passed.
+Both computes and Arbiter application upgraded to 1.3.0b2+vstore3.3. Physical storage
+layout unchanged: real RF2 and Arbiter remain connected. npm-vm HTTP 200.
+Backups: /opt/ibhics/vstore3.3-backup-20261110-172226 on Node2,
+/opt/ibhics/vstore3.3-backup-20261110-172227 on Node1.
+No GitHub push. Claude should review this and prior RF2/cache changes together.
+
+PREVIOUS vstore3.2 RECORD (details below remain useful):
 Virtual Storage RF2 vstore3.2 — latest handoff, 2026-11-10
 Supersedes vstore2 layout/capacity/planning-only/live-empty-disk descriptions.
 No GitHub push. Owner requested Claude review and push later.

@@ -163,7 +163,12 @@ window.VirtualStorageUI = (() => {
     const box = $("#virtual-storage-status");
     try {
       const data = await api("/virtual-storage");
+      const previousName = latest?.created?.spec?.name;
       latest = data;
+      if (data.created?.spec?.name && data.created.spec.name !== previousName) {
+        await load("pools");
+        renderPools();
+      }
       const running = busy(data.job), prepared = data.nodes.length === 3 && data.nodes.every((n) => n.healthy && n.software_ready);
       const topology = data.nodes.filter((n) => n.role === "compute").length === 2 && data.nodes.filter((n) => n.role === "witness" && n.healthy).length === 1;
       $("#vs-prepare").hidden = !!data.created || prepared;
@@ -187,7 +192,7 @@ window.VirtualStorageUI = (() => {
           const text = !n.healthy ? "Offline" : resource ? n.role === "witness" ? "Voting · no VM data" : replicated ? "Up to date" : "Synchronizing / check replication" : n.software_ready ? "Ready to create" : "Preparation required";
           return `<tr><td>${esc(n.display_name || n.name)}</td><td>${n.role === "witness" ? "Arbiter" : "Data node"}</td><td>${esc(text)}${!n.software_ready && n.healthy ? `<details><summary>Details</summary><span class="hint">${esc((n.missing_components || [n.error || "Storage components are unavailable"]).join("; "))}</span></details>` : ""}</td></tr>`;
         }).join("")}</tbody></table></div>`;
-      if (running && currentPage() === "storage") timer = setTimeout(() => render().catch(fail), 2500);
+      if (currentPage() === "storage") timer = setTimeout(() => render().catch(fail), running ? 2500 : 10000);
     } catch (err) { box.textContent = `Could not check Virtual Storage: ${err.message}`; }
     finally { rendering = false; }
   }

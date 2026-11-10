@@ -1,3 +1,7 @@
+LATEST vstore3.3: shared Virtual Storage displays once across nodes; local pools
+remain separate. Shared capacity/history no longer double counted. See
+docs/virtual-storage-rf2-handoff.txt. Live upgrade complete; no GitHub push.
+
 LATEST 2026-11-10: READ docs/virtual-storage-rf2-handoff.txt FIRST.
 Owner pressed Create. Real virtualstorage RF2 is ACTIVE on both nodes, Arbiter joined,
 all applications vstore3.2. SSD chunk/signature defects fixed; cross-node I/O passed.

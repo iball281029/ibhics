@@ -636,8 +636,8 @@ function totals() {
     vdisk: [...state.vms, ...(state.templates || [])].reduce((s, v) => s + (v.disks || []).reduce((a, d) => a + (d.size_gb || 0), 0), 0),
     vcpus: live.reduce((s, v) => s + v.vcpus, 0),
     vmem: live.reduce((s, v) => s + v.memory_mb, 0),
-    cap: state.pools.reduce((s, p) => s + p.capacity_gb, 0),
-    used: state.pools.reduce((s, p) => s + p.allocation_gb, 0),
+    cap: StorageView.pools(state.pools).reduce((s, p) => s + p.capacity_gb, 0),
+    used: StorageView.pools(state.pools).reduce((s, p) => s + p.allocation_gb, 0),
   };
 }
 
@@ -772,7 +772,7 @@ function renderHome() {
   const computes = computeMembers();
   $("#topology-strip").innerHTML = [
     topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "nodes"),
-    topo("t-storage", state.pools.length, "Storage pools", `${storagePct}% used`, "storage", true),
+    topo("t-storage", StorageView.pools(state.pools).length, "Storage pools", `${storagePct}% used`, "storage", true),
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
   ].join("");
 
@@ -2402,15 +2402,15 @@ handlers["net-dialog"] = async (f) => {
 
 function renderPools() {
   const admin = isAdmin();
-  $("#pools").innerHTML = state.pools.length ? state.pools.map((p) => {
+  $("#pools").innerHTML = state.pools.length ? StorageView.pools(state.pools).map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
       <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.display_name || p.name)}${p.display_name ? `<span class="vm-sub">Pool ID: ${esc(p.name)}</span>` : ""}</span></div></td>
-      <td title="Node ID: ${esc(p.node)}">${esc(nodeLabel(p.node))}</td>
+      <td>${p.shared ? `<b>Shared · ${esc(state.cluster?.name || "Cluster")}</b><span class="vm-sub">${p.members.map((m) => esc(nodeLabel(m.node))).join(", ")}</span>` : esc(nodeLabel(p.node))}</td>
       <td><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
       <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
-      <td><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button><button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>` : ""}</div></td>
+      <td><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button>${p.shared ? "" : `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>`}` : ""}</div></td>
     </tr>`;
   }).join("") : empty(6, "No storage pools");
 }
@@ -2423,7 +2423,10 @@ $("#pools").addEventListener("click", async (e) => {
     const label = prompt(`Storage display name (${name}). Leave empty to use the Pool ID.`, pool?.display_name || "");
     if (label == null) return;
     try {
-      await patch(`/nodes/${enc(node)}/pools/${enc(name)}`, { display_name: label.trim() });
+      const group = StorageView.pools(state.pools).find((p) => p.members.some((m) => m.node === node && m.name === name));
+      for (const member of group?.members || [pool]) {
+        await patch(`/nodes/${enc(member.node)}/pools/${enc(member.name)}`, { display_name: label.trim() });
+      }
       toast("Storage name updated"); await refresh("storage");
     } catch (err) { fail(err); }
     return;

@@ -26,6 +26,18 @@ def percent(used, total):
     return used / total * 100 if total > 0 else None
 
 
+def unique_storage_pools(pools):
+    """Count each NFS export once; local pools remain distinct across nodes."""
+    result = {}
+    for index, pool in enumerate(pools):
+        source = getattr(pool, "source", "")
+        shared = getattr(pool, "type", None) == "nfs" and source
+        key = ("nfs", source) if shared else ("local", index)
+        if key not in result or (not result[key].active and pool.active):
+            result[key] = pool
+    return list(result.values())
+
+
 class UsageHistory:
     def __init__(self, path: Path, clock=time.time):
         self.path, self.clock = path, clock
@@ -77,7 +89,7 @@ class UsageHistory:
             readings = list(pool.map(read_node, cluster.compute_members()))
         summaries = [s for s, _ in readings if s is not None]
         cpu = [s for s in summaries if math.isfinite(s.cpu_percent) and s.threads > 0]
-        pools = [p for _, ps in readings for p in ps]
+        pools = unique_storage_pools([p for _, ps in readings for p in ps])
         self.record(
             self.clock(),
             sum(s.cpu_percent * s.threads for s in cpu) / sum(s.threads for s in cpu)

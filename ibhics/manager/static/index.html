@@ -257,12 +257,12 @@
       </div>
       <div class="sheet">
         <div class="page-head">
-          <h1>Storage</h1><span class="sub">Pools on each node: local disk, NFS, iSCSI or FC</span>
+          <h1>Storage</h1><span class="sub">Shared storage across the cluster and local storage on each node</span>
           <span class="spacer"></span>
           <button class="primary admin-only" data-open="pool-dialog">+ Add storage</button>
         </div>
         <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>Pool</th><th>Node</th><th>Type</th><th>Source</th><th style="min-width:220px">Usage</th><th></th></tr></thead>
+          <thead><tr><th>Pool</th><th>Scope / nodes</th><th>Type</th><th>Source</th><th style="min-width:220px">Usage</th><th></th></tr></thead>
           <tbody id="pools"></tbody>
         </table></div>
       </div>
@@ -1558,6 +1558,7 @@
 
 <div id="toast"></div>
 <script src="history-time.js"></script>
+<script src="storage-view.js"></script>
 <script src="app.js"></script>
 <script src="virtual-storage.js"></script>
 </body>
