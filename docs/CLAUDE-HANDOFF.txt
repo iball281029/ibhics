@@ -1,3 +1,9 @@
+LATEST UPDATE 2026-11-10 — READ docs/virtual-storage-create-handoff.txt FIRST.
+Live vstore2 upgrade; data disks and old test container cleared with owner approval.
+Only npm-vm on Node1/default is preserved. Operator will press Create themselves.
+Older inventories and planning-only statements below are historical and superseded.
+No GitHub push. Arbiter ISO/UI integration remains a documented follow-up.
+
 CRITICAL ARBITER FIX: read docs/arbiter-firstboot-fix-handoff.txt FIRST.
 Original Arbiter ISO lacks D-Bus and fails before saving the root password/network.
 Use fix1 ISO Repair existing Arbiter; do not blame password entry or require VM reinstall.

@@ -23,7 +23,10 @@ from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNot
 from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
-from ..storage import VirtualStoragePlan, readiness, save_plan
+from ..storage import VirtualStoragePlan, save_plan
+from ..storage_cluster import StorageController, inventories
+from ..storage_create import StorageCreateConfirm, StorageCreateSpec
+from ..storage_software import software_status
 from . import datastore
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
@@ -146,6 +149,9 @@ async def receive_file(request: Request, target: Path) -> int:
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
+    ("POST", f"{API}/virtual-storage/software"),
+    ("POST", f"{API}/virtual-storage/review"),
+    ("POST", f"{API}/virtual-storage/create"),
     ("PUT", f"{API}/virtual-storage/plan"),
     ("PATCH", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("GET", f"{API}/cluster/pairing"),
@@ -235,6 +241,9 @@ def create_app(
     backups = backups or BackupManager(cluster)
     groups = groups or VMGroups()
     pool_labels = PoolLabels(pool_labels_path)
+    storage_controller = StorageController(
+        cluster, virtual_storage_path.with_name("virtual-storage-runtime")
+    )
 
     def backing_up(vm_name: str) -> bool:
         return any(
@@ -774,7 +783,7 @@ def create_app(
         for member in cluster.members():
             try:
                 if member.local:
-                    probe = readiness()
+                    probe = software_status(str(member.role), controller=True)
                 else:
                     response = member.client.request("GET", "/virtual-storage/readiness")
                     response.raise_for_status()
@@ -787,34 +796,43 @@ def create_app(
         plan = None
         if virtual_storage_path.exists():
             plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
-        # A saved plan is never evidence of replicated storage being online.
+        runtime = storage_controller.status()
+        resource = runtime["resource"]
+        active = bool(resource and resource.get("status", {}).get("service") == "Started")
+        phase = "planned" if plan else "unconfigured"
+        if runtime["created"]:
+            phase = "ready" if active and resource["status"].get("state") == "OK" else "degraded"
+            syncing = any(
+                str(peer.get("replication-state", "")).startswith("Sync")
+                for node in nodes for r in node.get("resources", [])
+                if r.get("name") == runtime["created"]["spec"]["name"]
+                for connection in r.get("connections", [])
+                for peer in connection.get("peer_devices", [])
+            )
+            if active and syncing:
+                phase = "syncing"
+        job = runtime["job"]
+        if job and job["state"] in ("queued", "running"):
+            phase = "preparing" if job["kind"] == "software" else "creating"
+        # A saved plan alone is never evidence of replicated storage being online.
         return {"nodes": nodes, "plan": plan.model_dump() if plan else None,
-                "phase": "planned" if plan else "unconfigured",
-                "active": False, "activation_supported": False}
+                "phase": phase, "active": active, "activation_supported": True, **runtime}
 
     @api.get("/virtual-storage/inventory")
     def virtual_storage_inventory() -> dict:
-        from ..cluster.topology import NodeRole
-        from ..hypervisor.storage_inventory import inventory
+        return {"nodes": list(inventories(cluster).values())}
 
-        nodes = []
-        for member in cluster.members():
-            if member.role != NodeRole.COMPUTE:
-                continue
-            row = {"name": member.name, "display_name": member.display_name}
-            try:
-                if not cluster.is_healthy(member):
-                    raise InvalidState("Node is offline")
-                if member.local:
-                    row.update(inventory(member.driver))
-                else:
-                    response = member.client.request("GET", "/virtual-storage/inventory")
-                    response.raise_for_status()
-                    row.update(response.json())
-            except Exception as exc:
-                row.update(disks=[], fingerprint=None, error=str(exc))
-            nodes.append(row)
-        return {"nodes": nodes}
+    @api.post("/virtual-storage/software", status_code=status.HTTP_202_ACCEPTED)
+    def virtual_storage_prepare() -> dict:
+        return storage_controller.prepare()
+
+    @api.post("/virtual-storage/review")
+    def virtual_storage_review(body: StorageCreateSpec) -> dict:
+        return storage_controller.review(body)
+
+    @api.post("/virtual-storage/create", status_code=status.HTTP_202_ACCEPTED)
+    def virtual_storage_create(body: StorageCreateConfirm) -> dict:
+        return storage_controller.create(body.token, body.confirm_name, body.confirm_wipe)
 
     @api.put("/virtual-storage/plan")
     def virtual_storage_plan(body: VirtualStoragePlan) -> dict:

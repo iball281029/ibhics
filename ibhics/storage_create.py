@@ -53,6 +53,12 @@ class StorageCreateSpec(BaseModel):
         return self
 
 
+class StorageCreateConfirm(BaseModel):
+    token: str = Field(pattern=r"^[0-9a-f]{48}$")
+    confirm_name: str = Field(pattern=NAME)
+    confirm_wipe: bool = False
+
+
 def thin_geometry(sizes: list[float], layout: str) -> tuple[int, int]:
     gib = min(sizes) if layout == "mirror" else sum(sizes)
     metadata_mib = 128 if gib < 100 else 1024

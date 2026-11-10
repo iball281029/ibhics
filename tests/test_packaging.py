@@ -42,6 +42,8 @@ def test_wheel_ships_the_console(tmp_path):
     prefix = "ibhics/manager/static/"
     for name in ("index.html", "novnc/core/rfb.js", "novnc/vendor/pako/lib/zlib/inflate.js"):
         assert prefix + name in names
+    assert prefix + "virtual-storage.js" in names
+    assert "ibhics/storage_assets/prepare.sh" in names
     shipped = {n for n in names if n.startswith(prefix)}
     expected = {str(p.relative_to(REPO)) for p in tracked_static()}
     assert expected <= shipped, sorted(expected - shipped)[:10]

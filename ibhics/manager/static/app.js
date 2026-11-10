@@ -1802,6 +1802,7 @@ handlers["migrate-dialog"] = async (f, ctx) => {
 
 // ---------- storage ----------
 async function renderVirtualStorage() {
+  if (window.VirtualStorageUI) return window.VirtualStorageUI.render();
   const box = $("#virtual-storage-status");
   try {
     const data = await api("/virtual-storage");

@@ -3,6 +3,9 @@
 import socket
 import socketserver
 import struct
+from functools import lru_cache
+
+lookup = lru_cache(maxsize=2048)(socket.getaddrinfo)
 
 
 class Resolver(socketserver.BaseRequestHandler):
@@ -21,7 +24,7 @@ class Resolver(socketserver.BaseRequestHandler):
             if cls == 1 and kind in (1, 28):
                 family = socket.AF_INET if kind == 1 else socket.AF_INET6
                 try:
-                    addresses = {r[4][0] for r in socket.getaddrinfo(".".join(labels),
+                    addresses = {r[4][0] for r in lookup(".".join(labels),
                                  None, family, socket.SOCK_STREAM)}
                 except socket.gaierror:
                     addresses = set()

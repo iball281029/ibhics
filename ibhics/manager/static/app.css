@@ -972,3 +972,21 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 @media (prefers-reduced-motion: reduce) { .rail, .shell { transition: none; } }
 /* Missing coverage is visible even in the unified cluster topology view. */
 .wire.coverage-warning { stroke: var(--warn); stroke-dasharray: 5 5; }
+/* Virtual Storage creation and operation status. */
+#virtual-storage-dialog { max-height:92vh; overflow:hidden; }
+#virtual-storage-form { display:flex; flex-direction:column; max-height:92vh; }
+#virtual-storage-form > .body { overflow-y:auto; min-height:0; }
+#virtual-storage-form > header,#virtual-storage-form > footer { flex-shrink:0; }
+.vs-node { margin-top:20px; border:1px solid #e5e9f3; border-radius:12px; overflow:hidden; }
+.vs-node-head { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px 16px; background:#f7f9ff; }
+.vs-node-head h3 { margin:0; }
+.vs-node-head label { max-width:220px; }
+.vs-protected { background:#f8fafc; color:#77839a; }
+.vs-erase { color:#b42343; background:#fff2f4; border:1px solid #ffd5df; border-radius:10px; padding:12px 14px; margin-top:14px; overflow-wrap:anywhere; }
+.vs-overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:20px; margin:18px 0; }
+.vs-overview small,.vs-overview b { display:block; }
+.vs-overview small { color:#77839a; margin-bottom:6px; }
+.vs-job { padding:16px; background:#f1f6ff; border:1px solid #dce6ff; border-radius:12px; margin:14px 0; }
+.vs-working { height:5px; border-radius:5px; background:linear-gradient(90deg,#c9e6ff,#5e67ff,#c9e6ff); background-size:200% 100%; animation:vs-working 2s linear infinite; margin:12px 0; }
+@keyframes vs-working { to { background-position:-200% 0; } }
+@media(prefers-reduced-motion:reduce) { .vs-working { animation:none; } }

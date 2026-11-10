@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import posixpath
 import subprocess
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from .disks import GIB, LSBLK, OWN_VG, _describe, _rotational, _walk, lv_vg
 
@@ -58,7 +60,8 @@ def parse_inventory(
         if any(d.get("type") == "mpath" for d in children):
             reasons.add("Multipath storage is not a local data disk")
         for d in children:
-            if d.get("type") == "lvm" and OWN_VG.match(lv_vg(d.get("name", ""))):
+            vg = lv_vg(d.get("name", ""))
+            if d.get("type") == "lvm" and (OWN_VG.match(vg) or vg.startswith("ibhv-")):
                 reasons.add("System or existing ibHiCS LVM volume")
         for mount in mounts:
             candidates = [p for p in pools if p.get("target") == mount]
@@ -139,8 +142,9 @@ def inventory(driver, run=subprocess.run) -> dict:
         root = ET.fromstring(pool.XMLDesc(0))
         target = root.findtext("target/path")
         if target:
-            pools.append({"name": pool.name(), "target": target})
+            pools.append({"name": pool.name(), "target": target, "type": root.get("type")})
     references = []
+    images: set[tuple[str, str]] = set()
     for dom in conn.listAllDomains():
         xmls = [dom.XMLDesc(2)]  # VIR_DOMAIN_XML_INACTIVE: configured disks too
         if dom.isActive():
@@ -152,11 +156,46 @@ def inventory(driver, run=subprocess.run) -> dict:
                 for attr in ("file", "dev"):
                     if source.get(attr):
                         references.append({"owner": dom.name(), "path": source.get(attr)})
+                        references.append(
+                            {"owner": dom.name(), "path": os.path.realpath(source.get(attr))}
+                        )
+                        if attr == "file":
+                            images.add((dom.name(), source.get(attr)))
                 if source.get("pool"):
                     matches = [p for p in pools if p["name"] == source.get("pool")]
                     if not matches:
                         raise ValueError(f"Cannot resolve storage pool for {dom.name()}")
                     references.extend({"owner": dom.name(), "path": p["target"]} for p in matches)
+                    if source.get("volume"):
+                        pool = conn.storagePoolLookupByName(source.get("pool"))
+                        volume = pool.storageVolLookupByName(source.get("volume"))
+                        filename = volume.path()
+                        references.append({"owner": dom.name(), "path": os.path.realpath(filename)})
+                        if Path(filename).is_file():
+                            images.add((dom.name(), filename))
+    # Container images and snapshots are data too, even while the container is stopped.
+    # Read metadata rather than invoking lxc-info, which can wait on a frozen container.
+    for pool in pools:
+        if pool["type"] not in ("dir", "fs"):
+            continue
+        for home in (Path(pool["target"]) / "containers").glob("*"):
+            if any((home / marker).exists() for marker in ("config", "ibhics.json", "rootfs.img")):
+                references.append(
+                    {"owner": "Container " + home.name, "path": os.path.realpath(home)}
+                )
+    # Inactive XML can omit the qcow2 backing chain; inspect image metadata too.
+    for owner, image in sorted(images):
+        info = run(
+            ["qemu-img", "info", "--output=json", "--backing-chain", "-U", image],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+        for layer in json.loads(info.stdout):
+            filename = layer.get("full-backing-filename") or layer.get("filename")
+            if filename:
+                references.append({"owner": owner, "path": os.path.realpath(filename)})
     physical = run(
         ["pvs", "--reportformat", "json", "-o", "pv_name,vg_name"],
         capture_output=True,
@@ -167,12 +206,27 @@ def inventory(driver, run=subprocess.run) -> dict:
     result = parse_inventory(
         json.loads(result.stdout), pools, references, json.loads(physical.stdout)
     )
-    interfaces = run(["ip", "-j", "-4", "address", "show"], capture_output=True,
-                     text=True, check=True, timeout=15)
+    interfaces = run(
+        ["ip", "-j", "-4", "address", "show"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
     result["addresses"] = [
-        {"interface": interface["ifname"], "address": address["local"],
-         "prefix": address["prefixlen"]}
+        {
+            "interface": interface["ifname"],
+            "address": address["local"],
+            "prefix": address["prefixlen"],
+        }
         for interface in json.loads(interfaces.stdout)
-        for address in interface.get("addr_info", []) if address.get("scope") == "global"
+        for address in interface.get("addr_info", [])
+        if address.get("scope") == "global"
     ]
+    result["previous_operations"] = sorted(
+        {
+            p.name.removesuffix("-disks.json")
+            for p in Path("/var/lib/ibhics").glob("virtual-storage*/*-disks.json")
+        }
+    )
     return result

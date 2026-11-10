@@ -252,7 +252,7 @@
 
     <section class="page" id="page-storage">
       <div class="sheet" style="margin-bottom:18px">
-        <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a></div>
+        <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a><button id="vs-prepare" class="admin-only" disabled>Prepare storage</button><button id="vs-create" class="primary admin-only" disabled>+ Create Virtual Storage</button></div>
         <div id="virtual-storage-status" style="padding:20px">Checking storage readiness…</div>
       </div>
       <div class="sheet">
@@ -923,6 +923,33 @@
   </form>
 </dialog>
 
+<dialog id="virtual-storage-dialog" class="wizard">
+  <form method="dialog" id="virtual-storage-form">
+    <header><h3>Create Virtual Storage</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p class="hint">Choose the data and optional SSD cache disks on each node. Arbiter stores no VM data.</p>
+      <div class="form-grid">
+        <label>Name<input name="name" value="hybrid01" required pattern="[a-z][a-z0-9\-]{0,30}"></label>
+        <label>Storage VIP<input name="virtual_ip" value="172.16.12.106" required></label>
+        <label>Network prefix<input name="prefix" type="number" min="1" max="30" value="24" required></label>
+        <label>Usable capacity (GiB)<input name="size_gib" type="number" min="1" required></label>
+        <label>Arbiter<select name="arbiter" required></select></label>
+      </div>
+      <div id="vs-disk-picker">Reading disks…</div>
+      <p id="vs-capacity" class="hint"></p>
+      <section id="vs-review" hidden>
+        <h3>Review selected disks</h3>
+        <div id="vs-review-details"></div>
+        <p class="vs-erase">Everything on the listed data and cache disks will be erased. The same data is stored on both nodes; their capacities are not added together.</p>
+        <label class="check"><input type="checkbox" name="confirm_wipe"> I confirm that the listed disks may be erased.</label>
+        <label>Type the storage name to confirm<input name="confirm_name" autocomplete="off"></label>
+      </section>
+      <p id="vs-form-error" role="alert" class="vs-erase" hidden></p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" id="vs-review-button" class="primary">Review selection</button><button id="vs-submit" class="primary" value="ok" hidden>Create Virtual Storage</button></footer>
+  </form>
+</dialog>
+
 <dialog id="pool-dialog" class="wizard">
   <form method="dialog" id="pool-form" novalidate>
     <header><h3>Add storage</h3><button value="cancel" formnovalidate>×</button></header>
@@ -1520,5 +1547,6 @@
 <div id="toast"></div>
 <script src="history-time.js"></script>
 <script src="app.js"></script>
+<script src="virtual-storage.js"></script>
 </body>
 </html>

@@ -1,0 +1,135 @@
+Virtual Storage vstore2 — latest Claude handoff, 2026-11-10
+This supersedes older VM/storage inventories and the planning-only vstore1 notes.
+No GitHub push. The owner will choose disks and press Create themselves.
+
+Source: codex/virtual-storage-create, based on b24c738; foundation commit af09acf.
+Application release: 1.3.0b2+vstore2, deployed on both compute nodes and Arbiter.
+Primary management: https://172.16.12.104:8888/#storage
+Node2 management: https://172.16.12.103:8888
+Arbiter pairing-key UI: https://172.16.12.105:8888 (existing standalone live addition).
+Cluster: ibhics-cluster, IDs ibhics-test / ibhics-node2 / arbiter-01.
+Storage VIP reserved: 172.16.12.106/24; Arbiter remains 172.16.12.105.
+
+Owner's final instructions:
+- Caller will select disks and press Create; do NOT create physical Virtual Storage for them.
+- Owner subsequently authorized clearing all old data disks and the old test container.
+- Preserve npm-vm and both OS disks.
+- Claude should review and push later. Do NOT push from this session.
+- Integrate Arbiter live Web UI into installer/ISO last; it has not been integrated yet.
+
+LIVE DATA CLEANUP COMPLETED:
+Node1: /dev/sda ZC172K74, /dev/sdb ZC172HWT, /dev/sdc S3F3NX0K403699 empty.
+Node1 OS: /dev/sdd BCA11806270130235 preserved, including Local-node1/default.
+Old hybrid01 libvirt pool, cached VG ibhc-hybrid01 and md127 were released and removed.
+A leftover running LXC container named test held loop0 on hybrid01. Stopped via lxc-stop
+with explicit old pool container path; its data was erased with the approved pool cleanup.
+Node1 cleanup audit/XML backup: /root/ibhics-vstorage-preclean-20261110-122842
+Node2: /dev/sda Z1ZB97QH, /dev/sdb Z1ZB9PRT, /dev/sdd S3F3NX0JB00633 empty.
+Node2 OS: /dev/sdc BCA11710020261894 preserved, including Local-node2/default.
+Old Ceph OSD/DB VGs on the selected data disks were removed.
+Node2 cleanup audit: /root/ibhics-vstorage-preclean-20261110-122906
+Cleanup removed metadata/signatures; it was NOT a full multi-terabyte secure erase.
+The one-off serial-guarded cleanup script is in the PRIVATE delivery folder and on each
+server under /root/ibhics-vstorage-prepare; it is intentionally outside the product tree.
+
+npm-vm remains running on Node1/default, UUID 50d7cc51-7d23-4ff0-99f0-01ab5324c15e.
+Active and persistent disk /var/lib/ibhics/pools/default/npm-vm-disk0.qcow2, no backing file.
+Verified with QMP query-block, qemu-img backing-chain, virsh domstate and HTTP 200 at
+http://172.16.12.194:81. All other VMs/templates were intentionally deleted earlier.
+Node2 RAM fault P2-DIMMF1 remains an accepted test-hardware fault; not hidden or repaired.
+
+NEW IMPLEMENTATION:
+- Storage card: Prepare storage, Create Virtual Storage, per-node disk role selection,
+  mirrored/combined local data layout, optional SSD cache, logical capacity and VIP.
+- No disks preselected. Protected OS/VM/container disks cannot be selected.
+- Review lists exact disk paths + serials + pools to erase. Checkbox + exact pool name
+  confirmation, one-time 10-minute server receipt bound to current inventory fingerprint.
+- Fresh node-side validation before releasing any pool. Shared RAID/LVM PV dependencies
+  require complete selection; unknown mounts, system VGs, VM live/persistent/snapshot/
+  qcow2 backing chains and container images protect their disks.
+- Local provisioning uses md RAID1 when multiple mirrored data disks are chosen, LVM thin
+  pool and optional LVM writethrough SSD cache. New managed VGs use ibhv-<name>.
+- Disk audit and pool XML are retained. A failed destructive job is never silently replayed
+  or rolled back by deleting partially created data.
+- Durable manager/agent jobs keep progress across logout/refresh. Interrupted jobs require
+  inspection. A single file lock serializes storage creation on each side.
+- LINSTOR creates two data replicas and a diskless third vote on Arbiter; DRBD Reactor and
+  LINSTOR Gateway provide one active NFS server and the storage VIP.
+- Gateway REST API restricts NFS clients to the two data node IPv4 addresses (/32).
+- Both libvirt nodes mount the same NFS export; it becomes a selectable VM/template pool.
+- REST POST acknowledgement is not readiness: wait for Started/primary before mounting.
+  Background replication is displayed as Synchronizing, not falsely labelled Healthy.
+- Current kernel NFS implementation supports ONE Virtual Storage resource per cluster.
+- The existing manager/control plane is on Node1; this does not implement VM restart HA,
+  evacuation orchestration, distributed management or a controller HA deployment.
+
+SOFTWARE ON ALL THREE LIVE HOSTS:
+DRBD kernel 9.3.4; utils 9.35.0; LINSTOR 1.35.3. Compute nodes also have Reactor 1.12.0,
+NFS/resource agents, mdadm, LVM, arping and iptables. Node1 has Gateway 2.3.0 and controller.
+Gateway and controller APIs bind to localhost (8337 / 3370).
+Source/archive SHA and repository signing key fingerprint are pinned in packaged prepare.sh.
+Matching kernel headers were available for Node1 6.12.113 and Node2 6.12.115+deb13.1;
+DKMS builds completed. Empty DRBD 8 modules were safely unloaded and DRBD9 loaded;
+no host reboot, no libvirt stop, no NPM VM shutdown.
+Satellite allowExtFiles configured on all three hosts, including the diskless Arbiter.
+Package preparation and API software readiness explicitly require D-Bus.
+Application backups:
+  Node1 /opt/ibhics/vstore2-backup-20261110-125014
+  Node2 /opt/ibhics/vstore2-backup-20261110-124853
+  Arbiter /opt/ibhics/vstore2-backup-20261110-125304
+First Arbiter application upgrade was automatically rolled back because its agent binds
+172.16.12.105, not localhost. Upgrade health check now reads agent host/port from its existing
+root-only environment file; retry passed. Credentials/network/pairing keys unchanged.
+
+VALIDATION:
+- 68 focused regression tests plus 5 existing history-time JS tests passed.
+- Latest 8 workflow tests passed, covering receipt replay/expiry, disk changes, VIP collision,
+  unrelated LINSTOR nodes, API confirmation, agent body validation and concurrent jobs.
+- Packaging checks passed: new JS and preparation script are in the wheel.
+- Broader suite: 604 passed; two already-known baseline failures remain:
+  tests/test_home_metrics.py::test_home_allocation_and_live_history
+  tests/test_installer.py::test_custom_folder_pool_added_to_apparmor
+- Browser preview exercised empty selections, protected OS rows, capacity calculation,
+  review, wrong typed-name rejection, correct mocked Create and Healthy state.
+- Real isolated 3-VM lab used actual Linux block devices backed only by qcow2 files.
+  LVM thin + SSD cache passed on both guests. Two-disk md mirror + thin + SSD cache also
+  passed on isolated guest2 (VG ibhv-vs-mirror), exercising the production disk command path.
+- DRBD resources: two UpToDate data replicas + Diskless witness, all voting.
+- Abruptly killed only isolated primary QEMU guest: standby promoted in 6.7 seconds,
+  existing NFS mount accepted fsynced writes and a fresh mount returned identical SHA256
+  for the original 8MiB file; complete I/O test 9.5 seconds. Old guest restarted afterward.
+- Gateway v2 REST payload accepted (201), asynchronously became Started/OK. Restricted
+  client list and actual NFS I/O from the second guest verified.
+- Live Virtual Storage has NOT been created. Readiness/inventory/review can be checked
+  safely; only the operator should confirm Create on the real disks.
+
+ISOLATED LAB (STOPPED after validation; proof files/images preserved):
+On Node2 /root/ibhics-vstorage-lab, bridge ibhvs-test without physical uplink.
+Guests vs-test1/2/3: 192.0.2.11/.12/.13, test VIP .16. All guest disks are qcow2 files.
+Root guest SSH key /root/ibhics-vstorage-lab/key (not used on physical hosts).
+Guest2 now has extra marked virtual disks VS-MIRROR-A/B/CACHE-2 and VG ibhv-vs-mirror.
+QEMU PIDs in nodeN/qemu.pid. Assert command line contains the corresponding lab OS image
+before stopping a process; do not kill the real npm-vm QEMU process on Node1.
+Proof files: failover-proof.json, failover.log, rest-integration.log, rest-io-proof.txt,
+mirror-proof.log. The first REST test assertion incorrectly expected immediate OK from POST;
+actual resource completed asynchronously, and the production code now waits correctly.
+DNS helper listens only 192.0.2.254:53; PID dns.pid. Guest NAT resolver was unreliable, so
+lab DNS forwards through the build host resolver with a small cache. Not installed in product.
+
+ARBITER ISO FOLLOW-UP:
+Existing delivered ISO is Arbiter-1.3.0-beta-fix1-amd64.iso, validated repair/firstboot.
+Do not claim that it contains this new Virtual Storage software or the live pairing-key UI.
+Standalone UI source: /Users/ccthailand./Desktop/claude-work/ibhics-live-arbiter-ui/
+Read its LIVE-HANDOFF.txt and docs/arbiter-firstboot-fix-handoff.txt before ISO integration.
+Installer build.sh still needs its VERSION marker aligned with a future rebuilt appliance.
+
+FINAL LIVE CHECK: all three hosts report software_ready=true with no missing components.
+Actual authenticated inventory returned six empty selectable data/cache disks and both
+OS disks protected. The actual creation-review API passed and reported 3350 GiB maximum
+with local mirrors. No real Create request was sent by Codex. Owner has been notified
+that they can select disks and press Create themselves.
+
+UI clarification requested by owner: current Data layout means per-node disk layout,
+not the cluster replication factor. Both Mirror and Combine use two data replicas.
+RF3 is not implemented in this two-node-plus-Arbiter creation workflow. Mirror adds
+local RAID1 protection; Combine aggregates local disks without that local copy.

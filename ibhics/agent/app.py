@@ -47,6 +47,7 @@ from ..manager.schemas import (
     VMEditIn,
     VMOut,
 )
+from ..storage_node import NodeProvisionIn, provision
 
 
 def create_agent_app(
@@ -57,6 +58,7 @@ def create_agent_app(
     backups: NodeBackup | None = None,
     imports: NodeImport | None = None,
     pool_labels_path: Path | None = None,
+    storage_root: Path = Path("/var/lib/ibhics/virtual-storage"),
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -69,6 +71,9 @@ def create_agent_app(
 
     app = FastAPI(title=f"ibHiCS Agent ({name})", version=__version__)
     pool_labels = PoolLabels(pool_labels_path)
+    from ..storage_jobs import StorageJobs
+
+    storage_jobs = StorageJobs(storage_root / "node-jobs")
     install_driver_errors(app)
     api = APIRouter(prefix="/agent/v1", dependencies=[Depends(check_token)])
 
@@ -78,9 +83,23 @@ def create_agent_app(
 
     @api.get("/virtual-storage/readiness")
     def storage_readiness() -> dict:
-        from ..storage import readiness
+        from ..storage_software import software_status
 
-        return readiness()
+        return software_status(str(role))
+
+    @api.get("/virtual-storage/job")
+    def storage_job() -> dict | None:
+        return storage_jobs.current()
+
+    @api.post("/virtual-storage/software", status_code=status.HTTP_202_ACCEPTED)
+    def storage_software() -> dict:
+        from ..storage_software import prepare_software
+
+        return storage_jobs.start(
+            "software",
+            {"role": str(role)},
+            lambda report: prepare_software(str(role), False, storage_root, report),
+        )
 
     if role == NodeRole.COMPUTE:
 
@@ -155,6 +174,18 @@ def create_agent_app(
             from ..hypervisor.storage_inventory import inventory
 
             return inventory(driver)
+
+        @api.post("/virtual-storage/provision", status_code=status.HTTP_202_ACCEPTED)
+        def storage_provision(body: NodeProvisionIn) -> dict:
+            if not body.confirm_wipe or body.selection.node != name:
+                raise ValueError(
+                    "Explicit disk erasure confirmation and matching node are required"
+                )
+            return storage_jobs.start(
+                "provision",
+                body.model_dump(),
+                lambda report: provision(driver, body, node=name, root=storage_root, report=report),
+            )
 
         @api.get("/networks")
         def networks() -> list[dict]:

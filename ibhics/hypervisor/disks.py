@@ -155,7 +155,9 @@ def clear_plan(lsblk_text: str, pvs_text: str, devices: list[str]) -> list[list[
         parts = [c["path"] for c in dev.get("children") or [] if c.get("type") == "part"]
         cmds += [["wipefs", "-a", p] for p in parts]
         cmds.append(["wipefs", "-a", device])
-    return cmds
+    # An md/LVM descendant can appear under several physical parents in lsblk.
+    # Removing the same PV twice would fail after the first removal succeeded.
+    return [list(cmd) for cmd in dict.fromkeys(tuple(cmd) for cmd in cmds)]
 
 
 def clear_disks(devices: list[str], run: Callable = subprocess.run) -> None:

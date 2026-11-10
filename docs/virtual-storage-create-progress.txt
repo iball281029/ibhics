@@ -1,3 +1,7 @@
+SUPERSEDED: read docs/virtual-storage-create-handoff.txt for the deployed vstore2 state.
+The notes below are an earlier development checkpoint; live disks are now cleaned and
+software deployed. The owner, not Codex, will press Create on real storage.
+
 Virtual Storage creation work in progress — 2026-11-10
 
 Branch: codex/virtual-storage-create (base b24c738).
