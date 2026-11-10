@@ -1,3 +1,34 @@
+LATEST LIVE OPTIMIZATION APPLIED — 2026-11-10 18:24 local
+Owner confirmed Windows installation finished and explicitly instructed proceed.
+Moved ONLY thin_tmeta (1GiB) to existing SSD free extents, sequentially Node1 then
+Node2, online pvmove with validated serials/VG/UUID/DRBD and node provision/job locks.
+Node1 thin_tmeta now /dev/sdc(217481), UUID uNopvV-H7k1-eC9m-uYFx-AWpy-MOlw-wkZSgK.
+Node2 thin_tmeta now /dev/sdd(217481), UUID 2e2s8K-6YW9-SLSb-fq7u-tMlD-7GaO-mRKtpv.
+UUIDs retained. Data LVs/cache unchanged, no storage re-creation, no guest stop/reboot.
+Audits /root/ibhics-metadata-to-ssd-20261110-182259 on Node1 and
+/root/ibhics-metadata-to-ssd-20261110-182345 on Node2 include VG before/after backups.
+Both real caches remain WRITEBACK; replication Protocol C verified via drbdsetup show
+--show-defaults, only protocol lines emitted (never dump shared-secret configuration).
+DRBD both copies UpToDate, Arbiter Connected/Diskless, Win2022-Template running,
+virsh domblkerror No errors found, npm-vm HTTP 200.
+
+Before/after non-destructive microtest on Node1 shared NFS mount: 128 random-offset
+16KiB writes with fdatasync each, fresh sparse 64MiB file, read-back verified, removed.
+Before mean 4.255ms/p95 15.611ms; after mean 3.643ms/p95 3.946ms. Mean -14.4%.
+One short sample each, cache/workload effects uncontrolled: NOT Windows installation
+speedup, NOT storage throughput ceiling, NOT proof of Hybrid performance equivalence.
+Evidence /root/ibhics-metadata-perf-before.json and ...-after.json on Node1.
+Helper /root/ibhics-metadata-perf.py writes only unique temporary files on shared mount.
+Historical 100ms Windows write sample was a DIFFERENT workload during installation;
+do not compare it to this microtest as if a measured 25x speedup.
+
+User also asked RF2 operation: 2 full replicas on separate compute nodes, protocol C
+synchronous acknowledgment, diskless Arbiter quorum tiebreaker. Approx half raw total
+before reserves (or smaller node if asymmetric). No automatic VM restart HA in ibHiCS.
+Current creator source still places thin metadata on HDD by default; future creation
+policy should be updated separately. No application upgrade/source allocation change
+was made in this live migration turn. No GitHub push; Claude review/push later.
+
 LATEST OPTIMIZATION PREPARATION — METADATA MOVE NOT YET APPLIED
 Owner wants Hybrid-like speed. Pending answer whether Windows installation finished.
 No real metadata/data migration applied. Do not treat elapsed time as installation done.

@@ -1,3 +1,7 @@
+LATEST: owner authorized live metadata relocation after Windows installation.
+BOTH thin_tmeta volumes are now on SSD; replicas UpToDate, caches Writeback.
+Read latest results/limitations in docs/virtual-storage-rf2-handoff.txt.
+
 LATEST LIVE STATE: owner enabled WRITEBACK on both caches. Windows installation
 performance sampled read-only; thin metadata remains on HDD. See latest section of
 docs/virtual-storage-rf2-handoff.txt. No tuning applied during installer workload.
