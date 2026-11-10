@@ -1,3 +1,20 @@
+LATEST LIVE CACHE / PERFORMANCE CHECK 2026-11-10
+Owner subsequently chose Writeback and pressed Apply themselves during Windows setup.
+Both real caches now WRITEBACK, cache hits/dirty blocks present, RF2 all UpToDate.
+Earlier instruction to keep Writethrough described pre-click state and is superseded.
+Read-only 10.04-second live sample while installing Win2022-Template: guest disk
+9.71 MiB/s writes, 695 write requests, mean QEMU write request duration 99.86 ms;
+CPU 0.74 core busy, ISO read 6.31 MiB/s at average 0.26 ms (not a controlled benchmark).
+Node2 SSD /dev/sdd 21.55 MiB/s writes, await 0.28 ms, busy 5.9%; HDD sda/sdb
+await 7.43/9.41 ms. Thin pool metadata thin_tmeta on HDD sda on BOTH nodes,
+SSD cache covers thin_tdata only. Metadata placement and synchronous qcow2/NFS/DRBD
+path are candidates for further profiling, NOT a proven single bottleneck.
+VM disk VirtIO/qcow2 cache=none, NFS4.2 hard TCP rsize/wsize 1MiB, sync server exports,
+storage export primary Node2 while VM runs Node1, eno1 link 1000 Mbps. No evidence
+from this sample that CPU or ISO reads are saturated. No pre-change baseline, so
+DO NOT quantify speedup or claim network saturation. No runtime tuning, VM stop,
+replication change or cache adjustment performed during this diagnostic turn.
+
 LATEST vstore3.4 CACHE SETTINGS — 2026-11-10
 Owner requested faster writes and selectable cache modes, then reported installing
 Windows Server. Agreed to add UI but DEFER changing real cache mode until installation

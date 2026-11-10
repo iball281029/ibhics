@@ -1,3 +1,7 @@
+LATEST LIVE STATE: owner enabled WRITEBACK on both caches. Windows installation
+performance sampled read-only; thin metadata remains on HDD. See latest section of
+docs/virtual-storage-rf2-handoff.txt. No tuning applied during installer workload.
+
 LATEST vstore3.4: selectable shared SSD cache modes installed on both computes.
 REAL MODE STILL WRITETHROUGH by agreement during Windows Server installation.
 Read docs/virtual-storage-rf2-handoff.txt. Do not automatically enable Writeback.
