@@ -1,3 +1,21 @@
+LATEST OPTIMIZATION PREPARATION — METADATA MOVE NOT YET APPLIED
+Owner wants Hybrid-like speed. Pending answer whether Windows installation finished.
+No real metadata/data migration applied. Do not treat elapsed time as installation done.
+Actual isolated LVM pvmove --name ibhv-vs-rf2-aggregate/thin_tmeta from virtual HDD
+to virtual SSD while direct fsynced writes continue PASSED; test LV removed and
+lab guest stopped. Proof Node2 /root/ibhics-vstorage-lab/metadata-move-proof.log.
+This validates online mechanics, NOT performance equivalence on real hardware.
+Serial/UUID/VG/DRBD/cache guarded one-off helper prepared and DRY-RUN PASSED on
+both real hosts /root/move-thin-metadata-to-ssd.py. Default read-only; --apply mutates.
+Private delivery vstore-private/move-thin-metadata-to-ssd.py. Keep private, serial-bound.
+Targets only 1GiB thin_tmeta, retaining LV UUID and all data/cache LVs. Source sda on
+both; destination Node1 sdc, Node2 sdd, each ~45GiB free. Locks node provision/job;
+requires both DRBD copies UpToDate/quorate/Connected and cache writeback.
+If live relocation later authorized at suitable time: secondary Node1 first, verify,
+then Node2; sample same workload and report actual change without promised speedup.
+Future creator should place thin metadata on SSD when cache exists; current creator
+still allocates thin metadata on HDD. No source allocation change in this turn.
+
 LATEST LIVE CACHE / PERFORMANCE CHECK 2026-11-10
 Owner subsequently chose Writeback and pressed Apply themselves during Windows setup.
 Both real caches now WRITEBACK, cache hits/dirty blocks present, RF2 all UpToDate.
