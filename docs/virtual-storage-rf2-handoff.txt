@@ -1,3 +1,36 @@
+LATEST vstore3.5 — INDEPENDENT FULL CLONE ACCELERATION
+Owner complained full deploy slow; explicitly cancelled running deploy to install
+Guest Tools first, then requested fix. Exact qemu-img copy PID 193307 stopped via
+SIGINT; existing clone cleanup removed partial vm-6cffdb5950-disk0.qcow2. Template
+and npm-vm preserved. Old deploy may display failed because no cancel API exists.
+
+Previous file-backed full clone always ran qemu-img convert through NFS client,
+forcing physical data read/write even when filesystem supports independent COW clone.
+NEW: qcow2->qcow2 full clone first tries Linux FICLONE (works through real NFS4.2
+on this XFS export). Independent file with NO qcow2 backing dependency; not linked.
+Only matching virtual capacity, no backing image and no internal snapshots accepted.
+Block targets, format/size changes, backing chains, internal snapshots and unsupported
+reflink filesystems retain existing qemu-img conversion path. Storage EIO is propagated.
+Temporary sibling, fsync, preserve target ownership/mode, verify image, atomic replace
+and directory fsync. Unsupported path leaves original libvirt target intact. Temp file
+cleaned on failure. Source mtime/size rechecked; normal stopped-source requirement kept.
+Linux identity reset and optional guest customization still run after cloning.
+
+Both computes upgraded to 1.3.0b2+vstore3.5; Arbiter still vstore3.3 (no clone engine).
+Backups Node2 /opt/ibhics/vstore3.5-backup-20261110-183548,
+Node1 /opt/ibhics/vstore3.5-backup-20261110-183549.
+Validation: 41 tests passed (templates/full-clone/packaging), ruff passed.
+Live NFS synthetic qcow2 120GiB / 12MiB written cloned in 0.0349s; full qemu-img
+compare passed, destination modifications did not alter source, deleting source did not
+break clone. All test files removed. /root/ibhics-full-clone-proof.json Node1.
+ACTUAL stopped Win2022-Template (120GiB virtual/~10.77GiB allocated) temporary full
+clone in 0.0708s. No backing file, sampled physical bytes match, temp clone removed.
+Proof /root/ibhics-real-template-clone-proof.json Node1. This measures disk clone only,
+not complete deploy/customization/Windows boot. No real VM deployed automatically.
+RF2 UpToDate, metadata stays SSD, caches Writeback, npm-vm HTTP200.
+Owner can convert source to template after Guest Tools and retry normal Full clone.
+No GitHub push; Claude should review/push later.
+
 LATEST LIVE OPTIMIZATION APPLIED — 2026-11-10 18:24 local
 Owner confirmed Windows installation finished and explicitly instructed proceed.
 Moved ONLY thin_tmeta (1GiB) to existing SSD free extents, sequentially Node1 then

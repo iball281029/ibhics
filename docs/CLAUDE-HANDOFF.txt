@@ -1,3 +1,7 @@
+LATEST vstore3.5: independent Full clone uses reflink automatically on supported
+file storage. Real 120GiB Windows template disk cloned in 0.0708s (disk step only).
+Both computes upgraded. Read docs/virtual-storage-rf2-handoff.txt. No GitHub push.
+
 LATEST: owner authorized live metadata relocation after Windows installation.
 BOTH thin_tmeta volumes are now on SSD; replicas UpToDate, caches Writeback.
 Read latest results/limitations in docs/virtual-storage-rf2-handoff.txt.

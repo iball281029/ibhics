@@ -333,6 +333,17 @@ def test_libvirt_full_clone_copies_into_block_pool(lvd):
     ]
 
 
+def test_libvirt_full_clone_uses_reflink_without_linking_template(lvd, monkeypatch):
+    d = lvd()
+    calls = []
+    monkeypatch.setattr(lv, "try_reflink", lambda *args: calls.append(args) or True)
+    vm = d.clone_vm("src", CloneSpec(name="fast-full", reset_identity=False))
+    assert d.commands == []
+    assert calls[0][:2] == ("/pool/tpl-disk0.qcow2", "/pool/fast-full-disk0.qcow2")
+    assert not vm.spec.linked_to
+    assert ET.fromstring(d._conn.pool.created[0]).find("backingStore") is None
+
+
 def test_libvirt_deploy_resets_linux_identity(lvd):
     d = lvd()
     d.clone_vm("src", CloneSpec(name="web2"))

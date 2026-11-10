@@ -70,6 +70,7 @@ from .domain_xml import (
     vm_meta,
     volume_name,
 )
+from .full_clone import try_reflink
 from .net_xml import build_network_xml, render_vlan_iface, vlan_bridge, vlan_iface_file, vlan_of
 from .pool_xml import (
     build_iscsi_session_xml,
@@ -994,6 +995,11 @@ class LibvirtDriver(HypervisorDriver):
                 driver = el.find("driver")
                 src_fmt = driver.get("type", "qcow2") if driver is not None else "qcow2"
                 dst_fmt = "raw" if disk.backend == "block" else "qcow2"
+                if src_fmt == dst_fmt == "qcow2" and try_reflink(
+                    base.path(), vol.path(), int(disk.size_gb * 1024**3)
+                ):
+                    logging.getLogger(__name__).info("Full clone %s used reflink", clone.name)
+                    continue
                 self.run(
                     ["qemu-img", "convert", "-n", "-f", src_fmt, "-O", dst_fmt]
                     + [base.path(), vol.path()]
