@@ -150,6 +150,12 @@ def create_agent_app(
         def disks() -> list[dict]:
             return [asdict(d) for d in driver.list_local_disks()]
 
+        @api.get("/virtual-storage/inventory")
+        def virtual_storage_inventory() -> dict:
+            from ..hypervisor.storage_inventory import inventory
+
+            return inventory(driver)
+
         @api.get("/networks")
         def networks() -> list[dict]:
             return [asdict(n) for n in driver.list_networks()]

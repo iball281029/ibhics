@@ -792,6 +792,30 @@ def create_app(
                 "phase": "planned" if plan else "unconfigured",
                 "active": False, "activation_supported": False}
 
+    @api.get("/virtual-storage/inventory")
+    def virtual_storage_inventory() -> dict:
+        from ..cluster.topology import NodeRole
+        from ..hypervisor.storage_inventory import inventory
+
+        nodes = []
+        for member in cluster.members():
+            if member.role != NodeRole.COMPUTE:
+                continue
+            row = {"name": member.name, "display_name": member.display_name}
+            try:
+                if not cluster.is_healthy(member):
+                    raise InvalidState("Node is offline")
+                if member.local:
+                    row.update(inventory(member.driver))
+                else:
+                    response = member.client.request("GET", "/virtual-storage/inventory")
+                    response.raise_for_status()
+                    row.update(response.json())
+            except Exception as exc:
+                row.update(disks=[], fingerprint=None, error=str(exc))
+            nodes.append(row)
+        return {"nodes": nodes}
+
     @api.put("/virtual-storage/plan")
     def virtual_storage_plan(body: VirtualStoragePlan) -> dict:
         cluster.require_quorum()
