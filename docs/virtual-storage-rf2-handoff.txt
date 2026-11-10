@@ -1,3 +1,32 @@
+LATEST vstore3.4 CACHE SETTINGS — 2026-11-10
+Owner requested faster writes and selectable cache modes, then reported installing
+Windows Server. Agreed to add UI but DEFER changing real cache mode until installation
+finishes. DO NOT claim Writeback is currently enabled or change it automatically.
+Both computes upgraded to vstore3.4; Arbiter remains vstore3.3 (no cache on witness).
+Live authenticated GET confirms both caches writethrough/smq, dirty_bytes=0, RF2 ready.
+Win2022-Template and npm-vm are running on Node1: preserve both.
+
+Storage > Virtual Storage now has SSD cache settings (Writeback / Writethrough),
+per-node actual mode and dirty MiB, Apply to both nodes, admin-only mutation route.
+Manager requires healthy complete RF2/Arbiter, created name match and readable caches.
+Durable single job changes both compute nodes; partial failure remains visible per node.
+Node helper only targets validated ibhv-<name>/thin_tdata of type cache. No disk erasure,
+cache removal, replication protocol changes, guest shutdown or host reboot.
+Returning to writethrough: cleaner policy destages dirty data first, 10-minute limit,
+then cache mode changes and original policy restored. Timeout leaves writeback mode;
+no forced detach/discard. Writeback can lose pending dirty data if cache devices fail;
+RF2 does not replace SSD PLP/backups. No guarantee this is fastest for every workload.
+
+Validation: 16 targeted tests passed incl real-size cache regression, flush timeout,
+healthy-replica gate and both-node orchestration; ruff/JS syntax passed.
+Browser preview verified mode picker and exact POST payload to mock API only.
+ACTUAL isolated Linux/LVM round-trip: writeback -> write/fsync 64 MiB (dirty 67108864)
+-> cleaner flush -> writethrough dirty 0, disposable LV removed. Lab guest stopped.
+Proof Node2 /root/ibhics-vstorage-lab/cache-mode-proof.log. Real cache never changed.
+App backups Node2 /opt/ibhics/vstore3.4-backup-20261110-180412 and
+Node1 /opt/ibhics/vstore3.4-backup-20261110-180414.
+No GitHub push; Claude review/push later. Arbiter ISO/UI integration still pending.
+
 LATEST vstore3.3 UPDATE — 2026-11-10
 Shared NFS exports now display once in Storage, with cluster scope and member node names.
 Per-node API mounts retained for VM placement, browse uses active mount. Local default

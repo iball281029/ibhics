@@ -994,3 +994,6 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 .vs-working { height:5px; border-radius:5px; background:linear-gradient(90deg,#c9e6ff,#5e67ff,#c9e6ff); background-size:200% 100%; animation:vs-working 2s linear infinite; margin:12px 0; }
 @keyframes vs-working { to { background-position:-200% 0; } }
 @media(prefers-reduced-motion:reduce) { .vs-working { animation:none; } }
+.vs-cache-panel { margin: 18px 0; padding: 18px; border: 1px solid var(--border, #e2e8f0); border-radius: 14px; background: #f8faff; }
+.vs-cache-panel .actions { justify-content: flex-start; flex-wrap: wrap; gap: 10px; }
+.vs-cache-panel select { max-width: 100%; min-width: 280px; padding: 10px; border: 1px solid #dce2f1; border-radius: 9px; background: white; }

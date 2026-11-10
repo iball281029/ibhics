@@ -2,6 +2,7 @@
 window.VirtualStorageUI = (() => {
   const dialog = $("#virtual-storage-dialog"), form = $("#virtual-storage-form");
   let latest = null, inspected = [], receipt = null, timer = null, rendering = false;
+  let desiredCacheMode = null;
   const busy = (job) => job && ["queued", "running"].includes(job.state);
   const error = (text = "") => {
     $("#vs-form-error").textContent = text;
@@ -148,6 +149,33 @@ window.VirtualStorageUI = (() => {
     }
   };
   $("#vs-create").addEventListener("click", start);
+  $("#virtual-storage-status").addEventListener("change", (event) => {
+    if (event.target.id === "vs-cache-mode") desiredCacheMode = event.target.value;
+  });
+  $("#virtual-storage-status").addEventListener("click", async (event) => {
+    const button = event.target.closest("#vs-cache-apply");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      await post("/virtual-storage/cache", {name: latest.created.spec.name,
+        mode: $("#vs-cache-mode").value});
+      toast("Changing SSD cache on both data nodes. Follow progress here.");
+      await render();
+    } catch (err) { fail(err); button.disabled = false; }
+  });
+  function cacheControls(data, running) {
+    if (!data.created || !data.cache?.length) return "";
+    const modes = [...new Set(data.cache.map((n) => n.mode || "unavailable"))];
+    const mode = modes.length === 1 ? modes[0] : "mixed";
+    const selected = desiredCacheMode || (mode === "writeback" ? "writeback" : "writethrough");
+    return `<div class="vs-cache-panel"><b>SSD cache · ${esc(mode)}</b>
+      <p class="hint">${data.cache.map((n) => `${esc(nodeName(n.node))}: ${esc(n.mode || n.error)}${n.dirty_bytes != null ? ` · ${(n.dirty_bytes / 1024**2).toFixed(1)} MiB pending to HDD` : ""}`).join("<br>")}</p>
+      ${isAdmin() ? `<div class="actions"><select id="vs-cache-mode" aria-label="SSD cache mode" ${running ? "disabled" : ""}>
+        <option value="writethrough" ${selected === "writethrough" ? "selected" : ""}>Writethrough · write to HDD before acknowledging</option>
+        <option value="writeback" ${selected === "writeback" ? "selected" : ""}>Writeback · accelerate writes using SSD</option>
+      </select><button id="vs-cache-apply" class="primary" ${running || data.phase !== "ready" || data.cache.some((n) => n.error) ? "disabled" : ""}>Apply to both nodes</button></div>` : ""}
+      <p class="hint">Writeback acknowledges writes from SSD before destaging to HDD. Cache failure can lose pending data; RF2 does not replace SSD power-loss protection or backups. Writethrough waits for HDD. Switching back flushes pending data first. Performance still depends on the network and workload.</p></div>`;
+  }
   $("#vs-prepare").addEventListener("click", async (event) => {
     event.target.disabled = true;
     try {
@@ -175,14 +203,15 @@ window.VirtualStorageUI = (() => {
       $("#vs-prepare").disabled = running || !topology;
       $("#vs-create").hidden = !!data.created;
       $("#vs-create").disabled = running || !prepared || !topology;
-      const label = {ready: "Healthy", syncing: "Synchronizing replicas", degraded: "Needs attention", preparing: "Preparing software", creating: "Creating storage"}[data.phase]
+      const label = {ready: "Healthy", syncing: "Synchronizing replicas", degraded: "Needs attention", preparing: "Preparing software", creating: "Creating storage", "changing-cache": "Changing SSD cache"}[data.phase]
         || (prepared ? "Ready to create" : topology ? "Preparation required" : "Waiting for two nodes and Arbiter");
       const status = data.resource?.status;
       box.innerHTML = `<p><span class="badge ${data.phase === "ready" ? "online" : "warning"}">${esc(label)}</span></p>
         ${data.phase === "syncing" ? '<p class="hint">Storage is serving data while the second copy synchronizes. Full redundancy is not ready yet.</p>' : ""}
         ${data.created ? `<div class="vs-overview"><div><small>Virtual Storage</small><b>${esc(data.created.spec.name)}</b></div><div><small>Storage VIP</small><b>${esc(data.created.spec.virtual_ip)}</b></div><div><small>Active node</small><b>${esc(status?.primary ? nodeName(status.primary) : "Unavailable")}</b></div><div><small>Usable capacity</small><b>${data.created.spec.size_gib.toLocaleString()} GiB</b></div></div>`
           : `<p class="hint">${prepared ? "Choose the disks on both nodes, review what will be erased, then create your shared storage." : "Prepare the storage components first, then select the data disks and optional SSD cache yourself."} Arbiter votes in quorum and stores no VM data.</p>`}
-        ${running ? `<div class="vs-job"><b>${data.job.kind === "software" ? "Preparing storage software" : "Creating Virtual Storage"}</b><p>${esc(data.job.step)}</p><div class="vs-working" aria-label="Operation in progress"></div><small>This operation continues if you close the page.</small></div>` : ""}
+        ${cacheControls(data, running)}
+        ${running ? `<div class="vs-job"><b>${data.job.kind === "cache-mode" ? "Changing SSD cache" : data.job.kind === "software" ? "Preparing storage software" : "Creating Virtual Storage"}</b><p>${esc(data.job.step)}</p><div class="vs-working" aria-label="Operation in progress"></div><small>This operation continues if you close the page.</small></div>` : ""}
         ${data.job?.state === "failed" || data.job?.state === "interrupted" ? `<div class="vs-erase"><b>Operation ${esc(data.job.state)}</b><p>${esc(data.job.error)}</p><small>Inspect the recorded operation before retrying. Disk erasure is never replayed automatically.</small></div>` : ""}
         ${data.error ? `<p class="vs-erase">${esc(data.error)}</p>` : ""}
         <div class="table-wrap"><table><thead><tr><th>Node</th><th>Role</th><th>Status</th></tr></thead><tbody>${data.nodes.map((n) => {

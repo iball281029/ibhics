@@ -24,6 +24,7 @@ from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
 from ..storage import VirtualStoragePlan, save_plan
+from ..storage_cache import CacheModeIn
 from ..storage_cluster import StorageController, inventories
 from ..storage_create import StorageCreateConfirm, StorageCreateSpec
 from ..storage_software import software_status
@@ -152,6 +153,7 @@ ADMIN_ROUTES = {
     ("POST", f"{API}/virtual-storage/software"),
     ("POST", f"{API}/virtual-storage/review"),
     ("POST", f"{API}/virtual-storage/create"),
+    ("POST", f"{API}/virtual-storage/cache"),
     ("PUT", f"{API}/virtual-storage/plan"),
     ("PATCH", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("GET", f"{API}/cluster/pairing"),
@@ -813,10 +815,12 @@ def create_app(
                 phase = "syncing"
         job = runtime["job"]
         if job and job["state"] in ("queued", "running"):
-            phase = "preparing" if job["kind"] == "software" else "creating"
+            phase = {"cache-mode": "changing-cache", "software": "preparing"}.get(
+                job["kind"], "creating")
         # A saved plan alone is never evidence of replicated storage being online.
         return {"nodes": nodes, "plan": plan.model_dump() if plan else None,
-                "phase": phase, "active": active, "activation_supported": True, **runtime}
+                "phase": phase, "active": active, "activation_supported": True,
+                "cache": storage_controller.cache(), **runtime}
 
     @api.get("/virtual-storage/inventory")
     def virtual_storage_inventory() -> dict:
@@ -833,6 +837,10 @@ def create_app(
     @api.post("/virtual-storage/create", status_code=status.HTTP_202_ACCEPTED)
     def virtual_storage_create(body: StorageCreateConfirm) -> dict:
         return storage_controller.create(body.token, body.confirm_name, body.confirm_wipe)
+
+    @api.post("/virtual-storage/cache", status_code=status.HTTP_202_ACCEPTED)
+    def virtual_storage_cache(body: CacheModeIn) -> dict:
+        return storage_controller.change_cache(body)
 
     @api.put("/virtual-storage/plan")
     def virtual_storage_plan(body: VirtualStoragePlan) -> dict:

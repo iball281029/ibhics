@@ -1,3 +1,7 @@
+LATEST vstore3.4: selectable shared SSD cache modes installed on both computes.
+REAL MODE STILL WRITETHROUGH by agreement during Windows Server installation.
+Read docs/virtual-storage-rf2-handoff.txt. Do not automatically enable Writeback.
+
 LATEST vstore3.3: shared Virtual Storage displays once across nodes; local pools
 remain separate. Shared capacity/history no longer double counted. See
 docs/virtual-storage-rf2-handoff.txt. Live upgrade complete; no GitHub push.

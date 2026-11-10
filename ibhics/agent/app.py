@@ -47,6 +47,7 @@ from ..manager.schemas import (
     VMEditIn,
     VMOut,
 )
+from ..storage_cache import CacheModeIn, cache_status, set_cache_mode
 from ..storage_node import NodeProvisionIn, provision
 
 
@@ -174,6 +175,15 @@ def create_agent_app(
             from ..hypervisor.storage_inventory import inventory
 
             return inventory(driver)
+
+        @api.get("/virtual-storage/cache/{pool}")
+        def storage_cache(pool: str) -> dict:
+            return cache_status(pool)
+
+        @api.post("/virtual-storage/cache", status_code=status.HTTP_202_ACCEPTED)
+        def storage_cache_mode(body: CacheModeIn) -> dict:
+            return storage_jobs.start("cache-mode", body.model_dump(), lambda report:
+                set_cache_mode(body, root=storage_root, report=report))
 
         @api.post("/virtual-storage/provision", status_code=status.HTTP_202_ACCEPTED)
         def storage_provision(body: NodeProvisionIn) -> dict:

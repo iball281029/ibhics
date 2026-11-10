@@ -16,6 +16,7 @@ import httpx
 from .cluster.topology import NodeRole
 from .hypervisor import PoolSpec, PoolType
 from .hypervisor.storage_inventory import inventory
+from .storage_cache import CacheModeIn, cache_status, set_cache_mode
 from .storage_create import RF2_CREATION_POLICY, StorageCreateSpec, review_disks
 from .storage_jobs import StorageJobs
 from .storage_node import NodeProvisionIn, provision
@@ -379,3 +380,51 @@ class StorageController:
             "error": error,
             "job": self.jobs.current(),
         }
+
+    def cache(self):
+        created = self.status()["created"]
+        if not created:
+            return []
+        name = created["spec"]["name"]
+        rows = []
+        for selection in created["spec"]["nodes"]:
+            if not selection["cache"]:
+                continue
+            member = self.cluster.member(selection["node"])
+            try:
+                info = cache_status(name) if member.local else remote(
+                    member, "GET", "/virtual-storage/cache/" + name)
+                rows.append({"node": member.name, **info})
+            except Exception as exc:
+                rows.append({"node": member.name, "error": str(exc)})
+        return rows
+
+    def change_cache(self, body: CacheModeIn):
+        def check():
+            self._members()
+            status = self.status()
+            if not status["created"] or status["created"]["spec"]["name"] != body.name:
+                raise ValueError("Select the created Virtual Storage")
+            if (status["resource"] or {}).get("status", {}).get("state") != "OK":
+                raise ValueError("Data replicas and Arbiter must be healthy before changing cache")
+            rows = self.cache()
+            if not rows or any(r.get("error") for r in rows):
+                raise ValueError("SSD cache status is unavailable; inspect both nodes")
+            return rows
+        check()
+
+        def work(report):
+            rows = check()
+            for row in rows:
+                member = self.cluster.member(row["node"])
+                report("Changing SSD cache on " + member.name)
+                if member.local:
+                    set_cache_mode(body, root=self.root, report=report)
+                else:
+                    job = remote(member, "POST", "/virtual-storage/cache", json=body.model_dump())
+                    self._wait(member, job, report)
+            result = self.cache()
+            if any(r.get("mode") != body.mode for r in result):
+                raise RuntimeError("Cache modes differ; inspect both nodes before retrying")
+            return {"mode": body.mode, "nodes": result}
+        return self.jobs.start("cache-mode", body.model_dump(), work)

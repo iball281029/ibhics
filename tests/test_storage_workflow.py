@@ -9,6 +9,7 @@ from test_migration import Env
 from test_storage_create import fixture as disk_fixture
 
 from ibhics.manager import create_app
+from ibhics.storage_cache import CacheModeIn
 from ibhics.storage_cluster import StorageController
 from ibhics.storage_jobs import StorageJobs
 
@@ -50,6 +51,38 @@ def wait_done(jobs):
             return job
         time.sleep(0.01)
     raise AssertionError("Job did not finish")
+
+
+def test_cache_changes_both_nodes_and_requires_healthy_replicas(workflow, monkeypatch):
+    _, controller, spec, _ = workflow
+    state = {"created": {"spec": spec.model_dump()},
+             "resource": {"status": {"state": "Degraded"}}}
+    monkeypatch.setattr(controller, "status", lambda: state)
+    rows = [{"node": n, "mode": "writethrough"} for n in ("node1", "node2")]
+    monkeypatch.setattr(controller, "cache", lambda: rows)
+    body = CacheModeIn(name=spec.name, mode="writeback")
+    with pytest.raises(ValueError, match="healthy"):
+        controller.change_cache(body)
+    assert controller.jobs.current() is None
+    state["resource"]["status"]["state"] = "OK"
+    calls = []
+
+    def local(body, **kwargs):
+        calls.append(("local", body.mode))
+        rows[0]["mode"] = body.mode
+
+    def peer(member, method, path, **kwargs):
+        calls.append((member.name, method, path, kwargs["json"]["mode"]))
+        return {"id": "cache-test"}
+
+    monkeypatch.setattr("ibhics.storage_cluster.set_cache_mode", local)
+    monkeypatch.setattr("ibhics.storage_cluster.remote", peer)
+    monkeypatch.setattr(controller, "_wait", lambda *a: rows[1].update(mode="writeback"))
+    controller.change_cache(body)
+    assert wait_done(controller.jobs)["state"] == "done"
+    assert all(r["mode"] == "writeback" for r in rows)
+    assert calls == [("local", "writeback"),
+                     ("node2", "POST", "/virtual-storage/cache", "writeback")]
 
 
 def test_review_and_confirm_use_one_time_receipt(workflow, monkeypatch):
