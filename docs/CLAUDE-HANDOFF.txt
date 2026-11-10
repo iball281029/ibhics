@@ -1,3 +1,7 @@
+LATEST UPDATE 2026-11-10: read docs/virtual-storage-arbiter-handoff.txt FIRST.
+Only npm-vm remains; all other VMs/templates were intentionally deleted with owner approval.
+The historical VM inventory below is obsolete. Virtual Storage is planning only, not active.
+
 สรุปส่งต่องาน ibHiCS ให้ Claude
 อัปเดต 9 พฤศจิกายน 2026 — หยุดพัฒนาตามคำสั่งผู้ใช้แล้ว
 

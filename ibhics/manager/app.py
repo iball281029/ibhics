@@ -23,6 +23,7 @@ from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNot
 from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
+from ..storage import VirtualStoragePlan, readiness, save_plan
 from . import datastore
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
@@ -31,6 +32,7 @@ from .edge import EdgeManager
 from .errors import install_cluster_errors, install_driver_errors
 from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
+from .poollabels import PoolLabels
 from .recycle import RecycleBin
 from .schemas import (
     AuditOut,
@@ -144,6 +146,8 @@ async def receive_file(request: Request, target: Path) -> int:
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
+    ("PUT", f"{API}/virtual-storage/plan"),
+    ("PATCH", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("GET", f"{API}/cluster/pairing"),
     ("POST", f"{API}/cluster/create"),
     ("PATCH", f"{API}/cluster/nodes/{{name}}"),
@@ -221,6 +225,8 @@ def create_app(
     recycle_days: int = 0,
     edge_state: Path | None = None,
     usage: UsageHistory | None = None,
+    virtual_storage_path: Path = Path("/var/lib/ibhics/virtual-storage.json"),
+    pool_labels_path: Path | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -228,6 +234,7 @@ def create_app(
         cluster = Cluster.standalone(socket.gethostname(), cluster)
     backups = backups or BackupManager(cluster)
     groups = groups or VMGroups()
+    pool_labels = PoolLabels(pool_labels_path)
 
     def backing_up(vm_name: str) -> bool:
         return any(
@@ -591,6 +598,7 @@ def create_app(
             for net in member.driver.list_networks():
                 out = found.setdefault(net.name, NetworkOut(**asdict(net)))
                 out.nodes.append(member.name)
+                out.configurations[member.name] = {"bridge": net.bridge, "vlan": net.vlan}
         return sorted(found.values(), key=lambda n: (n.vlan or 0, n.name))
 
     @api.post("/networks", response_model=NetworkOut, status_code=status.HTTP_201_CREATED)
@@ -666,8 +674,29 @@ def create_app(
             except NodeUnavailable as exc:
                 member.last_error = str(exc)
                 continue
-            result.extend(PoolOut.from_info(pool, member.name) for pool in pools)
+            for pool in pools:
+                out = PoolOut.from_info(pool, member.name)
+                if member.local:
+                    out.display_name = pool_labels.get(pool.name)
+                result.append(out)
         return result
+
+    @api.patch("/nodes/{name}/pools/{pool}", response_model=PoolOut)
+    def rename_pool(name: str, pool: str, body: NodeDisplayNameIn) -> PoolOut:
+        cluster.require_quorum()
+        member = cluster.member(name)
+        info = next((p for p in member.driver.list_pools() if p.name == pool), None)
+        if info is None:
+            raise HTTPException(404, "storage pool does not exist")
+        if member.local:
+            label = pool_labels.set(pool, body.display_name)
+        else:
+            response = member.client.request(
+                "PATCH", f"/pools/{pool}", json={"display_name": body.display_name}
+            )
+            response.raise_for_status()
+            label = response.json()["display_name"]
+        return PoolOut.from_info(info, name).model_copy(update={"display_name": label})
 
     @api.post("/nodes/{name}/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
     def create_pool(name: str, body: PoolCreate) -> PoolOut:
@@ -738,6 +767,58 @@ def create_app(
 
     # VMs: reads work without quorum so operators can see what is going on;
     # anything that changes state needs a majority of nodes.
+
+    @api.get("/virtual-storage")
+    def virtual_storage() -> dict:
+        nodes = []
+        for member in cluster.members():
+            try:
+                if member.local:
+                    probe = readiness()
+                else:
+                    response = member.client.request("GET", "/virtual-storage/readiness")
+                    response.raise_for_status()
+                    probe = response.json()
+            except Exception as exc:
+                probe = {"module_available": False, "resources": [], "error": str(exc)}
+            nodes.append({"name": member.name, "display_name": member.display_name,
+                          "role": str(member.role), "healthy": cluster.is_healthy(member),
+                          **probe})
+        plan = None
+        if virtual_storage_path.exists():
+            plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
+        # A saved plan is never evidence of replicated storage being online.
+        return {"nodes": nodes, "plan": plan.model_dump() if plan else None,
+                "phase": "planned" if plan else "unconfigured",
+                "active": False, "activation_supported": False}
+
+    @api.put("/virtual-storage/plan")
+    def virtual_storage_plan(body: VirtualStoragePlan) -> dict:
+        cluster.require_quorum()
+        from ..cluster.topology import NodeRole
+
+        for node in body.nodes:
+            if cluster.member(node.name).role != NodeRole.COMPUTE:
+                raise InvalidState(f"{node.name} is not a compute node")
+        arbiter = next((m for m in cluster.members() if m.name == body.arbiter_name), None)
+        if not arbiter or arbiter.role != NodeRole.WITNESS or not cluster.is_healthy(arbiter):
+            raise InvalidState("add an online Arbiter witness to the cluster first")
+        for member, vm in cluster.all_vms():
+            if member.name in {n.name for n in body.nodes}:
+                if any(d.pool == body.name for d in vm.spec.disks):
+                    raise InvalidState(
+                        f"{vm.spec.name} still uses {body.name}; move its disks first"
+                    )
+        save_plan(body, virtual_storage_path)
+        return {"phase": "planned", "active": False, "configuration": body.drbd_config()}
+
+    @api.get("/virtual-storage/configuration", response_class=Response)
+    def virtual_storage_configuration() -> Response:
+        if not virtual_storage_path.exists():
+            raise HTTPException(404, "save a Virtual Storage plan first")
+        plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
+        return Response(plan.drbd_config(), media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{plan.name}.res"'})
 
     @api.get("/vms", response_model=list[VMOut])
     def list_vms() -> list[VMOut]:
@@ -1059,8 +1140,22 @@ def create_app(
     def set_template(uuid: str, body: TemplateRequest) -> VMOut:
         cluster.require_quorum()
         member, vm = cluster.find_vm(uuid)
-        if not body.template and deploys.busy(uuid):
+        if deploys.busy(uuid):
             raise InvalidState(f"a VM is being deployed from {vm.spec.name!r}; wait for it")
+        if body.pool is not None:
+            if not body.template:
+                raise InvalidState("choose storage when converting to a template")
+            if vm.state != VMState.STOPPED:
+                raise InvalidState("shut the VM down before converting it to a template")
+            if not any(p.name == body.pool and p.active for p in member.driver.list_pools()):
+                raise InvalidState(f"no active pool named {body.pool!r} on {member.name}")
+            moves = {i: body.pool for i, d in enumerate(vm.spec.disks) if d.pool != body.pool}
+            if moves:
+                backups.run_task(
+                    "move-disks", f"template storage → {body.pool}", vm.spec.name,
+                    member.name, uuid, lambda: member.driver.move_disks(uuid, moves),
+                    progress=lambda: member.driver.disk_move_progress(uuid),
+                )
         return VMOut.from_info(member.driver.set_template(uuid, body.template), member.name)
 
     @api.post("/vms/{uuid}/clone", response_model=DeployOut, status_code=status.HTTP_202_ACCEPTED)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, status
 
@@ -16,6 +17,7 @@ from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
 from ..hypervisor.serialize import guest_to_json
 from ..importer import NodeImport, Source, SourceVM
 from ..manager.errors import install_driver_errors
+from ..manager.poollabels import PoolLabels
 from ..manager.schemas import (
     AgentBackupDelete,
     AgentBackupList,
@@ -32,6 +34,7 @@ from ..manager.schemas import (
     HostOut,
     HostSettingsIn,
     NetworkIn,
+    NodeDisplayNameIn,
     PoolCacheIn,
     PoolCreate,
     PoolOut,
@@ -53,6 +56,7 @@ def create_agent_app(
     driver: HypervisorDriver | None = None,
     backups: NodeBackup | None = None,
     imports: NodeImport | None = None,
+    pool_labels_path: Path | None = None,
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -64,12 +68,19 @@ def create_agent_app(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad token")
 
     app = FastAPI(title=f"ibHiCS Agent ({name})", version=__version__)
+    pool_labels = PoolLabels(pool_labels_path)
     install_driver_errors(app)
     api = APIRouter(prefix="/agent/v1", dependencies=[Depends(check_token)])
 
     @api.get("/health")
     def health() -> dict:
         return {"name": name, "role": str(role), "version": __version__}
+
+    @api.get("/virtual-storage/readiness")
+    def storage_readiness() -> dict:
+        from ..storage import readiness
+
+        return readiness()
 
     if role == NodeRole.COMPUTE:
 
@@ -268,7 +279,18 @@ def create_agent_app(
 
         @api.get("/pools", response_model=list[PoolOut])
         def list_pools() -> list[PoolOut]:
-            return [PoolOut.from_info(p) for p in driver.list_pools()]
+            return [
+                PoolOut.from_info(p).model_copy(update={"display_name": pool_labels.get(p.name)})
+                for p in driver.list_pools()
+            ]
+
+        @api.patch("/pools/{name}", response_model=PoolOut)
+        def rename_pool(name: str, body: NodeDisplayNameIn) -> PoolOut:
+            pool = next((p for p in driver.list_pools() if p.name == name), None)
+            if pool is None:
+                raise HTTPException(404, "storage pool does not exist")
+            label = pool_labels.set(name, body.display_name)
+            return PoolOut.from_info(pool).model_copy(update={"display_name": label})
 
         @api.post("/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
         def create_pool(body: PoolCreate) -> PoolOut:

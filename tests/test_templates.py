@@ -416,3 +416,40 @@ def test_deployed_vm_joins_template_group(env):
     env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "c1"})
     new = env.client.get("/api/v1/deploys").json()[0]["result"]
     assert env.client.get("/api/v1/vm-groups").json()["members"][new] == group
+
+
+def test_template_storage_on_remote_node(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("archive", node="node2", start=False)
+    api = env.client
+    res = api.post(f"/api/v1/vms/{uuid}/template", json={"pool": "shared"})
+    assert res.status_code == 200, res.text
+    assert res.json()["template"] and res.json()["node"] == "node2"
+    assert {d["pool"] for d in res.json()["disks"]} == {"shared"}
+    assert api.get("/api/v1/backup/jobs").json()[0]["state"] == "done"
+
+
+def test_template_storage_rejects_running_vm_before_move(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("running")
+    res = env.client.post(f"/api/v1/vms/{uuid}/template", json={"pool": "shared"})
+    assert res.status_code == 409
+    vm = env.client.get(f"/api/v1/vms/{uuid}").json()
+    assert not vm["template"] and vm["disks"][0]["pool"] == "default"
+
+
+def test_template_storage_failure_does_not_mark_template(env):
+    uuid = env.create_vm("stopped", start=False)
+    res = env.client.post(f"/api/v1/vms/{uuid}/template", json={"pool": "missing"})
+    assert res.status_code == 409
+    assert not env.client.get(f"/api/v1/vms/{uuid}").json()["template"]
+
+
+def test_template_storage_does_not_break_linked_clones(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("base", start=False)
+    env.client.post(f"/api/v1/vms/{uuid}/template", json={})
+    env.node1.clone_vm(uuid, CloneSpec(name="dependent", linked=True))
+    res = env.client.post(f"/api/v1/vms/{uuid}/template", json={"pool": "shared"})
+    assert res.status_code == 409, res.text
+    assert env.node1.get_vm(uuid).spec.disks[0].pool == "default"

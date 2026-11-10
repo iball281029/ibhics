@@ -151,6 +151,7 @@ def main() -> None:
         groups=groups,
         recycle_days=args.recycle_days,
         edge_state=Path("/var/lib/ibhics/edge.json") if args.driver == "libvirt" else None,
+        pool_labels_path=args.state_file.with_name("pool-labels.json"),
         usage=UsageHistory(
             Path(os.environ.get("IBHICS_USAGE_FILE", "/var/lib/ibhics/usage.sqlite3"))
         ),

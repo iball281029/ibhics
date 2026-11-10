@@ -251,6 +251,10 @@
     </section>
 
     <section class="page" id="page-storage">
+      <div class="sheet" style="margin-bottom:18px">
+        <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a></div>
+        <div id="virtual-storage-status" style="padding:20px">Checking storage readiness…</div>
+      </div>
       <div class="sheet">
         <div class="page-head">
           <h1>Storage</h1><span class="sub">Pools on each node: local disk, NFS, iSCSI or FC</span>
@@ -1316,6 +1320,19 @@
       <label class="wide check snap-restart" hidden><input type="checkbox" name="restart" checked> Shut down and start again if needed (once per UEFI VM, so later snapshots work while it runs)</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Take snapshot</button></footer>
+  </form>
+</dialog>
+
+<dialog id="template-storage-dialog">
+  <form method="dialog" id="template-storage-form">
+    <header><h3>Template storage</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p><b id="template-storage-name"></b></p>
+      <label>Store template disks on <select name="pool"></select></label>
+      <p class="hint">Storage is on this template's node. The VM must be shut down. Disks move before it becomes a template; follow progress in Tasks.</p>
+      <p class="hint" id="template-storage-windows" hidden>Windows: run sysprep /generalize /oobe /shutdown before converting so deployed VMs have their own identity.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save template</button></footer>
   </form>
 </dialog>
 

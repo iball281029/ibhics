@@ -595,6 +595,9 @@ class LibvirtDriver(HypervisorDriver):
         return dict(self._moves.get(uuid, {}))
 
     def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        clones = self.linked_clones(uuid)
+        if clones:
+            raise InvalidState(f"linked clones still use these disks: {', '.join(clones)}")
         dom = self._lookup(uuid)
         root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
         disks = root.findall("devices/disk[@device='disk']")

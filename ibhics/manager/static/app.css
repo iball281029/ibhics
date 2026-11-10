@@ -970,3 +970,5 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 .time-tick { font-size: 9px; }
 @media (max-width: 700px) { .rail-expanded .shell { margin-left: 52px; } .rail-expanded .rail { box-shadow: 8px 0 30px rgb(0 0 0 / 25%); } }
 @media (prefers-reduced-motion: reduce) { .rail, .shell { transition: none; } }
+/* Missing coverage is visible even in the unified cluster topology view. */
+.wire.coverage-warning { stroke: var(--warn); stroke-dasharray: 5 5; }

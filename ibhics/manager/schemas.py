@@ -234,6 +234,7 @@ class NetworkOut(BaseModel):
     bridge: str
     vlan: int | None = None
     nodes: list[str] = Field(default_factory=list, description="compute nodes that have it")
+    configurations: dict[str, dict] = Field(default_factory=dict)
 
 
 class DiskEditIn(BaseModel):
@@ -386,6 +387,7 @@ class RecycleBinOut(BaseModel):
 
 class TemplateRequest(BaseModel):
     template: bool = True  # false: convert the template back to a VM
+    pool: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class CustomizationIn(BaseModel):
@@ -576,6 +578,7 @@ class LocalDiskOut(BaseModel):
 
 class PoolOut(BaseModel):
     name: str
+    display_name: str = ""
     type: PoolType
     active: bool
     capacity_gb: float

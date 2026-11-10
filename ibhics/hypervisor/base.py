@@ -310,6 +310,7 @@ class PoolInfo:
     # hybrid is true for any pool on its own volume group, with a cache or without.
     hybrid: bool = False
     cache: dict | None = None
+    display_name: str = ""
 
 
 class PoolNotFound(LookupError):

@@ -75,6 +75,8 @@ const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", 
   "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
 const nodeLabel = (name) => state.cluster?.members.find((m) => m.name === name)?.display_name || name;
+const poolText = (p) => p.display_name ? `${p.display_name} (${p.name})` : p.name;
+const poolLabel = (name, node) => poolText(state.pools.find((p) => p.name === name && p.node === node) || { name });
 const nodeOptionText = (name) => nodeLabel(name) === name ? name : `${nodeLabel(name)} (${name})`;
 
 // ---------- theme and user menu ----------
@@ -332,7 +334,7 @@ function fillPools(form) {
   }
   const was = sel.value;
   const opts = [...byName.values()].sort((a, b) => b.available_gb - a.available_gb).map((p) =>
-    `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb).toLocaleString()} GB free, ${esc(p.type)})</option>`);
+    `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb).toLocaleString()} GB free, ${esc(p.type)})</option>`);
   if (sel.dataset.original) opts.unshift(`<option value="">${esc(sel.dataset.original)}</option>`);
   sel.innerHTML = opts.join("") || `<option value="">No storage pool on this node</option>`;
   if ([...sel.options].some((o) => o.value === was)) sel.value = was;
@@ -598,7 +600,7 @@ async function refresh(page, auto = false) {
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
-  if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
+  if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); await renderVirtualStorage(); }
   if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
   if (page === "nodes") { await load("vms", "summaries"); renderNodes(); }
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
@@ -1321,13 +1323,8 @@ async function vmAction(e) {
       return;
     }
     if (act === "totemplate") {
-      const v = state.vms.find((x) => x.uuid === id);
-      const win = /windows/i.test(v?.os_type || "") ? `\n\nWindows: was it generalized with sysprep (⋯ → Generalize, or sysprep /generalize /oobe /shutdown)? If not, every VM deployed from it has the same SID, which breaks joining a domain.` : "";
-      if (!confirm(`Convert ${name} to a template? A template cannot be powered on; new VMs are deployed from it. You can convert it back later.${win}`)) return;
-      await post(`/vms/${id}/template`, { template: true });
-      toast(`${name} is now a template`);
-      location.hash = "templates";
-      return;
+      await load("pools");
+      return openTemplateStorage(id);
     }
     if (act === "delete") {
       if (!confirm(`Delete ${name}?${binNote()}`)) return;
@@ -1343,6 +1340,25 @@ $("#vm-actions").addEventListener("click", vmAction);
 $("#vm-panel").addEventListener("click", vmAction);
 
 // ---------- templates ----------
+function openTemplateStorage(id) {
+  const vm = [...state.vms, ...state.templates].find((v) => v.uuid === id);
+  if (!vm) throw new Error("VM no longer exists. Refresh and try again.");
+  openDialog("template-storage-dialog", { id, name: vm.name });
+  $("#template-storage-name").textContent = vm.name;
+  $("#template-storage-form").elements.pool.innerHTML = `<option value="">Keep current storage</option>`
+    + state.pools.filter((p) => p.node === vm.node && p.active).map((p) =>
+      `<option value="${esc(p.name)}">${esc(poolText(p))} · ${num(p.available_gb)} GB free</option>`).join("");
+  $("#template-storage-windows").hidden = !/windows/i.test(vm.os_type || "");
+}
+handlers["template-storage-dialog"] = async (f, ctx) => {
+  const body = { template: true };
+  if (f.get("pool")) body.pool = f.get("pool");
+  toast(`Preparing ${ctx.name}… storage moves appear in Tasks`);
+  await post(`/vms/${ctx.id}/template`, body);
+  toast(`${ctx.name} is ready as a template`);
+  if (currentPage() === "templates") await refresh("templates");
+  else location.hash = "templates";
+};
 // A stopped VM becomes a template that cannot run; deployed VMs get their own
 // copies of its disks and can optionally be customized.
 function renderTemplates() {
@@ -1370,6 +1386,7 @@ function renderTemplates() {
         ${canOperate() ? `<button class="primary small" data-tpl="deploy" data-id="${t.uuid}">Deploy VM</button>
         <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
           <button data-tpl="edit" data-id="${t.uuid}">Settings</button>
+          <button data-tpl="storage" data-id="${t.uuid}">Change storage</button>
           <button data-tpl="tovm" data-id="${t.uuid}" data-name="${esc(t.name)}">Convert to VM</button>
           <button class="danger" data-tpl="delete" data-id="${t.uuid}" data-name="${esc(t.name)}">Delete</button>
         </div></details>` : ""}
@@ -1386,6 +1403,7 @@ $("#tpl-grid").addEventListener("click", async (e) => {
   try {
     if (act === "deploy") return openDeploy(id);
     if (act === "edit") return openEdit(id);
+    if (act === "storage") return openTemplateStorage(id);
     if (act === "tovm") {
       if (!confirm(`Convert ${name} back to a VM? It can then be powered on and changed.`)) return;
       await post(`/vms/${id}/template`, { template: false });
@@ -1419,7 +1437,7 @@ function openDeploy(uuid) {
     <span class="vm-sub">${src.vcpus} vCPU · ${num(src.memory_mb / 1024)} GB · ${src.disks.length} disk${src.disks.length === 1 ? "" : "s"} · ${esc(src.node || "")}</span></div>`;
   const pools = state.pools.filter((p) => p.node === src.node && p.active);
   form.elements.pool.innerHTML = `<option value="">Same pool as the ${isTpl ? "template" : "VM"}</option>`
-    + pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} · ${num(p.available_gb)} GB free</option>`).join("");
+    + pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} · ${num(p.available_gb)} GB free</option>`).join("");
   syncSwitch(form);
 }
 handlers["deploy-dialog"] = async (f, ctx) => {
@@ -1489,7 +1507,7 @@ function renderEdit() {
   $("#edit-items").innerHTML = editItems().map((it) => `<li><button type="button" data-item="${it.key}" class="${it.key === e.selected ? "active" : ""}">
     <svg><use href="#${it.icon}"/></svg><span>${it.label}</span><em>${it.value}</em></button></li>`).join("");
   const pools = state.pools.filter((p) => p.node === e.vm.node || !p.node);
-  const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(p.name)}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
+  const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(poolText(p))}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
   const pane = $("#edit-pane");
   const s = e.selected;
   if (s === "video") {
@@ -1749,7 +1767,7 @@ function migDisks() {
   $(".mig-disks", form).innerHTML = (vm.disks || []).map((d, i) => {
     const opts = [d.pool, ...pools.filter((p) => p !== d.pool)];
     return `<tr><td>Disk ${i + 1}</td><td>${num(d.size_gb)} GB</td><td>${esc(d.pool)}</td>
-    <td><select data-disk="${i}" data-from="${esc(d.pool)}">${opts.map((p) => `<option value="${esc(p)}">${p === d.pool ? `${esc(p)} (same pool)` : esc(p)}</option>`).join("")}</select></td></tr>`;
+    <td><select data-disk="${i}" data-from="${esc(d.pool)}">${opts.map((p) => `<option value="${esc(p)}">${p === d.pool ? `${esc(poolLabel(p, node))} (same pool)` : esc(poolLabel(p, node))}</option>`).join("")}</select></td></tr>`;
   }).join("") || empty(4, "This VM has no disks");
 }
 function migShow() {
@@ -1783,6 +1801,17 @@ handlers["migrate-dialog"] = async (f, ctx) => {
 };
 
 // ---------- storage ----------
+async function renderVirtualStorage() {
+  const box = $("#virtual-storage-status");
+  try {
+    const data = await api("/virtual-storage");
+    const witness = data.nodes.some((n) => n.role === "witness" && n.healthy);
+    box.innerHTML = `<p><span class="badge warning">${witness ? "Setup required" : "Waiting for Arbiter"}</span></p>
+      <p class="hint">Install Arbiter on VMware and add it as a witness in Cluster management. Shared storage stays inactive until replication and failover have been configured and verified.</p>
+      <div class="table-wrap"><table><thead><tr><th>Node</th><th>Role</th><th>Replication readiness</th></tr></thead><tbody>${data.nodes.map((n) => `<tr><td>${esc(n.display_name || n.name)}</td><td>${n.role === "witness" ? "Arbiter" : "Data node"}</td><td>${!n.healthy ? "Offline" : n.error ? esc(n.error) : `DRBD ${esc(n.kernel_version || "unknown")} · ${n.resources.length} resources`}</td></tr>`).join("")}</tbody></table></div>
+      ${data.plan ? `<p>Configuration prepared for <b>${esc(data.plan.name)}</b> · Storage VIP ${esc(data.plan.virtual_ip)}. Activation has not been performed.</p><a class="btn small" href="/api/v1/virtual-storage/configuration" download>Download DRBD configuration</a>` : ""}`;
+  } catch (err) { box.textContent = `Could not check storage readiness: ${err.message}`; }
+}
 
 // The LAN without a tag is the switch port's native VLAN, VLAN 1 unless the switch says otherwise.
 const vlanId = (n) => n.vlan ?? 1;
@@ -1868,7 +1897,7 @@ function topoLayoutKey() {
 function topoReadLayout() {
   try {
     const data = JSON.parse(localStorage.getItem(topoLayoutKey()) || "{}");
-    return Object.fromEntries(Object.entries(data).filter(([key, p]) => /^(node|net|vm):/.test(key) && p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 85 && p.y >= 35));
+    return Object.fromEntries(Object.entries(data).filter(([key, p]) => /^(cluster|node|net|vm):/.test(key) && p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 85 && p.y >= 35));
   } catch { return {}; }
 }
 function topoLayoutChanges(edit) {
@@ -2007,17 +2036,25 @@ async function renderTopology() {
 }
 
 function drawTopology() {
-  const nodes = computeMembers().filter((m) => m.healthy).map((m) => m.name);
+  const members = computeMembers(), nodes = members.map((m) => m.name);
+  const clusterView = Boolean(state.cluster.cluster_id) || nodes.length > 1;
+  const clusterKey = `cluster:${state.cluster.cluster_id || state.cluster.name || "local"}`;
+  const networkCoverage = (net) => {
+    const present = new Set(net.nodes || []), missing = nodes.filter((name) => !present.has(name));
+    const variants = new Set(Object.values(net.configurations || {}).map((c) => JSON.stringify([c.bridge,c.vlan ?? 1])));
+    return { missing, drift: variants.size > 1, complete: missing.length === 0 && variants.size <= 1 };
+  };
   const data = topoData(), edit = ntopo.edit;
   const nets = [...data.networks].sort((a, b) => vlanId(a) - vlanId(b));
   // VMs ordered by their first network, so their wires stay short.
   const netIndex = new Map(nets.map((n, i) => [n.name, i]));
   const vms = [...data.vms].sort((a, b) => (netIndex.get(a.nics[0]?.network) ?? 99) - (netIndex.get(b.nics[0]?.network) ?? 99) || a.name.localeCompare(b.name));
-  const cols = Math.max(nodes.length, nets.length, vms.length, 4);
+  const cols = Math.max(clusterView ? 1 : nodes.length, nets.length, vms.length, 4);
   let width = cols * TOPO.w + 40;
   const rowX = (count, i) => 20 + (width - 40) * (i + 0.5) / count;
   const pos = {};
-  nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
+  if (clusterView) pos[clusterKey] = { x: rowX(1,0), y: TOPO.top + 30 };
+  else nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
   nets.forEach((n, i) => { pos[`net:${n.name}`] = { x: rowX(nets.length, i), y: TOPO.top + 30 + TOPO.gapY }; });
   vms.forEach((v, i) => { pos[`vm:${v.uuid}`] = { x: rowX(vms.length, i), y: TOPO.top + 30 + TOPO.gapY * 2 }; });
   const layout = edit ? edit.layout : topoReadLayout();
@@ -2040,7 +2077,10 @@ function drawTopology() {
     return `<path ${attrs} class="wire ${cls}" d="${d}"/>${attrs ? `<path ${attrs} class="wire-hit" d="${d}"/>` : ""}`;
   };
   let wires = "";
-  for (const n of nets) for (const node of n.nodes || []) wires += wire(`node:${node}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
+  for (const n of nets) {
+    if (clusterView) wires += wire(clusterKey, `net:${n.name}`, `${n.vlan ? "tagged" : "native"}${networkCoverage(n).complete ? "" : " coverage-warning"}`);
+    else for (const name of n.nodes || []) wires += wire(`node:${name}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
+  }
   for (const v of vms) v.nics.forEach((nic, index) => {
     const old = edit?.base.vms.find((b) => b.uuid === v.uuid)?.nics || [];
     const pending = edit && !old.some((n) => nic.mac && n.mac === nic.mac && n.network === nic.network);
@@ -2063,7 +2103,11 @@ function drawTopology() {
     `<g class="tnode ${cls} ${ntopo.sel === key ? "sel" : ""} ${edit && JSON.stringify(edit.layout[key]) !== JSON.stringify(edit.layoutBase[key]) ? "pending" : ""}" data-key="${esc(key)}" transform="translate(0,0)">
       <rect x="${x - 22}" y="${y - 22}" width="44" height="44" rx="11"/><use href="#${icon}" x="${x - 11}" y="${y - 11}" width="22" height="22"/>${label(x, y, text, sub)}</g>`;
   let shapes = "";
-  for (const n of nodes) {
+  if (clusterView) {
+    const p = pos[clusterKey], online = members.filter((m) => m.healthy).length;
+    shapes += node(clusterKey, p.x, p.y, "i-nodes", `uplink${online < nodes.length ? " warn" : ""}`, state.cluster.name || "Cluster", `${online}/${nodes.length} nodes online · shared networks`);
+  }
+  for (const n of clusterView ? [] : nodes) {
     const ports = (ntopo.nics[n] || []).filter((p) => p.master === "br0");
     const sub = ports.length ? ports.map((p) => `${p.name}${p.speed_mbps ? ` ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000}G` : `${p.speed_mbps}M`}` : ""}`).join(", ") : "br0";
     const p = pos[`node:${n}`];
@@ -2071,7 +2115,7 @@ function drawTopology() {
   }
   for (const n of nets) {
     const p = pos[`net:${n.name}`];
-    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}`);
+    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}${clusterView ? ` · ${(n.nodes || []).length}/${nodes.length} nodes${networkCoverage(n).drift ? " · config differs" : ""}` : ""}`);
   }
   for (const v of vms) {
     const p = pos[`vm:${v.uuid}`];
@@ -2092,7 +2136,7 @@ function drawTopology() {
   $("#topo-svg").innerHTML = `${wires}${shapes}${grips}`;
   ntopo.pos = pos;
   const running = state.vms.filter((v) => v.state === "running").length;
-  $("#topo-stats").innerHTML = [["Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
+  $("#topo-stats").innerHTML = [[clusterView ? "Cluster nodes" : "Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
     .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
   topoToolbar();
   if (!ntopo.drag) topoPanel();
@@ -2108,12 +2152,15 @@ function topoPanel() {
       ${op ? `${!edit ? `<button class="primary small" data-topo-link-move ${ntopo.changing ? "disabled" : ""}>Move</button>` : ""} <button class="small danger" data-topo-disconnect ${edit?.saving || ntopo.changing ? "disabled" : ""}>Disconnect</button>` : ""}` : "";
   } else {
     const [kind, id] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
-    if (kind === "net") {
+    if (kind === "cluster") {
+      const members = computeMembers();
+      box.innerHTML = `<h3>${esc(state.cluster.name || "Cluster")}</h3><p class="hint">One logical cluster network view. Physical uplinks remain separate on each node. VLAN trunk configuration must also match on the upstream switches.</p><div class="topo-list">${members.map((m) => `<a href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span><span class="vm-sub">${esc((ntopo.nics[m.name] || []).filter((p) => p.master === "br0").map((p) => p.name).join(", ") || "br0")}</span>`).join("")}</div><a class="btn small" href="#cluster">Manage cluster</a>`;
+    } else if (kind === "net") {
       const n = data.networks.find((x) => x.name === id);
       if (!n) { ntopo.sel = null; return topoPanel(); }
       const vms = data.vms.filter((v) => v.nics.some((x) => x.network === n.name));
       box.innerHTML = `<h3>${esc(n.name)}</h3><dl class="kv"><dt>VLAN ID</dt><dd>${vlanId(n)}${n.vlan ? " (tagged)" : " (native, untagged on the wire)"}</dd>
-        <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>On nodes</dt><dd>${esc(n.nodes.join(", "))}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
+        <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>Available on</dt><dd>${esc(n.nodes.map(nodeLabel).join(", "))}</dd><dt>Missing on</dt><dd>${esc(computeMembers().filter((m) => !n.nodes.includes(m.name)).map((m) => nodeLabel(m.name)).join(", ")) || "None"}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
         <p class="wiz-label">Connected VMs</p><div class="topo-list">${vms.map((v) => `<a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a>`).join("") || `<span class="muted">None yet. Drag a VM here.</span>`}</div>
         ${admin && n.name !== "default" ? `<button class="small danger" data-topo-del="${esc(n.name)}" style="margin-top:14px">Remove switch</button>` : ""}`;
     } else if (kind === "vm") {
@@ -2357,17 +2404,29 @@ function renderPools() {
   $("#pools").innerHTML = state.pools.length ? state.pools.map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
-      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
+      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.display_name || p.name)}${p.display_name ? `<span class="vm-sub">Pool ID: ${esc(p.name)}</span>` : ""}</span></div></td>
       <td title="Node ID: ${esc(p.node)}">${esc(nodeLabel(p.node))}</td>
       <td><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
       <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
-      <td><div class="actions">${admin ? `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>` : ""}</div></td>
+      <td><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button><button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>` : ""}</div></td>
     </tr>`;
   }).join("") : empty(6, "No storage pools");
 }
 
 $("#pools").addEventListener("click", async (e) => {
+  const rename = e.target.closest("[data-pool-rename]");
+  if (rename) {
+    const { node, poolRename: name } = rename.dataset;
+    const pool = state.pools.find((p) => p.name === name && p.node === node);
+    const label = prompt(`Storage display name (${name}). Leave empty to use the Pool ID.`, pool?.display_name || "");
+    if (label == null) return;
+    try {
+      await patch(`/nodes/${enc(node)}/pools/${enc(name)}`, { display_name: label.trim() });
+      toast("Storage name updated"); await refresh("storage");
+    } catch (err) { fail(err); }
+    return;
+  }
   const link = e.target.closest("[data-pool-view]");
   if (link) { openPoolView(link.dataset.node, link.dataset.poolView); return; }
   const btn = e.target.closest("button[data-pool]");
@@ -2393,7 +2452,7 @@ function pvInfo() { return state.pools.find((p) => p.node === pv.node && p.name 
 function pvSummary() {
   const p = pvInfo();
   if (!p) return;
-  $(".pv-title", pvDlg).textContent = `${p.name} on ${p.node}`;
+  $(".pv-title", pvDlg).textContent = `${poolText(p)} on ${nodeLabel(p.node)}`;
   const used = pct(p.allocation_gb, p.capacity_gb), free = p.available_gb ?? p.capacity_gb - p.allocation_gb;
   $(".pv-stats", pvDlg).innerHTML = `
     <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(poolTypeText(p))}</em></div>
@@ -2563,7 +2622,7 @@ function fillIsoDest() {
   const initialized = sel.options.length > 0;
   const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
   sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
-    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(nodeOptionText(p.node))} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
+    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(poolText(p))} / iso · ${esc(nodeOptionText(p.node))} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
   if (initialized && [...sel.options].some((o) => o.value === was)) sel.value = was;
   else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
 }
@@ -4464,7 +4523,7 @@ function importCapacity() {
 function importTargetPools() {
   const sel = importForm.elements.pool, was = sel.value;
   const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
-  sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
+  sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
   if (pools.some((p) => p.name === was)) sel.value = was;
   importCapacity();
 }

@@ -60,6 +60,7 @@ def setup(monkeypatch, active):
              "raid": pool("raid", "logical")}  # fmt: skip
     d = object.__new__(lv.LibvirtDriver)
     d._conn = Conn(dom)
+    d._conn.listAllDomains = lambda: [dom]
     d._moves = {}
     d._lookup = lambda _u: dom
     d._pool = lambda n: pools[n]

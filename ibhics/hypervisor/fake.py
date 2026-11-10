@@ -225,6 +225,7 @@ class FakeDriver(HypervisorDriver):
             return copy.deepcopy(info)
 
     def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        self._refuse_if_linked(uuid, "moving its storage")
         with self._lock:
             vm = self._get(uuid)
             for i, pool in moves.items():
