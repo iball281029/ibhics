@@ -1,3 +1,7 @@
+CRITICAL ARBITER FIX: read docs/arbiter-firstboot-fix-handoff.txt FIRST.
+Original Arbiter ISO lacks D-Bus and fails before saving the root password/network.
+Use fix1 ISO Repair existing Arbiter; do not blame password entry or require VM reinstall.
+
 LATEST UPDATE 2026-11-10: read docs/virtual-storage-arbiter-handoff.txt FIRST.
 Only npm-vm remains; all other VMs/templates were intentionally deleted with owner approval.
 The historical VM inventory below is obsolete. Virtual Storage is planning only, not active.

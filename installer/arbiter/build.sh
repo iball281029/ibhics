@@ -12,7 +12,7 @@ cp "$OLD"/wheelhouse/*.whl "$PAYLOAD/wheelhouse/"
 rm -f "$PAYLOAD"/wheelhouse/ibhics-*.whl
 cp "$WHEEL" "$PAYLOAD/wheelhouse/"
 cp -a "$DEBS" "$PAYLOAD/repo"
-cp "$HERE"/{preseed.cfg,pick-disk.sh,packages.txt,install.sh,drbd-source.lock.json} "$PAYLOAD/"
+cp "$HERE"/{preseed.cfg,pick-disk.sh,packages.txt,install.sh,drbd-source.lock.json,repair.sh,repair-target.sh,repair.cfg} "$PAYLOAD/"
 cp "$HERE/find-ibhics.sh" "$PAYLOAD/"
 cp "$HERE/../"{already-installed.sh,ibhics.templates} "$PAYLOAD/"
 python3 - "$HERE/drbd-source.lock.json" "$HERE/drbd-9.3.4.tar.gz" <<'PY'
@@ -25,10 +25,14 @@ cp "$HERE/drbd-9.3.4.tar.gz" "$PAYLOAD/"
 sed 's/ libvirtd.service//' "$HERE/../systemd/ibhics-agent.service" >"$PAYLOAD/ibhics-agent.service"
 sed -e 's/ libvirtd.service//' -e 's|ExecStart=.*|ExecStart=/usr/local/sbin/arbiter-setup|' \
     "$HERE/../systemd/ibhics-firstboot.service" >"$PAYLOAD/ibhics-firstboot.service"
-echo '1.3.0b2+vstore1' >"$PAYLOAD/VERSION"
+echo '1.3.0b2+arbiterfix1' >"$PAYLOAD/VERSION"
 cat >"$WORK/grub.cfg" <<'EOF'
 set timeout=-1
 set default=0
+menuentry 'Repair existing Arbiter (keeps the VM disk)' {
+ linux /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/ibhics/repair.cfg vga=788 --- quiet
+ initrd /install.amd/initrd.gz
+}
 menuentry 'Install Arbiter (erases the dedicated VM disk)' {
  linux /install.amd/vmlinuz auto=true priority=critical preseed/file=/cdrom/ibhics/preseed.cfg vga=788 --- quiet
  initrd /install.amd/initrd.gz
@@ -38,9 +42,13 @@ cat >"$WORK/isolinux.cfg" <<'EOF'
 default vesamenu.c32
 timeout 0
 menu title Arbiter - ibHiCS witness installer
+label repair
+ menu label Repair existing Arbiter (keeps the VM disk)
+ menu default
+ kernel /install.amd/vmlinuz
+ append initrd=/install.amd/initrd.gz auto=true priority=critical preseed/file=/cdrom/ibhics/repair.cfg vga=788 --- quiet
 label arbiter
  menu label Install Arbiter (erases the dedicated VM disk)
- menu default
  kernel /install.amd/vmlinuz
  append initrd=/install.amd/initrd.gz auto=true priority=critical preseed/file=/cdrom/ibhics/preseed.cfg vga=788 --- quiet
 EOF

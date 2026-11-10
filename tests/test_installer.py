@@ -378,3 +378,32 @@ def test_test_install_defines_pause_on_every_path():
     # pause is used in step 3 too, so it is defined before step 2's branches.
     text = (INSTALLER / "test-install.sh").read_text()
     assert text.index("pause() {") < text.index('echo ">> 2/4')
+
+
+def test_console_password_saved_before_timezone_failure(tmp_path):
+    class FailedTimezone(Recorder):
+        def __call__(self, cmd, **kwargs):
+            result = super().__call__(cmd, **kwargs)
+            if cmd[0] == 'timedatectl':
+                return subprocess.CompletedProcess(cmd, 1, '', 'system bus unavailable')
+            return result
+    run = FailedTimezone()
+    with pytest.raises(RuntimeError, match='system bus unavailable'):
+        setup.apply(cfg('witness'), 'test-console-password', None, root=tmp_path, run=run)
+    assert (['chpasswd'], 'root:test-console-password\n') in run.calls
+    assert not (tmp_path / 'etc/ibhics/configured').exists()
+    assert not (tmp_path / 'etc/issue').exists()
+
+
+def test_failed_agent_start_does_not_mark_appliance_ready(tmp_path):
+    class FailedAgent(Recorder):
+        def __call__(self, cmd, **kwargs):
+            result = super().__call__(cmd, **kwargs)
+            if cmd == ['systemctl', 'enable', '--now', 'ibhics-agent.service']:
+                return subprocess.CompletedProcess(cmd, 1, '', 'agent failed')
+            return result
+    with pytest.raises(RuntimeError, match='agent failed'):
+        setup.apply(cfg('witness'), 'test-console-password', None,
+                    root=tmp_path, run=FailedAgent())
+    assert not (tmp_path / 'etc/ibhics/configured').exists()
+    assert not (tmp_path / 'etc/issue').exists()

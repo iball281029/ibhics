@@ -7,7 +7,7 @@ import secrets
 from . import setup as s
 
 
-def main() -> int:
+def setup_once() -> int:
     print("\n  Arbiter — ibHiCS cluster and storage witness\n")
     print("  Arbiter votes in quorum; it stores no VM data.\n")
     hostname = s.ask("Appliance name", "arbiter-01", s.check_hostname)
@@ -51,6 +51,20 @@ def main() -> int:
     )
     input("Press Enter to continue to login.")
     return 0
+
+
+def main() -> int:
+    while True:
+        try:
+            return setup_once()
+        except (RuntimeError, OSError) as exc:
+            print(
+                f"\n  Arbiter setup did not finish: {exc}\n"
+                "  The appliance has not been marked ready.\n"
+                "  Console access is set before network/timezone changes.\n"
+                "  You can use Ctrl+Alt+F2 for a console login.\n"
+            )
+            input("Press Enter to retry setup.")
 
 
 if __name__ == "__main__":

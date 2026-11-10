@@ -1,0 +1,54 @@
+Arbiter first-boot failure — 2026-11-10
+Branch: codex/arbiter-firstboot-fix, based on ab8c3c5.
+Release: 1.3.0b2+arbiterfix1. Compute nodes remain on vstore1; no live host upgrade needed.
+
+Confirmed defect in the original ISO (not a user password typo)
+- Minimal offline package list omitted dbus.
+- setup.apply called timedatectl before chpasswd and networking restart.
+- timedatectl failed with "Failed to connect to system scope bus via local transport".
+- The user's twice-confirmed password was never written, networking never activated,
+  root stayed locked from installation, and no agent pairing key was emitted.
+- /etc/issue had already been written as though setup succeeded, so getty displayed a
+  misleading configured IP/login banner after the firstboot process crashed.
+- Reproduced interactively in QEMU on an installed original ISO image with VMXNET3.
+
+Fix
+- Add dbus and its complete offline dependency closure (240 deb packages total).
+- Save root console credentials before network/timezone changes.
+- Write configured banner only after successful setup; remove configured marker if
+  agent service activation fails.
+- Arbiter catches setup errors, displays them and offers retry rather than silently
+  falling through to a locked login console.
+- Added "Repair existing Arbiter (keeps the VM disk)" boot-menu option.
+- Repair hook runs at partman/early_command, AFTER storage udebs are loaded.
+- Repair positively identifies one dedicated disk, arbiter-01 VG and Arbiter appliance;
+  explicitly mounts ext4 read-only before allowing writes; pyvenv.cfg is checked as a
+  regular file (absolute python symlinks cannot be tested outside the target chroot).
+- Repair installs D-Bus and the fixed wheel offline, backs up venv/config/shadow under
+  /root/arbiter-repair-backup-TIMESTAMP (0700), preserves disk layout and files, and
+  re-enables setup. No password reset by repair: incomplete setup will ask the owner
+  for the intended credentials and complete the previously failed configuration.
+- No formatting, partition deletion, disk initialization or reinstall in repair path.
+
+Verification
+- Original firstboot exception reproduced after entering password twice.
+- Repaired the same test disk offline; completed setup; pairing key emitted.
+- Real root console/PAM login accepted the newly configured test password.
+- passwd -S root reported P; dbus and ibhics-agent both active.
+- VMXNET3 interface UP with the requested isolated test IP.
+- Authenticated health endpoint returned witness, arbiter-01, version arbiterfix1.
+- Password and token were redacted from reported results.
+- Focused installer/packaging regression: 38 passed; known baseline AppArmor test
+  excluded (already documented in prior handoff).
+- New tests cover timezone failure after password save, no false ready marker/banner,
+  service activation failure and visible/retryable firstboot errors.
+- Test isolation: QEMU images under Node2 /root/arbiter-build; NO host disks attached,
+  NO production VM/root password/network changes, NO .105 login attempts to old SSH.
+
+Operational notes
+- User fixed an IP conflict on .105. Before repair, .105 remains unreachable because
+  the setup had failed before activating its configured interface.
+- Owner will boot the fixed ISO on the existing VMware VM and choose Repair existing
+  Arbiter, detach the ISO after repair, boot virtual disk, finish setup, then Add witness.
+- Virtual Storage remains inactive/planning only. Arbiter joining does not activate it.
+- No GitHub push or Claude handoff message sent; keep for later review.
