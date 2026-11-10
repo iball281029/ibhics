@@ -25,9 +25,13 @@ def workflow(tmp_path, monkeypatch):
         disks[name]["addresses"] = [{"address": address, "prefix": 24, "interface": "br0"}]
     monkeypatch.setattr("ibhics.storage_cluster.inventories", lambda _: disks)
     monkeypatch.setattr(
-        "ibhics.storage_cluster.software_status", lambda *a, **kw: {"software_ready": True}
+        "ibhics.storage_cluster.software_status",
+        lambda *a, **kw: {"software_ready": True, "creation_policy": "rf2-aggregate-v1"},
     )
-    monkeypatch.setattr("ibhics.storage_cluster.remote", lambda *a, **kw: {"software_ready": True})
+    monkeypatch.setattr(
+        "ibhics.storage_cluster.remote",
+        lambda *a, **kw: {"software_ready": True, "creation_policy": "rf2-aggregate-v1"},
+    )
     monkeypatch.setattr(StorageController, "_gateway", staticmethod(lambda: []))
     monkeypatch.setattr(StorageController, "_linstor_list", staticmethod(lambda _: []))
     monkeypatch.setattr(

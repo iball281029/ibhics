@@ -9,6 +9,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from .storage import readiness
+from .storage_create import RF2_CREATION_POLICY
 
 
 def software_status(role: str, controller: bool = False) -> dict:
@@ -46,7 +47,12 @@ def software_status(role: str, controller: bool = False) -> dict:
             missing.append("LINSTOR service configuration distribution is not enabled")
     except (OSError, tomllib.TOMLDecodeError):
         missing.append("LINSTOR satellite configuration is missing or invalid")
-    return {**probe, "software_ready": not missing, "missing_components": missing}
+    return {
+        **probe,
+        "software_ready": not missing,
+        "missing_components": missing,
+        "creation_policy": RF2_CREATION_POLICY,
+    }
 
 
 def prepare_software(role: str, controller: bool, root: Path, report) -> dict:

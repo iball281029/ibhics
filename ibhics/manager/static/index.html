@@ -928,15 +928,27 @@
     <header><h3>Create Virtual Storage</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body">
       <p class="hint">Choose the data and optional SSD cache disks on each node. Arbiter stores no VM data.</p>
+      <section class="vs-protection">
+        <b>Data protection: RF2 · two copies across two nodes</b>
+        <p>All selected data disks add capacity. One data copy is stored on each node; no additional local mirror is created.</p>
+        <details><summary>How protection and capacity work</summary>
+          <ol><li>Selected HDDs provide data capacity; SSDs selected as cache do not add usable capacity.</li>
+          <li>RF2 keeps one synchronous copy on each data node. With balanced nodes, capacity after replication is half of their combined raw data capacity.</li>
+          <li>This setup leaves 10% unallocated headroom and reserves metadata/service space. This is shown separately below.</li>
+          <li>Arbiter stores no VM data. It helps the surviving node decide whether it can continue serving storage.</li>
+          <li>Storage failover moves the VIP to the surviving node. Automatic VM restart and disk-level rebalancing are not provided by this storage setup.</li></ol>
+        </details>
+      </section>
       <div class="form-grid">
-        <label>Name<input name="name" value="hybrid01" required pattern="[a-z][a-z0-9\-]{0,30}"></label>
+        <label>Name<input name="name" value="hybrid01" required pattern="[a-z][a-z0-9\-]{0,30}" title="Use lowercase letters, numbers and hyphens"><span class="vm-sub">Lowercase letters, numbers and hyphens.</span></label>
         <label>Storage VIP<input name="virtual_ip" value="172.16.12.106" required></label>
         <label>Network prefix<input name="prefix" type="number" min="1" max="30" value="24" required></label>
-        <label>Usable capacity (GiB)<input name="size_gib" type="number" min="1" required></label>
+        <label>Calculated capacity (GiB)<input name="size_gib" type="number" min="1" readonly><span class="vm-sub">Automatic from selected disks and RF2.</span></label>
         <label>Arbiter<select name="arbiter" required></select></label>
       </div>
       <div id="vs-disk-picker">Reading disks…</div>
       <p id="vs-capacity" class="hint"></p>
+      <div id="vs-capacity-breakdown" hidden></div>
       <section id="vs-review" hidden>
         <h3>Review selected disks</h3>
         <div id="vs-review-details"></div>

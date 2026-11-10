@@ -16,7 +16,7 @@ import httpx
 from .cluster.topology import NodeRole
 from .hypervisor import PoolSpec, PoolType
 from .hypervisor.storage_inventory import inventory
-from .storage_create import StorageCreateSpec, review_disks
+from .storage_create import RF2_CREATION_POLICY, StorageCreateSpec, review_disks
 from .storage_jobs import StorageJobs
 from .storage_node import NodeProvisionIn, provision
 from .storage_software import prepare_software, software_status
@@ -129,6 +129,8 @@ class StorageController:
             )
             if not status.get("software_ready"):
                 raise ValueError(f"Prepare storage software on {member.name} first")
+            if status.get("creation_policy") != RF2_CREATION_POLICY:
+                raise ValueError(f"Update storage software on {member.name} for the RF2 policy")
         if self._gateway():
             raise ValueError(
                 "This cluster already has an NFS storage resource; only one is supported"
@@ -252,6 +254,12 @@ class StorageController:
                 job = remote(member, "POST", "/virtual-storage/provision", json=body.model_dump())
                 self._wait(member, job, report)
 
+        return self._connect(spec, review, report)
+
+    def _connect(self, spec, review, report):
+        """Connect prepared providers. Never prepares or erases physical disks."""
+        compute, witness = self._members()
+
         def command(*args, timeout=180):
             done = subprocess.run(
                 args, capture_output=True, text=True, timeout=timeout, check=False
@@ -282,6 +290,8 @@ class StorageController:
             "create",
             group,
             "--place-count",
+            "2",
+            "--peer-slots",
             "2",
             "--storage-pool",
             group,

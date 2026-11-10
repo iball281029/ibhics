@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from .hypervisor.disks import _walk, clear_plan
+from .hypervisor.hybrid import chunk_size
 from .hypervisor.storage_inventory import inventory
 from .storage_create import NAME, NodeDisks, review_node, thin_geometry
 
@@ -53,9 +54,7 @@ def _provision(driver, body, root, run, report):
     # All validation, including pool references, precedes the first mutation.
     current = inventory(driver, run=run)
     reviewed = review_node(body.selection, current, body.size_gib)
-    thin_mib, metadata_mib = thin_geometry(
-        [d["size_gib"] for d in reviewed["data"]], body.selection.layout
-    )
+    thin_mib, metadata_mib = thin_geometry([d["size_gib"] for d in reviewed["data"]])
     vg = "ibhv-" + body.name
     existing = command(["vgs", "--noheadings", "-o", "vg_name"]).split()
     if vg in existing:
@@ -99,31 +98,13 @@ def _provision(driver, body, root, run, report):
         command(["blockdev", "--rereadpt", path])
     command(["udevadm", "settle"])
     data = list(body.selection.data)
-    if body.selection.layout == "mirror" and len(data) > 1:
-        array = "/dev/md/ibhvs-" + body.name
-        command(
-            [
-                "mdadm",
-                "--create",
-                array,
-                "--metadata=1.2",
-                "--level=1",
-                f"--raid-devices={len(data)}",
-                "--run",
-                *data,
-            ]
-        )
-        command(["udevadm", "settle"])
-        description = command(["mdadm", "--detail", "--scan", array])
-        with Path("/etc/mdadm/mdadm.conf").open("a") as conf:
-            conf.write("\n# ibHiCS Virtual Storage " + body.name + "\n" + description)
-        data = [array]
     report(f"Creating thin storage on {body.selection.node}")
     command(["pvcreate", "-ff", "-y", *data, *body.selection.cache])
     command(["vgcreate", vg, *data, *body.selection.cache])
     command(
         [
             "lvcreate",
+            "-y",
             "--type",
             "thin-pool",
             "--chunksize",
@@ -139,7 +120,7 @@ def _provision(driver, body, root, run, report):
         ]
     )
     if body.selection.cache:
-        command(["lvcreate", "-l", "95%PVS", "-n", "cache", vg, *body.selection.cache])
+        command(["lvcreate", "-y", "-l", "95%PVS", "-n", "cache", vg, *body.selection.cache])
         command(
             [
                 "lvconvert",
@@ -151,7 +132,7 @@ def _provision(driver, body, root, run, report):
                 "--cachemode",
                 "writethrough",
                 "--chunksize",
-                "256K",
+                chunk_size(command, vg),
                 f"{vg}/thin",
             ]
         )

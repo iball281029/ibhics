@@ -1,0 +1,79 @@
+Virtual Storage RF2 vstore3.2 — latest handoff, 2026-11-10
+Supersedes vstore2 layout/capacity/planning-only/live-empty-disk descriptions.
+No GitHub push. Owner requested Claude review and push later.
+
+LIVE SUCCESS:
+The OWNER selected disks, confirmed erasure and pressed Create for virtualstorage.
+Initial job c5abb3db573347538b97f7c3ae0d2cf6 failed attaching Node1 cache:
+849.54 GiB cache / hardcoded 256 KiB chunks exceeded LVM's 1,000,000 chunk limit.
+Fixed by reusing hypervisor.hybrid.chunk_size, calculated from actual cache LV size:
+1024 KiB chunks on both real SSD caches. Added regression test with actual 912181428224 bytes.
+A second failure on Node2 exposed an old ceph_bluestore signature INSIDE the newly
+allocated cache LV extents. Added lvcreate -y after explicit operator disk confirmation.
+Whole-disk wipefs cannot remove every historical signature inside later LV extents.
+
+Recovery explicitly inspected serials, PV membership, LV types and original job/audits.
+Node1 existing thin pool retained; cache attached without replaying physical disk erasure.
+Node2 original preparation was attempted once; missing cache LV created/attached in place.
+No OS/NPM disk erased; no forced-primary/data-discard/split-brain recovery was used.
+Refactored StorageController._connect for prepared providers; no public auto-resume route.
+Final connect-only job 4e4593ebea07402287d2af9a41589a40 completed 13:47:17 local.
+All historical failed jobs retained. Root-only maintenance scripts remain on hosts;
+not shipped as a generic retry command and not automatically executed after failure.
+
+Current storage: virtualstorage, RF2, requested 6703 GiB, VIP 172.16.12.106/24.
+Node1 .104 ibhics-test/display ibhics-Node1; Node2 .103 ibhics-node2; Arbiter .105 arbiter-01.
+All three application packages upgraded to 1.3.0b2+vstore3.2 with health checks.
+Storage controller and gateway remain on Node1, data export primary currently Node2.
+Both data volumes and private gateway metadata volumes UpToDate on both data nodes.
+Witness diskless, connections established. Gateway resource status OK, service Started.
+Both libvirt pools active/autostart, same NFS export /srv/gateway-exports/virtualstorage
+mounted at /mnt/ibhics/virtualstorage on both nodes via VIP. No VM moved automatically.
+A fresh 2 MiB file was written+fsynced through Node1 and read through Node2:
+SHA256 ca8bc86b083275fc9cd0ce14d3c9d00758a2cbae993054c0afa863d3be327ea1.
+Temporary file removed, proof retained /root/ibhics-virtualstorage-io-proof.json on Node1.
+npm-vm still running from Local-node1/default, HTTP .194:81 returns 200.
+No real host failover/power-off test performed. Earlier abrupt failover test was ISOLATED lab.
+All lab QEMU guests now stopped again; qcow2 images and validation proofs preserved.
+
+RF2 POLICY CHANGE:
+Owner rejected local Mirror/Combine choices. Removed both UI options and backend layout.
+Data disks aggregate inside each node with LVM thin; no local md RAID creation.
+Fixed 2 full copies across two compute nodes, diskless Arbiter stores NO VM data.
+RF3/legacy layout fields rejected. Agents expose creation policy rf2-aggregate-v1;
+manager refuses old agents before reviewing or erasing disks.
+Calculated capacity readonly; all selected data capacity used, SSD caches excluded:
+raw both nodes 14904 GiB -> RF2 7452 -> 10% unallocated 745.2 -> metadata/service
+3.25 GiB -> floored estimated logical maximum 6703 GiB. Unequal nodes limited by smaller.
+10% headroom is NOT an automatic rebuild guarantee. Local disk failure can lose that
+node's copy; second node retains the other. No automatic per-disk rebalance/DSF equivalence.
+
+Selected physical disks (now owned by ibhv-virtualstorage, NOT empty anymore):
+Node1 /dev/sda ZC172K74, /dev/sdb ZC172HWT; SSD /dev/sdc S3F3NX0K403699.
+Node2 /dev/sda Z1ZB97QH, /dev/sdb Z1ZB9PRT; SSD /dev/sdd S3F3NX0JB00633.
+Protected OS: Node1 /dev/sdd BCA11806270130235; Node2 /dev/sdc BCA11710020261894.
+Keep Node2 accepted P2-DIMMF1 RAM fault and Node1 SMART warning visible.
+
+Validation:
+Latest targeted storage/node/workflow/inventory/hybrid/packaging suite: 36 passed.
+After _connect extraction: node/create/workflow 22 passed, ruff passed.
+Earlier RF2 suite 63 passed; isolated two-data-disk aggregate+cache actual kernel/LVM test
+thin pool 4.902 GiB from two 3 GiB virtual disks, no local RAID created.
+Historical broad vstore2 suite 604 passed, 2 pre-existing failures in home_metrics and
+installer AppArmor folder pool tests; do not claim full suite green.
+
+Application backups:
+Node1 /opt/ibhics/vstore3.2-backup-20261110-134758
+Node2 /opt/ibhics/vstore3.2-backup-20261110-134752
+Arbiter /opt/ibhics/vstore3.2-backup-20261110-134815
+Original cleanup audits and earlier test proofs documented in virtual-storage-create-handoff.txt.
+
+LIMITATIONS / STILL PENDING:
+- Arbiter standalone root-authenticated pairing-key Web UI is live, but not integrated into
+  wheel/installer/new ISO. Existing fix1 ISO repairs firstboot/dbus/password persistence.
+  Do not claim new vstore3.2 Arbiter ISO has been built. User deferred ISO integration until last.
+- New ISO should include offline DRBD/LINSTOR and root UI, generate unique TLS keys per VM.
+  Use Node2 /var/lib/ibhics for build temp/output; root has only ~3.5 GiB free.
+- Control plane is not distributed/HA; existing data-plane Reactor handles storage failover.
+- No automatic VM restart HA. Only one kernel NFS Virtual Storage supported.
+- No automatic retry of destructive creation; inspect failed operation before explicit recovery.

@@ -980,6 +980,10 @@ details.more .dropdown button, details.more .dropdown a { white-space: nowrap; o
 .vs-node { margin-top:20px; border:1px solid #e5e9f3; border-radius:12px; overflow:hidden; }
 .vs-node-head { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:14px 16px; background:#f7f9ff; }
 .vs-node-head h3 { margin:0; }
+.vs-node select[data-vs-disk] { min-width:145px; }
+.vs-protection { padding:14px 16px; border:1px solid #dce6ff; border-radius:12px; background:#f1f6ff; margin-bottom:18px; }
+.vs-protection p { margin:8px 0; }
+.vs-protection li { margin:7px 0; }
 .vs-node-head label { max-width:220px; }
 .vs-protected { background:#f8fafc; color:#77839a; }
 .vs-erase { color:#b42343; background:#fff2f4; border:1px solid #ffd5df; border-radius:10px; padding:12px 14px; margin-top:14px; overflow-wrap:anywhere; }

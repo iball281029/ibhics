@@ -24,30 +24,50 @@ window.VirtualStorageUI = (() => {
       .filter((s) => s.dataset.vsNode === node && s.value === role).map((s) => s.dataset.vsDisk);
   }
   function capacity() {
-    const sizes = inspected.map((n) => {
+    const nodes = inspected.map((n) => {
       const picked = selected(n.name, "data");
       const data = n.disks.filter((d) => picked.includes(d.path)).map((d) => d.size_gib);
-      if (!data.length) return 0;
-      const layout = $$("select[data-vs-layout]", form).find((s) => s.dataset.vsLayout === n.name).value;
-      const raw = layout === "mirror" ? Math.min(...data) : data.reduce((a, b) => a + b, 0);
+      if (!data.length) return {raw: 0, maximum: 0};
+      const raw = data.reduce((a, b) => a + b, 0);
       const meta = raw < 100 ? 128 : 1024;
-      return Math.max(0, Math.floor((Math.floor(raw * 1024 * .9) - 2 * meta - 512) / 1024));
+      const thin = Math.floor(raw * 1024 * .9) - 2 * meta - 256;
+      const replication = Math.max(1024, Math.ceil(thin / 16384) + 256);
+      return {raw, headroom: raw * .10, metadata: (2 * meta + 256 + replication) / 1024,
+        maximum: Math.max(0, Math.floor((thin - replication) / 1024))};
     });
-    const maximum = sizes.length === 2 ? Math.min(...sizes) : 0;
+    const maximum = nodes.length === 2 ? Math.min(...nodes.map((n) => n.maximum)) : 0;
     $("#vs-capacity").textContent = maximum
-      ? `Up to approximately ${maximum.toLocaleString()} GiB usable, with a copy on each node. SSD cache does not add storage capacity.`
+      ? "RF2 stores two copies across the nodes. All selected data disks contribute capacity; SSD cache is excluded. Actual free space is reported after formatting."
       : "Choose at least one data disk on each node. SSD cache is optional.";
+    $("#vs-capacity-breakdown").hidden = !maximum;
     if (maximum) {
+      const limiting = nodes.reduce((a, b) => a.maximum < b.maximum ? a : b);
+      const raw = nodes.reduce((s, n) => s + n.raw, 0), afterRF2 = Math.min(...nodes.map((n) => n.raw));
+      $("#vs-capacity-breakdown").innerHTML = breakdown({raw_data_gib: raw,
+        after_rf2_gib: afterRF2, headroom_gib: limiting.headroom,
+        metadata_and_service_gib: limiting.metadata, maximum_gib: maximum,
+        unmatched_gib: raw / 2 - afterRF2});
       form.elements.size_gib.max = String(maximum);
-      if (!form.elements.size_gib.value || Number(form.elements.size_gib.value) > maximum) {
-        form.elements.size_gib.value = String(maximum);
-      }
-    } else form.elements.size_gib.removeAttribute("max");
+      form.elements.size_gib.value = String(maximum);
+    } else {
+      form.elements.size_gib.removeAttribute("max");
+      form.elements.size_gib.value = "";
+    }
+  }
+  function breakdown(c) {
+    const gib = (n) => `${Number(n).toLocaleString(undefined, {maximumFractionDigits: 1})} GiB`;
+    return `<div class="vs-overview"><div><small>Raw data disks · both nodes</small><b>${gib(c.raw_data_gib)}</b></div>
+      <div><small>After RF2 · two copies</small><b>${gib(c.after_rf2_gib)}</b></div>
+      <div><small>Headroom · 10%</small><b>−${gib(c.headroom_gib)}</b></div>
+      <div><small>Metadata and service reserve</small><b>−${gib(c.metadata_and_service_gib)}</b></div>
+      <div><small>Estimated maximum · rounded down</small><b>${gib(c.maximum_gib)}</b></div></div>
+      ${c.unmatched_gib > .1 ? `<p class="hint">Unequal node capacities leave ${gib(c.unmatched_gib)} beyond the smaller node's matching capacity.</p>` : ""}
+      <p class="hint">The 10% headroom stays unallocated. It is not an automatic rebuild guarantee.</p>`;
   }
   function diskPicker() {
     $("#vs-disk-picker").innerHTML = inspected.map((n) => `<section class="vs-node">
       <div class="vs-node-head"><h3>${esc(n.display_name || n.name)}</h3>
-      <label>Data layout<select data-vs-layout="${esc(n.name)}"><option value="mirror">Mirror data disks</option><option value="stripe">Combine data disks</option></select></label></div>
+      <span class="badge plain">RF2 data copy</span></div>
       ${n.error ? `<p class="vs-erase">${esc(n.error)}</p>` : `<div class="table-wrap"><table><thead><tr><th>Use as</th><th>Disk</th><th>Capacity</th><th>Current contents</th></tr></thead><tbody>
       ${n.disks.map((d) => `<tr class="${d.selectable ? "" : "vs-protected"}">
         <td><select data-vs-node="${esc(n.name)}" data-vs-disk="${esc(d.path)}" ${d.selectable ? "" : "disabled"} aria-label="Role for ${esc(n.name)} ${esc(d.path)}"><option value="">${d.selectable ? "Do not use" : "Protected"}</option>${d.selectable ? `<option value="data">Data</option>${d.media === "ssd" ? '<option value="cache">SSD cache</option>' : ""}` : ""}</select></td>
@@ -92,14 +112,17 @@ window.VirtualStorageUI = (() => {
     button.disabled = true;
     error();
     try {
+      if (!Number(form.elements.size_gib.value) || inspected.some((n) => !selected(n.name, "data").length)) {
+        throw new Error("Choose data disks on both nodes before reviewing the storage.");
+      }
       const body = {name: form.elements.name.value, virtual_ip: form.elements.virtual_ip.value,
         prefix: Number(form.elements.prefix.value), size_gib: Number(form.elements.size_gib.value),
-        arbiter: form.elements.arbiter.value, nodes: inspected.map((n) => ({node: n.name,
-          fingerprint: n.fingerprint, data: selected(n.name, "data"), cache: selected(n.name, "cache"),
-          layout: $$("select[data-vs-layout]", form).find((s) => s.dataset.vsLayout === n.name).value}))};
+        replicas: 2, arbiter: form.elements.arbiter.value, nodes: inspected.map((n) => ({node: n.name,
+          fingerprint: n.fingerprint, data: selected(n.name, "data"), cache: selected(n.name, "cache")}))};
       receipt = await post("/virtual-storage/review", body);
       const r = receipt.review;
-      $("#vs-review-details").innerHTML = `<p><b>${esc(r.name)}</b> · ${r.size_gib.toLocaleString()} GiB usable · VIP ${esc(r.virtual_ip)} · Arbiter ${esc(nodeName(r.arbiter))}</p>
+      $("#vs-review-details").innerHTML = `<p><b>${esc(r.name)}</b> · RF2 · ${r.size_gib.toLocaleString()} GiB requested · VIP ${esc(r.virtual_ip)} · Arbiter ${esc(nodeName(r.arbiter))}</p>
+        ${breakdown(r.capacity)}
         <div class="table-wrap"><table><thead><tr><th>Node</th><th>Data disks to erase</th><th>Cache disks to erase</th><th>Replaces pools</th></tr></thead><tbody>${r.nodes.map((n) => `<tr><td>${esc(nodeName(n.node))}</td><td>${n.data.map((d) => `${esc(d.path)} · ${esc(d.serial || d.model)}`).join("<br>")}</td><td>${n.cache.map((d) => `${esc(d.path)} · ${esc(d.serial || d.model)}`).join("<br>") || "None"}</td><td>${esc(n.reclaim_pools.join(", ") || "None")}</td></tr>`).join("")}</tbody></table></div>`;
       $("#vs-review").hidden = false;
       $("#vs-submit").hidden = false;

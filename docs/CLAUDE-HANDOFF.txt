@@ -1,3 +1,9 @@
+LATEST 2026-11-10: READ docs/virtual-storage-rf2-handoff.txt FIRST.
+Owner pressed Create. Real virtualstorage RF2 is ACTIVE on both nodes, Arbiter joined,
+all applications vstore3.2. SSD chunk/signature defects fixed; cross-node I/O passed.
+Older empty-disk/planning-only/Mirror-Combine statements below are superseded.
+No GitHub push. Arbiter ISO/UI integration still pending.
+
 LATEST UPDATE 2026-11-10 — READ docs/virtual-storage-create-handoff.txt FIRST.
 Live vstore2 upgrade; data disks and old test container cleared with owner approval.
 Only npm-vm on Node1/default is preserved. Operator will press Create themselves.

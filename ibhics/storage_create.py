@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 NAME = r"^[a-z][a-z0-9-]{0,30}$"
 NODE = r"^[a-zA-Z0-9][a-zA-Z0-9.-]{0,62}$"
 DEVICE = r"^/dev/(?:sd[a-z]+|vd[a-z]+|nvme[0-9]+n[0-9]+)$"
+RF2_CREATION_POLICY = "rf2-aggregate-v1"
 
 
 class NodeDisks(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     node: str = Field(pattern=NODE)
     fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     data: list[str] = Field(min_length=1, max_length=8)
     cache: list[str] = Field(default_factory=list, max_length=2)
-    layout: Literal["mirror", "stripe"] = "mirror"
 
     @model_validator(mode="after")
     def unique_devices(self):
@@ -31,6 +33,8 @@ class NodeDisks(BaseModel):
 
 
 class StorageCreateSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replicas: Literal[2] = 2
     name: str = Field(default="hybrid01", pattern=NAME)
     nodes: list[NodeDisks] = Field(min_length=2, max_length=2)
     arbiter: str = Field(pattern=NODE)
@@ -59,10 +63,17 @@ class StorageCreateConfirm(BaseModel):
     confirm_wipe: bool = False
 
 
-def thin_geometry(sizes: list[float], layout: str) -> tuple[int, int]:
-    gib = min(sizes) if layout == "mirror" else sum(sizes)
+def thin_geometry(sizes: list[float]) -> tuple[int, int]:
+    # RF2 protection is across nodes. Do not halve capacity again with local RAID1.
+    gib = sum(sizes)
     metadata_mib = 128 if gib < 100 else 1024
     return int(gib * 1024 * 0.90) - 2 * metadata_mib - 256, metadata_mib
+
+
+def replication_reserve_mib(thin_mib: int) -> int:
+    # Two DRBD peer bitmap slots (32 KiB/GiB each), plus activity-log,
+    # alignment and the gateway's private volume. Keep at least 1 GiB.
+    return max(1024, math.ceil(thin_mib / 16384) + 256)
 
 
 def review_node(selection: NodeDisks, inventory: dict, size_gib: int) -> dict:
@@ -84,13 +95,16 @@ def review_node(selection: NodeDisks, inventory: dict, size_gib: int) -> dict:
             raise ValueError(f"{selection.node} {path}: cache requires an SSD or NVMe disk")
     data_sizes = [disks[d]["size_gib"] for d in selection.data]
     # Reserve LVM thin metadata, DRBD metadata, filesystem and gateway state.
-    thin_mib, _ = thin_geometry(data_sizes, selection.layout)
-    usable = max(0, (thin_mib - 256) // 1024)
+    thin_mib, metadata_mib = thin_geometry(data_sizes)
+    replication_mib = replication_reserve_mib(thin_mib)
+    usable = max(0, (thin_mib - replication_mib) // 1024)
     if size_gib > usable:
         raise ValueError(f"{selection.node}: requested size exceeds {usable} GiB usable capacity")
     return {
         "node": selection.node,
-        "layout": selection.layout,
+        "raw_data_gib": sum(data_sizes),
+        "headroom_gib": sum(data_sizes) * 0.10,
+        "metadata_and_service_gib": (2 * metadata_mib + 256 + replication_mib) / 1024,
         "data": [disks[p] for p in selection.data],
         "cache": [disks[p] for p in selection.cache],
         "reclaim_pools": sorted({name for p in selected for name in disks[p]["reclaim_pools"]}),
@@ -101,6 +115,8 @@ def review_node(selection: NodeDisks, inventory: dict, size_gib: int) -> dict:
 def review_disks(spec: StorageCreateSpec, inventories: dict[str, dict]) -> dict:
     """Recheck identities, mounts, references and every shared PV before approval."""
     reviewed = [review_node(n, inventories.get(n.node), spec.size_gib) for n in spec.nodes]
+    raw = sum(n["raw_data_gib"] for n in reviewed)
+    limiting = min(reviewed, key=lambda n: n["usable_gib"])
     return {
         "name": spec.name,
         "nodes": reviewed,
@@ -110,5 +126,16 @@ def review_disks(spec: StorageCreateSpec, inventories: dict[str, dict]) -> dict:
         "size_gib": spec.size_gib,
         "maximum_gib": min(n["usable_gib"] for n in reviewed),
         "copies": 2,
+        "policy": "RF2",
+        "capacity": {
+            "raw_data_gib": raw,
+            "after_rf2_gib": min(n["raw_data_gib"] for n in reviewed),
+            "replication_factor": 2,
+            "headroom_gib": limiting["headroom_gib"],
+            "metadata_and_service_gib": limiting["metadata_and_service_gib"],
+            "maximum_gib": limiting["usable_gib"],
+            "cache_gib": sum(d["size_gib"] for n in reviewed for d in n["cache"]),
+            "unmatched_gib": raw / 2 - min(n["raw_data_gib"] for n in reviewed),
+        },
         "warning": "All existing data on the selected data and cache disks will be erased.",
     }

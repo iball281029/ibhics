@@ -38,9 +38,64 @@ def fixture():
 def test_review_reports_disks_and_reclaimed_pools():
     spec, inventories = fixture()
     review = review_disks(spec, inventories)
-    assert review["maximum_gib"] == 87
+    assert review["maximum_gib"] == 86
     assert review["copies"] == 2
+    assert review["policy"] == "RF2"
     assert review["nodes"][0]["reclaim_pools"] == ["hybrid01"]
+
+
+def test_rf2_uses_all_data_disk_capacity_without_a_second_local_mirror():
+    spec, inventories = fixture()
+    for selected in spec.nodes:
+        selected.data = ["/dev/sda", "/dev/sdb"]
+        selected.cache = ["/dev/sdc"]
+        inventories[selected.node]["disks"] = [
+            {
+                "path": p,
+                "selectable": True,
+                "size_gib": size,
+                "media": media,
+                "required_disks": [p],
+                "reclaim_pools": [],
+                "reasons": [],
+            }
+            for p, size, media in (
+                ("/dev/sda", 3726, "hdd"),
+                ("/dev/sdb", 3726, "hdd"),
+                ("/dev/sdc", 894.3, "ssd"),
+            )
+        ]
+    spec.size_gib = 6703
+    reviewed = review_disks(spec, inventories)
+    capacity = reviewed["capacity"]
+    assert capacity["raw_data_gib"] == 14904
+    assert capacity["after_rf2_gib"] == 7452
+    assert capacity["headroom_gib"] == pytest.approx(745.2)
+    assert capacity["metadata_and_service_gib"] == 3.25
+    assert capacity["maximum_gib"] == 6703
+    assert capacity["cache_gib"] == pytest.approx(1788.6)
+    assert capacity["unmatched_gib"] == 0
+
+
+def test_old_layout_option_and_rf3_cannot_be_submitted():
+    spec, _ = fixture()
+    body = spec.model_dump()
+    body["nodes"][0]["layout"] = "mirror"
+    with pytest.raises(ValidationError):
+        StorageCreateSpec(**body)
+    body = spec.model_dump() | {"replicas": 3}
+    with pytest.raises(ValidationError):
+        StorageCreateSpec(**body)
+
+
+def test_smaller_node_limits_two_copy_capacity():
+    spec, inventories = fixture()
+    inventories["node2"]["disks"][0]["size_gib"] = 90
+    spec.size_gib = 70
+    capacity = review_disks(spec, inventories)["capacity"]
+    assert capacity["raw_data_gib"] == 190
+    assert capacity["after_rf2_gib"] == 90
+    assert capacity["unmatched_gib"] == 5
 
 
 @pytest.mark.parametrize("change", ["identity", "protected", "shared", "capacity", "cache"])
