@@ -54,7 +54,9 @@ from .base import (
     snapshot_allowed,
 )
 from .domain_xml import (
+    DIMM_MB,
     DISK_DEVS,
+    MEMORY_SLOTS,
     META_NS,
     NAME_NS,
     build_domain_xml,
@@ -62,6 +64,8 @@ from .domain_xml import (
     cdrom_element,
     disk_element,
     file_name,
+    hotplug_ready,
+    make_hotplug_ready,
     nic_element,
     recycled_at,
     set_recycled_mark,
@@ -276,12 +280,51 @@ class LibvirtDriver(HypervisorDriver):
         if os_label is None:
             os_label = ET.SubElement(meta, f"{{{META_NS}}}os")
         os_label.text = new.os_type
-        root.find("vcpu").text = str(new.vcpus)
-        for tag in ("memory", "currentMemory"):
-            el = root.find(tag)
-            if el is not None:
-                el.set("unit", "KiB")
-                el.text = str(new.memory_mb * 1024)
+        cpu_mem_changed = (new.vcpus, new.memory_mb) != (
+            current.spec.vcpus,
+            current.spec.memory_mb,
+        )
+        hot_cpus = hot_mb = 0
+        if running and hotplug_ready(root):
+            # Grow a running VM at once; shrinking still waits for a restart.
+            limit = int(root.findtext("vcpu"))
+            if current.spec.vcpus < new.vcpus <= limit:
+                hot_cpus = new.vcpus
+            grow = new.memory_mb - current.spec.memory_mb
+            dimms = len(root.findall("devices/memory[@model='dimm']"))
+            if grow > 0 and grow % DIMM_MB == 0 and dimms < MEMORY_SLOTS:
+                max_mb = _kib(root.find("maxMemory")) // 1024
+                if new.memory_mb <= max_mb:
+                    hot_mb = grow
+        if cpu_mem_changed and not hotplug_ready(root):  # room for next time
+            make_hotplug_ready(root, new.vcpus, new.memory_mb)
+        vcpu_el = root.find("vcpu")
+        if hot_cpus or not running or new.vcpus < current.spec.vcpus or not hotplug_ready(root):
+            if vcpu_el.get("current") is not None:
+                vcpu_el.set("current", str(new.vcpus))
+                if new.vcpus > int(vcpu_el.text):
+                    vcpu_el.text = str(new.vcpus)
+            else:
+                vcpu_el.text = str(new.vcpus)
+        if not hot_mb:  # an added DIMM brings its own size into the saved definition
+            dimm_mb = sum(
+                _kib(d.find("target/size")) // 1024
+                for d in root.findall("devices/memory[@model='dimm']")
+            )
+            for tag in ("memory", "currentMemory"):
+                el = root.find(tag)
+                if el is not None:
+                    el.set("unit", "KiB")
+                    el.text = str(new.memory_mb * 1024)
+            cell = root.find("cpu/numa/cell")
+            if cell is not None:
+                if not running:
+                    # Offline the DIMMs fold back into the base memory.
+                    for d in root.findall("devices/memory[@model='dimm']"):
+                        root.find("devices").remove(d)
+                    dimm_mb = 0
+                cell.set("unit", "KiB")
+                cell.set("memory", str(max(DIMM_MB, new.memory_mb - dimm_mb) * 1024))
         if edit.video is not None:
             for old in root.findall("devices/video"):
                 root.find("devices").remove(old)
@@ -313,6 +356,20 @@ class LibvirtDriver(HypervisorDriver):
                 dom.blockResize(dev, size, libvirt.VIR_DOMAIN_BLOCK_RESIZE_BYTES)
             else:
                 vol.resize(size, 0)
+        if hot_cpus:
+            dom.setVcpusFlags(hot_cpus, libvirt.VIR_DOMAIN_AFFECT_LIVE)
+            try:  # bring them online inside the guest, if its agent runs
+                dom.setVcpusFlags(hot_cpus, libvirt.VIR_DOMAIN_VCPU_GUEST)
+            except libvirt.libvirtError:
+                pass  # most Linux guests online new CPUs themselves
+        if hot_mb:
+            dimm = (
+                "<memory model='dimm'><target>"
+                f"<size unit='MiB'>{hot_mb}</size><node>0</node></target></memory>"
+            )
+            dom.attachDeviceFlags(
+                dimm, libvirt.VIR_DOMAIN_AFFECT_LIVE | libvirt.VIR_DOMAIN_AFFECT_CONFIG
+            )
         busy = set()
         if running:
             live = libvirt.VIR_DOMAIN_AFFECT_LIVE
@@ -1913,10 +1970,32 @@ def _video_of(root) -> str:
     return kind if kind in VIDEO_MODELS else "virtio"
 
 
+def _kib(el) -> int:
+    """A libvirt size element in KiB, whatever its unit."""
+    if el is None or not (el.text or "").strip():
+        return 0
+    unit = (el.get("unit") or "KiB").lower()
+    scale = {
+        "b": 1 / 1024,
+        "bytes": 1 / 1024,
+        "k": 1,
+        "kib": 1,
+        "kb": 1000 / 1024,
+        "m": 1024,
+        "mib": 1024,
+        "mb": 1000**2 / 1024,
+        "g": 1024**2,
+        "gib": 1024**2,
+        "gb": 1000**3 / 1024,
+    }
+    return int(float(el.text) * scale.get(unit, 1))
+
+
 def _restart_key(root) -> tuple:
     memory = root.find("memory")
+    vcpu = root.find("vcpu")
     return (
-        root.findtext("vcpu"),
+        (vcpu.get("current") or vcpu.text) if vcpu is not None else None,
         memory.text if memory is not None else None,
         [b.get("dev") for b in root.findall("os/boot")],
         _video_of(root),
@@ -2003,7 +2082,10 @@ def _spec_from_xml(xml: str) -> VMSpec:
     return VMSpec(
         name=root.findtext(f"metadata/{{{NAME_NS}}}name") or root.findtext("name", ""),
         video=_video_of(root),
-        vcpus=int(root.findtext("vcpu", "1")),
+        vcpus=int(
+            (root.find("vcpu").get("current") if root.find("vcpu") is not None else None)
+            or root.findtext("vcpu", "1")
+        ),
         memory_mb=memory_mb,
         firmware=firmware,
         disks=disks,

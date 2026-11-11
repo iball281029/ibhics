@@ -155,10 +155,10 @@ def test_restart_applies_pending_changes():
     client = TestClient(create_app(FakeDriver()))
     vm = make_vm(client, "ex2022")
     client.post(f"{API}/vms/{vm['uuid']}/start")
-    edited = client.patch(f"{API}/vms/{vm['uuid']}", json={"memory_mb": 32768}).json()
-    assert edited["restart_needed"]
+    edited = client.patch(f"{API}/vms/{vm['uuid']}", json={"memory_mb": 512}).json()
+    assert edited["restart_needed"]  # shrinking memory waits for a restart
     r = client.post(f"{API}/vms/{vm['uuid']}/restart").json()
-    assert not r["restart_needed"] and r["state"] == "running" and r["memory_mb"] == 32768
+    assert not r["restart_needed"] and r["state"] == "running" and r["memory_mb"] == 512
     assert "restart" in [j["kind"] for j in client.get(f"{API}/backup/jobs").json()]
 
 

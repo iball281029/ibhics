@@ -1623,7 +1623,7 @@ async function openEdit(uuid) {
   $("#edit-firmware").textContent = vm.firmware === "uefi" ? "UEFI" : "BIOS";
   const note = $("#edit-note");
   note.hidden = vm.state !== "running";
-  note.textContent = "This VM is running. Disks, network adapters and the CD change now; processor, memory and boot order apply after it is shut down and powered on again.";
+  note.textContent = "This VM is running. Disks, network adapters, the CD and more vCPUs (up to 32) or memory (in 128 MB steps, up to 512 GB) change now. Fewer vCPUs or less memory and the boot order apply after it is shut down and powered on again. A VM made before hot-add support needs one restart after its first CPU or memory change.";
   selectTab("edit-tabs", "edit-hw");
   renderEdit();
 }

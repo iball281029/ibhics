@@ -122,7 +122,10 @@ class FakeDriver(HypervisorDriver):
             vm = self._get(uuid)
             new = edit.apply_to(vm.spec)
             running = vm.state == VMState.RUNNING
-            if running and _restart_key(new) != _restart_key(vm.spec):
+            # Like libvirt: CPUs and memory can grow while the VM runs (hot-add).
+            grows = vm.spec.vcpus <= new.vcpus <= 32 and vm.spec.memory_mb <= new.memory_mb
+            key = (lambda sp: (sp.boot, sp.video)) if grows else _restart_key
+            if running and key(new) != key(vm.spec):
                 vm.restart_needed = True
             if edit.disks is not None:
                 disks, data = [], []

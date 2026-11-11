@@ -24,7 +24,9 @@ def test_domain_basics():
     assert root.get("type") == "kvm"
     assert root.findtext("name") == "db-01"
     assert root.findtext("uuid") == "1234"
-    assert root.findtext("vcpu") == "4"
+    assert root.find("vcpu").get("current") == "4" and root.findtext("vcpu") == "32"
+    assert root.find("maxMemory").get("slots") == "16"  # room for hot-add
+    assert root.find("cpu/numa/cell").get("memory") == "8192"
     assert root.find("memory").get("unit") == "MiB"
     assert root.findtext("memory") == "8192"
     assert root.find("cpu").get("mode") == "host-model"
