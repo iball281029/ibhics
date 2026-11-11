@@ -101,24 +101,44 @@ def _provision(driver, body, root, run, report):
     report(f"Creating thin storage on {body.selection.node}")
     command(["pvcreate", "-ff", "-y", *data, *body.selection.cache])
     command(["vgcreate", vg, *data, *body.selection.cache])
-    command(
-        [
-            "lvcreate",
-            "-y",
-            "--type",
-            "thin-pool",
-            "--chunksize",
-            "256K",
-            "--poolmetadatasize",
-            f"{metadata_mib}M",
-            "-L",
-            f"{thin_mib}M",
-            "-n",
-            "thin",
-            vg,
-            *data,
-        ]
-    )
+    cache = list(body.selection.cache)
+    if cache:
+        # Thin metadata is small and synchronously written: on the SSD it keeps HDD
+        # seeks out of every allocation. Data stays on the HDDs, cached below.
+        command(["lvcreate", "-y", "-L", f"{thin_mib}M", "-n", "thin", vg, *data])
+        command(["lvcreate", "-y", "-L", f"{metadata_mib}M", "-n", "thin_meta", vg, *cache])
+        command(
+            [
+                "lvconvert",
+                "-y",
+                "--type",
+                "thin-pool",
+                "--chunksize",
+                "256K",
+                "--poolmetadata",
+                f"{vg}/thin_meta",
+                f"{vg}/thin",
+            ]
+        )
+    else:
+        command(
+            [
+                "lvcreate",
+                "-y",
+                "--type",
+                "thin-pool",
+                "--chunksize",
+                "256K",
+                "--poolmetadatasize",
+                f"{metadata_mib}M",
+                "-L",
+                f"{thin_mib}M",
+                "-n",
+                "thin",
+                vg,
+                *data,
+            ]
+        )
     if body.selection.cache:
         command(["lvcreate", "-y", "-l", "95%PVS", "-n", "cache", vg, *body.selection.cache])
         command(
