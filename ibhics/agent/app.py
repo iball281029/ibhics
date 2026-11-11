@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hmac
 from dataclasses import asdict
 from pathlib import Path
@@ -316,6 +318,29 @@ def create_agent_app(
         @api.post("/vms/{uuid}/clone", response_model=VMOut)
         def clone_vm(uuid: str, body: CloneIn) -> VMOut:
             return VMOut.from_info(driver.clone_vm(uuid, body.to_clone()))
+
+        @api.get("/vms/{uuid}/migration-files")
+        def migration_files(uuid: str) -> dict[str, str]:
+            files = driver.migration_files(uuid)
+            return {path: base64.b64encode(data).decode() for path, data in files.items()}
+
+        @api.post("/migration-files")
+        def stage_migration_files(body: dict) -> dict:
+            raw = body.get("files")
+            if not isinstance(raw, dict):
+                raise ValueError("files must map paths to base64 content")
+            try:
+                files = {str(p): base64.b64decode(d, validate=True) for p, d in raw.items()}
+            except (TypeError, binascii.Error):
+                raise ValueError("file content must be base64") from None
+            return {"staged": driver.stage_migration_files(files)}
+
+        @api.post("/migration-files/remove")
+        def remove_migration_files(body: dict) -> dict:
+            paths = body.get("paths")
+            if not isinstance(paths, list):
+                raise ValueError("paths must be a list")
+            return {"removed": driver.remove_migration_files([str(p) for p in paths])}
 
         # Runs until the VM has moved, which can take minutes for a busy guest.
         @api.post("/vms/{uuid}/migrate", status_code=status.HTTP_204_NO_CONTENT)

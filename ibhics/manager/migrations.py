@@ -238,14 +238,23 @@ class MigrationManager:
     def _run(self, job: Migration, plan: Plan, bandwidth_mib: int | None) -> None:
         job.state = "running"
         try:
+            job.step = "Preparing UEFI and seed files"
+            files = plan.source.driver.migration_files(job.uuid)
+            staged = plan.target.driver.stage_migration_files(files) if files else []
             job.step = f"Moving to {plan.target.name}"
-            plan.source.driver.migrate_vm(
-                job.uuid,
-                self.uri(plan.target),
-                plan.copy_storage,
-                bandwidth_mib,
-                self.migration_address(plan.target),
-            )
+            try:
+                plan.source.driver.migrate_vm(
+                    job.uuid,
+                    self.uri(plan.target),
+                    plan.copy_storage,
+                    bandwidth_mib,
+                    self.migration_address(plan.target),
+                )
+            except Exception:
+                _quietly(plan.target.driver.remove_migration_files, staged)
+                raise
+            # The source no longer defines the VM; drop its now unused copies.
+            _quietly(plan.source.driver.remove_migration_files, list(files))
             disks = plan.vm.spec.disks
             moves = {i: p for i, p in (job.disk_pools or {}).items() if disks[i].pool != p}
             if moves:
@@ -264,6 +273,15 @@ class MigrationManager:
 
     def _now(self) -> str:
         return self._clock().isoformat(timespec="seconds")
+
+
+def _quietly(remove: Callable[[list[str]], list[str]], paths: list[str]) -> None:
+    """Best-effort cleanup that must not hide the migration's own result."""
+    if paths:
+        try:
+            remove(paths)
+        except Exception:
+            pass
 
 
 def _shared(src: PoolInfo | None, dst: PoolInfo) -> bool:

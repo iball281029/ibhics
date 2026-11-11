@@ -579,6 +579,20 @@ class HypervisorDriver(abc.ABC):
         """
         raise NotImplementedError
 
+    def migration_files(self, uuid: str) -> dict[str, bytes]:
+        """Node-local files the VM needs on the destination that libvirt does not move:
+        UEFI variables and the VM's customization CD. Path -> content."""
+        return {}
+
+    def stage_migration_files(self, files: dict[str, bytes]) -> list[str]:
+        """Write files from `migration_files` here before a VM arrives. Refuses paths
+        that another VM on this node uses. Returns the paths written."""
+        return []
+
+    def remove_migration_files(self, paths: list[str]) -> list[str]:
+        """Delete staged or left-behind files that no VM on this node uses any more."""
+        return []
+
     def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
         """Put an ISO in the VM's CD drive, or empty it with None; works while it runs."""
         raise NotImplementedError

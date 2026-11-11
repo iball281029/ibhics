@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import threading
 from dataclasses import asdict
 from urllib.parse import quote
@@ -211,6 +212,32 @@ class RemoteDriver(HypervisorDriver):
         if resp.status_code == 404 and "storage pool" in resp.json().get("detail", ""):
             raise PoolNotFound(resp.json()["detail"].removeprefix("storage pool not found: "))
         return info_from_json(self._ok(resp, uuid).json())
+
+    def migration_files(self, uuid: str) -> dict[str, bytes]:
+        resp = self._client.request("GET", f"/vms/{uuid}/migration-files", timeout=60)
+        if resp.status_code == 404 and "VM not found" not in resp.text:
+            return {}  # an agent from before file staging: libvirt alone moves the VM
+        data = self._ok(resp, uuid).json()
+        return {path: base64.b64decode(content) for path, content in data.items()}
+
+    def stage_migration_files(self, files: dict[str, bytes]) -> list[str]:
+        body = {"files": {p: base64.b64encode(d).decode() for p, d in files.items()}}
+        resp = self._client.request("POST", "/migration-files", json=body, timeout=60)
+        if resp.status_code == 404:
+            raise InvalidState(
+                f"{self._client.address} cannot receive UEFI/seed files; update that node first"
+            )
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        return list(self._ok(resp).json()["staged"])
+
+    def remove_migration_files(self, paths: list[str]) -> list[str]:
+        resp = self._client.request(
+            "POST", "/migration-files/remove", json={"paths": paths}, timeout=60
+        )
+        if resp.status_code == 404:
+            return []
+        return list(self._ok(resp).json()["removed"])
 
     def migrate_vm(
         self,

@@ -84,6 +84,8 @@ from .pool_xml import (
 GIB = 1024**3
 SCRATCH_DIR = "/var/lib/ibhics/scratch"
 SEED_DIR = "/var/lib/ibhics/seeds"  # guest customization CDs of deployed VMs
+NVRAM_DIR = "/var/lib/libvirt/qemu/nvram"  # UEFI variables libvirt keeps per VM
+MIGRATION_FILE_LIMIT = 64 << 20
 
 try:
     import libvirt
@@ -168,6 +170,7 @@ class LibvirtDriver(HypervisorDriver):
     # (raw images are sparse, so only the data actually written counts).
     scratch_dir = SCRATCH_DIR
     seed_dir = SEED_DIR
+    nvram_dir = NVRAM_DIR
     run = staticmethod(_run)
 
     @staticmethod
@@ -1458,6 +1461,88 @@ class LibvirtDriver(HypervisorDriver):
             raise MigrationFailed(str(exc)) from None
         for vol in volumes:  # the copies now live on the destination
             vol.delete(0)
+
+    def _local_file_roots(self) -> tuple[Path, ...]:
+        return (Path(self.nvram_dir), Path(self.seed_dir))
+
+    def _stageable(self, path: str) -> Path | None:
+        """`path` if it is a plain file name directly inside the NVRAM or seed folder."""
+        p = Path(path)
+        if not p.is_absolute() or p.name in ("", ".", "..") or p.name.startswith("."):
+            return None
+        return p if p.parent in self._local_file_roots() else None
+
+    def _local_files_of(self, root) -> list[str]:
+        paths = [(root.findtext("os/nvram") or "").strip()]
+        for drive in root.findall("./devices/disk[@device='cdrom']/source"):
+            paths.append(drive.get("file") or "")
+        return [p for p in paths if p and self._stageable(p)]
+
+    def _files_in_use(self) -> set[str]:
+        used = set()
+        for dom in self._conn.listAllDomains():
+            try:
+                xml = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+            except libvirt.libvirtError:
+                continue
+            used.update(self._local_files_of(ET.fromstring(xml)))
+        return used
+
+    def migration_files(self, uuid: str) -> dict[str, bytes]:
+        root = ET.fromstring(self._lookup(uuid).XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        files = {}
+        for path in self._local_files_of(root):
+            p = Path(path)
+            if p.is_file() and not p.is_symlink():
+                if p.stat().st_size > MIGRATION_FILE_LIMIT:
+                    raise InvalidState(f"{p.name} is too large to send with the VM")
+                files[path] = p.read_bytes()
+        return files
+
+    def stage_migration_files(self, files: dict[str, bytes]) -> list[str]:
+        targets = {}
+        for path, data in files.items():
+            p = self._stageable(path)
+            if p is None:
+                raise ValueError(f"refusing to stage {path!r}: not an NVRAM or seed file")
+            if len(data) > MIGRATION_FILE_LIMIT:
+                raise ValueError(f"{p.name} is too large")
+            targets[p] = data
+        busy = self._files_in_use() & {str(p) for p in targets}
+        if busy:
+            raise InvalidState(f"another VM here already uses {', '.join(sorted(busy))}")
+        written = []
+        try:
+            for p, data in targets.items():
+                p.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".stage-")
+                try:
+                    with os.fdopen(fd, "wb") as out:
+                        out.write(data)
+                        out.flush()
+                        os.fsync(out.fileno())
+                    os.chmod(tmp, 0o600 if p.parent == Path(self.nvram_dir) else 0o644)
+                    os.replace(tmp, p)
+                except BaseException:
+                    Path(tmp).unlink(missing_ok=True)
+                    raise
+                written.append(str(p))
+        except BaseException:
+            for path in written:
+                Path(path).unlink(missing_ok=True)
+            raise
+        return written
+
+    def remove_migration_files(self, paths: list[str]) -> list[str]:
+        used = self._files_in_use()
+        removed = []
+        for path in paths:
+            p = self._stageable(path)
+            if p is None or str(p) in used or p.is_symlink() or not p.is_file():
+                continue
+            p.unlink()
+            removed.append(str(p))
+        return removed
 
     def _precreate_block_disks(self, dest_uri, root, disks, volumes) -> list:
         """libvirt creates the destination copy of a volume disk itself, but not of a
