@@ -553,11 +553,18 @@ async function renderTaskDetail(t) {
   }
 }
 async function renderOps() {
-  const ops = await api("/audit?limit=300"); // newest first
-  $("#task-ops").innerHTML = ops.length ? ops.map((o) => `<tr>
-    <td>${esc(when(o.time))}</td><td>${esc(o.user)}</td><td>${esc(o.action)}</td><td class="mono">${esc(o.target)}</td>
-    <td><span class="badge ${o.result < 400 ? "done" : "failed"}">${o.result < 400 ? "OK" : esc(o.result)}</span></td><td class="muted">${esc(o.address)}</td></tr>`).join("")
-    : empty(6, "No operations recorded yet");
+  // Readable change history (admins also see where each change came from).
+  const { events } = await api("/activity?limit=500");
+  const vms = [...(state.vms || []), ...(state.templates || [])];
+  const named = (e) => {
+    const vm = vms.find((v) => e.object && e.object.startsWith(v.uuid));
+    if (vm) return e.object.replace(vm.uuid, vm.name);
+    return e.object || ((e.note || "").startsWith("name: ") ? e.note.slice(6) : "");
+  };
+  $("#task-ops").innerHTML = events.length ? events.map((e) => `<tr>
+    <td>${esc(when(e.at))}</td><td>${esc(e.user)}</td><td><span class="badge plain">${esc(e.category)}</span> ${esc(e.action)}</td><td>${esc(named(e))}</td>
+    <td><span class="badge ${e.ok ? "done" : "failed"}">${e.ok ? "OK" : `Failed (${esc(e.status)})`}</span></td><td class="muted">${esc(e.address)}</td></tr>`).join("")
+    : empty(6, "No changes recorded yet");
 }
 {
   $("#task-rows").addEventListener("click", (e) => {
