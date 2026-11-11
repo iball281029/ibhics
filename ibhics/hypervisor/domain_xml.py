@@ -146,6 +146,50 @@ def template_facts(root: ET.Element) -> tuple[bool, str]:
     )
 
 
+MAX_VCPUS = 32  # vCPU slots a VM can grow to while running
+MAX_MEMORY_MB = 512 * 1024  # memory a VM can grow to while running
+MEMORY_SLOTS = 16  # DIMMs that can be added while running
+DIMM_MB = 128  # Linux onlines memory in 128 MiB blocks
+
+
+def hotplug_ready(root) -> bool:
+    """The definition leaves room to add CPUs and memory while the VM runs."""
+    vcpu = root.find("vcpu")
+    return (
+        root.find("maxMemory") is not None
+        and root.find("cpu/numa/cell") is not None
+        and vcpu is not None
+        and vcpu.get("current") is not None
+    )
+
+
+def make_hotplug_ready(root, vcpus: int, memory_mb: int) -> None:
+    """Give an older definition hot-add room (takes effect at its next start)."""
+    vcpu = root.find("vcpu")
+    vcpu.set("current", str(vcpus))
+    vcpu.text = str(max(MAX_VCPUS, vcpus))
+    if root.find("maxMemory") is None:
+        el = ET.Element("maxMemory", slots=str(MEMORY_SLOTS), unit="MiB")
+        el.text = str(max(MAX_MEMORY_MB, memory_mb))
+        root.insert(list(root).index(root.find("memory")), el)
+    cpu = root.find("cpu")
+    if cpu is None:
+        cpu = ET.SubElement(root, "cpu", mode="host-model")
+    numa = cpu.find("numa")
+    if numa is None:
+        numa = ET.SubElement(cpu, "numa")
+    for cell in numa.findall("cell"):
+        numa.remove(cell)
+    ET.SubElement(
+        numa,
+        "cell",
+        id="0",
+        cpus=f"0-{max(MAX_VCPUS, vcpus) - 1}",
+        memory=str(memory_mb),
+        unit="MiB",
+    )
+
+
 def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     spec.validate()
     if len(spec.disks) > len(DISK_DEVS):
@@ -164,8 +208,14 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     if spec.linked_to:
         ET.SubElement(meta, f"{{{META_NS}}}linked", template=spec.linked_to)
     set_recycled_mark(meta, spec.recycled)
+    # Room to add CPUs and memory while the VM runs (hot-add).
+    ET.SubElement(dom, "maxMemory", slots=str(MEMORY_SLOTS), unit="MiB").text = str(
+        max(MAX_MEMORY_MB, spec.memory_mb)
+    )
     ET.SubElement(dom, "memory", unit="MiB").text = str(spec.memory_mb)
-    ET.SubElement(dom, "vcpu", placement="static").text = str(spec.vcpus)
+    ET.SubElement(dom, "vcpu", placement="static", current=str(spec.vcpus)).text = str(
+        max(MAX_VCPUS, spec.vcpus)
+    )
 
     os_attrs = {"firmware": "efi"} if spec.firmware == Firmware.UEFI else {}
     os_el = ET.SubElement(dom, "os", **os_attrs)
@@ -177,7 +227,16 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     ET.SubElement(features, "acpi")
     ET.SubElement(features, "apic")
     # host-model keeps live migration possible between nodes with different CPU generations.
-    ET.SubElement(dom, "cpu", mode="host-model")
+    cpu = ET.SubElement(dom, "cpu", mode="host-model")
+    numa = ET.SubElement(cpu, "numa")  # memory hot-add needs a NUMA cell to add DIMMs to
+    ET.SubElement(
+        numa,
+        "cell",
+        id="0",
+        cpus=f"0-{max(MAX_VCPUS, spec.vcpus) - 1}",
+        memory=str(spec.memory_mb),
+        unit="MiB",
+    )
     ET.SubElement(dom, "clock", offset="utc")
     ET.SubElement(dom, "on_poweroff").text = "destroy"
     ET.SubElement(dom, "on_reboot").text = "restart"

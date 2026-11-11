@@ -602,7 +602,7 @@ def test_vmware_source_keeps_password_private(env):
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 422
     body["password"] = "VMware1!"
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 201
-    uploads, listed = client.get("/api/v1/migrate/sources").json()
+    uploads, _physical, listed = client.get("/api/v1/migrate/sources").json()
     assert uploads["name"] == "uploads"  # built in, always first
     assert listed["settings"]["password"] == "********"
     state = tmp_path / "migrate.json"

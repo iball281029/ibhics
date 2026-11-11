@@ -95,3 +95,30 @@ def test_remove_keeps_files_in_use(make):
     d = make(xml(str(used)))
     assert d.remove_migration_files([str(used), str(stale), "/etc/passwd"]) == [str(stale)]
     assert used.exists() and not stale.exists()
+
+
+def test_define_vm_drops_a_cd_file_this_node_lacks(make, tmp_path, monkeypatch):
+    make, nvram, seeds = make
+    d = make()
+    defined = []
+
+    class Err(Exception):
+        pass
+
+    def lookup(_u):
+        raise Err()
+
+    monkeypatch.setattr(lv.libvirt, "libvirtError", Err, raising=False)
+    d._conn.lookupByUUIDString = lookup
+    d._conn.defineXML = lambda x: defined.append(x) or "dom"
+    d._info = lambda dom: dom
+    present = tmp_path / "present.iso"
+    present.write_bytes(b"x")
+    desc = (
+        "<domain><name>vm</name><uuid>u1</uuid><devices>"
+        f"<disk type='file' device='cdrom'><source file='{seeds}/gone.iso'/></disk>"
+        f"<disk type='file' device='cdrom'><source file='{present}'/></disk>"
+        "</devices></domain>"
+    )
+    assert d.define_vm(desc) == "dom"
+    assert "gone.iso" not in defined[0] and str(present) in defined[0]

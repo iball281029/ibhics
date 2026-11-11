@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import socket
+import time
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, WebSocket, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    status,
+)
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -181,6 +193,7 @@ ADMIN_ROUTES = {
     ("PATCH", f"{API}/users/{{name}}"),
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
+    ("PUT", f"{API}/activity/settings"),
     ("POST", f"{API}/migrate/sources"),
     ("POST", f"{API}/migrate/sources/test"),  # probes any host: admin, like adding one
     ("POST", f"{API}/networks"),
@@ -236,6 +249,10 @@ def create_app(
     virtual_storage_path: Path = Path("/var/lib/ibhics/virtual-storage.json"),
     pool_labels_path: Path | None = None,
     migration_tls=None,
+    ha=None,
+    activity=None,
+    p2v=None,
+    p2v_pin: str = "",
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -286,6 +303,11 @@ def create_app(
             async def beat() -> None:
                 while True:
                     await asyncio.to_thread(cluster.refresh)
+                    if ha is not None:
+                        try:
+                            await asyncio.to_thread(ha.tick)
+                        except Exception:
+                            logging.getLogger(__name__).exception("HA check failed")
                     await asyncio.sleep(heartbeat_interval)
 
             task = asyncio.create_task(beat())
@@ -296,6 +318,7 @@ def create_app(
                 while True:
                     await asyncio.to_thread(backups.tick)
                     await asyncio.to_thread(recycle.purge_expired)
+                    await asyncio.to_thread(activity.purge)
                     await asyncio.sleep(scheduler_interval)
 
             scheduler = asyncio.create_task(schedule())
@@ -311,6 +334,10 @@ def create_app(
     app.state.deploys = deploys
     app.state.auth = auth
     imports = imports or ImportManager(cluster)
+    from .p2v import P2VError, P2VSessions
+
+    p2v = p2v or P2VSessions()
+    imports.p2v = p2v
     app.state.imports = imports
     install_driver_errors(app)
     install_cluster_errors(app)
@@ -328,28 +355,109 @@ def create_app(
             raise Forbidden(f"this needs the {needed} role; you are {user.role}")
         return user
 
+    from .activity import ActivityLog
+
+    activity = activity or ActivityLog()
+
     @app.middleware("http")
     async def audit(request: Request, call_next):
+        started = time.monotonic()
+        named = ""
+        if (
+            request.method in ("POST", "PUT", "PATCH")
+            and request.headers.get("content-type", "").startswith("application/json")
+            and int(request.headers.get("content-length") or 0) <= 65536
+        ):
+            # The name of what is being created, for the change history. Never secrets:
+            # only these keys are read.
+            with contextlib.suppress(Exception):
+                body = json.loads(await request.body() or b"{}")
+                if isinstance(body, dict):
+                    named = str(body.get("name") or body.get("username") or "")[:120]
         response = await call_next(request)
         if (
-            auth is not None
-            and request.method not in ("GET", "HEAD", "OPTIONS")
+            request.method not in ("GET", "HEAD", "OPTIONS")
             and request.url.path.startswith(API)
             and request.url.path != f"{API}/auth/login"  # recorded by the login route
         ):
             user = getattr(request.state, "user", None)
             note = getattr(request.state, "audit_note", "")
-            auth.record(
-                user.name if user else "-",
-                request.method,
-                f"{request.url.path} {note}".strip(),
-                response.status_code,
-                request.client.host if request.client else "",
-            )
+            address = request.client.host if request.client else ""
+            history_note = note or (f"name: {named}" if named else "")
+            if auth is not None:
+                auth.record(
+                    user.name if user else "-",
+                    request.method,
+                    f"{request.url.path} {note}".strip(),
+                    response.status_code,
+                    address,
+                )
+            route = request.scope.get("route")
+            try:
+                activity.add(
+                    user.name if user else "-",
+                    request.method,
+                    getattr(route, "path", ""),
+                    request.url.path,
+                    response.status_code,
+                    address,
+                    int((time.monotonic() - started) * 1000),
+                    history_note,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("could not record activity")
         return response
 
     public = APIRouter(prefix=API)
     api = APIRouter(prefix=API, dependencies=[Depends(guard)])
+
+    # P2V agent uploads: no console session, the session's one-time token instead.
+
+    def p2v_session(sid: str, token: str):
+        try:
+            return p2v.authorize(sid, token)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from None
+
+    @public.post("/p2v/upload/{sid}/inventory")
+    def p2v_inventory(sid: str, body: dict, x_p2v_token: str = Header(default="")) -> dict:
+        try:
+            return p2v.inventory(p2v_session(sid, x_p2v_token), body)
+        except P2VError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    @public.put("/p2v/upload/{sid}/disks/{index}")
+    async def p2v_disk(sid: str, index: int, request: Request) -> dict:
+        session = p2v_session(sid, request.headers.get("x-p2v-token", ""))
+        gzip = request.headers.get("content-encoding", "").lower() == "gzip"
+        loop = asyncio.get_running_loop()
+        import queue
+
+        chunks: queue.Queue = queue.Queue(maxsize=64)
+
+        def drain():
+            while (item := chunks.get()) is not None:
+                yield item
+
+        writer = loop.run_in_executor(None, p2v.write_disk, session, index, drain(), gzip)
+        try:
+            async for chunk in request.stream():
+                if chunk:
+                    await asyncio.to_thread(chunks.put, chunk)
+        finally:
+            await asyncio.to_thread(chunks.put, None)
+        try:
+            written = await writer
+        except P2VError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"disk": index, "bytes": written}
+
+    @public.post("/p2v/upload/{sid}/finish")
+    def p2v_finish(sid: str, x_p2v_token: str = Header(default="")) -> dict:
+        try:
+            return p2v.finish(p2v_session(sid, x_p2v_token)).public()
+        except P2VError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
 
     @public.get("/health")
     def health() -> dict:
@@ -372,8 +480,10 @@ def create_app(
             session = auth.login(body.username, body.password)
         except AuthError:
             auth.record(body.username, "LOGIN", "failed", 401, address)
+            activity.add(body.username, "LOGIN", "", "failed", 401, address)
             raise
         auth.record(body.username, "LOGIN", "ok", 200, address)
+        activity.add(body.username, "LOGIN", "", "ok", 200, address)
         response.set_cookie(
             SESSION_COOKIE,
             session.token,
@@ -439,6 +549,82 @@ def create_app(
     @api.delete("/users/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_user(name: str, request: Request) -> None:
         users().delete_user(name, acting=acting(request))
+
+    @api.get("/p2v/sessions")
+    def p2v_sessions() -> list[dict]:
+        return [s.public() for s in p2v.list()]
+
+    @api.post("/p2v/sessions", status_code=status.HTTP_201_CREATED)
+    def p2v_open(request: Request, body: dict) -> dict:
+        pool = str(body.get("pool", ""))
+        local = next((m for m in cluster.compute_members() if m.local), None)
+        if local is None:
+            raise HTTPException(status_code=409, detail="no local compute node")
+        folder = local.driver.pool_path(pool)
+        if not folder:
+            raise HTTPException(
+                status_code=409, detail=f"{pool!r} is not a folder-based storage pool on this node"
+            )
+        session, token = p2v.open(pool, Path(folder))
+        server = f"{request.url.scheme}://{request.url.netloc}"
+        pin = f" --pin '{p2v_pin}'" if p2v_pin else ""
+        fetch = f"--pinnedpubkey 'sha256//{p2v_pin}' -k" if p2v_pin else "-k"
+        command = (
+            f"curl -fsS {fetch} {server}/p2v-agent.sh | sudo bash -s -- --server {server} "
+            f"--session {session.id} --token '{token}'{pin}"
+        )
+        return {"session": session.public(), "command": command}
+
+    @api.delete("/p2v/sessions/{sid}", status_code=status.HTTP_204_NO_CONTENT)
+    def p2v_close(sid: str) -> None:
+        p2v.delete(sid)
+
+    @api.get("/activity")
+    def activity_log(
+        request: Request,
+        category: str = "",
+        result: str = "",
+        q: str = "",
+        days: int = 0,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> dict:
+        rows = activity.query(category, result, q, days, limit, offset)
+        user = getattr(request.state, "user", None)
+        if auth is not None and (user is None or user.role != Role.ADMIN):
+            for row in rows:
+                row["address"] = ""  # client addresses and command text are for admins
+                if not row["note"].startswith("name: "):
+                    row["note"] = ""
+        return {"events": rows, "retention_days": activity.retention_days}
+
+    @api.get("/activity.csv")
+    def activity_csv(
+        request: Request, category: str = "", result: str = "", q: str = "", days: int = 0
+    ) -> Response:
+        rows = activity.query(category, result, q, days, limit=5000)
+        user = getattr(request.state, "user", None)
+        if auth is not None and (user is None or user.role != Role.ADMIN):
+            for row in rows:
+                row["address"] = ""
+                if not row["note"].startswith("name: "):
+                    row["note"] = ""
+        return Response(
+            activity.to_csv(rows),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="ibhics-activity.csv"'},
+        )
+
+    @api.put("/activity/settings")
+    def activity_settings(body: dict) -> dict:
+        try:
+            days = int(body.get("retention_days", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="retention_days must be a number") from None
+        try:
+            return {"retention_days": activity.set_retention(days)}
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @api.get("/audit", response_model=list[AuditOut])
     def audit_log(limit: int = 200) -> list[AuditOut]:
@@ -537,6 +723,19 @@ def create_app(
         if migration_tls is not None and migration_tls.enabled and was_compute:
             with contextlib.suppress(Exception):
                 migration_tls.revoke(name)
+
+    @api.get("/ha")
+    def ha_status() -> dict:
+        if ha is None:
+            return {"vms": [], "moved": {}, "events": [], "available": False}
+        return {**ha.status(), "available": True}
+
+    @api.put("/vms/{uuid}/ha")
+    def set_vm_ha(uuid: str, body: dict) -> dict:
+        if ha is None:
+            raise HTTPException(status_code=409, detail="HA restart is not available here")
+        ha.set_enabled(uuid, bool(body.get("enabled")))
+        return {"uuid": uuid, "enabled": uuid in ha.enabled}
 
     @api.get("/cluster/migration-tls")
     def migration_tls_status() -> dict:

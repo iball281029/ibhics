@@ -40,6 +40,7 @@ class SourceType(StrEnum):
     DISK = "disk"
     UPLOAD = "upload"  # files uploaded through the web console, on the manager's node
     KVM = "kvm"  # a Proxmox VE or plain KVM/libvirt host, read over SSH
+    P2V = "p2v"  # physical machines whose disks the P2V agent sent to the manager's node
 
 
 class SourceNotFound(LookupError):

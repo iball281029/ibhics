@@ -404,11 +404,17 @@ async function loadCluster() {
 }
 const loaders = {
   vms: async () => {
-    const all = await api("/vms");
+    const [all, ha] = await Promise.all([api("/vms"), api("/ha").catch(() => ({ vms: [] }))]);
+    state.ha = new Set((ha.vms || []).map((v) => v.uuid));
     state.vms = all.filter((v) => !v.template && !v.recycled);
     state.templates = all.filter((v) => v.template && !v.recycled);
   },
   deploys: async () => { state.deploys = await api("/deploys"); },
+  activity: async () => {
+    const r = await api(`/activity?limit=1000${tp.days ? `&days=${tp.days}` : ""}`);
+    state.activity = r.events || [];
+    state.activityRetention = r.retention_days || 0;
+  },
   recycle: async () => { state.recycle = await api("/recycle-bin"); },
   edge: async () => { state.edge = await api("/edge"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
@@ -457,6 +463,17 @@ function allTasks() {
       state: d.state, step: "Copying the disks", percent: null, created: d.created, finished: d.finished,
       error: d.error, id: d.id, result: d.result ? `VM ${d.result}${d.power_on ? ", powered on" : ""}` : "",
     })),
+    ...(state.activity || []).map((a) => {
+      const vm = [...(state.vms || []), ...(state.templates || [])].find((v) => v.uuid === a.object.split(" / ")[0]);
+      const named = (a.note || "").startsWith("name: ") ? a.note.slice(6) : "";
+      const object = vm ? a.object.replace(vm.uuid, vm.name) : a.object || named;
+      return {
+        kind: a.category, title: object || a.action, sub: [object ? a.action : "", a.user && a.user !== "-" ? `by ${a.user}` : ""].filter(Boolean).join(" · "),
+        state: a.ok ? "done" : "failed", step: "", percent: null, created: a.at, finished: a.at, duration_ms: a.duration_ms,
+        error: a.ok ? "" : `HTTP ${a.status}${a.note ? ` · ${a.note}` : ""}`, id: `ev${a.id}`,
+        result: a.ok ? `${a.method} ${a.path}${a.address ? ` from ${a.address}` : ""}` : "",
+      };
+    }),
   ];
   return tasks.sort((a, b) => String(b.created).localeCompare(String(a.created)));
 }
@@ -481,14 +498,20 @@ function renderTasks() {
 }
 // ---------- Tasks page ----------
 
-const tp = { state: "", kind: "", sel: "" };
+const tp = { state: "", kind: "", sel: "", days: 0 };
 const taskKey = (t) => `${t.kind}|${t.id}`;
 function duration(t) {
+  if (t.duration_ms != null) return t.duration_ms < 1000 ? `${t.duration_ms} ms` : `${(t.duration_ms / 1000).toFixed(1)} s`;
   if (!t.created) return "";
   const s = Math.max(0, ((t.finished ? new Date(t.finished) : new Date()) - new Date(t.created)) / 1000);
   if (s < 60) return `${Math.round(s)} s`;
   if (s < 3600) return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
   return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+function renderTaskTools() {
+  const keep = $("#task-retention");
+  keep.hidden = !(state.me && isAdmin());
+  keep.value = String(state.activityRetention || 0);
 }
 function renderTaskPage() {
   const q = $("#task-search").value.trim().toLowerCase();
@@ -530,11 +553,18 @@ async function renderTaskDetail(t) {
   }
 }
 async function renderOps() {
-  const ops = await api("/audit?limit=300"); // newest first
-  $("#task-ops").innerHTML = ops.length ? ops.map((o) => `<tr>
-    <td>${esc(when(o.time))}</td><td>${esc(o.user)}</td><td>${esc(o.action)}</td><td class="mono">${esc(o.target)}</td>
-    <td><span class="badge ${o.result < 400 ? "done" : "failed"}">${o.result < 400 ? "OK" : esc(o.result)}</span></td><td class="muted">${esc(o.address)}</td></tr>`).join("")
-    : empty(6, "No operations recorded yet");
+  // Readable change history (admins also see where each change came from).
+  const { events } = await api("/activity?limit=500");
+  const vms = [...(state.vms || []), ...(state.templates || [])];
+  const named = (e) => {
+    const vm = vms.find((v) => e.object && e.object.startsWith(v.uuid));
+    if (vm) return e.object.replace(vm.uuid, vm.name);
+    return e.object || ((e.note || "").startsWith("name: ") ? e.note.slice(6) : "");
+  };
+  $("#task-ops").innerHTML = events.length ? events.map((e) => `<tr>
+    <td>${esc(when(e.at))}</td><td>${esc(e.user)}</td><td><span class="badge plain">${esc(e.category)}</span> ${esc(e.action)}</td><td>${esc(named(e))}</td>
+    <td><span class="badge ${e.ok ? "done" : "failed"}">${e.ok ? "OK" : `Failed (${esc(e.status)})`}</span></td><td class="muted">${esc(e.address)}</td></tr>`).join("")
+    : empty(6, "No changes recorded yet");
 }
 {
   $("#task-rows").addEventListener("click", (e) => {
@@ -547,7 +577,61 @@ async function renderOps() {
   });
   $("#task-kind").addEventListener("change", (e) => { tp.kind = e.target.value; renderTaskPage(); });
   $("#task-search").addEventListener("input", () => renderTaskPage());
+  $("#task-days").addEventListener("change", (e) => {
+    tp.days = Number(e.target.value) || 0;
+    load("activity").then(renderTaskPage).catch(fail);
+  });
+  $("#task-csv").addEventListener("click", () => {
+    const qs = new URLSearchParams();
+    const categories = ["VM", "Container", "Storage", "Network", "Node", "Backup", "User", "Sign-in", "Import", "System"];
+    if (categories.includes(tp.kind)) qs.set("category", tp.kind);
+    if (tp.state === "done") qs.set("result", "ok");
+    if (tp.state === "failed") qs.set("result", "failed");
+    const q = $("#task-search").value.trim();
+    if (q) qs.set("q", q);
+    if (tp.days) qs.set("days", tp.days);
+    location.href = `/api/v1/activity.csv?${qs}`;
+  });
+  $("#task-retention").addEventListener("change", (e) => {
+    api("/activity/settings", { method: "PUT", body: JSON.stringify({ retention_days: Number(e.target.value) }) })
+      .then((r) => toast(r.retention_days ? `Keeping ${r.retention_days} days of history` : "Keeping all history"))
+      .catch(fail);
+  });
 }
+
+const P2V_STATE = { waiting: "Waiting for the agent", uploading: "Copying disks", ready: "Ready to import", imported: "Imported", failed: "Failed" };
+async function renderP2V() {
+  const local = (state.cluster?.members || []).find((m) => m.local);
+  const select = $("#p2v-pool");
+  const keep = select.value;
+  select.innerHTML = state.pools.filter((p) => p.active && (!local || p.node === local.name) && !["lvm", "iscsi"].includes(p.type))
+    .map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))}</option>`).join("");
+  if (keep) select.value = keep;
+  const sessions = await api("/p2v/sessions");
+  $("#p2v-rows").innerHTML = sessions.length ? sessions.map((s) => {
+    const m = s.machine || {};
+    const disks = (m.disks || []).map((d) => `${esc(d.name)} ${Math.ceil(d.size_bytes / 2 ** 30)} GiB`).join(", ");
+    return `<tr><td class="vm-name">${esc(m.hostname || "—")}<div class="vm-sub">${esc(m.os || `session ${s.id}`)}</div></td>
+      <td><span class="badge ${s.state === "ready" ? "done" : s.state === "failed" ? "failed" : "running"}">${esc(P2V_STATE[s.state] || s.state)}</span>${s.state === "uploading" ? ` ${s.percent}%` : ""}</td>
+      <td>${m.cpus ? `${m.cpus} vCPU · ${Math.round(m.memory_mb / 1024)} GB` : "—"}</td><td>${disks || "—"}</td><td>${esc(s.pool)}</td><td>${esc(when(s.created))}</td>
+      <td class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></td></tr>`;
+  }).join("") : empty(7, "No physical machines yet. Create an agent command to start.");
+}
+$("#p2v-open").addEventListener("click", async () => {
+  try {
+    const r = await post("/p2v/sessions", { pool: $("#p2v-pool").value });
+    $("#p2v-code").textContent = r.command;
+    $("#p2v-command").hidden = false;
+    await renderP2V();
+  } catch (err) { fail(err); }
+});
+$("#p2v-copy").addEventListener("click", () => navigator.clipboard.writeText($("#p2v-code").textContent).then(() => toast("Command copied")).catch(fail));
+$("#p2v-refresh").addEventListener("click", () => renderP2V().catch(fail));
+$("#p2v-rows").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-p2v-delete]");
+  if (!b || !confirm("Remove this session and any disk data it received?")) return;
+  del(`/p2v/sessions/${enc(b.dataset.p2vDelete)}`).then(renderP2V).catch(fail);
+});
 
 function logTime(seconds) {
   const n = Math.max(0, Math.floor(seconds || 0));
@@ -653,12 +737,12 @@ async function refresh(page, auto = false) {
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
-  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
+  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
   if (page === "containers") { await load("containers", "ctTemplates", "pools", "networks"); renderContainers(); }
-  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
+  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "activity", "vms"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();
@@ -894,6 +978,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${vm.template ? "" : `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate… (host or storage)</button>`}
+      ${multi && !vm.template ? `<button data-vm="ha" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Start this VM on another node if its node fails (shared storage only)">${state.ha?.has(vm.uuid) ? "Turn off HA restart" : "Turn on HA restart"}</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
       <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
       <button data-vm="snapshots" data-id="${vm.uuid}">Restore snapshot…</button>
@@ -1338,6 +1423,13 @@ async function vmAction(e) {
   if (act === "snapshots") { location.hash = `vm/${id}`; setTimeout(() => selectTab("vm-tabs", "vm-snapshots"), 400); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "rename") { renameVM(id, name).catch(fail); return; }
+  if (act === "ha") {
+    const on = !state.ha?.has(id);
+    api(`/vms/${enc(id)}/ha`, { method: "PUT", body: JSON.stringify({ enabled: on }) })
+      .then(() => { toast(`HA restart ${on ? "on" : "off"} for ${name}`); return refresh(currentPage()); })
+      .catch(fail);
+    return;
+  }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
     return;
@@ -1531,7 +1623,7 @@ async function openEdit(uuid) {
   $("#edit-firmware").textContent = vm.firmware === "uefi" ? "UEFI" : "BIOS";
   const note = $("#edit-note");
   note.hidden = vm.state !== "running";
-  note.textContent = "This VM is running. Disks, network adapters and the CD change now; processor, memory and boot order apply after it is shut down and powered on again.";
+  note.textContent = "This VM is running. Disks, network adapters, the CD and more vCPUs (up to 32) or memory (in 128 MB steps, up to 512 GB) change now. Fewer vCPUs or less memory and the boot order apply after it is shut down and powered on again. A VM made before hot-add support needs one restart after its first CPU or memory change.";
   selectTab("edit-tabs", "edit-hw");
   renderEdit();
 }

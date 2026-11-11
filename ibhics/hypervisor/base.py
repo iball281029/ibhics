@@ -579,6 +579,21 @@ class HypervisorDriver(abc.ABC):
         """
         raise NotImplementedError
 
+    def vm_definition(self, uuid: str) -> str:
+        """The VM's saved definition, enough for `define_vm` on another node to run the
+        same VM from the same shared disks (HA restart). Opaque to the caller."""
+        raise NotImplementedError
+
+    def define_vm(self, definition: str) -> VMInfo:
+        """Register a VM from `vm_definition` here without creating any disk. A CD whose
+        file this node does not have is left empty."""
+        raise NotImplementedError
+
+    def forget_vm(self, uuid: str) -> None:
+        """Stop (if needed) and unregister a VM another node now runs, keeping its
+        disks; drops its node-local UEFI and seed files."""
+        raise NotImplementedError
+
     def migration_files(self, uuid: str) -> dict[str, bytes]:
         """Node-local files the VM needs on the destination that libvirt does not move:
         UEFI variables and the VM's customization CD. Path -> content."""

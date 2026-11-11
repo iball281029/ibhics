@@ -122,7 +122,10 @@ class FakeDriver(HypervisorDriver):
             vm = self._get(uuid)
             new = edit.apply_to(vm.spec)
             running = vm.state == VMState.RUNNING
-            if running and _restart_key(new) != _restart_key(vm.spec):
+            # Like libvirt: CPUs and memory can grow while the VM runs (hot-add).
+            grows = vm.spec.vcpus <= new.vcpus <= 32 and vm.spec.memory_mb <= new.memory_mb
+            key = (lambda sp: (sp.boot, sp.video)) if grows else _restart_key
+            if running and key(new) != key(vm.spec):
                 vm.restart_needed = True
             if edit.disks is not None:
                 disks, data = [], []
@@ -148,6 +151,39 @@ class FakeDriver(HypervisorDriver):
                 ]
             vm.spec = new
             return copy.deepcopy(vm)
+
+    def vm_definition(self, uuid: str) -> str:
+        import json
+
+        from .serialize import spec_to_json
+
+        with self._lock:
+            vm = self._get(uuid)
+            return json.dumps({**spec_to_json(vm.spec), "uuid": vm.uuid, "state": "stopped"})
+
+    def define_vm(self, definition: str) -> VMInfo:
+        import json
+
+        from .serialize import info_from_json
+
+        vm = info_from_json(json.loads(definition))
+        with self._lock:
+            if vm.uuid in self._vms or any(v.spec.name == vm.spec.name for v in self._vms.values()):
+                raise VMExists(f"VM named {vm.spec.name!r} already exists")
+            for disk in vm.spec.disks:
+                if disk.pool not in self._pools:
+                    raise PoolNotFound(disk.pool)
+            vm.state = VMState.STOPPED
+            self._vms[vm.uuid] = vm
+            self._disks[vm.uuid] = [bytearray(d.size_gb * FAKE_BYTES_PER_GB) for d in vm.spec.disks]
+            return copy.deepcopy(vm)
+
+    def forget_vm(self, uuid: str) -> None:
+        with self._lock:
+            self._get(uuid)
+            del self._vms[uuid]
+            self._disks.pop(uuid, None)
+            self.consoles.pop(uuid, None)
 
     def start_vm(self, uuid: str) -> VMInfo:
         with self._lock:

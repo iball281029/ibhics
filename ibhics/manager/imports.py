@@ -69,6 +69,7 @@ def check_space(member, pool: str, vm: SourceVM) -> None:
 
 UPLOAD_DIR = Path("/var/lib/ibhics/uploads")
 UPLOADS = "uploads"
+PHYSICAL = "physical"  # P2V: machines the agent copied to the manager's node
 UPLOAD_SUFFIXES = (".ova", *IMAGE_SUFFIXES)
 
 
@@ -105,6 +106,7 @@ class ImportManager:
         self._jobs: deque[ImportJob] = deque(maxlen=200)
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
+        self.p2v = None  # P2VSessions, set by the app
 
     # Sources
 
@@ -112,11 +114,18 @@ class ImportManager:
     def uploads_source(self) -> Source:
         return Source(UPLOADS, SourceType.UPLOAD, path=str(self.upload_dir))
 
+    @property
+    def physical_source(self) -> Source:
+        return Source(PHYSICAL, SourceType.P2V)
+
     def sources(self) -> list[Source]:
         with self._lock:
-            return [self.uploads_source, *self._sources.values()]
+            builtin = [self.uploads_source] + ([self.physical_source] if self.p2v else [])
+            return [*builtin, *self._sources.values()]
 
     def source(self, name: str) -> Source:
+        if name == PHYSICAL and self.p2v is not None:
+            return self.physical_source
         if name == UPLOADS:
             self.upload_dir.mkdir(parents=True, exist_ok=True)
             return self.uploads_source
@@ -131,7 +140,7 @@ class ImportManager:
         if source.type == SourceType.UPLOAD:
             raise ValueError("uploaded files have their own built-in source")
         with self._lock:
-            if source.name in self._sources or source.name == UPLOADS:
+            if source.name in self._sources or source.name in (UPLOADS, PHYSICAL):
                 raise VMExists(f"a migrate source named {source.name!r} already exists")
             self._sources[source.name] = source
             self._save()
@@ -154,7 +163,12 @@ class ImportManager:
     def source_vms(self, name: str) -> list[SourceVM]:
         """What is on a source. Folders are read on the manager's node, which mounts the
         same share as the node that will run the conversion."""
-        return self._discover(self.source(name))
+        source = self.source(name)
+        if source.type == SourceType.P2V:
+            from .p2v import source_vm
+
+            return [source_vm(s) for s in self.p2v.ready()]
+        return self._discover(source)
 
     # Jobs
 
@@ -177,7 +191,7 @@ class ImportManager:
     ) -> ImportJob:
         self._cluster.require_quorum()
         source = self.source(source_name)
-        vm = next((v for v in self._discover(source) if v.ref == vm_ref), None)
+        vm = next((v for v in self.source_vms(source_name) if v.ref == vm_ref), None)
         if vm is None:
             raise SourceNotFound(f"{source_name}: no VM {vm_ref!r}")
         name = name or vm.name
@@ -186,7 +200,7 @@ class ImportManager:
             taken |= {j.name for j in self._jobs if j.state in ("queued", "running")}
             if name in taken:
                 raise VMExists(f"a VM named {name!r} already exists; choose another name")
-            if source.type == SourceType.UPLOAD:
+            if source.type in (SourceType.UPLOAD, SourceType.P2V):
                 # Uploaded files are on the manager's own disk, so it converts them.
                 member = next((m for m in self._cluster.compute_members() if m.local), None)
                 if member is None or (node and node != member.name):
@@ -232,6 +246,8 @@ class ImportManager:
                     **extra,
                 )
                 job.result, job.state, job.step, job.percent = info.uuid, "done", "", 100
+                if source.type == SourceType.P2V and self.p2v is not None:
+                    self.p2v.delete(vm.ref)  # the VM has its converted copies now
             except Exception as exc:  # recorded on the job; nobody else is waiting
                 job.error, job.state = f"{type(exc).__name__}: {exc}", "failed"
             job.finished = self._now()

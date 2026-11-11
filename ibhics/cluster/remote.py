@@ -213,6 +213,23 @@ class RemoteDriver(HypervisorDriver):
             raise PoolNotFound(resp.json()["detail"].removeprefix("storage pool not found: "))
         return info_from_json(self._ok(resp, uuid).json())
 
+    def vm_definition(self, uuid: str) -> str:
+        resp = self._client.request("GET", f"/vms/{uuid}/definition", timeout=30)
+        return self._ok(resp, uuid).json()["definition"]
+
+    def define_vm(self, definition: str) -> VMInfo:
+        resp = self._client.request(
+            "POST", "/vms/define", json={"definition": definition}, timeout=60
+        )
+        if resp.status_code == 404:
+            detail = str(resp.json().get("detail", ""))
+            if detail.startswith("storage pool not found: "):
+                raise PoolNotFound(detail.removeprefix("storage pool not found: "))
+        return info_from_json(self._ok(resp).json())
+
+    def forget_vm(self, uuid: str) -> None:
+        self._ok(self._client.request("POST", f"/vms/{uuid}/forget", timeout=120), uuid)
+
     def migration_files(self, uuid: str) -> dict[str, bytes]:
         resp = self._client.request("GET", f"/vms/{uuid}/migration-files", timeout=60)
         if resp.status_code == 404 and "VM not found" not in resp.text:

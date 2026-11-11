@@ -499,12 +499,13 @@
     <section class="page" id="page-migrate">
       <div class="sheet">
         <div class="page-head">
-          <h1>Migrate</h1><span class="sub">Bring VMs over from VMware ESXi / vCenter, OVA exports and disk images (VMDK, VHDX, QCOW2)</span>
+          <h1>Migrate</h1><span class="sub">Bring VMs over from VMware ESXi / vCenter, Proxmox / KVM, OVA exports, disk images (VMDK, VHDX, QCOW2) and physical Linux servers</span>
         </div>
         <div class="tabs" id="migrate-tabs">
           <button data-tab="import" class="active">Import VMs</button>
           <button data-tab="sources">Sources</button>
           <button data-tab="imports">Jobs</button>
+          <button data-tab="p2v">Physical machines</button>
         </div>
         <div class="subpage active" id="tab-import">
           <div class="steps">
@@ -525,6 +526,28 @@
             <thead><tr><th><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"></th><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
             <tbody id="source-vms"></tbody>
           </table></div>
+        </div>
+        <div class="subpage" id="tab-p2v">
+          <div class="steps">
+            <div class="step"><b>1</b><span>Pick the storage that receives the disks and create a one-time agent command</span></div>
+            <div class="step"><b>2</b><span>Paste it as root on the physical Linux server: it sends CPU, memory, NICs and every disk</span></div>
+            <div class="step"><b>3</b><span>When it shows Ready, import it from Import VMs with source <b>physical</b></span></div>
+          </div>
+          <div class="toolbar operator-only">
+            <label style="display:flex;align-items:center;gap:8px">Storage <select id="p2v-pool" style="width:auto"></select></label>
+            <button type="button" class="primary" id="p2v-open">Create agent command</button>
+            <span class="spacer"></span><button type="button" id="p2v-refresh">Refresh</button>
+          </div>
+          <div id="p2v-command" hidden>
+            <p class="hint">Run on the physical server (Linux, as root). The command works for 24 hours and for one machine. Stop databases and busy services first, or boot the server from a live USB, for a clean copy.</p>
+            <pre class="code" id="p2v-code"></pre>
+            <button type="button" class="small" id="p2v-copy">Copy command</button>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Machine</th><th>Status</th><th>CPU / Memory</th><th>Disks</th><th>Storage</th><th>Created</th><th></th></tr></thead>
+            <tbody id="p2v-rows"></tbody>
+          </table></div>
+          <p class="hint">Windows servers are not supported by this agent yet.</p>
         </div>
         <div class="subpage" id="tab-sources">
           <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="source-dialog">+ Add source</button></div>
@@ -610,7 +633,7 @@
       <div class="sheet">
         <div class="page-head"><h1>Tasks</h1><span class="sub" id="tasks-sum"></span>
           <span class="spacer"></span>
-          <input class="search" id="task-search" placeholder="Search by VM, node or target">
+          <input class="search" id="task-search" placeholder="Search by VM, node, user or action">
         </div>
         <div class="tabs" id="tasks-tabs">
           <button data-tab="task-jobs" class="active">Jobs</button>
@@ -619,7 +642,11 @@
         <div class="subpage active" id="tab-task-jobs">
           <div class="toolbar">
             <div class="chips" id="task-state"><button type="button" data-v="" class="on">All</button><button type="button" data-v="active">Running</button><button type="button" data-v="done">Finished</button><button type="button" data-v="failed">Failed</button></div>
-            <select id="task-kind" style="width:auto"><option value="">All types</option><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy VM</option></select>
+            <select id="task-kind" style="width:auto"><option value="">All types</option><optgroup label="Jobs"><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy VM</option></optgroup><optgroup label="Changes"><option>VM</option><option>Container</option><option>Storage</option><option>Network</option><option>Node</option><option>User</option><option>Sign-in</option><option>System</option></optgroup></select>
+            <select id="task-days" style="width:auto" title="How far back"><option value="0">All time</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select>
+            <span class="spacer"></span>
+            <button type="button" class="small" id="task-csv" title="Download the changes shown here as CSV">Export CSV</button>
+            <select id="task-retention" style="width:auto" title="How long the change history is kept" hidden><option value="0">Keep history forever</option><option value="30">Keep 30 days</option><option value="90">Keep 90 days</option><option value="365">Keep 1 year</option></select>
           </div>
           <div class="tasks-split">
             <div class="table-wrap"><table class="task-table">
@@ -631,7 +658,7 @@
         </div>
         <div class="subpage" id="tab-task-ops">
           <div class="table-wrap"><table>
-            <thead><tr><th>Time</th><th>User</th><th>Operation</th><th>Object</th><th>Result</th><th>From</th></tr></thead>
+            <thead><tr><th>Time</th><th>User</th><th>Change</th><th>Object</th><th>Result</th><th>From</th></tr></thead>
             <tbody id="task-ops"></tbody>
           </table></div>
         </div>

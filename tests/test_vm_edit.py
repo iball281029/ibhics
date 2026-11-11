@@ -38,11 +38,13 @@ def test_edit_cpu_memory_boot_and_options():
     assert out["description"] == "web tier" and out["restart_needed"] is False
 
 
-def test_running_vm_saves_cpu_for_next_start():
+def test_running_vm_grows_at_once_and_saves_a_shrink_for_next_start():
     client = TestClient(create_app(FakeDriver()))
-    vm = make(client)
+    vm = make(client, vcpus=2)
     client.post(f"/api/v1/vms/{vm['uuid']}/start")
-    out = client.patch(f"/api/v1/vms/{vm['uuid']}", json={"vcpus": 2}).json()
+    grown = client.patch(f"/api/v1/vms/{vm['uuid']}", json={"vcpus": 4}).json()
+    assert grown["restart_needed"] is False and grown["vcpus"] == 4  # hot-add
+    out = client.patch(f"/api/v1/vms/{vm['uuid']}", json={"vcpus": 1}).json()
     assert out["restart_needed"] is True
     client.post(f"/api/v1/vms/{vm['uuid']}/stop")
     assert client.get(f"/api/v1/vms/{vm['uuid']}").json()["restart_needed"] is False
