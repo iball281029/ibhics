@@ -4407,7 +4407,7 @@ function renderSources() {
   const admin = isAdmin();
   $("#sources").innerHTML = state.sources.length ? state.sources.map((s) => {
     const st = s.settings;
-    const where = s.type === "vmware" || s.type === "kvm" ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
+    const where = ["vmware", "kvm", "nutanix"].includes(s.type) ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
       : s.type === "upload" ? "Files uploaded with Import VMs → Upload files" : st.path;
     return `<tr>
       <td><div class="name-cell">${avatar("i-migrate")}<span class="vm-name">${esc(s.name)}</span></div></td>
@@ -4599,6 +4599,7 @@ function sourceFormBody(f) {
     Object.assign(body, { host: f.get("host"), username: f.get("username"), password: f.get("password"), verify_tls: f.get("verify_tls") === "on", transport: f.get("transport") });
     if (f.get("vpath")) body.path = f.get("vpath");
   } else if (type === "kvm") Object.assign(body, { host: f.get("host"), username: "root", password: f.get("password") });
+  else if (type === "nutanix") Object.assign(body, { host: f.get("host"), username: f.get("username"), password: f.get("password"), verify_tls: f.get("verify_tls") === "on" });
   else body.path = f.get("path");
   return body;
 }
