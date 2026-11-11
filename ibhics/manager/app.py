@@ -236,6 +236,7 @@ def create_app(
     virtual_storage_path: Path = Path("/var/lib/ibhics/virtual-storage.json"),
     pool_labels_path: Path | None = None,
     migration_tls=None,
+    ha=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -286,6 +287,11 @@ def create_app(
             async def beat() -> None:
                 while True:
                     await asyncio.to_thread(cluster.refresh)
+                    if ha is not None:
+                        try:
+                            await asyncio.to_thread(ha.tick)
+                        except Exception:
+                            logging.getLogger(__name__).exception("HA check failed")
                     await asyncio.sleep(heartbeat_interval)
 
             task = asyncio.create_task(beat())
@@ -537,6 +543,19 @@ def create_app(
         if migration_tls is not None and migration_tls.enabled and was_compute:
             with contextlib.suppress(Exception):
                 migration_tls.revoke(name)
+
+    @api.get("/ha")
+    def ha_status() -> dict:
+        if ha is None:
+            return {"vms": [], "moved": {}, "events": [], "available": False}
+        return {**ha.status(), "available": True}
+
+    @api.put("/vms/{uuid}/ha")
+    def set_vm_ha(uuid: str, body: dict) -> dict:
+        if ha is None:
+            raise HTTPException(status_code=409, detail="HA restart is not available here")
+        ha.set_enabled(uuid, bool(body.get("enabled")))
+        return {"uuid": uuid, "enabled": uuid in ha.enabled}
 
     @api.get("/cluster/migration-tls")
     def migration_tls_status() -> dict:

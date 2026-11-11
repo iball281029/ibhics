@@ -1488,6 +1488,36 @@ class LibvirtDriver(HypervisorDriver):
             used.update(self._local_files_of(ET.fromstring(xml)))
         return used
 
+    def vm_definition(self, uuid: str) -> str:
+        return self._lookup(uuid).XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+
+    def define_vm(self, definition: str) -> VMInfo:
+        root = ET.fromstring(definition)
+        for drive in root.findall("./devices/disk[@device='cdrom']"):
+            source = drive.find("source")
+            if source is not None and source.get("file") and not Path(source.get("file")).exists():
+                drive.remove(source)  # e.g. a seed CD left on the failed node: start without it
+        uuid = root.findtext("uuid") or ""
+        try:
+            self._conn.lookupByUUIDString(uuid)
+        except libvirt.libvirtError:
+            pass
+        else:
+            raise VMExists(f"VM {root.findtext('name')!r} is already defined here")
+        return self._info(self._conn.defineXML(ET.tostring(root, encoding="unicode")))
+
+    def forget_vm(self, uuid: str) -> None:
+        dom = self._lookup(uuid)
+        files = self._local_files_of(ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)))
+        if dom.isActive():
+            dom.destroy()
+        dom.undefineFlags(
+            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM
+            | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE", 0)
+        )
+        self.remove_migration_files(files)
+
     def migration_files(self, uuid: str) -> dict[str, bytes]:
         root = ET.fromstring(self._lookup(uuid).XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
         files = {}

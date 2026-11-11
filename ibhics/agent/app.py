@@ -366,6 +366,21 @@ def create_agent_app(
         def clone_vm(uuid: str, body: CloneIn) -> VMOut:
             return VMOut.from_info(driver.clone_vm(uuid, body.to_clone()))
 
+        @api.get("/vms/{uuid}/definition")
+        def vm_definition(uuid: str) -> dict:
+            return {"definition": driver.vm_definition(uuid)}
+
+        @api.post("/vms/define", response_model=VMOut)
+        def define_vm(body: dict) -> VMOut:
+            definition = body.get("definition")
+            if not isinstance(definition, str) or not definition:
+                raise ValueError("definition is required")
+            return VMOut.from_info(driver.define_vm(definition))
+
+        @api.post("/vms/{uuid}/forget", status_code=status.HTTP_204_NO_CONTENT)
+        def forget_vm(uuid: str) -> None:
+            driver.forget_vm(uuid)
+
         @api.get("/vms/{uuid}/migration-files")
         def migration_files(uuid: str) -> dict[str, str]:
             files = driver.migration_files(uuid)

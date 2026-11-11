@@ -404,7 +404,8 @@ async function loadCluster() {
 }
 const loaders = {
   vms: async () => {
-    const all = await api("/vms");
+    const [all, ha] = await Promise.all([api("/vms"), api("/ha").catch(() => ({ vms: [] }))]);
+    state.ha = new Set((ha.vms || []).map((v) => v.uuid));
     state.vms = all.filter((v) => !v.template && !v.recycled);
     state.templates = all.filter((v) => v.template && !v.recycled);
   },
@@ -894,6 +895,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${vm.template ? "" : `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate… (host or storage)</button>`}
+      ${multi && !vm.template ? `<button data-vm="ha" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Start this VM on another node if its node fails (shared storage only)">${state.ha?.has(vm.uuid) ? "Turn off HA restart" : "Turn on HA restart"}</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
       <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
       <button data-vm="snapshots" data-id="${vm.uuid}">Restore snapshot…</button>
@@ -1338,6 +1340,13 @@ async function vmAction(e) {
   if (act === "snapshots") { location.hash = `vm/${id}`; setTimeout(() => selectTab("vm-tabs", "vm-snapshots"), 400); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
   if (act === "rename") { renameVM(id, name).catch(fail); return; }
+  if (act === "ha") {
+    const on = !state.ha?.has(id);
+    api(`/vms/${enc(id)}/ha`, { method: "PUT", body: JSON.stringify({ enabled: on }) })
+      .then(() => { toast(`HA restart ${on ? "on" : "off"} for ${name}`); return refresh(currentPage()); })
+      .catch(fail);
+    return;
+  }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
     return;

@@ -134,6 +134,8 @@ def main() -> None:
         ),
     )
 
+    from .ha import HighAvailability
+
     migration_tls = None
     if args.driver == "libvirt" and args.migration_transport == "tls" and args.migration_host:
         from .migration_tls import MigrationTLS
@@ -162,6 +164,7 @@ def main() -> None:
             Path(os.environ.get("IBHICS_USAGE_FILE", "/var/lib/ibhics/usage.sqlite3"))
         ),
         migration_tls=migration_tls,
+        ha=HighAvailability(cluster, state_path=args.state_file.with_name("ha.json")),
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")
