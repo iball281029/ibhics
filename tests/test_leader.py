@@ -102,3 +102,9 @@ def test_cluster_state_includes_this_node_for_a_standby(tmp_path):
     d.load()
     names = {m.name: m.local for m in d.members()}
     assert names == {"node2": True, "node1": False}
+
+
+def test_folder_is_made_on_first_use_but_not_without_the_share(tmp_path):
+    assert Leadership(tmp_path / "share" / ".mgr", "n1", "x").available is False
+    (tmp_path / "share").mkdir()
+    assert Leadership(tmp_path / "share" / ".mgr", "n1", "x").available is True

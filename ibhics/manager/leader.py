@@ -47,6 +47,8 @@ class Leadership:
     @property
     def available(self) -> bool:
         try:
+            if not self.shared.is_dir() and self.shared.parent.is_dir():
+                self.shared.mkdir(mode=0o700)  # first use, on a mounted share
             return self.shared.is_dir() and os.access(self.shared, os.W_OK)
         except OSError:
             return False
