@@ -31,6 +31,7 @@
   <button id="cad" disabled>Ctrl+Alt+Del</button>
   <button id="kbd-btn" title="On-screen keyboard: Esc, Tab, F1–F12, Ctrl/Alt/Win and more">Keyboard</button>
   <button id="paste" disabled title="Type the clipboard text into the VM">Paste text</button>
+  <button id="release" disabled title="Send key-up for Shift, Ctrl, Alt and Meta if the VM acts as if one is stuck">Release keys</button>
   <button id="full">Fullscreen</button>
   <button id="reconnect">Reconnect</button>
 </header>
@@ -47,7 +48,7 @@ document.getElementById("title").textContent = name;
 
 const status = document.getElementById("status");
 const setStatus = (text, cls) => { status.textContent = text; status.className = cls; };
-const buttons = ["cad", "paste"].map((id) => document.getElementById(id));
+const buttons = ["cad", "paste", "release"].map((id) => document.getElementById(id));
 let rfb = null;
 
 function connect() {
@@ -144,6 +145,14 @@ const US_KEYS = (() => {
 const KEYSYM = { "\n": 0xff0d, "\t": 0xff09 };
 const SHIFT = 0xffe1;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+const KEY_GAP = 8, LINE_GAP = 80;
+// Key-up for every modifier, whatever the guest thinks is held. Harmless when none is.
+const MODIFIER_UPS = [[0xffe1, "ShiftLeft"], [0xffe2, "ShiftRight"], [0xffe3, "ControlLeft"],
+  [0xffe4, "ControlRight"], [0xffe9, "AltLeft"], [0xffea, "AltRight"], [0xffe7, "MetaLeft"], [0xffe8, "MetaRight"]];
+function releaseModifiers() {
+  if (!rfb) return;
+  for (const [keysym, code] of MODIFIER_UPS) rfb.sendKey(keysym, code, false);
+}
 
 document.getElementById("paste").addEventListener("click", async () => {
   // Types the clipboard text as key presses, for guests without a clipboard agent.
@@ -159,17 +168,29 @@ document.getElementById("paste").addEventListener("click", async () => {
       if (!key || !rfb) { skipped += 1; continue; }
       const [code, shift] = key;
       const keysym = KEYSYM[ch] ?? ch.codePointAt(0);
-      if (shift) rfb.sendKey(SHIFT, "ShiftLeft", true);
+      // Every event gets its own gap: a guest that misses a Shift release keeps typing
+      // capitals after the paste, one that misses a press drops the character.
+      if (shift) { rfb.sendKey(SHIFT, "ShiftLeft", true); await pause(KEY_GAP); }
       rfb.sendKey(keysym, code, true);
+      await pause(KEY_GAP);
       rfb.sendKey(keysym, code, false);
-      if (shift) rfb.sendKey(SHIFT, "ShiftLeft", false);
-      await pause(ch === "\n" ? 60 : 12);  // a slow guest console drops or repeats keys sent in a burst
+      await pause(KEY_GAP);
+      if (shift) { rfb.sendKey(SHIFT, "ShiftLeft", false); await pause(KEY_GAP); }
+      if (ch === "\n") await pause(LINE_GAP);
     }
   } finally {
+    releaseModifiers();
     button.disabled = !rfb;
   }
   if (skipped) setStatus(`Typed the text; ${skipped} character(s) have no key on a US keyboard and were left out`, "wait");
   rfb.focus();
+});
+
+document.getElementById("release").addEventListener("click", () => {
+  releaseModifiers();
+  held.clear();
+  kbd.querySelectorAll("button.on").forEach((b) => b.classList.remove("on"));
+  if (rfb) rfb.focus();
 });
 
 if (uuid) connect(); else setStatus("No VM given", "bad");
