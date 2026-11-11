@@ -599,6 +599,40 @@ async function renderOps() {
   });
 }
 
+const P2V_STATE = { waiting: "Waiting for the agent", uploading: "Copying disks", ready: "Ready to import", imported: "Imported", failed: "Failed" };
+async function renderP2V() {
+  const local = (state.cluster?.members || []).find((m) => m.local);
+  const select = $("#p2v-pool");
+  const keep = select.value;
+  select.innerHTML = state.pools.filter((p) => p.active && (!local || p.node === local.name) && !["lvm", "iscsi"].includes(p.type))
+    .map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))}</option>`).join("");
+  if (keep) select.value = keep;
+  const sessions = await api("/p2v/sessions");
+  $("#p2v-rows").innerHTML = sessions.length ? sessions.map((s) => {
+    const m = s.machine || {};
+    const disks = (m.disks || []).map((d) => `${esc(d.name)} ${Math.ceil(d.size_bytes / 2 ** 30)} GiB`).join(", ");
+    return `<tr><td class="vm-name">${esc(m.hostname || "—")}<div class="vm-sub">${esc(m.os || `session ${s.id}`)}</div></td>
+      <td><span class="badge ${s.state === "ready" ? "done" : s.state === "failed" ? "failed" : "running"}">${esc(P2V_STATE[s.state] || s.state)}</span>${s.state === "uploading" ? ` ${s.percent}%` : ""}</td>
+      <td>${m.cpus ? `${m.cpus} vCPU · ${Math.round(m.memory_mb / 1024)} GB` : "—"}</td><td>${disks || "—"}</td><td>${esc(s.pool)}</td><td>${esc(when(s.created))}</td>
+      <td class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></td></tr>`;
+  }).join("") : empty(7, "No physical machines yet. Create an agent command to start.");
+}
+$("#p2v-open").addEventListener("click", async () => {
+  try {
+    const r = await post("/p2v/sessions", { pool: $("#p2v-pool").value });
+    $("#p2v-code").textContent = r.command;
+    $("#p2v-command").hidden = false;
+    await renderP2V();
+  } catch (err) { fail(err); }
+});
+$("#p2v-copy").addEventListener("click", () => navigator.clipboard.writeText($("#p2v-code").textContent).then(() => toast("Command copied")).catch(fail));
+$("#p2v-refresh").addEventListener("click", () => renderP2V().catch(fail));
+$("#p2v-rows").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-p2v-delete]");
+  if (!b || !confirm("Remove this session and any disk data it received?")) return;
+  del(`/p2v/sessions/${enc(b.dataset.p2vDelete)}`).then(renderP2V).catch(fail);
+});
+
 function logTime(seconds) {
   const n = Math.max(0, Math.floor(seconds || 0));
   return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
@@ -703,7 +737,7 @@ async function refresh(page, auto = false) {
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
-  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
+  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();

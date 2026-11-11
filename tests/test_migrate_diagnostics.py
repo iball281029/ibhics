@@ -174,7 +174,7 @@ def test_api_unsaved_and_saved_source_tests_keep_password_private(tmp_path):
     body = SOURCE.to_dict()
     unsaved = client.post("/api/v1/migrate/sources/test", json=body)
     assert unsaved.status_code == 200
-    assert manager.sources() == [manager.uploads_source]
+    assert manager.sources() == [manager.uploads_source, manager.physical_source]
     assert not (tmp_path / "uploads").exists()
     assert client.post("/api/v1/migrate/sources", json=body).status_code == 201
     saved = client.post(f"/api/v1/migrate/sources/{SOURCE.name}/test")

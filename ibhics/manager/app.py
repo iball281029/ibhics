@@ -12,7 +12,17 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, WebSocket, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    WebSocket,
+    status,
+)
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -241,6 +251,8 @@ def create_app(
     migration_tls=None,
     ha=None,
     activity=None,
+    p2v=None,
+    p2v_pin: str = "",
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -322,6 +334,10 @@ def create_app(
     app.state.deploys = deploys
     app.state.auth = auth
     imports = imports or ImportManager(cluster)
+    from .p2v import P2VError, P2VSessions
+
+    p2v = p2v or P2VSessions()
+    imports.p2v = p2v
     app.state.imports = imports
     install_driver_errors(app)
     install_cluster_errors(app)
@@ -394,6 +410,54 @@ def create_app(
 
     public = APIRouter(prefix=API)
     api = APIRouter(prefix=API, dependencies=[Depends(guard)])
+
+    # P2V agent uploads: no console session, the session's one-time token instead.
+
+    def p2v_session(sid: str, token: str):
+        try:
+            return p2v.authorize(sid, token)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from None
+
+    @public.post("/p2v/upload/{sid}/inventory")
+    def p2v_inventory(sid: str, body: dict, x_p2v_token: str = Header(default="")) -> dict:
+        try:
+            return p2v.inventory(p2v_session(sid, x_p2v_token), body)
+        except P2VError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    @public.put("/p2v/upload/{sid}/disks/{index}")
+    async def p2v_disk(sid: str, index: int, request: Request) -> dict:
+        session = p2v_session(sid, request.headers.get("x-p2v-token", ""))
+        gzip = request.headers.get("content-encoding", "").lower() == "gzip"
+        loop = asyncio.get_running_loop()
+        import queue
+
+        chunks: queue.Queue = queue.Queue(maxsize=64)
+
+        def drain():
+            while (item := chunks.get()) is not None:
+                yield item
+
+        writer = loop.run_in_executor(None, p2v.write_disk, session, index, drain(), gzip)
+        try:
+            async for chunk in request.stream():
+                if chunk:
+                    await asyncio.to_thread(chunks.put, chunk)
+        finally:
+            await asyncio.to_thread(chunks.put, None)
+        try:
+            written = await writer
+        except P2VError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"disk": index, "bytes": written}
+
+    @public.post("/p2v/upload/{sid}/finish")
+    def p2v_finish(sid: str, x_p2v_token: str = Header(default="")) -> dict:
+        try:
+            return p2v.finish(p2v_session(sid, x_p2v_token)).public()
+        except P2VError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
 
     @public.get("/health")
     def health() -> dict:
@@ -485,6 +549,35 @@ def create_app(
     @api.delete("/users/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_user(name: str, request: Request) -> None:
         users().delete_user(name, acting=acting(request))
+
+    @api.get("/p2v/sessions")
+    def p2v_sessions() -> list[dict]:
+        return [s.public() for s in p2v.list()]
+
+    @api.post("/p2v/sessions", status_code=status.HTTP_201_CREATED)
+    def p2v_open(request: Request, body: dict) -> dict:
+        pool = str(body.get("pool", ""))
+        local = next((m for m in cluster.compute_members() if m.local), None)
+        if local is None:
+            raise HTTPException(status_code=409, detail="no local compute node")
+        folder = local.driver.pool_path(pool)
+        if not folder:
+            raise HTTPException(
+                status_code=409, detail=f"{pool!r} is not a folder-based storage pool on this node"
+            )
+        session, token = p2v.open(pool, Path(folder))
+        server = f"{request.url.scheme}://{request.url.netloc}"
+        pin = f" --pin '{p2v_pin}'" if p2v_pin else ""
+        fetch = f"--pinnedpubkey 'sha256//{p2v_pin}' -k" if p2v_pin else "-k"
+        command = (
+            f"curl -fsS {fetch} {server}/p2v-agent.sh | sudo bash -s -- --server {server} "
+            f"--session {session.id} --token '{token}'{pin}"
+        )
+        return {"session": session.public(), "command": command}
+
+    @api.delete("/p2v/sessions/{sid}", status_code=status.HTTP_204_NO_CONTENT)
+    def p2v_close(sid: str) -> None:
+        p2v.delete(sid)
 
     @api.get("/activity")
     def activity_log(

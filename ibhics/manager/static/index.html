@@ -499,12 +499,13 @@
     <section class="page" id="page-migrate">
       <div class="sheet">
         <div class="page-head">
-          <h1>Migrate</h1><span class="sub">Bring VMs over from VMware ESXi / vCenter, OVA exports and disk images (VMDK, VHDX, QCOW2)</span>
+          <h1>Migrate</h1><span class="sub">Bring VMs over from VMware ESXi / vCenter, Proxmox / KVM, OVA exports, disk images (VMDK, VHDX, QCOW2) and physical Linux servers</span>
         </div>
         <div class="tabs" id="migrate-tabs">
           <button data-tab="import" class="active">Import VMs</button>
           <button data-tab="sources">Sources</button>
           <button data-tab="imports">Jobs</button>
+          <button data-tab="p2v">Physical machines</button>
         </div>
         <div class="subpage active" id="tab-import">
           <div class="steps">
@@ -525,6 +526,28 @@
             <thead><tr><th><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"></th><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
             <tbody id="source-vms"></tbody>
           </table></div>
+        </div>
+        <div class="subpage" id="tab-p2v">
+          <div class="steps">
+            <div class="step"><b>1</b><span>Pick the storage that receives the disks and create a one-time agent command</span></div>
+            <div class="step"><b>2</b><span>Paste it as root on the physical Linux server: it sends CPU, memory, NICs and every disk</span></div>
+            <div class="step"><b>3</b><span>When it shows Ready, import it from Import VMs with source <b>physical</b></span></div>
+          </div>
+          <div class="toolbar operator-only">
+            <label style="display:flex;align-items:center;gap:8px">Storage <select id="p2v-pool" style="width:auto"></select></label>
+            <button type="button" class="primary" id="p2v-open">Create agent command</button>
+            <span class="spacer"></span><button type="button" id="p2v-refresh">Refresh</button>
+          </div>
+          <div id="p2v-command" hidden>
+            <p class="hint">Run on the physical server (Linux, as root). The command works for 24 hours and for one machine. Stop databases and busy services first, or boot the server from a live USB, for a clean copy.</p>
+            <pre class="code" id="p2v-code"></pre>
+            <button type="button" class="small" id="p2v-copy">Copy command</button>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Machine</th><th>Status</th><th>CPU / Memory</th><th>Disks</th><th>Storage</th><th>Created</th><th></th></tr></thead>
+            <tbody id="p2v-rows"></tbody>
+          </table></div>
+          <p class="hint">Windows servers are not supported by this agent yet.</p>
         </div>
         <div class="subpage" id="tab-sources">
           <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="source-dialog">+ Add source</button></div>

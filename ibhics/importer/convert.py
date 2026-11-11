@@ -404,6 +404,12 @@ class V2VConverter:
                 xml = out_dir / "source.xml"
                 xml.write_text(libvirt_xml(vm, self._pull_kvm_disks(source, vm, out_dir, progress)))
                 cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
+            elif source.type == SourceType.P2V:
+                from .kvm import libvirt_xml
+
+                xml = out_dir / "source.xml"
+                xml.write_text(libvirt_xml(vm, [(p, "raw") for p in vm.disk_paths]))
+                cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
             elif source.type == SourceType.OVA or vm.ref.lower().endswith(".ova"):
                 cmd = ["virt-v2v", "-i", "ova", vm.ref]
             else:

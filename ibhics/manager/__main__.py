@@ -136,6 +136,7 @@ def main() -> None:
 
     from .activity import ActivityLog
     from .ha import HighAvailability
+    from .p2v import P2VSessions
 
     migration_tls = None
     if args.driver == "libvirt" and args.migration_transport == "tls" and args.migration_host:
@@ -167,6 +168,8 @@ def main() -> None:
         migration_tls=migration_tls,
         ha=HighAvailability(cluster, state_path=args.state_file.with_name("ha.json")),
         activity=ActivityLog(args.state_file.with_name("activity.sqlite3")),
+        p2v=P2VSessions(args.state_file.with_name("p2v.json")),
+        p2v_pin=_public_key_pin(args.tls_cert),
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")
@@ -177,6 +180,35 @@ def main() -> None:
         ssl_certfile=args.tls_cert,
         ssl_keyfile=args.tls_key,
     )
+
+
+def _public_key_pin(cert: str | None) -> str:
+    """curl --pinnedpubkey value of the console's certificate, so the P2V agent talks
+    to this manager only. Empty when it cannot be read."""
+    if not cert:
+        return ""
+    import subprocess
+
+    try:
+        pub = subprocess.run(
+            ["openssl", "x509", "-in", cert, "-pubkey", "-noout"],
+            capture_output=True,
+            check=True,
+            timeout=10,
+        ).stdout
+        der = subprocess.run(
+            ["openssl", "pkey", "-pubin", "-outform", "DER"],
+            input=pub,
+            capture_output=True,
+            check=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    import base64
+    import hashlib
+
+    return base64.b64encode(hashlib.sha256(der).digest()).decode()
 
 
 if __name__ == "__main__":
