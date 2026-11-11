@@ -32,7 +32,7 @@ def test_large_ssd_cache_provision_fits_lvm_chunk_limit(tmp_path, monkeypatch):
             output = json.dumps({"report": [{"pv": []}]})
         elif args[0] == "lvs":
             output = str(cache_bytes)
-        elif args[0] == "lvconvert":
+        elif args[0] == "lvconvert" and "--cachevol" in args:
             chunk = int(args[args.index("--chunksize") + 1][:-1]) * 1024
             assert cache_bytes // chunk <= 1_000_000
             assert chunk == 1024**2
@@ -50,4 +50,15 @@ def test_large_ssd_cache_provision_fits_lvm_chunk_limit(tmp_path, monkeypatch):
         run=run,
     )
     assert result["cache_mode"] == "writethrough"
-    assert len([c for c in calls if c[0] == "lvconvert"]) == 1
+    assert len([c for c in calls if c[0] == "lvconvert"]) == 2
+    creates = [c for c in calls if c[0] == "lvcreate"]
+    data_lv, meta_lv = creates[0], creates[1]
+    # thin data on the HDD only, thin metadata on the SSD only (before the cache takes it)
+    assert "thin" in data_lv and set(data_lv) & set(spec.nodes[0].data)
+    assert not set(data_lv) & set(spec.nodes[0].cache)
+    assert "thin_meta" in meta_lv and set(meta_lv[-len(spec.nodes[0].cache) :]) == set(
+        spec.nodes[0].cache
+    )
+    pool = next(c for c in calls if c[0] == "lvconvert" and "thin-pool" in c)
+    assert pool[pool.index("--poolmetadata") + 1].endswith("/thin_meta")
+    assert calls.index(pool) < calls.index(creates[2])  # cache LV comes after
