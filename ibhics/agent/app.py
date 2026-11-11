@@ -62,6 +62,7 @@ def create_agent_app(
     imports: NodeImport | None = None,
     pool_labels_path: Path | None = None,
     storage_root: Path = Path("/var/lib/ibhics/virtual-storage"),
+    migration_pki=None,
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -83,6 +84,49 @@ def create_agent_app(
     @api.get("/health")
     def health() -> dict:
         return {"name": name, "role": str(role), "version": __version__}
+
+    if migration_pki is not None and role == NodeRole.COMPUTE:
+        from ..cluster.migration_pki import PKIError, schedule_activate
+
+        def pki_call(fn, *args):
+            try:
+                return fn(*args)
+            except PKIError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+
+        @api.get("/migration-tls")
+        def migration_tls_status() -> dict:
+            return pki_call(migration_pki.status)
+
+        @api.post("/migration-tls/prepare")
+        def migration_tls_prepare(body: dict) -> dict:
+            return pki_call(migration_pki.prepare, str(body.get("name", "")))
+
+        @api.post("/migration-tls/install")
+        def migration_tls_install(body: dict) -> dict:
+            certs, peers = body.get("certs"), body.get("peers")
+            if not isinstance(certs, dict) or not isinstance(peers, list):
+                raise HTTPException(status_code=422, detail="certs and peers are required")
+            return pki_call(
+                migration_pki.install,
+                str(body.get("name", "")),
+                str(body.get("address", "")),
+                str(body.get("ca", "")),
+                {str(k): str(v) for k, v in certs.items()},
+                [str(p) for p in peers],
+            )
+
+        @api.post("/migration-tls/peers")
+        def migration_tls_peers(body: dict) -> dict:
+            peers = body.get("peers")
+            if not isinstance(peers, list):
+                raise HTTPException(status_code=422, detail="peers must be a list")
+            return {"peers": pki_call(migration_pki.set_peers, [str(p) for p in peers])}
+
+        @api.post("/migration-tls/activate", status_code=status.HTTP_202_ACCEPTED)
+        def migration_tls_activate() -> dict:
+            pki_call(schedule_activate)
+            return {"scheduled": True}
 
     @api.get("/virtual-storage/readiness")
     def storage_readiness() -> dict:

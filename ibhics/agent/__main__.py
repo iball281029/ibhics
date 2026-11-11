@@ -47,6 +47,11 @@ def main() -> None:
         backups = NodeBackup(driver)
         backups.cleanup()  # detach backup targets a crash may have left attached
         restore_edge(driver)
+    migration_pki = None
+    if driver is not None and type(driver).__name__ == "LibvirtDriver":
+        from ..cluster.migration_pki import MigrationPKI
+
+        migration_pki = MigrationPKI()
     app = create_agent_app(
         args.name,
         role,
@@ -54,6 +59,7 @@ def main() -> None:
         driver,
         backups,
         pool_labels_path=Path("/var/lib/ibhics/pool-labels.json"),
+        migration_pki=migration_pki,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
