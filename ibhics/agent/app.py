@@ -476,6 +476,14 @@ def create_agent_app(
         def import_progress() -> dict:
             return {name: list(p) for name, p in imports.progress.items()}
 
+        @api.post("/imports/{name}/cancel")
+        def cancel_import(name: str) -> dict:
+            return {"stopped": imports.cancel(name)}
+
+        @api.post("/vms/{uuid}/migrate/abort")
+        def abort_migration(uuid: str) -> dict:
+            return {"aborted": driver.abort_migration(uuid)}
+
         @api.get("/imports/{name}/log")
         def import_log(name: str) -> dict:
             return {"log": imports.log(name)}

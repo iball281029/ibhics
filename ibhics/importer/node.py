@@ -73,6 +73,11 @@ class NodeImport:
             self._driver.start_vm(created.uuid)
         return self._driver.get_vm(created.uuid)
 
+    def cancel(self, name: str) -> bool:
+        """Stop a running conversion; the import then fails as cancelled."""
+        cancel = getattr(self._converter, "cancel", None)
+        return bool(cancel and cancel(name))
+
     def log(self, name: str, max_bytes: int | None = None) -> str:
         """virt-v2v's output for an import, while it runs and after."""
         log_dir = getattr(self._converter, "log_dir", None)

@@ -213,6 +213,10 @@ class RemoteDriver(HypervisorDriver):
             raise PoolNotFound(resp.json()["detail"].removeprefix("storage pool not found: "))
         return info_from_json(self._ok(resp, uuid).json())
 
+    def abort_migration(self, uuid: str) -> bool:
+        resp = self._client.request("POST", f"/vms/{uuid}/migrate/abort", timeout=30)
+        return resp.status_code < 400 and bool(resp.json().get("aborted"))
+
     def vm_definition(self, uuid: str) -> str:
         resp = self._client.request("GET", f"/vms/{uuid}/definition", timeout=30)
         return self._ok(resp, uuid).json()["definition"]
@@ -435,6 +439,10 @@ class RemoteImport:
 
     def __init__(self, client: AgentClient) -> None:
         self._client = client
+
+    def cancel(self, name: str) -> bool:
+        resp = self._client.request("POST", f"/imports/{name}/cancel", timeout=30)
+        return resp.status_code < 400 and bool(resp.json().get("stopped"))
 
     def log(self, name: str) -> str:
         resp = self._client.request("GET", f"/imports/{name}/log")

@@ -1545,6 +1545,13 @@ class LibvirtDriver(HypervisorDriver):
             used.update(self._local_files_of(ET.fromstring(xml)))
         return used
 
+    def abort_migration(self, uuid: str) -> bool:
+        try:
+            self._lookup(uuid).abortJob()
+        except libvirt.libvirtError:
+            return False
+        return True
+
     def vm_definition(self, uuid: str) -> str:
         return self._lookup(uuid).XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
 
