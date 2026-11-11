@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ibhics"
-version = "1.3.0b2+vstore3.11"
+version = "1.3.0b2+vstore3.12"
 description = "Open-source hyper-converged infrastructure platform"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -33,6 +33,7 @@ include = ["ibhics*"]
 [tool.setuptools.package-data]
 "ibhics" = ["storage_assets/*.sh"]
 "ibhics.manager" = ["static/*", "static/**/*"]
+"ibhics.arbiter_ui" = ["static/*"]
 
 [tool.ruff]
 line-length = 100

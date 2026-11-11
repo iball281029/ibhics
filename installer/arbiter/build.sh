@@ -23,6 +23,7 @@ PY
 cp "$HERE/drbd-9.3.4.tar.gz" "$PAYLOAD/"
 # Dedicated witness services: no libvirt dependency or compute manager on appliance.
 sed 's/ libvirtd.service//' "$HERE/../systemd/ibhics-agent.service" >"$PAYLOAD/ibhics-agent.service"
+cp "$HERE/../systemd/ibhics-arbiter-ui.service" "$PAYLOAD/"
 sed -e 's/ libvirtd.service//' -e 's|ExecStart=.*|ExecStart=/usr/local/sbin/arbiter-setup|' \
     "$HERE/../systemd/ibhics-firstboot.service" >"$PAYLOAD/ibhics-firstboot.service"
 echo '1.3.0b2+arbiterfix1' >"$PAYLOAD/VERSION"

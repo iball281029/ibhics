@@ -21,10 +21,11 @@ printf 'drbd\n' >/etc/modules-load.d/arbiter.conf
 python3 -m venv /opt/ibhics/venv
 /opt/ibhics/venv/bin/pip install --no-index --find-links "$SRC/wheelhouse" ibhics
 install -d /etc/ibhics /var/lib/ibhics /var/log/ibhics
-install -m 644 "$SRC/ibhics-agent.service" "$SRC/ibhics-firstboot.service" /etc/systemd/system/
+install -m 644 "$SRC/ibhics-agent.service" "$SRC/ibhics-firstboot.service" \
+    "$SRC/ibhics-arbiter-ui.service" /etc/systemd/system/
 printf '#!/bin/sh\nexec /opt/ibhics/venv/bin/python -m ibhics.installer.arbiter "$@"\n' >/usr/local/sbin/arbiter-setup
 chmod 755 /usr/local/sbin/arbiter-setup
-systemctl enable ibhics-firstboot.service open-vm-tools.service
+systemctl enable ibhics-firstboot.service open-vm-tools.service ibhics-arbiter-ui.service
 cp "$SRC/VERSION" /etc/ibhics/version
 printf 'Arbiter\n' >/etc/ibhics/appliance
 # Package sources for later maintenance.

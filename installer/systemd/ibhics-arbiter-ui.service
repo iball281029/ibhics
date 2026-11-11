@@ -1,0 +1,20 @@
+[Unit]
+Description=Arbiter witness web console
+After=network-online.target ibhics-agent.service
+Wants=network-online.target
+ConditionPathExists=/etc/ibhics/configured
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/ibhics/venv/bin/python -m ibhics.arbiter_ui
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=-/etc/ibhics
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
