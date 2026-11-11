@@ -410,6 +410,11 @@ const loaders = {
     state.templates = all.filter((v) => v.template && !v.recycled);
   },
   deploys: async () => { state.deploys = await api("/deploys"); },
+  activity: async () => {
+    const r = await api(`/activity?limit=1000${tp.days ? `&days=${tp.days}` : ""}`);
+    state.activity = r.events || [];
+    state.activityRetention = r.retention_days || 0;
+  },
   recycle: async () => { state.recycle = await api("/recycle-bin"); },
   edge: async () => { state.edge = await api("/edge"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
@@ -458,6 +463,17 @@ function allTasks() {
       state: d.state, step: "Copying the disks", percent: null, created: d.created, finished: d.finished,
       error: d.error, id: d.id, result: d.result ? `VM ${d.result}${d.power_on ? ", powered on" : ""}` : "",
     })),
+    ...(state.activity || []).map((a) => {
+      const vm = [...(state.vms || []), ...(state.templates || [])].find((v) => v.uuid === a.object.split(" / ")[0]);
+      const named = (a.note || "").startsWith("name: ") ? a.note.slice(6) : "";
+      const object = vm ? a.object.replace(vm.uuid, vm.name) : a.object || named;
+      return {
+        kind: a.category, title: object || a.action, sub: [object ? a.action : "", a.user && a.user !== "-" ? `by ${a.user}` : ""].filter(Boolean).join(" · "),
+        state: a.ok ? "done" : "failed", step: "", percent: null, created: a.at, finished: a.at, duration_ms: a.duration_ms,
+        error: a.ok ? "" : `HTTP ${a.status}${a.note ? ` · ${a.note}` : ""}`, id: `ev${a.id}`,
+        result: a.ok ? `${a.method} ${a.path}${a.address ? ` from ${a.address}` : ""}` : "",
+      };
+    }),
   ];
   return tasks.sort((a, b) => String(b.created).localeCompare(String(a.created)));
 }
@@ -482,14 +498,20 @@ function renderTasks() {
 }
 // ---------- Tasks page ----------
 
-const tp = { state: "", kind: "", sel: "" };
+const tp = { state: "", kind: "", sel: "", days: 0 };
 const taskKey = (t) => `${t.kind}|${t.id}`;
 function duration(t) {
+  if (t.duration_ms != null) return t.duration_ms < 1000 ? `${t.duration_ms} ms` : `${(t.duration_ms / 1000).toFixed(1)} s`;
   if (!t.created) return "";
   const s = Math.max(0, ((t.finished ? new Date(t.finished) : new Date()) - new Date(t.created)) / 1000);
   if (s < 60) return `${Math.round(s)} s`;
   if (s < 3600) return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
   return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+function renderTaskTools() {
+  const keep = $("#task-retention");
+  keep.hidden = !(state.me && isAdmin());
+  keep.value = String(state.activityRetention || 0);
 }
 function renderTaskPage() {
   const q = $("#task-search").value.trim().toLowerCase();
@@ -548,6 +570,26 @@ async function renderOps() {
   });
   $("#task-kind").addEventListener("change", (e) => { tp.kind = e.target.value; renderTaskPage(); });
   $("#task-search").addEventListener("input", () => renderTaskPage());
+  $("#task-days").addEventListener("change", (e) => {
+    tp.days = Number(e.target.value) || 0;
+    load("activity").then(renderTaskPage).catch(fail);
+  });
+  $("#task-csv").addEventListener("click", () => {
+    const qs = new URLSearchParams();
+    const categories = ["VM", "Container", "Storage", "Network", "Node", "Backup", "User", "Sign-in", "Import", "System"];
+    if (categories.includes(tp.kind)) qs.set("category", tp.kind);
+    if (tp.state === "done") qs.set("result", "ok");
+    if (tp.state === "failed") qs.set("result", "failed");
+    const q = $("#task-search").value.trim();
+    if (q) qs.set("q", q);
+    if (tp.days) qs.set("days", tp.days);
+    location.href = `/api/v1/activity.csv?${qs}`;
+  });
+  $("#task-retention").addEventListener("change", (e) => {
+    api("/activity/settings", { method: "PUT", body: JSON.stringify({ retention_days: Number(e.target.value) }) })
+      .then((r) => toast(r.retention_days ? `Keeping ${r.retention_days} days of history` : "Keeping all history"))
+      .catch(fail);
+  });
 }
 
 function logTime(seconds) {
@@ -659,7 +701,7 @@ async function refresh(page, auto = false) {
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
   if (page === "containers") { await load("containers", "ctTemplates", "pools", "networks"); renderContainers(); }
-  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
+  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "activity", "vms"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();

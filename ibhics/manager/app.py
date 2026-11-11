@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import socket
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -181,6 +183,7 @@ ADMIN_ROUTES = {
     ("PATCH", f"{API}/users/{{name}}"),
     ("DELETE", f"{API}/users/{{name}}"),
     ("GET", f"{API}/audit"),
+    ("PUT", f"{API}/activity/settings"),
     ("POST", f"{API}/migrate/sources"),
     ("POST", f"{API}/migrate/sources/test"),  # probes any host: admin, like adding one
     ("POST", f"{API}/networks"),
@@ -237,6 +240,7 @@ def create_app(
     pool_labels_path: Path | None = None,
     migration_tls=None,
     ha=None,
+    activity=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -302,6 +306,7 @@ def create_app(
                 while True:
                     await asyncio.to_thread(backups.tick)
                     await asyncio.to_thread(recycle.purge_expired)
+                    await asyncio.to_thread(activity.purge)
                     await asyncio.sleep(scheduler_interval)
 
             scheduler = asyncio.create_task(schedule())
@@ -334,24 +339,57 @@ def create_app(
             raise Forbidden(f"this needs the {needed} role; you are {user.role}")
         return user
 
+    from .activity import ActivityLog
+
+    activity = activity or ActivityLog()
+
     @app.middleware("http")
     async def audit(request: Request, call_next):
+        started = time.monotonic()
+        named = ""
+        if (
+            request.method in ("POST", "PUT", "PATCH")
+            and request.headers.get("content-type", "").startswith("application/json")
+            and int(request.headers.get("content-length") or 0) <= 65536
+        ):
+            # The name of what is being created, for the change history. Never secrets:
+            # only these keys are read.
+            with contextlib.suppress(Exception):
+                body = json.loads(await request.body() or b"{}")
+                if isinstance(body, dict):
+                    named = str(body.get("name") or body.get("username") or "")[:120]
         response = await call_next(request)
         if (
-            auth is not None
-            and request.method not in ("GET", "HEAD", "OPTIONS")
+            request.method not in ("GET", "HEAD", "OPTIONS")
             and request.url.path.startswith(API)
             and request.url.path != f"{API}/auth/login"  # recorded by the login route
         ):
             user = getattr(request.state, "user", None)
             note = getattr(request.state, "audit_note", "")
-            auth.record(
-                user.name if user else "-",
-                request.method,
-                f"{request.url.path} {note}".strip(),
-                response.status_code,
-                request.client.host if request.client else "",
-            )
+            address = request.client.host if request.client else ""
+            history_note = note or (f"name: {named}" if named else "")
+            if auth is not None:
+                auth.record(
+                    user.name if user else "-",
+                    request.method,
+                    f"{request.url.path} {note}".strip(),
+                    response.status_code,
+                    address,
+                )
+            route = request.scope.get("route")
+            try:
+                activity.add(
+                    user.name if user else "-",
+                    request.method,
+                    getattr(route, "path", ""),
+                    request.url.path,
+                    response.status_code,
+                    address,
+                    int((time.monotonic() - started) * 1000),
+                    history_note,
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("could not record activity")
         return response
 
     public = APIRouter(prefix=API)
@@ -378,8 +416,10 @@ def create_app(
             session = auth.login(body.username, body.password)
         except AuthError:
             auth.record(body.username, "LOGIN", "failed", 401, address)
+            activity.add(body.username, "LOGIN", "", "failed", 401, address)
             raise
         auth.record(body.username, "LOGIN", "ok", 200, address)
+        activity.add(body.username, "LOGIN", "", "ok", 200, address)
         response.set_cookie(
             SESSION_COOKIE,
             session.token,
@@ -445,6 +485,53 @@ def create_app(
     @api.delete("/users/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_user(name: str, request: Request) -> None:
         users().delete_user(name, acting=acting(request))
+
+    @api.get("/activity")
+    def activity_log(
+        request: Request,
+        category: str = "",
+        result: str = "",
+        q: str = "",
+        days: int = 0,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> dict:
+        rows = activity.query(category, result, q, days, limit, offset)
+        user = getattr(request.state, "user", None)
+        if auth is not None and (user is None or user.role != Role.ADMIN):
+            for row in rows:
+                row["address"] = ""  # client addresses and command text are for admins
+                if not row["note"].startswith("name: "):
+                    row["note"] = ""
+        return {"events": rows, "retention_days": activity.retention_days}
+
+    @api.get("/activity.csv")
+    def activity_csv(
+        request: Request, category: str = "", result: str = "", q: str = "", days: int = 0
+    ) -> Response:
+        rows = activity.query(category, result, q, days, limit=5000)
+        user = getattr(request.state, "user", None)
+        if auth is not None and (user is None or user.role != Role.ADMIN):
+            for row in rows:
+                row["address"] = ""
+                if not row["note"].startswith("name: "):
+                    row["note"] = ""
+        return Response(
+            activity.to_csv(rows),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="ibhics-activity.csv"'},
+        )
+
+    @api.put("/activity/settings")
+    def activity_settings(body: dict) -> dict:
+        try:
+            days = int(body.get("retention_days", 0))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="retention_days must be a number") from None
+        try:
+            return {"retention_days": activity.set_retention(days)}
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @api.get("/audit", response_model=list[AuditOut])
     def audit_log(limit: int = 200) -> list[AuditOut]:

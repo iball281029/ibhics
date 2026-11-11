@@ -134,6 +134,7 @@ def main() -> None:
         ),
     )
 
+    from .activity import ActivityLog
     from .ha import HighAvailability
 
     migration_tls = None
@@ -165,6 +166,7 @@ def main() -> None:
         ),
         migration_tls=migration_tls,
         ha=HighAvailability(cluster, state_path=args.state_file.with_name("ha.json")),
+        activity=ActivityLog(args.state_file.with_name("activity.sqlite3")),
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")

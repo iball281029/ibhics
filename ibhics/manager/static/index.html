@@ -610,7 +610,7 @@
       <div class="sheet">
         <div class="page-head"><h1>Tasks</h1><span class="sub" id="tasks-sum"></span>
           <span class="spacer"></span>
-          <input class="search" id="task-search" placeholder="Search by VM, node or target">
+          <input class="search" id="task-search" placeholder="Search by VM, node, user or action">
         </div>
         <div class="tabs" id="tasks-tabs">
           <button data-tab="task-jobs" class="active">Jobs</button>
@@ -619,7 +619,11 @@
         <div class="subpage active" id="tab-task-jobs">
           <div class="toolbar">
             <div class="chips" id="task-state"><button type="button" data-v="" class="on">All</button><button type="button" data-v="active">Running</button><button type="button" data-v="done">Finished</button><button type="button" data-v="failed">Failed</button></div>
-            <select id="task-kind" style="width:auto"><option value="">All types</option><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy VM</option></select>
+            <select id="task-kind" style="width:auto"><option value="">All types</option><optgroup label="Jobs"><option>Backup</option><option>Restore</option><option>Import</option><option>Live migration</option><option>Move</option><option>Deploy VM</option></optgroup><optgroup label="Changes"><option>VM</option><option>Container</option><option>Storage</option><option>Network</option><option>Node</option><option>User</option><option>Sign-in</option><option>System</option></optgroup></select>
+            <select id="task-days" style="width:auto" title="How far back"><option value="0">All time</option><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select>
+            <span class="spacer"></span>
+            <button type="button" class="small" id="task-csv" title="Download the changes shown here as CSV">Export CSV</button>
+            <select id="task-retention" style="width:auto" title="How long the change history is kept" hidden><option value="0">Keep history forever</option><option value="30">Keep 30 days</option><option value="90">Keep 90 days</option><option value="365">Keep 1 year</option></select>
           </div>
           <div class="tasks-split">
             <div class="table-wrap"><table class="task-table">
