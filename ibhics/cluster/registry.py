@@ -74,6 +74,7 @@ class Cluster:
         self._lock = threading.RLock()
         self.cluster_id = ""
         self.cluster_name = ""
+        self.local_agent = ""  # this node's agent URL, saved for a standby manager
 
     @classmethod
     def standalone(cls, name: str, driver: HypervisorDriver, **kwargs) -> Cluster:
@@ -363,6 +364,16 @@ class Cluster:
             for m in self._members.values()
             if not m.local
         ]
+        local = next((m for m in self._members.values() if m.local), None)
+        if local is not None and self.local_agent:
+            entries.append(
+                {
+                    "name": local.name,
+                    "role": str(local.role),
+                    "address": self.local_agent,
+                    **({"agent_token": self._token} if self._token else {}),
+                }
+            )
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state_path.with_suffix(".tmp")
         maintenance = sorted(m.name for m in self._members.values() if m.maintenance)
