@@ -579,6 +579,10 @@ class HypervisorDriver(abc.ABC):
         """
         raise NotImplementedError
 
+    def abort_migration(self, uuid: str) -> bool:
+        """Stop a live migration in progress; the VM keeps running here."""
+        return False
+
     def vm_definition(self, uuid: str) -> str:
         """The VM's saved definition, enough for `define_vm` on another node to run the
         same VM from the same shared disks (HA restart). Opaque to the caller."""

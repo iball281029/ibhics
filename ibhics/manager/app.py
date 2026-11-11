@@ -1644,6 +1644,21 @@ def create_app(
         )
         return ImportJobOut(**job.__dict__)
 
+    @api.post("/migrate/jobs/{job_id}/cancel", response_model=ImportJobOut)
+    def cancel_import(job_id: str) -> ImportJobOut:
+        try:
+            return ImportJobOut(**imports.cancel(job_id).__dict__)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such import") from None
+
+    @api.post("/migrations/{job_id}/cancel")
+    def cancel_migration(job_id: str) -> dict:
+        try:
+            job = migrations.cancel(job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such migration") from None
+        return {"id": job.id, "state": job.state, "error": job.error}
+
     @api.get("/migrate/jobs/{job_id}/log")
     def import_log(job_id: str, format: str | None = None, download: bool = False):
         if download:

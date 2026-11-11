@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..cluster import Cluster
-from ..hypervisor import VMExists
+from ..hypervisor import InvalidState, VMExists
 from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
 from ..importer.diagnostics import test_source
@@ -30,7 +30,7 @@ class ImportJob:
     name: str  # the VM's name in ibHiCS
     node: str
     created: str
-    state: str = "queued"  # queued, running, done, failed
+    state: str = "queued"  # queued, running, done, failed, cancelled
     finished: str | None = None
     result: str | None = None  # the new VM's uuid
     error: str | None = None
@@ -172,6 +172,21 @@ class ImportManager:
 
     # Jobs
 
+    def cancel(self, job_id: str) -> ImportJob:
+        with self._lock:
+            job = next((j for j in self._jobs if j.id == job_id), None)
+        if job is None:
+            raise KeyError(job_id)
+        if job.state == "queued":
+            job.state, job.error, job.finished = "cancelled", "cancelled", self._now()
+        elif job.state == "running":
+            member = self._cluster.member(job.node)
+            if not member.imports.cancel(job.name):
+                raise InvalidState("this step cannot be stopped yet; try again in a moment")
+        else:
+            raise InvalidState(f"this import is already {job.state}")
+        return job
+
     def jobs(self) -> list[ImportJob]:
         with self._lock:
             return list(reversed(self._jobs))
@@ -226,6 +241,8 @@ class ImportManager:
             self._jobs.append(job)
 
         def run() -> None:
+            if job.state == "cancelled":
+                return
             job.state = "running"
 
             def progress(step: str, percent: int | None) -> None:
@@ -250,6 +267,8 @@ class ImportManager:
                     self.p2v.delete(vm.ref)  # the VM has its converted copies now
             except Exception as exc:  # recorded on the job; nobody else is waiting
                 job.error, job.state = f"{type(exc).__name__}: {exc}", "failed"
+                if "cancelled by the operator" in str(exc):
+                    job.state = "cancelled"
             job.finished = self._now()
 
         self._executor.submit(run)

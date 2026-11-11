@@ -66,7 +66,9 @@ const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + wi
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
-const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
+const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
+// Jobs that can be stopped from the Tasks page, and the API call that stops them.
+const CANCEL_PATH = { Import: (id) => `/migrate/jobs/${enc(id)}/cancel`, "Live migration": (id) => `/migrations/${enc(id)}/cancel`, Move: (id) => `/migrations/${enc(id)}/cancel` };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
 const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
@@ -541,7 +543,8 @@ async function renderTaskDetail(t) {
     ["Status", `<span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span>`],
     ["Current step", step], ["Started", esc(when(t.created))], ["Finished", t.finished ? esc(when(t.finished)) : ""],
     ["Duration", esc(duration(t))], ["Result", esc(t.result || "")], ["Task ID", `<span class="mono">${esc(t.id)}</span>`]].filter(([, v]) => v);
-  box.innerHTML = `<h3>${esc(t.kind)} · ${esc(t.title)}</h3><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+  const cancellable = isActive(t) && CANCEL_PATH[t.kind] && canOperate();
+  box.innerHTML = `<h3>${esc(t.kind)} · ${esc(t.title)}</h3>${cancellable ? `<button type="button" class="small danger" data-task-cancel="${esc(t.kind)}|${esc(t.id)}">Cancel task</button>` : ""}<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     ${t.error ? `<p class="wiz-label">Error</p><pre class="task-err">${esc(t.error)}</pre>` : ""}
     ${t.log ? `<p class="wiz-label">Log <button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Open full log</button></p><div class="task-log import-log-mini" id="task-log">Loading…</div>` : ""}`;
   if (t.log) {
@@ -577,6 +580,14 @@ async function renderOps() {
   });
   $("#task-kind").addEventListener("change", (e) => { tp.kind = e.target.value; renderTaskPage(); });
   $("#task-search").addEventListener("input", () => renderTaskPage());
+  $("#task-detail").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-task-cancel]");
+    if (!b) return;
+    const [kind, id] = b.dataset.taskCancel.split("|");
+    if (!confirm(`Cancel this ${kind.toLowerCase()}? The VM stays where it was.`)) return;
+    b.disabled = true;
+    post(CANCEL_PATH[kind](id)).then(() => { toast("Cancel requested"); return refresh("tasks"); }).catch(fail);
+  });
   $("#task-days").addEventListener("change", (e) => {
     tp.days = Number(e.target.value) || 0;
     load("activity").then(renderTaskPage).catch(fail);

@@ -35,13 +35,14 @@ class Migration:
     copy_storage: bool
     live: bool
     created: str
-    state: str = "queued"  # queued, running, done, failed
+    state: str = "queued"  # queued, running, done, failed, cancelled
     finished: str | None = None
     error: str | None = None
     step: str = ""
     # Change host and storage: after the move, these disks (by order) go to these pools
     # on the new node.
     disk_pools: dict[int, str] | None = None
+    cancel_requested: bool = False
 
 
 @dataclass
@@ -235,7 +236,26 @@ class MigrationManager:
         self._jobs.append(job)
         return job
 
+    def cancel(self, job_id: str) -> Migration:
+        job = next((j for j in self._jobs if j.id == job_id), None)
+        if job is None:
+            raise KeyError(job_id)
+        if job.state == "queued":
+            job.state, job.error, job.finished = "cancelled", "cancelled", self._now()
+        elif job.state == "running":
+            job.cancel_requested = True
+            source = self._cluster.member(job.source)
+            if not source.driver.abort_migration(job.uuid):
+                raise InvalidState("the migration could not be stopped; it may be finishing")
+        else:
+            raise InvalidState(f"this migration is already {job.state}")
+        return job
+
     def _run(self, job: Migration, plan: Plan, bandwidth_mib: int | None) -> None:
+        if job.state == "cancelled":
+            with self._lock:
+                self._moving.discard(job.uuid)
+            return
         job.state = "running"
         try:
             job.step = "Preparing UEFI and seed files"
@@ -264,6 +284,8 @@ class MigrationManager:
             job.step = ""
         except Exception as exc:  # the job records every failure; nothing else is waiting
             job.state, job.error = "failed", str(exc) or type(exc).__name__
+            if getattr(job, "cancel_requested", False):
+                job.state, job.error = "cancelled", "cancelled by the operator; the VM stayed"
         else:
             job.state = "done"
         finally:

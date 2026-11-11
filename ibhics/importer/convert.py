@@ -323,6 +323,23 @@ exit 0
 
 
 class V2VConverter:
+    # name -> running virt-v2v, so an operator can stop an import.
+    running: dict[str, subprocess.Popen] = {}
+    cancelled: set[str] = set()
+
+    @classmethod
+    def cancel(cls, name: str) -> bool:
+        cls.cancelled.add(name)
+        proc = cls.running.get(name)
+        if proc is None:
+            return False
+        proc.terminate()
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return True
+
     def __init__(
         self,
         run=subprocess.run,
@@ -548,9 +565,13 @@ class V2VConverter:
         except OSError:
             log, sink = None, None
         lines = []
+        if name in self.cancelled:
+            self.cancelled.discard(name)
+            raise ConversionFailed("cancelled by the operator")
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
         )
+        self.running[name] = proc
         sampler = ProgressSampler()
         for line in proc.stdout:
             # TextIO normalizes CR and CRLF into complete terminal updates.
@@ -563,8 +584,12 @@ class V2VConverter:
             if found:
                 progress(*found)
         proc.wait()
+        self.running.pop(name, None)
         if sink:
             sink.close()
+        if name in self.cancelled:
+            self.cancelled.discard(name)
+            raise ConversionFailed("cancelled by the operator")
         out = "".join(lines)
         return subprocess.CompletedProcess(cmd, proc.returncode, out, out), log
 
