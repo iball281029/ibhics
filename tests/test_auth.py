@@ -249,3 +249,30 @@ def test_console_needs_operator_and_same_origin(env):
     assert "another site" in reason(client, {"origin": "https://evil.example"})
     # admin from our own page gets past auth; the fake VM simply has no display
     assert "no VNC display" in reason(client, {"origin": "http://testserver"})
+
+
+def test_sessions_survive_a_manager_restart_but_not_logout(tmp_path):
+    from ibhics.manager.auth import Auth, Role
+
+    now = [1000.0]
+    a = Auth(state_path=tmp_path / "users.json", clock=lambda: now[0])
+    a.add_user("ops", Role.OPERATOR, "a-long-password")
+    s1, s2 = a.login("ops", "a-long-password"), a.login("ops", "a-long-password")
+    saved = (tmp_path / "sessions.json").read_text()
+    assert s1.token not in saved and s2.token not in saved  # only hashes on disk
+    assert (tmp_path / "sessions.json").stat().st_mode & 0o777 == 0o600
+    a.logout(s2.token)
+    b = Auth(state_path=tmp_path / "users.json", clock=lambda: now[0])
+    b.load()
+    assert b.authenticate(s1.token).name == "ops"
+    import pytest
+
+    from ibhics.manager.auth import AuthError
+
+    with pytest.raises(AuthError):
+        b.authenticate(s2.token)
+    now[0] += 13 * 3600  # past the 12-hour maximum
+    c = Auth(state_path=tmp_path / "users.json", clock=lambda: now[0])
+    c.load()
+    with pytest.raises(AuthError):
+        c.authenticate(s1.token)

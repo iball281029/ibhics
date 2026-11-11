@@ -107,6 +107,10 @@ def check_password_rules(password: str, username: str) -> None:
 _DUMMY_HASH = hash_password(secrets.token_hex(8))
 
 
+def _key(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 class Auth:
     def __init__(
         self,
@@ -126,7 +130,10 @@ class Auth:
         self._lockout = lockout
         self._clock = clock
         self._users: dict[str, User] = {}
+        # Keyed by a hash of the token: the saved copy cannot be replayed as a cookie.
         self._sessions: dict[str, Session] = {}
+        self._sessions_path = state_path.with_name("sessions.json") if state_path else None
+        self._sessions_saved = 0.0
         self._failures: dict[str, list[float]] = {}
         self._audit: deque[AuditEntry] = deque(maxlen=1000)
         self._lock = threading.RLock()
@@ -141,6 +148,39 @@ class Auth:
             for entry in data["users"]:
                 entry["role"] = Role(entry["role"])
                 self._users[entry["name"]] = User(**entry)
+            self._load_sessions()
+
+    def _load_sessions(self) -> None:
+        """Sessions survive a manager restart (an upgrade), so nobody is signed out."""
+        path = self._sessions_path
+        if not path or not path.exists():
+            return
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return
+        now = self._clock()
+        for key, s in saved.items():
+            session = Session("", s["user"], float(s["created"]), float(s["last_used"]))
+            if s["user"] in self._users and not self._expired(session, now):
+                self._sessions[key] = session
+
+    def _save_sessions(self, force: bool = True) -> None:
+        path = self._sessions_path
+        now = self._clock()
+        if not path or (not force and now - self._sessions_saved < 60):
+            return
+        self._sessions_saved = now
+        data = {
+            k: {"user": s.user, "created": s.created, "last_used": s.last_used}
+            for k, s in self._sessions.items()
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+        tmp.replace(path)
 
     def _save(self) -> None:
         if not self._state_path:
@@ -282,28 +322,33 @@ class Auth:
             user.last_login = self._stamp()
             self._drop_expired_sessions(now)
             session = Session(secrets.token_urlsafe(32), name, now, now)
-            self._sessions[session.token] = session
+            self._sessions[_key(session.token)] = session
             self._save()
+            self._save_sessions()
             return session
 
     def logout(self, token: str) -> None:
         with self._lock:
-            self._sessions.pop(token, None)
+            self._sessions.pop(_key(token or ""), None)
+            self._save_sessions()
 
     def authenticate(self, token: str | None) -> User:
         if not token:
             raise AuthError("sign in first")
         now = self._clock()
         with self._lock:
-            session = self._sessions.get(token)
+            key = _key(token)
+            session = self._sessions.get(key)
             if session is None:
                 raise AuthError("sign in first")
             expired = self._expired(session, now)
             user = self._users.get(session.user)
             if expired or user is None or not user.enabled:
-                del self._sessions[token]
+                del self._sessions[key]
+                self._save_sessions()
                 raise AuthError("your session has ended; sign in again")
             session.last_used = now
+            self._save_sessions(force=False)  # idle time survives a restart, roughly
             return user
 
     def _expired(self, session: Session, now: float) -> bool:
@@ -324,6 +369,7 @@ class Auth:
     def _end_sessions(self, name: str) -> None:
         for token in [t for t, s in self._sessions.items() if s.user == name]:
             del self._sessions[token]
+        self._save_sessions()
 
     # Audit log
 
