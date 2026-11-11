@@ -792,9 +792,15 @@ def create_app(
                     probe = response.json()
             except Exception as exc:
                 probe = {"module_available": False, "resources": [], "error": str(exc)}
-            nodes.append({"name": member.name, "display_name": member.display_name,
-                          "role": str(member.role), "healthy": cluster.is_healthy(member),
-                          **probe})
+            nodes.append(
+                {
+                    "name": member.name,
+                    "display_name": member.display_name,
+                    "role": str(member.role),
+                    "healthy": cluster.is_healthy(member),
+                    **probe,
+                }
+            )
         plan = None
         if virtual_storage_path.exists():
             plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
@@ -806,7 +812,8 @@ def create_app(
             phase = "ready" if active and resource["status"].get("state") == "OK" else "degraded"
             syncing = any(
                 str(peer.get("replication-state", "")).startswith("Sync")
-                for node in nodes for r in node.get("resources", [])
+                for node in nodes
+                for r in node.get("resources", [])
                 if r.get("name") == runtime["created"]["spec"]["name"]
                 for connection in r.get("connections", [])
                 for peer in connection.get("peer_devices", [])
@@ -816,11 +823,18 @@ def create_app(
         job = runtime["job"]
         if job and job["state"] in ("queued", "running"):
             phase = {"cache-mode": "changing-cache", "software": "preparing"}.get(
-                job["kind"], "creating")
+                job["kind"], "creating"
+            )
         # A saved plan alone is never evidence of replicated storage being online.
-        return {"nodes": nodes, "plan": plan.model_dump() if plan else None,
-                "phase": phase, "active": active, "activation_supported": True,
-                "cache": storage_controller.cache(), **runtime}
+        return {
+            "nodes": nodes,
+            "plan": plan.model_dump() if plan else None,
+            "phase": phase,
+            "active": active,
+            "activation_supported": True,
+            "cache": storage_controller.cache(),
+            **runtime,
+        }
 
     @api.get("/virtual-storage/inventory")
     def virtual_storage_inventory() -> dict:
@@ -867,8 +881,11 @@ def create_app(
         if not virtual_storage_path.exists():
             raise HTTPException(404, "save a Virtual Storage plan first")
         plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
-        return Response(plan.drbd_config(), media_type="text/plain",
-                        headers={"Content-Disposition": f'attachment; filename="{plan.name}.res"'})
+        return Response(
+            plan.drbd_config(),
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="{plan.name}.res"'},
+        )
 
     @api.get("/vms", response_model=list[VMOut])
     def list_vms() -> list[VMOut]:
@@ -1202,8 +1219,12 @@ def create_app(
             moves = {i: body.pool for i, d in enumerate(vm.spec.disks) if d.pool != body.pool}
             if moves:
                 backups.run_task(
-                    "move-disks", f"template storage → {body.pool}", vm.spec.name,
-                    member.name, uuid, lambda: member.driver.move_disks(uuid, moves),
+                    "move-disks",
+                    f"template storage → {body.pool}",
+                    vm.spec.name,
+                    member.name,
+                    uuid,
+                    lambda: member.driver.move_disks(uuid, moves),
                     progress=lambda: member.driver.disk_move_progress(uuid),
                 )
         return VMOut.from_info(member.driver.set_template(uuid, body.template), member.name)

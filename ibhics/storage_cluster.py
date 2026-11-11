@@ -392,8 +392,11 @@ class StorageController:
                 continue
             member = self.cluster.member(selection["node"])
             try:
-                info = cache_status(name) if member.local else remote(
-                    member, "GET", "/virtual-storage/cache/" + name)
+                info = (
+                    cache_status(name)
+                    if member.local
+                    else remote(member, "GET", "/virtual-storage/cache/" + name)
+                )
                 rows.append({"node": member.name, **info})
             except Exception as exc:
                 rows.append({"node": member.name, "error": str(exc)})
@@ -411,6 +414,7 @@ class StorageController:
             if not rows or any(r.get("error") for r in rows):
                 raise ValueError("SSD cache status is unavailable; inspect both nodes")
             return rows
+
         check()
 
         def work(report):
@@ -427,4 +431,5 @@ class StorageController:
             if any(r.get("mode") != body.mode for r in result):
                 raise RuntimeError("Cache modes differ; inspect both nodes before retrying")
             return {"mode": body.mode, "nodes": result}
+
         return self.jobs.start("cache-mode", body.model_dump(), work)

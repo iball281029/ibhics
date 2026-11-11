@@ -62,14 +62,16 @@ def test_disk_picker_requires_one_suitable_disk(tmp_path, sizes, removable, expe
 
 def test_setup_failure_is_visible_and_retried(monkeypatch, capsys):
     calls = []
+
     def run():
         calls.append(True)
         if len(calls) == 1:
-            raise RuntimeError('system bus unavailable')
+            raise RuntimeError("system bus unavailable")
         return 0
-    monkeypatch.setattr(arbiter, 'setup_once', run)
-    monkeypatch.setattr('builtins.input', lambda _: '')
+
+    monkeypatch.setattr(arbiter, "setup_once", run)
+    monkeypatch.setattr("builtins.input", lambda _: "")
     assert arbiter.main() == 0
     assert len(calls) == 2
     text = capsys.readouterr().out
-    assert 'setup did not finish' in text and 'has not been marked ready' in text
+    assert "setup did not finish" in text and "has not been marked ready" in text

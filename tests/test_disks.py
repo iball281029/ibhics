@@ -111,8 +111,9 @@ def test_lv_vg_reads_device_mapper_names():
 
 def test_clearing_shared_raid_pv_removes_it_only_once():
     raid = dev("md127", 100, "raid1", fstype="LVM2_member")
-    blk = json.dumps({"blockdevices": [dev("sda", 100, children=[raid]),
-                                       dev("sdb", 100, children=[raid])]})
+    blk = json.dumps(
+        {"blockdevices": [dev("sda", 100, children=[raid]), dev("sdb", 100, children=[raid])]}
+    )
     plan = clear_plan(blk, pvs(("/dev/md127", "old-data")), ["/dev/sda", "/dev/sdb"])
     assert plan.count(["pvremove", "-ff", "-y", "/dev/md127"]) == 1
 

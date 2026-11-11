@@ -371,7 +371,7 @@ def test_test_install_opens_the_disk_with_libguestfs_first():
     vc, nbd = text.index("if command -v virt-customize"), text.index("qemu-nbd -c /dev/nbd0")
     assert vc < text.index("elif command -v guestfish") < nbd
     assert "--upload answers.conf:/etc/ibhics/answers.conf" in text
-    assert 'RENAME_FAILED' in text  # a failed rename stops before first boot, not hangs
+    assert "RENAME_FAILED" in text  # a failed rename stops before first boot, not hangs
 
 
 def test_test_install_defines_pause_on_every_path():
@@ -384,26 +384,27 @@ def test_console_password_saved_before_timezone_failure(tmp_path):
     class FailedTimezone(Recorder):
         def __call__(self, cmd, **kwargs):
             result = super().__call__(cmd, **kwargs)
-            if cmd[0] == 'timedatectl':
-                return subprocess.CompletedProcess(cmd, 1, '', 'system bus unavailable')
+            if cmd[0] == "timedatectl":
+                return subprocess.CompletedProcess(cmd, 1, "", "system bus unavailable")
             return result
+
     run = FailedTimezone()
-    with pytest.raises(RuntimeError, match='system bus unavailable'):
-        setup.apply(cfg('witness'), 'test-console-password', None, root=tmp_path, run=run)
-    assert (['chpasswd'], 'root:test-console-password\n') in run.calls
-    assert not (tmp_path / 'etc/ibhics/configured').exists()
-    assert not (tmp_path / 'etc/issue').exists()
+    with pytest.raises(RuntimeError, match="system bus unavailable"):
+        setup.apply(cfg("witness"), "test-console-password", None, root=tmp_path, run=run)
+    assert (["chpasswd"], "root:test-console-password\n") in run.calls
+    assert not (tmp_path / "etc/ibhics/configured").exists()
+    assert not (tmp_path / "etc/issue").exists()
 
 
 def test_failed_agent_start_does_not_mark_appliance_ready(tmp_path):
     class FailedAgent(Recorder):
         def __call__(self, cmd, **kwargs):
             result = super().__call__(cmd, **kwargs)
-            if cmd == ['systemctl', 'enable', '--now', 'ibhics-agent.service']:
-                return subprocess.CompletedProcess(cmd, 1, '', 'agent failed')
+            if cmd == ["systemctl", "enable", "--now", "ibhics-agent.service"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "agent failed")
             return result
-    with pytest.raises(RuntimeError, match='agent failed'):
-        setup.apply(cfg('witness'), 'test-console-password', None,
-                    root=tmp_path, run=FailedAgent())
-    assert not (tmp_path / 'etc/ibhics/configured').exists()
-    assert not (tmp_path / 'etc/issue').exists()
+
+    with pytest.raises(RuntimeError, match="agent failed"):
+        setup.apply(cfg("witness"), "test-console-password", None, root=tmp_path, run=FailedAgent())
+    assert not (tmp_path / "etc/ibhics/configured").exists()
+    assert not (tmp_path / "etc/issue").exists()

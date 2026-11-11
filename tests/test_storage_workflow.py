@@ -55,8 +55,7 @@ def wait_done(jobs):
 
 def test_cache_changes_both_nodes_and_requires_healthy_replicas(workflow, monkeypatch):
     _, controller, spec, _ = workflow
-    state = {"created": {"spec": spec.model_dump()},
-             "resource": {"status": {"state": "Degraded"}}}
+    state = {"created": {"spec": spec.model_dump()}, "resource": {"status": {"state": "Degraded"}}}
     monkeypatch.setattr(controller, "status", lambda: state)
     rows = [{"node": n, "mode": "writethrough"} for n in ("node1", "node2")]
     monkeypatch.setattr(controller, "cache", lambda: rows)
@@ -81,8 +80,10 @@ def test_cache_changes_both_nodes_and_requires_healthy_replicas(workflow, monkey
     controller.change_cache(body)
     assert wait_done(controller.jobs)["state"] == "done"
     assert all(r["mode"] == "writeback" for r in rows)
-    assert calls == [("local", "writeback"),
-                     ("node2", "POST", "/virtual-storage/cache", "writeback")]
+    assert calls == [
+        ("local", "writeback"),
+        ("node2", "POST", "/virtual-storage/cache", "writeback"),
+    ]
 
 
 def test_review_and_confirm_use_one_time_receipt(workflow, monkeypatch):

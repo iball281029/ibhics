@@ -15,17 +15,18 @@ class Resolver(socketserver.BaseRequestHandler):
         try:
             while query[at]:
                 size = query[at]
-                labels.append(query[at + 1:at + size + 1].decode("ascii"))
+                labels.append(query[at + 1 : at + size + 1].decode("ascii"))
                 at += size + 1
             at += 1
-            kind, cls = struct.unpack("!HH", query[at:at + 4])
-            question = query[12:at + 4]
+            kind, cls = struct.unpack("!HH", query[at : at + 4])
+            question = query[12 : at + 4]
             answers = []
             if cls == 1 and kind in (1, 28):
                 family = socket.AF_INET if kind == 1 else socket.AF_INET6
                 try:
-                    addresses = {r[4][0] for r in lookup(".".join(labels),
-                                 None, family, socket.SOCK_STREAM)}
+                    addresses = {
+                        r[4][0] for r in lookup(".".join(labels), None, family, socket.SOCK_STREAM)
+                    }
                 except socket.gaierror:
                     addresses = set()
                 for address in addresses:

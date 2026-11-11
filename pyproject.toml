@@ -37,6 +37,7 @@ include = ["ibhics*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["ops"]  # one-off operator scripts kept as run
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

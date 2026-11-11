@@ -184,8 +184,11 @@ def create_agent_app(
 
         @api.post("/virtual-storage/cache", status_code=status.HTTP_202_ACCEPTED)
         def storage_cache_mode(body: CacheModeIn) -> dict:
-            return storage_jobs.start("cache-mode", body.model_dump(), lambda report:
-                set_cache_mode(body, root=storage_root, report=report))
+            return storage_jobs.start(
+                "cache-mode",
+                body.model_dump(),
+                lambda report: set_cache_mode(body, root=storage_root, report=report),
+            )
 
         @api.post("/virtual-storage/provision", status_code=status.HTTP_202_ACCEPTED)
         def storage_provision(body: NodeProvisionIn) -> dict:

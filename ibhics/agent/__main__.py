@@ -47,8 +47,14 @@ def main() -> None:
         backups = NodeBackup(driver)
         backups.cleanup()  # detach backup targets a crash may have left attached
         restore_edge(driver)
-    app = create_agent_app(args.name, role, token, driver, backups,
-                           pool_labels_path=Path("/var/lib/ibhics/pool-labels.json"))
+    app = create_agent_app(
+        args.name,
+        role,
+        token,
+        driver,
+        backups,
+        pool_labels_path=Path("/var/lib/ibhics/pool-labels.json"),
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 

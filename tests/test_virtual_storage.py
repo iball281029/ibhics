@@ -11,11 +11,18 @@ from ibhics.storage import VirtualStoragePlan, readiness
 
 
 def plan():
-    return {"name": "hybrid01", "nodes": [
-        {"name": "node1", "address": "172.16.12.104", "device": "/dev/vg/data"},
-        {"name": "node2", "address": "172.16.12.103", "device": "/dev/vg/data"}],
-        "arbiter_name": "witness", "arbiter_address": "172.16.12.105",
-        "virtual_ip": "172.16.12.106", "prefix": 24, "size_gib": 3500}
+    return {
+        "name": "hybrid01",
+        "nodes": [
+            {"name": "node1", "address": "172.16.12.104", "device": "/dev/vg/data"},
+            {"name": "node2", "address": "172.16.12.103", "device": "/dev/vg/data"},
+        ],
+        "arbiter_name": "witness",
+        "arbiter_address": "172.16.12.105",
+        "virtual_ip": "172.16.12.106",
+        "prefix": 24,
+        "size_gib": 3500,
+    }
 
 
 def test_configuration_has_two_replicas_and_diskless_arbiter():
@@ -27,11 +34,16 @@ def test_configuration_has_two_replicas_and_diskless_arbiter():
     assert "hosts node1 node2 witness;" in conf
 
 
-@pytest.mark.parametrize("change", [
-    {"virtual_ip": "172.16.12.104"}, {"virtual_ip": "172.16.13.106"},
-    {"arbiter_name": "node1"}, {"name": "bad; rm -rf /"},
-    {"virtual_ip": "172.16.12.255"},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"virtual_ip": "172.16.12.104"},
+        {"virtual_ip": "172.16.13.106"},
+        {"arbiter_name": "node1"},
+        {"name": "bad; rm -rf /"},
+        {"virtual_ip": "172.16.12.255"},
+    ],
+)
 def test_invalid_address_or_name_is_refused(change):
     with pytest.raises(ValidationError):
         VirtualStoragePlan(**(plan() | change))

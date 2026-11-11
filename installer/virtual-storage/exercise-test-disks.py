@@ -32,5 +32,13 @@ assert len(data) == len(cache) == 1
 Path(f"/sys/class/block/{Path(cache[0]).name}/queue/rotational").write_text("0")
 current = inventory(driver)
 selection = NodeDisks(node=node, fingerprint=current["fingerprint"], data=data, cache=cache)
-print(json.dumps(provision(driver, NodeProvisionIn(name="vs-test", selection=selection,
-    size_gib=1, confirm_wipe=True), node=node, report=lambda s: print(s, flush=True))))
+print(
+    json.dumps(
+        provision(
+            driver,
+            NodeProvisionIn(name="vs-test", selection=selection, size_gib=1, confirm_wipe=True),
+            node=node,
+            report=lambda s: print(s, flush=True),
+        )
+    )
+)
