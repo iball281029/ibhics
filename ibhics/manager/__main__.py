@@ -134,6 +134,12 @@ def main() -> None:
         ),
     )
 
+    migration_tls = None
+    if args.driver == "libvirt" and args.migration_transport == "tls" and args.migration_host:
+        from .migration_tls import MigrationTLS
+
+        migration_tls = MigrationTLS(cluster, local_address=args.migration_host)
+
     imports = ImportManager(cluster, state_path=args.migrate_state_file)
     imports.load()
 
@@ -155,6 +161,7 @@ def main() -> None:
         usage=UsageHistory(
             Path(os.environ.get("IBHICS_USAGE_FILE", "/var/lib/ibhics/usage.sqlite3"))
         ),
+        migration_tls=migration_tls,
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")

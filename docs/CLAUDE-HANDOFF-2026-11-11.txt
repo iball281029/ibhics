@@ -167,3 +167,19 @@ E. Automatic VM restart HA และ real host failure/power-off test ยัง�
 - ไม่ได้ทดสอบดับ hostจริง และไม่ได้ตรวจสถานะ VM liveใหม่ในวันที่11
 - vstore3.8-review/ มี tracked-changes.patch + new migration_tls.py + handoff
   patchไม่รวม untrackedfiles ให้ใช้workingtreeเดิมเป็นหลัก ไม่applyซ้ำ
+
+12. อัปเดตโดย Claude 11 พ.ย. 2026 ช่วงค่ำ
+- PR #25 merge เข้า main แล้ว (94c00a2); GitHub ใช้งานได้อีกครั้ง
+- vstore3.9: ส่ง UEFI NVRAM และ seed ISO ไปปลายทางอัตโนมัติก่อน migrate
+  ลบไฟล์ที่ส่งไปเมื่อ migrate ล้มเหลว และลบสำเนาต้นทางเมื่อสำเร็จ
+  ทดสอบจริง: VM UEFI ชั่วคราว ibtest-mig Node1->Node2->Node1 ~3 วินาที/รอบ
+  hash NVRAM/seed ตรงกัน ไม่มี disk error แล้วลบเฉพาะ VM ทดสอบ
+- vstore3.10 ติดตั้ง Node1/Node2 แล้ว (backup /opt/ibhics/vstore3.10-backup-*)
+  ibhics/cluster/migration_pki.py + ibhics/manager/migration_tls.py
+  Add node (compute) ออก cert ให้อัตโนมัติเมื่อ manager มี CA; Remove node
+  ถอดออกจาก tls_allowed_dn_list ของเครื่องที่เหลือ; renew ผ่าน
+  POST /api/v1/cluster/migration-tls/renew; ดูสถานะ GET /api/v1/cluster/migration-tls
+  ตรวจสถานะจริงแล้ว: cert ทั้งสองเครื่องหมดอายุ ก.พ. 2029, CA พ.ย. 2036
+- ยังไม่ได้ทดสอบจริง: Add node เครื่องที่สาม และ renew (renew จะ restart
+  libvirtd ทั้งสองเครื่อง แบบไม่หยุด VM ตามที่ Codex พิสูจน์ไว้)
+- Arbiter .105 ยังเป็น vstore3.3 (Mac ไม่มี SSH key) ไม่มี VM จึงไม่กระทบ

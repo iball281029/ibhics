@@ -235,6 +235,7 @@ def create_app(
     usage: UsageHistory | None = None,
     virtual_storage_path: Path = Path("/var/lib/ibhics/virtual-storage.json"),
     pool_labels_path: Path | None = None,
+    migration_tls=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -501,6 +502,10 @@ def create_app(
             body.address,
             body.agent_token.get_secret_value() if body.agent_token else "",
         )
+        if migration_tls is not None and migration_tls.enabled and member.role == "compute":
+            # The node joins either way; a failure is shown under migration certificates.
+            with contextlib.suppress(Exception):
+                migration_tls.enroll(member.name)
         return MemberOut(
             name=member.name,
             display_name=member.display_name or member.name,
@@ -527,7 +532,35 @@ def create_app(
 
     @api.delete("/cluster/nodes/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_node(name: str) -> None:
+        was_compute = any(m.name == name and m.role == "compute" for m in cluster.members())
         cluster.remove(name)
+        if migration_tls is not None and migration_tls.enabled and was_compute:
+            with contextlib.suppress(Exception):
+                migration_tls.revoke(name)
+
+    @api.get("/cluster/migration-tls")
+    def migration_tls_status() -> dict:
+        if migration_tls is None:
+            return {"enabled": False, "nodes": {}, "events": []}
+        return migration_tls.status()
+
+    @api.post("/cluster/migration-tls/nodes/{name}/enroll")
+    def migration_tls_enroll(name: str) -> dict:
+        if migration_tls is None:
+            raise HTTPException(status_code=409, detail="migration TLS is not managed here")
+        try:
+            return migration_tls.enroll(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.post("/cluster/migration-tls/renew")
+    def migration_tls_renew() -> list[dict]:
+        if migration_tls is None:
+            raise HTTPException(status_code=409, detail="migration TLS is not managed here")
+        try:
+            return migration_tls.renew_all()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @api.get("/nodes/{name}/host", response_model=HostOut)
     def node_host(name: str) -> HostOut:
