@@ -40,6 +40,7 @@ class SourceType(StrEnum):
     DISK = "disk"
     UPLOAD = "upload"  # files uploaded through the web console, on the manager's node
     KVM = "kvm"  # a Proxmox VE or plain KVM/libvirt host, read over SSH
+    NUTANIX = "nutanix"  # Nutanix AHV through Prism (Element or Central) v3 API
     P2V = "p2v"  # physical machines whose disks the P2V agent sent to the manager's node
 
 
@@ -84,6 +85,13 @@ class Source:
                 raise ValueError("a Proxmox or KVM source needs the host's address")
             if not self.password:
                 raise ValueError("a Proxmox or KVM source needs the root password")
+        elif self.type == SourceType.NUTANIX:
+            if not self.host or not HOST_RE.match(self.host):
+                raise ValueError("a Nutanix source needs the Prism address")
+            if not self.username or not self.password:
+                raise ValueError("a Nutanix source needs a Prism username and password")
+        elif self.type == SourceType.P2V:
+            pass
         elif not self.path or not self.path.startswith("/"):
             raise ValueError(f"an {self.type} source needs an absolute folder path")
 
@@ -182,6 +190,10 @@ def list_vms(
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     fetch: Callable[[Source, str], str] | None = None,
 ) -> list[SourceVM]:
+    if source.type == SourceType.NUTANIX:
+        from .nutanix import list_nutanix_vms
+
+        return list_nutanix_vms(source)
     if source.type == SourceType.KVM:
         from .convert import HostSSH
         from .kvm import list_kvm_vms

@@ -404,6 +404,14 @@ class V2VConverter:
                 xml = out_dir / "source.xml"
                 xml.write_text(libvirt_xml(vm, self._pull_kvm_disks(source, vm, out_dir, progress)))
                 cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
+            elif source.type == SourceType.NUTANIX:
+                from .kvm import libvirt_xml
+                from .nutanix import pull_disks
+
+                progress("Copying the disks out of Prism", 1)
+                xml = out_dir / "source.xml"
+                xml.write_text(libvirt_xml(vm, pull_disks(source, vm, out_dir, progress)))
+                cmd = ["virt-v2v", "-i", "libvirtxml", str(xml)]
             elif source.type == SourceType.P2V:
                 from .kvm import libvirt_xml
 

@@ -105,7 +105,24 @@ def _ssh(source, command, timeout):
         return result.stdout.strip()
 
 
+def _prism(source, timeout):
+    import httpx
+
+    from .nutanix import Prism
+
+    client = httpx.Client(
+        base_url=f"https://{source.host}:9440",
+        auth=(source.username or "", source.password or ""),
+        verify=source.verify_tls,
+        timeout=timeout,
+    )
+    return Prism(source, http=client)
+
+
 def _login(source, timeout):
+    if source.type == SourceType.NUTANIX:
+        _prism(source, timeout)._call("POST", "/vms/list", json={"kind": "vm", "length": 1})
+        return "Authenticated (read-only test)"
     if source.type == SourceType.KVM:
         _ssh(source, "true", timeout)
     else:
@@ -116,6 +133,9 @@ def _login(source, timeout):
 
 
 def _inventory(source, timeout):
+    if source.type == SourceType.NUTANIX:
+        page = _prism(source, timeout)._call("POST", "/vms/list", json={"kind": "vm", "length": 1})
+        return page.get("metadata", {}).get("total_matches", 0)
     if source.type == SourceType.KVM:
         output = _ssh(
             source,
@@ -190,7 +210,7 @@ def test_source(
 
     def check(step, call, *, advisory=False, port=None):
         nonlocal node
-        target_port = port or (22 if source.type == SourceType.KVM else 443)
+        target_port = port or {SourceType.KVM: 22, SourceType.NUTANIX: 9440}.get(source.type, 443)
         try:
             remaining = max(0.001, min(timeout, deadline - time.monotonic()))
             value = _bounded(lambda: call(remaining), remaining)
@@ -242,7 +262,7 @@ def test_source(
         checks.append(dict(step=step, ok=ok, detail=detail, hint=hint))
         return ok or advisory
 
-    if source.type not in (SourceType.VMWARE, SourceType.KVM):
+    if source.type not in (SourceType.VMWARE, SourceType.KVM, SourceType.NUTANIX):
         check("Path", lambda t: path_check(source, t))
     else:
         try:
@@ -262,7 +282,7 @@ def test_source(
                 node = _bounded(lambda: _node_address(host), 0.25)
             except Exception:
                 pass
-        port = 443 if source.type == SourceType.VMWARE else 22
+        port = {SourceType.VMWARE: 443, SourceType.NUTANIX: 9440}.get(source.type, 22)
         if not check(f"TCP {port}", lambda t: connect(host, port, t), port=port):
             return {"checks": checks}
         if source.type == SourceType.VMWARE:
