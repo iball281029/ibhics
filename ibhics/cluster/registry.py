@@ -351,6 +351,10 @@ class Cluster:
         if name in self._members:
             raise MembershipError(f"a node named {name!r} is already in the cluster")
 
+    def save(self) -> None:
+        with self._lock:
+            self._save()
+
     def _save(self) -> None:
         if not self._state_path:
             return

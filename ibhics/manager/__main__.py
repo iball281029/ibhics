@@ -116,6 +116,8 @@ def main() -> None:
         # Saved with the members, so a standby manager can reach this node's agent.
         cluster.local_agent = f"http://{args.migration_host}:8007"
     cluster.load()
+    if cluster.local_agent and args.state_file.exists():
+        cluster.save()  # record this node's own agent for whichever manager comes next
 
     backups = BackupManager(cluster, state_path=args.backup_state_file)
     backups.load()
