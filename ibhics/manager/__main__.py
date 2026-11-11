@@ -18,6 +18,7 @@ from .auth import Auth
 from .backups import BackupManager
 from .imports import ImportManager
 from .migrations import TRANSPORTS, MigrationManager
+from .usage import UsageHistory
 from .vmgroups import VMGroups
 
 
@@ -150,6 +151,10 @@ def main() -> None:
         groups=groups,
         recycle_days=args.recycle_days,
         edge_state=Path("/var/lib/ibhics/edge.json") if args.driver == "libvirt" else None,
+        pool_labels_path=args.state_file.with_name("pool-labels.json"),
+        usage=UsageHistory(
+            Path(os.environ.get("IBHICS_USAGE_FILE", "/var/lib/ibhics/usage.sqlite3"))
+        ),
     )
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")

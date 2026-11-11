@@ -63,6 +63,9 @@ class Policy:
         return now >= slot and (last is None or last < slot)
 
 
+PROGRESS_POLL = 2.0  # s between looks at a long task's progress
+
+
 @dataclass
 class Job:
     id: str
@@ -76,6 +79,8 @@ class Job:
     finished: str | None = None
     result: str | None = None  # backup id, or the restored VM's uuid
     error: str | None = None
+    step: str = ""  # long tasks: what runs now, and how far (move-disks)
+    percent: float | None = None
 
 
 class BackupManager:
@@ -148,6 +153,17 @@ class BackupManager:
             self._policies[policy.name] = policy
             self._save()
         return policy
+
+    def rename_vm(self, old: str, new: str) -> None:
+        """Policies that name the VM follow its new name."""
+        with self._lock:
+            changed = False
+            for policy in self._policies.values():
+                if old in policy.vms:
+                    policy.vms = [new if v == old else v for v in policy.vms]
+                    changed = True
+            if changed:
+                self._save()
 
     def remove_policy(self, name: str) -> None:
         with self._lock:
@@ -266,11 +282,26 @@ class BackupManager:
         with self._lock:
             return self._vm_locks.setdefault(uuid, threading.Lock())
 
-    def run_task(self, kind: str, detail: str, vm_name: str, node: str, uuid: str, work):
+    def run_task(self, kind: str, detail: str, vm_name: str, node: str, uuid: str, work,
+                 progress: Callable[[], dict] | None = None):  # fmt: skip
         """Run a short VM task (snapshot, restore, delete snapshot) now, in this request,
-        after any backup or snapshot of the same VM; it is listed in Tasks like a job."""
+        after any backup or snapshot of the same VM; it is listed in Tasks like a job.
+        With `progress` (returns {"step", "percent"}), the job shows how far it got."""
         job = self._new_job(kind, detail, vm_name, node, None)
         job.state = "running"
+        done = threading.Event()
+        if progress is not None:
+
+            def watch() -> None:
+                while not done.wait(PROGRESS_POLL):
+                    try:
+                        now = progress() or {}
+                    except Exception:  # noqa: BLE001 - progress is best effort
+                        continue
+                    job.step = str(now.get("step", job.step))
+                    job.percent = now.get("percent", job.percent)
+
+            threading.Thread(target=watch, daemon=True).start()
         try:
             with self.vm_busy(uuid):
                 result = work()
@@ -281,6 +312,7 @@ class BackupManager:
             job.state = "failed"
             raise
         finally:
+            done.set()
             job.finished = self._clock().isoformat()
 
     def _new_job(self, kind, target, vm, node, policy) -> Job:

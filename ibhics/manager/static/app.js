@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
+const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -69,8 +69,15 @@ const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder"
 const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed" };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot" };
+const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
+  "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
+  "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
+  "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
 const computeMembers = () => (state.cluster?.members || []).filter((m) => m.role === "compute");
+const nodeLabel = (name) => state.cluster?.members.find((m) => m.name === name)?.display_name || name;
+const poolText = (p) => p.display_name ? `${p.display_name} (${p.name})` : p.name;
+const poolLabel = (name, node) => poolText(state.pools.find((p) => p.name === name && p.node === node) || { name });
+const nodeOptionText = (name) => nodeLabel(name) === name ? name : `${nodeLabel(name)} (${name})`;
 
 // ---------- theme and user menu ----------
 
@@ -94,20 +101,65 @@ document.addEventListener("click", (e) => {
   const link = e.target.closest("[data-tab-link]");
   if (link) setTimeout(() => selectTab("system-tabs", link.dataset.tabLink), 0);
 });
-// Row menus sit inside scrolling tables, which would clip them: place the open menu on
-// the page itself, below the button, or above it when there is no room underneath.
-document.addEventListener("toggle", (e) => {
-  const d = e.target;
-  if (!(d instanceof HTMLDetailsElement) || !d.classList.contains("more") || !d.open) return;
-  const menu = d.querySelector(".dropdown"), r = d.querySelector("summary").getBoundingClientRect();
-  menu.style.cssText = "position:fixed;visibility:hidden;top:0;left:0;right:auto";
-  const h = menu.offsetHeight, w = menu.offsetWidth;
-  const below = window.innerHeight - r.bottom - 8 >= h || r.top < h + 8;
-  menu.style.top = `${below ? r.bottom + 4 : r.top - h - 4}px`;
-  menu.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))}px`;
-  menu.style.visibility = "";
+// Manual popovers retain their DOM ancestry for delegated VM actions, while the
+// browser top layer prevents clipping by cards, panels and scrolling tables.
+function positionActionMenu(details) {
+  const menu = details.querySelector(":scope > .dropdown");
+  if (!menu || !details.open) return;
+  const pad = 8, width = innerWidth, height = innerHeight;
+  const anchor = details.querySelector("summary").getBoundingClientRect();
+  Object.assign(menu.style, {position: "fixed", margin: "0", inset: "auto",
+    left: "0px", top: "0px", minWidth: `${Math.min(210, width - 2 * pad)}px`,
+    maxWidth: `${width - 2 * pad}px`, maxHeight: `${height - 2 * pad}px`});
+  const naturalHeight = menu.scrollHeight + 2;
+  const below = Math.max(0, height - anchor.bottom - pad - 4);
+  const above = Math.max(0, anchor.top - pad - 4);
+  const down = below >= naturalHeight || below >= above;
+  const available = Math.min(height - 2 * pad, Math.max(below, above));
+  menu.style.maxHeight = `${Math.max(40, available)}px`;
+  const rect = menu.getBoundingClientRect();
+  const rail = document.querySelector(".rail")?.getBoundingClientRect().right || 0;
+  const minimumLeft = width - rail - pad >= rect.width ? rail + pad : pad;
+  const left = Math.max(minimumLeft, Math.min(anchor.right - rect.width, width - rect.width - pad));
+  const top = Math.max(pad, Math.min(down ? anchor.bottom + 4 : anchor.top - rect.height - 4,
+    height - rect.height - pad));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+document.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement) || !details.classList.contains("more")) return;
+  const menu = details.querySelector(":scope > .dropdown");
+  if (!menu) return;
+  if (!details.open) {
+    if (menu.hasAttribute("popover") && menu.matches(":popover-open")) menu.hidePopover();
+    return;
+  }
+  $$("details.more[open]").forEach((other) => { if (other !== details) other.open = false; });
+  if (typeof menu.showPopover === "function") {
+    menu.setAttribute("popover", "manual");
+    if (!menu.matches(":popover-open")) menu.showPopover();
+  }
+  positionActionMenu(details);
 }, true);
-window.addEventListener("scroll", () => $$("details.more[open]").forEach((d) => d.removeAttribute("open")), true);
+let actionMenuFrame = null;
+function repositionActionMenus(event) {
+  if (event?.target instanceof Element && event.target.closest(".dropdown")) return;
+  if (actionMenuFrame !== null) return;
+  actionMenuFrame = requestAnimationFrame(() => {
+    actionMenuFrame = null;
+    $$("details.more[open]").forEach(positionActionMenu);
+  });
+}
+addEventListener("scroll", repositionActionMenus, {passive: true, capture: true});
+addEventListener("resize", repositionActionMenus);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  $$("details.more[open]").forEach((details) => {
+    details.open = false;
+    details.querySelector("summary")?.focus();
+  });
+});
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
   location.href = "/login.html";
@@ -120,11 +172,35 @@ async function loadMe() {
   document.body.classList.toggle("can-operate", canOperate());
 }
 
+
+// Expand the icon rail without navigating away from the current page.
+const railToggle = document.getElementById("rail-toggle");
+for (const link of document.querySelectorAll(".rail nav a[data-label]")) {
+  const label = document.createElement("span");
+  label.className = "rail-label";
+  label.textContent = link.dataset.label;
+  link.append(label);
+  link.setAttribute("aria-label", link.dataset.label);
+}
+function setRailExpanded(expanded) {
+  document.body.classList.toggle("rail-expanded", expanded);
+  railToggle.setAttribute("aria-expanded", String(expanded));
+  railToggle.setAttribute("aria-label", expanded ? "Collapse navigation" : "Expand navigation");
+}
+try { setRailExpanded(localStorage.getItem("ibhics-rail-expanded") === "true"); } catch { setRailExpanded(false); }
+railToggle.addEventListener("click", () => {
+  const expanded = !document.body.classList.contains("rail-expanded");
+  setRailExpanded(expanded);
+  try { localStorage.setItem("ibhics-rail-expanded", String(expanded)); } catch { /* private mode */ }
+});
+railToggle.addEventListener("keydown", (event) => { if (event.key === "Escape") setRailExpanded(false); });
+
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "nodes", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal"];
+const PAGES = ["home", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
+  if (hash === "nodes") return "cluster"; // Preserve old node inventory bookmarks.
   if (hash.startsWith("vm/")) return "vm";
   if (hash.startsWith("node/")) return "node";
   return PAGES.includes(hash) ? hash : "home";
@@ -133,12 +209,13 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 
 function show() {
   const page = currentPage();
+  if (location.hash === "#nodes") history.replaceState(null, "", "#cluster");
   if (page !== "network" && ntopo.edit) {
     if (ntopo.edit.saving) { location.hash = "network"; toast("Wait for topology saving to finish.", true); return; }
     topoEndEdit(); // Leaving Network discards only the local draft.
   }
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  const section = { vm: "compute", node: "nodes", recycle: "compute" }[page] || page;
+  const section = { vm: "compute", node: "cluster", recycle: "compute" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
@@ -263,9 +340,12 @@ $$("dialog").forEach((dlg) => {
 
 function fillSelects() {
   const online = computeMembers().filter((m) => m.healthy);
-  const opts = online.map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
-  $$(".node-list").forEach((s) => { s.innerHTML = opts; });
-  $$(".node-list-auto").forEach((s) => { s.innerHTML = `<option value="">Automatic</option>${opts}`; });
+  const opts = online.map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
+  $$(".node-list, .node-list-auto").forEach((s) => {
+    const was = s.value;
+    s.innerHTML = `${s.matches(".node-list-auto") ? '<option value="">Automatic</option>' : ""}${opts}`;
+    if ([...s.options].some((o) => o.value === was)) s.value = was;
+  });
   const keep = (sel, items) => $$(sel).forEach((s) => {
     const was = s.value;
     s.innerHTML = items.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
@@ -301,7 +381,7 @@ function fillPools(form) {
   }
   const was = sel.value;
   const opts = [...byName.values()].sort((a, b) => b.available_gb - a.available_gb).map((p) =>
-    `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb).toLocaleString()} GB free, ${esc(p.type)})</option>`);
+    `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb).toLocaleString()} GB free, ${esc(p.type)})</option>`);
   if (sel.dataset.original) opts.unshift(`<option value="">${esc(sel.dataset.original)}</option>`);
   sel.innerHTML = opts.join("") || `<option value="">No storage pool on this node</option>`;
   if ([...sel.options].some((o) => o.value === was)) sel.value = was;
@@ -316,7 +396,7 @@ $$("form").forEach((form) => {
 async function loadCluster() {
   const c = await api("/cluster");
   state.cluster = c;
-  $("#topology").textContent = TOPOLOGY[c.topology] || c.topology;
+  $("#topology").textContent = c.name || TOPOLOGY[c.topology] || c.topology;
   $("#quorum").innerHTML = `<span class="dot ${c.quorum ? "ok" : "bad"}"></span> ${c.quorum ? "OK" : "Lost"}`;
   const hosts = await Promise.all(computeMembers().filter((m) => m.healthy).map((m) =>
     api(`/nodes/${enc(m.name)}/host`).then((h) => [m.name, h]).catch(() => [m.name, null])));
@@ -343,6 +423,13 @@ const loaders = {
   sources: async () => { state.sources = await api("/migrate/sources"); },
   isos: async () => { state.isos = await api("/isos"); },
   imports: async () => { state.imports = await api("/migrate/jobs"); },
+  containers: async () => { state.containers = await api("/containers"); },
+  ctTemplates: async () => { if (!state.ctTemplates?.length) state.ctTemplates = await api("/containers/templates"); },
+  summaries: async () => {
+    const got = await Promise.all(computeMembers().filter((m) => m.healthy).map((m) =>
+      api(`/nodes/${enc(m.name)}/summary`).then((s) => [m.name, s]).catch(() => null)));
+    state.summaries = Object.fromEntries(got.filter(Boolean));
+  },
   users: async () => { state.users = isAdmin() && state.me ? await api("/users") : []; },
 };
 const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
@@ -358,12 +445,12 @@ function allTasks() {
       step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
     })),
     ...state.jobs.map((j) => ({
-      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
-      state: j.state, step: "", percent: null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
+      kind: JOB_KINDS[j.kind] || "Backup", title: j.vm, sub: j.kind === "rename" ? j.target : j.kind.startsWith("container") ? `container · ${j.target}` : j.kind.startsWith("snapshot") ? `snapshot ${j.target}` : `${j.kind === "restore" ? "from" : "to"} ${j.target}`,
+      state: j.state, step: j.step || "", percent: j.percent ?? null, created: j.created, finished: j.finished, error: j.error, id: j.id, result: j.result,
     })),
     ...state.moves.map((m) => ({
       kind: m.live ? "Live migration" : "Move", title: m.vm, sub: `${m.source} → ${m.target || "auto"}`,
-      state: m.state, step: "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
+      state: m.state, step: m.step || "", percent: null, created: m.created, finished: m.finished, error: m.error, id: m.id,
     })),
     ...state.deploys.map((d) => ({
       kind: "Deploy VM", title: d.vm, sub: `from ${d.source} on ${d.node}${d.customized ? " · customized" : ""}`,
@@ -554,21 +641,23 @@ setInterval(async () => {
 }, 3000);
 
 async function refresh(page, auto = false) {
+  if (auto && document.querySelector("details.more[open]")) return;
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
-  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users"); renderHome(); }
-  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); renderVMs(); renderMoves(); }
+  if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
+  if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); if (!auto || !document.querySelector("details.more[open]")) { renderVMs(); renderMoves(); } }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
-  if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); }
+  if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); await renderVirtualStorage(); }
   if (page === "network") { await load("vms", "networks", "edge"); renderNetworks(); renderEdge(); await renderTopology(); }
-  if (page === "nodes") { await load("vms"); renderNodes(); }
+  if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
   if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
+  if (page === "containers") { await load("containers", "ctTemplates", "pools", "networks"); renderContainers(); }
   if (page === "tasks") { await load("imports", "jobs", "moves", "deploys"); renderTaskPage(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
@@ -578,24 +667,105 @@ async function refresh(page, auto = false) {
 // ---------- home ----------
 
 function totals() {
-  let cpus = 0, mem = 0;
+  let cpus = 0, mem = 0, sockets = 0, cores = 0, memUsed = 0, cpuBusy = 0, measured = 0, memMeasured = 0;
   for (const m of computeMembers()) {
-    const h = state.hosts[m.name];
-    if (h) { cpus += h.cpus; mem += h.memory_mb; }
+    const h = state.hosts[m.name], s = state.summaries[m.name];
+    if (h) { cpus += h.cpus; mem += h.memory_mb; sockets += h.sockets || 0; cores += h.cores || 0; }
+    if (s) {
+      if (Number.isFinite(s.memory_used_mb) && s.memory_mb > 0) { memUsed += s.memory_used_mb; memMeasured += s.memory_mb; }
+      if (Number.isFinite(s.cpu_percent)) { cpuBusy += (s.cpu_percent / 100) * (h?.cpus || s.threads); measured += h?.cpus || s.threads; }
+    }
   }
   const live = state.vms.filter((v) => v.state !== "stopped");
   return {
-    cpus, mem,
+    cpus, mem, sockets, cores, memUsed, measured, memMeasured,
+    cpuPct: measured ? Math.round((cpuBusy / measured) * 100) : null,
+    vdisk: [...state.vms, ...(state.templates || [])].reduce((s, v) => s + (v.disks || []).reduce((a, d) => a + (d.size_gb || 0), 0), 0),
     vcpus: live.reduce((s, v) => s + v.vcpus, 0),
     vmem: live.reduce((s, v) => s + v.memory_mb, 0),
-    cap: state.pools.reduce((s, p) => s + p.capacity_gb, 0),
-    used: state.pools.reduce((s, p) => s + p.allocation_gb, 0),
+    cap: StorageView.pools(state.pools).reduce((s, p) => s + p.capacity_gb, 0),
+    used: StorageView.pools(state.pools).reduce((s, p) => s + p.allocation_gb, 0),
   };
+}
+
+// History is collected on the server even when no browser is open.
+const HISTORY_RANGES = HistoryTime.profiles;
+let homeRange = "now", homeMetrics = null, homeHistoryError = "", homeHistoryRequest = 0;
+try { const saved = localStorage.getItem("ibhics-history-range"); if (HISTORY_RANGES[saved]) homeRange = saved; } catch { /* private mode */ }
+const allocationPct = (used, capacity) => capacity > 0 ? used / capacity * 100 : null;
+const percentText = (value) => value == null ? "–" : `${Number(value.toFixed(1))}%`;
+async function loadHomeHistory() {
+  const range = homeRange, request = ++homeHistoryRequest;
+  try {
+    const data = await api(`/usage/history?resolution=${enc(range)}&utc_offset=${-new Date().getTimezoneOffset()}`);
+    if (request === homeHistoryRequest && range === homeRange) { homeMetrics = data; homeHistoryError = data.note || ""; }
+  } catch (err) {
+    if (request === homeHistoryRequest) homeHistoryError = `History unavailable: ${err.message}`;
+  }
+}
+$("#usage").addEventListener("change", async (event) => {
+  if (event.target.id !== "home-history-range" || !HISTORY_RANGES[event.target.value]) return;
+  homeRange = event.target.value;
+  try { localStorage.setItem("ibhics-history-range", homeRange); } catch { /* private mode */ }
+  await loadHomeHistory();
+  if (currentPage() === "home") renderHome();
+});
+
+function allocationMeter(label, used, capacity, detail) {
+  const value = allocationPct(used, capacity), over = value != null && value > 100;
+  return `<div class="allocation-meter${over ? " overallocated" : ""}">
+    <div class="allocation-top"><b>${esc(label)}</b><strong>${percentText(value)}</strong></div>
+    <span class="allocation-detail">${detail}</span>
+    ${over ? `<span class="allocation-warning"><svg aria-hidden="true"><use href="#i-alert"/></svg>Overallocated by ${percentText(value - 100)}</span>` : ""}
+    ${value == null ? '<span class="allocation-detail">Capacity unavailable</span>' : ""}</div>`;
+}
+
+function usageChart(key, label, value, detail) {
+  const history = homeMetrics?.resolution === homeRange ? homeMetrics : null;
+  const samples = history?.points || [], last = history?.end || Date.now();
+  const start = history?.start || last - HISTORY_RANGES[homeRange].windowMs, duration = last - start;
+  const step = history?.step_ms || 10000;
+  const timeLabel = (at) => ["1d", "7d"].includes(homeRange) ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const tickMs = history?.tick_ms || HISTORY_RANGES[homeRange].tickMs;
+  const timeTicks = HistoryTime.ticks(start, last, tickMs, history?.utc_offset ?? -new Date().getTimezoneOffset());
+  const groups = [];
+  for (const sample of samples) {
+    if (sample[key] == null) { groups.push([]); continue; }
+    let group = groups.at(-1);
+    if (!group || (group.length && sample.at - group.at(-1).at > step * 2.5)) { group = []; groups.push(group); }
+    group.push(sample);
+  }
+  const x = (sample) => 38 + (sample.at - start) / duration * 312;
+  const y = (sample) => 132 - Math.min(100, Math.max(0, sample[key])) / 100 * 120;
+  const path = (group) => group.map((sample, i) => `${i ? "L" : "M"}${x(sample).toFixed(1)},${y(sample).toFixed(1)}`).join(" ");
+  const status = value == null ? "unavailable" : value >= 90 ? "bad" : value >= 75 ? "warn" : "";
+  const icon = { cpu: "i-cpu", memory: "i-mem", storage: "i-storage" }[key];
+  const used = Math.min(100, Math.max(0, value || 0));
+  const remaining = key === "cpu" ? "Idle" : "Available";
+  const explanation = { cpu: "Processing power currently in use", memory: "RAM used by the server and VMs", storage: "Physical storage occupied by files" }[key];
+  const known = samples.filter((s) => s[key] != null);
+  return `<article class="usage-chart chart-${key} ${status}">
+    <div class="chart-top"><span class="chart-label"><span class="chart-icon"><svg aria-hidden="true"><use href="#${icon}"/></svg></span>${esc(label)}</span><span class="chart-live"><i></i>${value == null ? "No data" : "Live"}</span></div>
+    <p class="chart-explanation">${explanation}</p>
+    <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div><span class="chart-current-label">in use now</span></div>
+    <div class="actual-capacity-bar" role="img" aria-label="${esc(label)}: ${percentText(value)} used"><i style="width:${value == null ? 0 : used}%"></i></div>
+    <div class="capacity-legend"><span><i></i>Used</span><span>${remaining}: <b>${value == null ? "–" : percentText(100 - used)}</b></span></div>
+    <div class="chart-history-heading"><b>${esc(HISTORY_RANGES[homeRange].label)} · ${esc(HISTORY_RANGES[homeRange].windowLabel)}</b><span>Usage (%)${step > 10000 ? " · average" : ""}</span></div>
+    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: selected ${esc(HISTORY_RANGES[homeRange].label)} window.">
+      <defs><linearGradient id="home-area-${key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+      <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="38" y1="0" x2="350" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
+      ${[0, 25, 50, 75, 100].map((p) => `<path class="chart-grid" d="M38 ${132 - p * 1.2} H350"/><text class="chart-axis" x="30" y="${136 - p * 1.2}" text-anchor="end">${p}%</text>`).join("")}
+      ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},132 L${x(g[0]).toFixed(1)},132 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
+      ${groups.filter((g) => g.length).map((g) => `<circle cx="${x(g.at(-1)).toFixed(1)}" cy="${y(g.at(-1)).toFixed(1)}" r="3.5" fill="currentColor"/>`).join("")}
+      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.first_sample ?? s.at).toLocaleString())}${s.samples > 1 ? ` – ${esc(new Date(s.last_sample).toLocaleTimeString())} · average` : ""}: ${percentText(s[key])}</title></circle>`).join("")}
+      ${known.length < 2 ? `<text class="chart-empty" x="194" y="74" text-anchor="middle">${homeHistoryError ? "History unavailable" : known.length ? "First recorded reading" : "No recorded data in this period"}</text>` : ""}
+      ${timeTicks.map((at) => `<path class="chart-grid" d="M${x({at}).toFixed(1)} 12 V132"/><text class="chart-axis time-tick" data-at="${at}" x="${x({at}).toFixed(1)}" y="154" text-anchor="middle">${esc(timeLabel(at))}</text>`).join("")}
+    </svg><div class="chart-caption">Saved on server · 30-day retention<span>${step > 10000 ? `Average every ${homeRange === "1d" ? "day" : homeRange === "7d" ? "7 days" : `${Math.round(step / 60000)} min`}` : "Sample every 10 sec"}</span></div></article>`;
 }
 
 function activities() {
   const items = [
-    ...state.jobs.map((j) => ({ kind: j.kind === "backup" ? "Backup" : "Restore", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
+    ...state.jobs.map((j) => ({ kind: JOB_KINDS[j.kind] || "Backup", icon: "i-backup", what: j.vm, where: j.target, state: j.state, created: j.created, error: j.error })),
     ...state.moves.map((m) => ({ kind: "Live migration", icon: "i-migrate", what: m.vm, where: `${m.source} → ${m.target || "?"}`, state: m.state, created: m.created, error: m.error })),
     ...state.imports.map((j) => ({ kind: "Import", icon: "i-compute", what: j.name, where: j.source, state: j.state, created: j.created, error: j.error })),
     ...state.deploys.map((d) => ({ kind: "Deploy VM", icon: "i-template", what: d.vm, where: `from ${d.source}`, state: d.state, created: d.created, error: d.error })),
@@ -627,16 +797,17 @@ function renderHome() {
   else if (storagePct >= 85 || failed.length) mood = ["warn", "Needs ", "Attention"];
   if ($("#health")) $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
 
+  $("#home-cluster-name").textContent = c.name || "Standalone server";
   const cs = $("#cluster-state");
   cs.textContent = c.quorum ? (c.ha_capable ? "Highly available" : "Healthy") : "No quorum";
   cs.className = `val ${c.quorum ? "ok" : "bad"}`;
   const row = (k, v) => `<div class="row"><span>${esc(k)}</span><b>${v}</b></div>`;
   $("#cluster-box").innerHTML = [
-    row("Deployment", esc(TOPOLOGY[c.topology] || c.topology)),
+    row("Deployment", c.cluster_id ? `Cluster · ${esc(c.name)} (${c.members.length} node${c.members.length === 1 ? "" : "s"})` : esc(TOPOLOGY[c.topology] || c.topology)),
     row("High availability", c.ha_capable ? "Yes" : "No"),
     row("Members online", `${members.length - offline.length} / ${members.length}`),
     row("Quorum", `<span class="dot ${c.quorum ? "ok" : "bad"}"></span> ${c.quorum ? "OK" : "Lost"}`),
-    row("Physical cores", t.cpus),
+    row("Processors", t.cores ? `${t.sockets} socket${t.sockets === 1 ? "" : "s"} · ${t.cores} cores · ${t.cpus} threads` : `${t.cpus} threads`),
     row("Physical memory", gbText(t.mem)),
     `<div class="hint">${c.ha_capable ? "VMs can be moved between nodes while running." : "Add a second compute node and a witness for high availability."}</div>`,
   ].join("");
@@ -647,28 +818,34 @@ function renderHome() {
   infra.className = `val ${infraLevel}`;
   const computes = computeMembers();
   $("#topology-strip").innerHTML = [
-    topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "nodes"),
-    topo("t-storage", state.pools.length, "Storage pools", `${storagePct}% used`, "storage", true),
+    topo("t-node", computes.length, "Nodes", `${computes.filter((m) => m.healthy).length} online`, "cluster"),
+    topo("t-storage", StorageView.pools(state.pools).length, "Storage pools", `${storagePct}% used`, "storage", true),
     topo("t-vm", state.vms.length, "Virtual machines", `${running} running`, "compute"),
   ].join("");
 
-  const meter = (name, p, detail) => `<div class="meter"><div class="top"><b>${esc(name)}</b><span>${detail}</span></div>${segments(p)}</div>`;
-  $("#usage").innerHTML = [
-    meter("CPU", pct(t.vcpus, t.cpus), `${t.vcpus} vCPU of ${t.cpus} cores · ${pct(t.vcpus, t.cpus)}%`),
-    meter("Memory", pct(t.vmem, t.mem), `${gbText(t.vmem)} of ${gbText(t.mem)} · ${pct(t.vmem, t.mem)}%`),
-    meter("Storage", storagePct, `${Math.round(t.used)} of ${Math.round(t.cap)} GB · ${storagePct}%`),
-  ].join("");
+  const partial = t.measured < t.cpus || t.memMeasured < t.mem;
+  $("#usage").innerHTML = `<div class="usage-row"><h4>Allocated to running VMs</h4>${[
+    allocationMeter("vCPU", t.vcpus, t.cpus, `${t.vcpus} vCPU / ${t.cpus} hardware threads`),
+    allocationMeter("Memory", t.vmem, t.mem, `${gbText(t.vmem)} / ${gbText(t.mem)}`),
+    allocationMeter("VM disks", t.vdisk, t.cap, `${num(t.vdisk)} / ${num(t.cap)} GB · all VMs &amp; templates, thin provisioned`),
+  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4><div class="history-controls"><label for="home-history-range">Resolution</label><select id="home-history-range">${Object.entries(HISTORY_RANGES).map(([key, {label}]) => `<option value="${key}" ${homeRange === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select><span class="hint">${esc(HISTORY_RANGES[homeRange].windowLabel)} · Time grid: every ${homeRange === "now" || homeRange === "5m" ? "5 min" : homeRange === "30m" ? "30 min" : homeRange === "1d" ? "day" : "7 days"} · Kept for 30 days${homeMetrics?.storage_bytes ? ` · ${homeMetrics.storage_bytes < 1048576 ? `${(homeMetrics.storage_bytes / 1024).toFixed(0)} KB` : `${(homeMetrics.storage_bytes / 1048576).toFixed(1)} MB`} stored` : ""}${homeMetrics?.recording_since ? ` · Recording since ${esc(new Date(homeMetrics.recording_since).toLocaleString())}` : ""}${homeHistoryError ? ` · ${esc(homeHistoryError)}` : ""}</span></div>${[
+    usageChart("cpu", "CPU usage", t.cpuPct, `${t.measured} hardware threads in total`),
+    usageChart("memory", "Memory usage", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} used / ${gbText(t.memMeasured)} total` : "Waiting for node metrics"),
+    usageChart("storage", "Storage usage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} GB used / ${num(t.cap)} GB total` : "Waiting for storage metrics"),
+  ].join("")}</div>`;
 
   $("#home-nodes").innerHTML = members.map((m) => {
     const h = state.hosts[m.name];
     const vms = state.vms.filter((v) => v.node === m.name && v.state !== "stopped");
-    const cpu = h ? pct(vms.reduce((s, v) => s + v.vcpus, 0), h.cpus) : 0;
-    const mem = h ? pct(vms.reduce((s, v) => s + v.memory_mb, 0), h.memory_mb) : 0;
+    // Actual use when the node reports it; otherwise what its VMs are given.
+    const s = state.summaries[m.name];
+    const cpu = s ? Math.round(s.cpu_percent) : h ? pct(vms.reduce((a, v) => a + v.vcpus, 0), h.cpus) : 0;
+    const mem = s ? pct(s.memory_used_mb, s.memory_mb) : h ? pct(vms.reduce((a, v) => a + v.memory_mb, 0), h.memory_mb) : 0;
     const usage = m.role === "compute" && h
       ? `<div class="mini">CPU ${cpu}%${bar(cpu)}</div><div class="mini">Memory ${mem}%${bar(mem)}</div>`
       : `<div class="mini">${m.role === "witness" ? "Quorum vote only" : "No data"}</div><div></div>`;
     return `<div class="node-row">${avatar("i-nodes")}
-      <div><span class="vm-name">${esc(m.name)}</span> <span class="dot ${m.healthy ? "ok" : "bad"}"></span>
+      <div><a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a> <span class="dot ${m.healthy ? "ok" : "bad"}"></span>
       <span class="vm-sub">${esc(m.role)}${m.local ? " · manager" : ""} · ${esc(m.address || "local")}</span></div>${usage}</div>`;
   }).join("");
   $("#home-feed").innerHTML = feed(6) || `<li class="hint">No jobs yet. Backups, migrations and imports show up here.</li>`;
@@ -716,13 +893,16 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
-      ${multi ? `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate to another node</button>` : ""}
+      ${vm.template ? "" : `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate… (host or storage)</button>`}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
       <button data-vm="snapshot" data-id="${vm.uuid}">Take snapshot…</button>
       <button data-vm="snapshots" data-id="${vm.uuid}">Restore snapshot…</button>
       <button data-vm="backup" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Back up now</button>
       <button data-vm="tools" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Insert guest tools CD</button>
-      ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
+      ${vm.iso ? `<button data-vm="eject" data-id="${vm.uuid}" title="Eject ${esc(vm.iso.split("/").pop())}">Eject CD (${esc(vm.iso.split("/").pop())})</button>` : ""}
+      <button data-vm="rename" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Rename…</button>
+      ${(vm.disks || []).some((d) => d.bus === "sata") && /windows/i.test(vm.os_type || "") ? `<button data-vm="tovirtio" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Switch disks to VirtIO…</button>` : ""}
+      ${vm.state === "running" && /windows/i.test(vm.os_type || "") ? `<button data-vm="sysprep" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Generalize (sysprep) for a template…</button>` : ""}
       ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
       ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
@@ -809,7 +989,7 @@ const VM_COLUMNS = {
     ["Description", (v) => v.description || "", (v) => `<span class="clip" title="${esc(v.description)}">${esc(v.description || "–")}</span>`],
   ],
   node: [
-    ["Node", (v) => v.node || "", (v) => `<a href="#node/${enc(v.node || "")}">${esc(v.node || "")}</a>`],
+    ["Node", (v) => nodeLabel(v.node || ""), (v) => `<a href="#node/${enc(v.node || "")}" title="Node ID: ${esc(v.node || "")}">${esc(nodeLabel(v.node || ""))}</a>`],
     ["Node load", (v) => v.node || "", (v) => {
       const h = state.hosts[v.node];
       if (!h) return `<span class="muted">–</span>`;
@@ -1135,6 +1315,15 @@ function renderMoves() {
     <td class="vm-sub" style="display:table-cell">${esc(m.error || "")}</td></tr>`).join("");
 }
 
+// Rename a VM (Thai names too), even while it runs; backup policies follow the new name.
+async function renameVM(uuid, old) {
+  const name = (prompt(`New name for ${old}`, old) || "").trim();
+  if (!name || name === old) return;
+  if (!/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(name)) throw new Error("Use letters (Thai too), digits and _ . - (no spaces)");
+  await post(`/vms/${uuid}/rename`, { name });
+  toast(`${old} is now ${name}`);
+  await refresh(currentPage());
+}
 async function vmAction(e) {
   const btn = e.target.closest("button[data-vm]");
   if (!btn) return;
@@ -1148,16 +1337,12 @@ async function vmAction(e) {
   if (act === "snapshot") { openSnapshot(id); return; }
   if (act === "snapshots") { location.hash = `vm/${id}`; setTimeout(() => selectTab("vm-tabs", "vm-snapshots"), 400); return; }
   if (act === "clone") { load("pools").then(() => openDeploy(id)).catch(fail); return; }
+  if (act === "rename") { renameVM(id, name).catch(fail); return; }
   if (act === "backup") {
     backupNow(id, name).catch(fail);
     return;
   }
-  if (act === "migrate") {
-    openDialog("migrate-dialog", { id, name });
-    const sel = $("#migrate-form select[name=node]");
-    [...sel.options].forEach((o) => { if (o.value === btn.dataset.node) o.remove(); });
-    return;
-  }
+  if (act === "migrate") { openMigrate(id, name, btn.dataset.node); return; }
   try {
     if (act === "start") await post(`/vms/${id}/start`);
     if (act === "stop") await post(`/vms/${id}/stop`);
@@ -1169,12 +1354,24 @@ async function vmAction(e) {
       toast(`Guest tools CD is in ${name}'s drive. Windows: run virtio-win-guest-tools.exe from it. Linux: run sh linux/install.sh from it as root.`);
     }
     if (act === "eject") await post(`/vms/${id}/cdrom`, { iso: null });
-    if (act === "totemplate") {
-      if (!confirm(`Convert ${name} to a template? A template cannot be powered on; new VMs are deployed from it. You can convert it back later.`)) return;
-      await post(`/vms/${id}/template`, { template: true });
-      toast(`${name} is now a template`);
-      location.hash = "templates";
+    if (act === "tovirtio") {
+      if (!confirm(`Switch ${name}'s disks to VirtIO for speed? (The network card stays as it is, so its IP settings stay.)\n\nInstall the guest tools in Windows first (⋯ → Insert guest tools CD, run the installer for this Windows). ibHiCS then shuts ${name} down, starts it once with a small VirtIO disk so Windows loads the driver, shuts it down again and moves the disks over. Takes a few minutes; follow it in Tasks.`)) return;
+      toast(`Switching ${name} to VirtIO… (see Tasks)`);
+      setTimeout(() => load("jobs").catch(() => {}), 800);
+      await post(`/vms/${id}/to-virtio`);
+      toast(`${name} now uses VirtIO disks`);
+      await refresh(currentPage());
       return;
+    }
+    if (act === "sysprep") {
+      if (!confirm(`Run sysprep /generalize /oobe /shutdown in ${name}?\n\nWindows removes its SID, computer name and drivers' hardware ties, then shuts down. Convert it to a template after that: every VM deployed from it gets its own SID. Needs the guest tools (guest agent) in the VM. Do this on a copy if you still need this VM as it is.`)) return;
+      await post(`/vms/${id}/sysprep`);
+      toast(`Sysprep started in ${name}: it shuts down when done, then convert it to a template`);
+      return;
+    }
+    if (act === "totemplate") {
+      await load("pools");
+      return openTemplateStorage(id);
     }
     if (act === "delete") {
       if (!confirm(`Delete ${name}?${binNote()}`)) return;
@@ -1190,6 +1387,25 @@ $("#vm-actions").addEventListener("click", vmAction);
 $("#vm-panel").addEventListener("click", vmAction);
 
 // ---------- templates ----------
+function openTemplateStorage(id) {
+  const vm = [...state.vms, ...state.templates].find((v) => v.uuid === id);
+  if (!vm) throw new Error("VM no longer exists. Refresh and try again.");
+  openDialog("template-storage-dialog", { id, name: vm.name });
+  $("#template-storage-name").textContent = vm.name;
+  $("#template-storage-form").elements.pool.innerHTML = `<option value="">Keep current storage</option>`
+    + state.pools.filter((p) => p.node === vm.node && p.active).map((p) =>
+      `<option value="${esc(p.name)}">${esc(poolText(p))} · ${num(p.available_gb)} GB free</option>`).join("");
+  $("#template-storage-windows").hidden = !/windows/i.test(vm.os_type || "");
+}
+handlers["template-storage-dialog"] = async (f, ctx) => {
+  const body = { template: true };
+  if (f.get("pool")) body.pool = f.get("pool");
+  toast(`Preparing ${ctx.name}… storage moves appear in Tasks`);
+  await post(`/vms/${ctx.id}/template`, body);
+  toast(`${ctx.name} is ready as a template`);
+  if (currentPage() === "templates") await refresh("templates");
+  else location.hash = "templates";
+};
 // A stopped VM becomes a template that cannot run; deployed VMs get their own
 // copies of its disks and can optionally be customized.
 function renderTemplates() {
@@ -1217,6 +1433,7 @@ function renderTemplates() {
         ${canOperate() ? `<button class="primary small" data-tpl="deploy" data-id="${t.uuid}">Deploy VM</button>
         <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
           <button data-tpl="edit" data-id="${t.uuid}">Settings</button>
+          <button data-tpl="storage" data-id="${t.uuid}">Change storage</button>
           <button data-tpl="tovm" data-id="${t.uuid}" data-name="${esc(t.name)}">Convert to VM</button>
           <button class="danger" data-tpl="delete" data-id="${t.uuid}" data-name="${esc(t.name)}">Delete</button>
         </div></details>` : ""}
@@ -1233,6 +1450,7 @@ $("#tpl-grid").addEventListener("click", async (e) => {
   try {
     if (act === "deploy") return openDeploy(id);
     if (act === "edit") return openEdit(id);
+    if (act === "storage") return openTemplateStorage(id);
     if (act === "tovm") {
       if (!confirm(`Convert ${name} back to a VM? It can then be powered on and changed.`)) return;
       await post(`/vms/${id}/template`, { template: false });
@@ -1266,12 +1484,12 @@ function openDeploy(uuid) {
     <span class="vm-sub">${src.vcpus} vCPU · ${num(src.memory_mb / 1024)} GB · ${src.disks.length} disk${src.disks.length === 1 ? "" : "s"} · ${esc(src.node || "")}</span></div>`;
   const pools = state.pools.filter((p) => p.node === src.node && p.active);
   form.elements.pool.innerHTML = `<option value="">Same pool as the ${isTpl ? "template" : "VM"}</option>`
-    + pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} · ${num(p.available_gb)} GB free</option>`).join("");
+    + pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} · ${num(p.available_gb)} GB free</option>`).join("");
   syncSwitch(form);
 }
 handlers["deploy-dialog"] = async (f, ctx) => {
   const custom = f.get("custom");
-  const body = { name: f.get("name"), power_on: f.get("power_on") === "on" };
+  const body = { name: f.get("name"), power_on: f.get("power_on") === "on", reset_identity: f.get("reset_identity") === "on" };
   if (f.get("description")) body.description = f.get("description");
   if (f.get("pool")) body.pool = f.get("pool");
   if (custom !== "none") {
@@ -1299,10 +1517,11 @@ async function openEdit(uuid) {
     vm,
     vcpus: vm.vcpus,
     memory_mb: vm.memory_mb,
-    disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool })),
+    disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool, bus: d.bus })),
     nics: vm.nics.map((n) => ({ mac: n.mac, network: n.network, model: n.model || "virtio" })),
     iso: vm.iso || "",
     boot: vm.boot || ["hd"],
+    video: vm.video || "virtio",
     removedDisks: 0,
     selected: "cpu",
   };
@@ -1322,21 +1541,26 @@ function editItems() {
   return [
     { key: "cpu", icon: "i-cpu", label: "Processor", value: `${e.vcpus} vCPU` },
     { key: "mem", icon: "i-mem", label: "Memory", value: gbText(e.memory_mb) },
-    ...e.disks.map((d, i) => ({ key: `disk${i}`, icon: "i-hdd", label: `Hard disk ${i + 1}`, value: `${d.size_gb} GB${d.index == null ? " · new" : ""}` })),
+    ...e.disks.map((d, i) => ({ key: `disk${i}`, icon: "i-hdd", label: `Hard disk ${i + 1}`, value: `${d.size_gb} GB${d.pool ? ` · ${esc(d.pool)}` : ""}${d.index == null ? " · new" : ""}` })),
     ...e.nics.map((n, i) => ({ key: `nic${i}`, icon: "i-nic", label: `Network adapter ${i + 1}`, value: `${esc(n.network)}${n.mac ? "" : " · new"}` })),
     { key: "cd", icon: "i-cd", label: "CD/DVD drive", value: e.iso ? esc(e.iso.split("/").pop()) : "Empty" },
+    { key: "video", icon: "i-compute", label: "Display", value: VIDEO_NAMES[e.video] || e.video },
   ];
 }
+const VIDEO_NAMES = { virtio: "VirtIO GPU", vga: "Standard VGA", qxl: "QXL", cirrus: "Cirrus" };
 
 function renderEdit() {
   const e = editing;
   $("#edit-items").innerHTML = editItems().map((it) => `<li><button type="button" data-item="${it.key}" class="${it.key === e.selected ? "active" : ""}">
     <svg><use href="#${it.icon}"/></svg><span>${it.label}</span><em>${it.value}</em></button></li>`).join("");
   const pools = state.pools.filter((p) => p.node === e.vm.node || !p.node);
-  const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(p.name)}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
+  const poolOpts = (cur) => (pools.length ? pools : [{ name: cur }]).map((p) => `<option value="${esc(p.name)}" ${p.name === cur ? "selected" : ""}>${esc(poolText(p))}${p.available_gb != null ? ` (${Math.round(p.available_gb).toLocaleString()} GB free)` : ""}</option>`).join("");
   const pane = $("#edit-pane");
   const s = e.selected;
-  if (s === "cpu") {
+  if (s === "video") {
+    pane.innerHTML = `<h4>Display</h4><label>Display adapter <select data-set="video">${Object.entries(VIDEO_NAMES).map(([k, v]) => `<option value="${k}" ${k === e.video ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <p class="hint">VirtIO GPU suits Linux and Windows 10/Server 2016 and later. Older Windows (Server 2012 R2 and before, 7, 8.1) shows a black or slow screen with it: use Standard VGA. Applies after a restart.</p>`;
+  } else if (s === "cpu") {
     pane.innerHTML = `<h4>Processor</h4><label>vCPU <input type="number" min="1" max="256" value="${e.vcpus}" data-set="vcpus"></label>
       <p class="hint">Host CPU model is passed through (host-model), so the VM can still live-migrate between nodes.</p>`;
   } else if (s === "mem") {
@@ -1346,7 +1570,7 @@ function renderEdit() {
     pane.innerHTML = `<h4>Hard disk ${i + 1}</h4>
       <label>Size (GB) <input type="number" min="${d.min || 1}" value="${d.size_gb}" data-disk="${i}" data-field="size_gb"></label>
       ${d.index == null ? `<label>Storage pool <select data-disk="${i}" data-field="pool">${poolOpts(d.pool)}</select></label>`
-        : `<p class="hint">Pool ${esc(d.pool)}. A disk can grow but not shrink; grow the partition inside the guest afterwards.</p>`}
+        : `<p class="hint">Storage pool: <b>${esc(d.pool || "unknown (outside ibHiCS pools)")}</b>${d.bus ? ` · ${esc(d.bus === "sata" ? "SATA" : "VirtIO")}` : ""}. To move it to another pool use ⋯ → Migrate… → Change storage. A disk can grow but not shrink; grow the partition inside the guest afterwards.</p>`}
       ${e.disks.length > 1 ? `<button type="button" class="danger small" data-remove="disk" data-i="${i}">Remove this disk</button>` : ""}`;
   } else if (s.startsWith("nic")) {
     const i = Number(s.slice(3)), n = e.nics[i];
@@ -1400,6 +1624,7 @@ function renderEdit() {
     if (t.dataset.set === "vcpus") e.vcpus = Number(t.value);
     if (t.dataset.set === "memory_gb") e.memory_mb = Math.round(Number(t.value) * 1024);
     if (t.dataset.set === "iso") e.iso = t.value;
+    if (t.dataset.set === "video") e.video = t.value;
     if (t.dataset.disk) e.disks[Number(t.dataset.disk)][t.dataset.field] = t.dataset.field === "size_gb" ? Number(t.value) : t.value;
     if (t.dataset.nic) e.nics[Number(t.dataset.nic)][t.dataset.field] = t.value;
     if (t.dataset.boot) {
@@ -1418,14 +1643,14 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
   const body = {
     os_type: f.get("os_type"), description: f.get("description"),
     vcpus: e.vcpus, memory_mb: e.memory_mb, boot: e.boot.length ? e.boot : ["hd"],
-    autostart: f.get("autostart") === "on",
+    autostart: f.get("autostart") === "on", video: e.video,
     disks: e.disks.map((d) => (d.index == null ? { size_gb: d.size_gb, pool: d.pool } : { index: d.index, size_gb: d.size_gb })),
     nics: e.nics.map((n) => (n.mac ? { mac: n.mac, network: n.network, model: n.model } : { network: n.network, model: n.model })),
     delete_removed_disks: deleteDisks,
   };
   const vm = await patch(`/vms/${uuid}`, body);
   if ((e.iso || null) !== (e.vm.iso || null)) await post(`/vms/${uuid}/cdrom`, { iso: e.iso || null });
-  toast(vm.restart_needed ? `${vm.name} saved. Shut it down and power it on to apply the processor, memory and boot order.` : `${vm.name} saved`);
+  toast(vm.restart_needed ? `${vm.name} saved. Restart it to apply the processor, memory and boot order: ibHiCS shuts it down and powers it on again.` : `${vm.name} saved`);
   await refresh(currentPage());
 };
 
@@ -1467,7 +1692,9 @@ const vmWiz = wizard("vm-dialog", {
 // (Server 2012 non-R2, Windows 8, Windows 7 / Server 2008 R2 and older) get SATA disks and
 // an Intel NIC that Windows has a driver for (e1000e from Windows 8 / 2012, e1000 before).
 function osProfile(family, ver) {
-  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp|server 2012(?! r2)|windows 8(?!\.1)/.test(ver);
+  // Up to Server 2012 R2 / Windows 8.1: Setup refuses the bundled virtio drivers ("No
+  // signed device drivers were found"), so these install on SATA and an Intel NIC.
+  const legacy = family === "windows" && /2008|2003|windows 7|vista|xp|server 2012|windows 8/.test(ver);
   const nic = !legacy ? "virtio" : /2012|windows 8/.test(ver) ? "e1000e" : "e1000";
   const uefi = !legacy && ((family === "windows" && !/2012|2016|windows 8/.test(ver))
     || /2025|enterprise linux (9|10)|rocky linux (9|10)|almalinux (9|10)|oracle linux 9|stream 9|2[2-4]\.04|debian 1[23]|leap 15|suse linux enterprise 15|fedora|freebsd 1[34]/.test(ver));
@@ -1483,10 +1710,10 @@ function vmWizOs(form) {
   const f = form.elements, family = f.os_family.value, ver = f.os_type.value.toLowerCase();
   const { uefi, legacy, nic, folder } = osProfile(family, ver);
   f.firmware.value = uefi ? "uefi" : "bios";
-  $(".fw-hint", form).textContent = legacy ? `This Windows has no virtio driver on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
+  $(".fw-hint", form).textContent = legacy ? `Windows Setup of this version does not take the virtio drivers on the CD, so it gets SATA disks and an Intel ${nic} network card: Setup sees the disk without loading a driver.`
     : uefi ? "UEFI suits this OS (needed for Windows 11 and Server 2022+)." : "BIOS suits this OS.";
   $(".win-driver-note", form).innerHTML = legacy ? "No driver CD needed: Windows has its own SATA and Intel network drivers."
-    : `Windows VMs get a second CD with the virtio drivers. When Windows Setup shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;
+    : `Windows VMs get a second CD with the virtio drivers: Setup finds the disk and network drivers on it by itself. If it still shows no disk, click <b>Load driver</b> and pick <code>viostor\\${folder || "&lt;version&gt;"}\\amd64</code> on that CD; after Windows is installed, run <code>virtio-win-guest-tools.exe</code> from it for the network and other drivers.`;
   f.os_type.placeholder = { windows: "Windows Server 2022", linux: "Ubuntu 24.04 LTS", other: "e.g. pfSense" }[family];
   $(".win-driver-note", form).hidden = family !== "windows";
 }
@@ -1527,6 +1754,7 @@ handlers["vm-dialog"] = async (f) => {
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default", bus: legacy ? "sata" : "virtio" })),
     nics: [{ network: f.get("network") || "default", model: nic }],
     node: f.get("node") || null,
+    video: legacy ? "vga" : "virtio",
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);
@@ -1556,8 +1784,62 @@ handlers["backup-dialog"] = async (f, ctx) => {
   toast(`Backing up ${ctx.name} to ${body.target}. Progress is under Backup → Jobs.`);
 };
 
+// Migrate: another node (live migration) or other pools for the disks (storage move).
+function openMigrate(id, name, node) {
+  const vm = state.vms.find((v) => v.uuid === id) || { disks: [] };
+  openDialog("migrate-dialog", { id, name });
+  const form = $("#migrate-form"), sel = $("select[name=node]", form);
+  [...sel.options].forEach((o) => { if (o.value === node) o.remove(); });
+  $("#migrate-title").textContent = `Migrate ${name}`;
+  const others = sel.options.length > 0, one = "Only one node in the cluster: add a node to move VMs between hosts.";
+  for (const mode of ["host", "both"]) {
+    const r = $(`input[name=mode][value=${mode}]`, form);
+    r.disabled = !others;
+    r.closest(".type-card").classList.toggle("disabled", !others);
+  }
+  $(".mig-host-why", form).textContent = others ? "Move the VM to another node; a running VM keeps running." : one;
+  $(".mig-both-why", form).textContent = others ? "Move the VM to another node and its disks to pools you pick there." : one;
+  $(`input[name=mode][value=${others ? "host" : "storage"}]`, form).checked = true;
+  migState.vm = vm;
+  migState.node = node;
+  migShow();
+}
+const migState = { vm: null, node: "" };
+// The disks and the pools they can go to: on the VM's node (storage), or on the chosen
+// destination (host and storage), where a disk stays in the pool of the same name.
+function migDisks() {
+  const form = $("#migrate-form"), mode = form.elements.mode.value, vm = migState.vm || { disks: [] };
+  const node = mode === "both" ? form.elements.node.value : migState.node;
+  const pools = [...new Set(state.pools.filter((p) => p.node === node && p.active).map((p) => p.name))];
+  $(".mig-disks", form).innerHTML = (vm.disks || []).map((d, i) => {
+    const opts = [d.pool, ...pools.filter((p) => p !== d.pool)];
+    return `<tr><td>Disk ${i + 1}</td><td>${num(d.size_gb)} GB</td><td>${esc(d.pool)}</td>
+    <td><select data-disk="${i}" data-from="${esc(d.pool)}">${opts.map((p) => `<option value="${esc(p)}">${p === d.pool ? `${esc(poolLabel(p, node))} (same pool)` : esc(poolLabel(p, node))}</option>`).join("")}</select></td></tr>`;
+  }).join("") || empty(4, "This VM has no disks");
+}
+function migShow() {
+  const form = $("#migrate-form"), mode = form.elements.mode.value;
+  $$("[data-mig]", form).forEach((el) => { el.hidden = !el.dataset.mig.split(" ").includes(mode); });
+  migDisks();
+}
+$("#migrate-form").addEventListener("change", (e) => {
+  if (e.target.name === "mode" || (e.target.name === "node" && $("#migrate-form").elements.mode.value === "both")) migShow();
+});
 handlers["migrate-dialog"] = async (f, ctx) => {
+  if (f.get("mode") === "storage") {
+    const moves = $$("#migrate-form select[data-disk]").filter((s) => s.value !== s.dataset.from).map((s) => ({ index: Number(s.dataset.disk), pool: s.value }));
+    if (!moves.length) throw new Error("Pick another pool for at least one disk.");
+    toast(`Moving ${ctx.name}'s disks… follow it in Tasks`);
+    setTimeout(() => load("jobs").then(renderTasks).catch(() => {}), 800);
+    post(`/vms/${ctx.id}/move-disks`, { moves })
+      .then(() => { toast(`${ctx.name}: disks moved`); return refresh(currentPage()); })
+      .catch(fail);
+    return;
+  }
   const body = { node: f.get("node") || null };
+  if (f.get("mode") === "both") {
+    body.disks = $$("#migrate-form select[data-disk]").filter((s) => s.value !== s.dataset.from).map((s) => ({ index: Number(s.dataset.disk), pool: s.value }));
+  }
   if (f.get("copy_storage") === "false") body.copy_storage = false;
   if (f.get("bandwidth_mib")) body.bandwidth_mib = Number(f.get("bandwidth_mib"));
   const job = await post(`/vms/${ctx.id}/migrate`, body);
@@ -1566,6 +1848,18 @@ handlers["migrate-dialog"] = async (f, ctx) => {
 };
 
 // ---------- storage ----------
+async function renderVirtualStorage() {
+  if (window.VirtualStorageUI) return window.VirtualStorageUI.render();
+  const box = $("#virtual-storage-status");
+  try {
+    const data = await api("/virtual-storage");
+    const witness = data.nodes.some((n) => n.role === "witness" && n.healthy);
+    box.innerHTML = `<p><span class="badge warning">${witness ? "Setup required" : "Waiting for Arbiter"}</span></p>
+      <p class="hint">Install Arbiter on VMware and add it as a witness in Cluster management. Shared storage stays inactive until replication and failover have been configured and verified.</p>
+      <div class="table-wrap"><table><thead><tr><th>Node</th><th>Role</th><th>Replication readiness</th></tr></thead><tbody>${data.nodes.map((n) => `<tr><td>${esc(n.display_name || n.name)}</td><td>${n.role === "witness" ? "Arbiter" : "Data node"}</td><td>${!n.healthy ? "Offline" : n.error ? esc(n.error) : `DRBD ${esc(n.kernel_version || "unknown")} · ${n.resources.length} resources`}</td></tr>`).join("")}</tbody></table></div>
+      ${data.plan ? `<p>Configuration prepared for <b>${esc(data.plan.name)}</b> · Storage VIP ${esc(data.plan.virtual_ip)}. Activation has not been performed.</p><a class="btn small" href="/api/v1/virtual-storage/configuration" download>Download DRBD configuration</a>` : ""}`;
+  } catch (err) { box.textContent = `Could not check storage readiness: ${err.message}`; }
+}
 
 // The LAN without a tag is the switch port's native VLAN, VLAN 1 unless the switch says otherwise.
 const vlanId = (n) => n.vlan ?? 1;
@@ -1651,7 +1945,7 @@ function topoLayoutKey() {
 function topoReadLayout() {
   try {
     const data = JSON.parse(localStorage.getItem(topoLayoutKey()) || "{}");
-    return Object.fromEntries(Object.entries(data).filter(([key, p]) => /^(node|net|vm):/.test(key) && p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 85 && p.y >= 35));
+    return Object.fromEntries(Object.entries(data).filter(([key, p]) => /^(cluster|node|net|vm):/.test(key) && p && Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= 85 && p.y >= 35));
   } catch { return {}; }
 }
 function topoLayoutChanges(edit) {
@@ -1790,17 +2084,25 @@ async function renderTopology() {
 }
 
 function drawTopology() {
-  const nodes = computeMembers().filter((m) => m.healthy).map((m) => m.name);
+  const members = computeMembers(), nodes = members.map((m) => m.name);
+  const clusterView = Boolean(state.cluster.cluster_id) || nodes.length > 1;
+  const clusterKey = `cluster:${state.cluster.cluster_id || state.cluster.name || "local"}`;
+  const networkCoverage = (net) => {
+    const present = new Set(net.nodes || []), missing = nodes.filter((name) => !present.has(name));
+    const variants = new Set(Object.values(net.configurations || {}).map((c) => JSON.stringify([c.bridge,c.vlan ?? 1])));
+    return { missing, drift: variants.size > 1, complete: missing.length === 0 && variants.size <= 1 };
+  };
   const data = topoData(), edit = ntopo.edit;
   const nets = [...data.networks].sort((a, b) => vlanId(a) - vlanId(b));
   // VMs ordered by their first network, so their wires stay short.
   const netIndex = new Map(nets.map((n, i) => [n.name, i]));
   const vms = [...data.vms].sort((a, b) => (netIndex.get(a.nics[0]?.network) ?? 99) - (netIndex.get(b.nics[0]?.network) ?? 99) || a.name.localeCompare(b.name));
-  const cols = Math.max(nodes.length, nets.length, vms.length, 4);
+  const cols = Math.max(clusterView ? 1 : nodes.length, nets.length, vms.length, 4);
   let width = cols * TOPO.w + 40;
   const rowX = (count, i) => 20 + (width - 40) * (i + 0.5) / count;
   const pos = {};
-  nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
+  if (clusterView) pos[clusterKey] = { x: rowX(1,0), y: TOPO.top + 30 };
+  else nodes.forEach((n, i) => { pos[`node:${n}`] = { x: rowX(nodes.length, i), y: TOPO.top + 30 }; });
   nets.forEach((n, i) => { pos[`net:${n.name}`] = { x: rowX(nets.length, i), y: TOPO.top + 30 + TOPO.gapY }; });
   vms.forEach((v, i) => { pos[`vm:${v.uuid}`] = { x: rowX(vms.length, i), y: TOPO.top + 30 + TOPO.gapY * 2 }; });
   const layout = edit ? edit.layout : topoReadLayout();
@@ -1823,7 +2125,10 @@ function drawTopology() {
     return `<path ${attrs} class="wire ${cls}" d="${d}"/>${attrs ? `<path ${attrs} class="wire-hit" d="${d}"/>` : ""}`;
   };
   let wires = "";
-  for (const n of nets) for (const node of n.nodes || []) wires += wire(`node:${node}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
+  for (const n of nets) {
+    if (clusterView) wires += wire(clusterKey, `net:${n.name}`, `${n.vlan ? "tagged" : "native"}${networkCoverage(n).complete ? "" : " coverage-warning"}`);
+    else for (const name of n.nodes || []) wires += wire(`node:${name}`, `net:${n.name}`, n.vlan ? "tagged" : "native");
+  }
   for (const v of vms) v.nics.forEach((nic, index) => {
     const old = edit?.base.vms.find((b) => b.uuid === v.uuid)?.nics || [];
     const pending = edit && !old.some((n) => nic.mac && n.mac === nic.mac && n.network === nic.network);
@@ -1846,7 +2151,11 @@ function drawTopology() {
     `<g class="tnode ${cls} ${ntopo.sel === key ? "sel" : ""} ${edit && JSON.stringify(edit.layout[key]) !== JSON.stringify(edit.layoutBase[key]) ? "pending" : ""}" data-key="${esc(key)}" transform="translate(0,0)">
       <rect x="${x - 22}" y="${y - 22}" width="44" height="44" rx="11"/><use href="#${icon}" x="${x - 11}" y="${y - 11}" width="22" height="22"/>${label(x, y, text, sub)}</g>`;
   let shapes = "";
-  for (const n of nodes) {
+  if (clusterView) {
+    const p = pos[clusterKey], online = members.filter((m) => m.healthy).length;
+    shapes += node(clusterKey, p.x, p.y, "i-nodes", `uplink${online < nodes.length ? " warn" : ""}`, state.cluster.name || "Cluster", `${online}/${nodes.length} nodes online · shared networks`);
+  }
+  for (const n of clusterView ? [] : nodes) {
     const ports = (ntopo.nics[n] || []).filter((p) => p.master === "br0");
     const sub = ports.length ? ports.map((p) => `${p.name}${p.speed_mbps ? ` ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000}G` : `${p.speed_mbps}M`}` : ""}`).join(", ") : "br0";
     const p = pos[`node:${n}`];
@@ -1854,7 +2163,7 @@ function drawTopology() {
   }
   for (const n of nets) {
     const p = pos[`net:${n.name}`];
-    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}`);
+    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}${clusterView ? ` · ${(n.nodes || []).length}/${nodes.length} nodes${networkCoverage(n).drift ? " · config differs" : ""}` : ""}`);
   }
   for (const v of vms) {
     const p = pos[`vm:${v.uuid}`];
@@ -1875,7 +2184,7 @@ function drawTopology() {
   $("#topo-svg").innerHTML = `${wires}${shapes}${grips}`;
   ntopo.pos = pos;
   const running = state.vms.filter((v) => v.state === "running").length;
-  $("#topo-stats").innerHTML = [["Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
+  $("#topo-stats").innerHTML = [[clusterView ? "Cluster nodes" : "Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
     .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
   topoToolbar();
   if (!ntopo.drag) topoPanel();
@@ -1891,12 +2200,15 @@ function topoPanel() {
       ${op ? `${!edit ? `<button class="primary small" data-topo-link-move ${ntopo.changing ? "disabled" : ""}>Move</button>` : ""} <button class="small danger" data-topo-disconnect ${edit?.saving || ntopo.changing ? "disabled" : ""}>Disconnect</button>` : ""}` : "";
   } else {
     const [kind, id] = [key.split(":")[0], key.slice(key.indexOf(":") + 1)];
-    if (kind === "net") {
+    if (kind === "cluster") {
+      const members = computeMembers();
+      box.innerHTML = `<h3>${esc(state.cluster.name || "Cluster")}</h3><p class="hint">One logical cluster network view. Physical uplinks remain separate on each node. VLAN trunk configuration must also match on the upstream switches.</p><div class="topo-list">${members.map((m) => `<a href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span><span class="vm-sub">${esc((ntopo.nics[m.name] || []).filter((p) => p.master === "br0").map((p) => p.name).join(", ") || "br0")}</span>`).join("")}</div><a class="btn small" href="#cluster">Manage cluster</a>`;
+    } else if (kind === "net") {
       const n = data.networks.find((x) => x.name === id);
       if (!n) { ntopo.sel = null; return topoPanel(); }
       const vms = data.vms.filter((v) => v.nics.some((x) => x.network === n.name));
       box.innerHTML = `<h3>${esc(n.name)}</h3><dl class="kv"><dt>VLAN ID</dt><dd>${vlanId(n)}${n.vlan ? " (tagged)" : " (native, untagged on the wire)"}</dd>
-        <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>On nodes</dt><dd>${esc(n.nodes.join(", "))}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
+        <dt>Bridge</dt><dd class="mono">${esc(n.bridge)}</dd><dt>Available on</dt><dd>${esc(n.nodes.map(nodeLabel).join(", "))}</dd><dt>Missing on</dt><dd>${esc(computeMembers().filter((m) => !n.nodes.includes(m.name)).map((m) => nodeLabel(m.name)).join(", ")) || "None"}</dd><dt>VMs</dt><dd>${vms.length}</dd></dl>
         <p class="wiz-label">Connected VMs</p><div class="topo-list">${vms.map((v) => `<a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a>`).join("") || `<span class="muted">None yet. Drag a VM here.</span>`}</div>
         ${admin && n.name !== "default" ? `<button class="small danger" data-topo-del="${esc(n.name)}" style="margin-top:14px">Remove switch</button>` : ""}`;
     } else if (kind === "vm") {
@@ -2137,20 +2449,39 @@ handlers["net-dialog"] = async (f) => {
 
 function renderPools() {
   const admin = isAdmin();
-  $("#pools").innerHTML = state.pools.length ? state.pools.map((p) => {
+  const pools = StorageView.pools(state.pools).filter((p) => !window.VirtualStorageUI?.ownsPool(p));
+  $("#pools").innerHTML = pools.length ? pools.map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
-      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.name)}</span></div></td>
-      <td>${esc(p.node)}</td>
-      <td><span class="badge info plain">${esc(POOL_TYPES[p.type] || p.type)}</span></td>
+      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.display_name || p.name)}${p.display_name ? `<span class="vm-sub">Pool ID: ${esc(p.name)}</span>` : ""}</span></div></td>
+      <td>${p.shared ? `<b>Shared · ${esc(state.cluster?.name || "Cluster")}</b><span class="vm-sub">${p.members.map((m) => esc(nodeLabel(m.node))).join(", ")}</span>` : esc(nodeLabel(p.node))}</td>
+      <td><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
       <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
-      <td><div class="actions">${admin ? `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>` : ""}</div></td>
+      <td><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button>${p.shared ? "" : `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>`}` : ""}</div></td>
     </tr>`;
-  }).join("") : empty(6, "No storage pools");
+  }).join("") : empty(6, "No local or external storage pools");
+}
+
+async function renamePoolDisplayName(node, name) {
+  const pool = state.pools.find((p) => p.name === name && p.node === node);
+  if (!pool) throw new Error("Storage pool is unavailable. Refresh and try again.");
+  const label = prompt(`Storage display name (${name}). Leave empty to use the Pool ID.`, pool.display_name || "");
+  if (label == null) return;
+  const group = StorageView.pools(state.pools).find((p) => p.members.some((m) => m.node === node && m.name === name));
+  for (const member of group?.members || [pool]) {
+    await patch(`/nodes/${enc(member.node)}/pools/${enc(member.name)}`, { display_name: label.trim() });
+  }
+  toast("Storage name updated"); await refresh("storage");
 }
 
 $("#pools").addEventListener("click", async (e) => {
+  const rename = e.target.closest("[data-pool-rename]");
+  if (rename) {
+    const { node, poolRename: name } = rename.dataset;
+    try { await renamePoolDisplayName(node, name); } catch (err) { fail(err); }
+    return;
+  }
   const link = e.target.closest("[data-pool-view]");
   if (link) { openPoolView(link.dataset.node, link.dataset.poolView); return; }
   const btn = e.target.closest("button[data-pool]");
@@ -2176,15 +2507,15 @@ function pvInfo() { return state.pools.find((p) => p.node === pv.node && p.name 
 function pvSummary() {
   const p = pvInfo();
   if (!p) return;
-  $(".pv-title", pvDlg).textContent = `${p.name} on ${p.node}`;
+  $(".pv-title", pvDlg).textContent = `${poolText(p)} on ${nodeLabel(p.node)}`;
   const used = pct(p.allocation_gb, p.capacity_gb), free = p.available_gb ?? p.capacity_gb - p.allocation_gb;
   $(".pv-stats", pvDlg).innerHTML = `
-    <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(POOL_TYPES[p.type] || p.type)}</em></div>
+    <div class="stat"><span>Capacity</span><b>${sizeText(p.capacity_gb)}</b><em>${esc(poolTypeText(p))}</em></div>
     <div class="stat"><span>Used</span><b>${sizeText(p.allocation_gb)} <small>${used}%</small></b>${bar(used)}</div>
     <div class="stat"><span>Free</span><b>${sizeText(free)}</b><em>${p.active ? "Online" : "Offline"}</em></div>`;
   const disks = state.vms.filter((v) => v.node === p.node).flatMap((v) => v.disks.map((d, i) => ({ vm: v, d, i }))).filter((x) => x.d.pool === p.name);
   const isos = state.isos.filter((i) => i.pool === p.name);
-  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(p.node)], ["Type", esc(POOL_TYPES[p.type] || p.type)], ["Source", `<span class="mono">${esc(p.source)}</span>`],
+  $(".pv-kv", pvDlg).innerHTML = [["Node", esc(nodeOptionText(p.node))], ["Type", esc(poolTypeText(p))], ["Source", `<span class="mono">${esc(p.source)}</span>`],
     ["VM disks", `${disks.length} (${sizeText(disks.reduce((s, x) => s + x.d.size_gb, 0))} provisioned)`], ["ISOs", String(isos.length)]]
     .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   $(".pv-disks", pvDlg).innerHTML = disks.length ? disks.map((x) => `<tr><td class="vm-name"><a class="vm-link" href="#vm/${esc(x.vm.uuid)}">${esc(x.vm.name)}</a></td>
@@ -2192,7 +2523,54 @@ function pvSummary() {
     : empty(4, "No VM disks here yet");
   const files = ["dir", "disk", "nfs"].includes(p.type);
   $('#pv-tabs [data-tab="pv-files"]').hidden = !files;
+  pvCache(p);
 }
+// A hybrid pool's SSD cache: how well it works, and changing it.
+function pvCache(p) {
+  const box = $(".pv-cache", pvDlg), c = p.cache;
+  box.hidden = !p.hybrid;
+  if (!p.hybrid) return;
+  const pctText = (v) => (v == null ? "–" : `${v}%`);
+  box.innerHTML = `<p class="wiz-label">SSD cache</p>` + (c ? `<div class="stats" style="padding:0">
+    <div class="stat"><span>Hit ratio</span><b>${pctText(c.hit_pct)}</b><em>Reads ${pctText(c.read_hit_pct)} · writes ${pctText(c.write_hit_pct)}</em></div>
+    <div class="stat"><span>Cache size</span><b>${sizeText(c.size_gb)} <small>${c.used_pct}% used</small></b>${bar(c.used_pct)}</div>
+    <div class="stat"><span>Mode</span><b>${esc(c.mode)}</b><em>Dirty: ${c.dirty_gb} GB not yet on the HDDs</em></div></div>
+    <div class="wiz-bar operator-only" style="margin-top:10px">
+      <button type="button" data-cache="mode" data-mode="${c.mode === "writeback" ? "writethrough" : "writeback"}">Switch to ${c.mode === "writeback" ? "writethrough" : "writeback"}</button>
+      <button type="button" class="danger" data-cache="remove">Remove cache</button></div>`
+    : `<p class="hint">No cache: the pool runs at the speed of its HDDs.</p>
+    <div class="wiz-bar operator-only"><label class="inline">SSD <select class="pv-cache-dev"><option value="">Loading…</option></select></label>
+      <label class="inline">Mode <select class="pv-cache-mode"><option>writethrough</option><option>writeback</option></select></label>
+      <label class="inline">Size GB <input type="number" min="1" class="pv-cache-gb" placeholder="all" style="width:80px"></label>
+      <button type="button" data-cache="add">Add cache</button></div>`);
+  if (!c) api(`/nodes/${enc(p.node)}/disks`).then((disks) => {
+    const sel = $(".pv-cache-dev", box);
+    if (sel) sel.innerHTML = disks.filter((d) => d.empty).map((d) => `<option value="${esc(d.path)}">${esc(d.path)} ${sizeText(d.size_gb)} ${esc((d.media || "").toUpperCase())}</option>`).join("") || `<option value="">No empty disk</option>`;
+  }).catch(() => {});
+}
+$(".pv-cache", pvDlg).addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-cache]");
+  if (!b) return;
+  const p = pvInfo(), act = b.dataset.cache, box = $(".pv-cache", pvDlg);
+  const body = { action: act, mode: b.dataset.mode || "writethrough" };
+  if (act === "add") {
+    body.devices = [$(".pv-cache-dev", box).value].filter(Boolean);
+    body.mode = $(".pv-cache-mode", box).value;
+    body.size_gb = Number($(".pv-cache-gb", box).value) || null;
+    body.confirm_wipe = true;
+    if (!body.devices.length) { toast("Pick an empty SSD", true); return; }
+    if (!confirm(`Erase ${body.devices[0]} and use it as the cache of ${p.name}?`)) return;
+  }
+  if (act === "remove" && !confirm(`Remove the SSD cache of ${p.name}? Dirty blocks are written to the HDDs first; VMs keep running.`)) return;
+  if (body.mode === "writeback" && act !== "remove" && !confirm("Writeback keeps new writes only on the SSD until they are copied to the HDDs: use it only with a mirrored (RAID 1) SSD. Continue?")) return;
+  b.disabled = true;
+  try {
+    await post(`/nodes/${enc(p.node)}/pools/${enc(p.name)}/cache`, body);
+    toast(`${p.name}: cache ${act === "mode" ? `now ${body.mode}` : act === "add" ? "added" : "removed"}`);
+    await refresh("storage");
+    pvSummary();
+  } catch (err) { fail(err); } finally { b.disabled = false; }
+});
 async function pvFiles() {
   const p = pvInfo();
   if (!p || !["dir", "disk", "nfs"].includes(p.type)) return;
@@ -2299,7 +2677,7 @@ function fillIsoDest() {
   const initialized = sel.options.length > 0;
   const pools = state.pools.filter((p) => p.active && ["dir", "disk", "nfs"].includes(p.type));
   sel.innerHTML = `<option value="">System disk (ISO library)</option>` + pools.map((p) =>
-    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(p.name)} / iso · ${esc(p.node)} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
+    `<option value="${esc(`${p.node}|${p.name}`)}">${esc(poolText(p))} / iso · ${esc(nodeOptionText(p.node))} (${Math.floor(p.available_gb).toLocaleString()} GB free)</option>`).join("");
   if (initialized && [...sel.options].some((o) => o.value === was)) sel.value = was;
   else if (pools.length) sel.value = `${pools.sort((a, b) => b.available_gb - a.available_gb)[0].node}|${pools[0].name}`;
 }
@@ -2368,7 +2746,11 @@ const poolWiz = {
   media: "",
   nameTouched: false,
 };
-const KIND_LABEL = { local: "Local disks", fc: "Fibre Channel", nfs: "NFS", iscsi: "iSCSI", dir: "Folder" };
+const KIND_LABEL = { local: "Local disks", hybrid: "Hybrid (HDD + SSD cache)", fc: "Fibre Channel", nfs: "NFS", iscsi: "iSCSI", dir: "Folder" };
+const DISK_KINDS = ["local", "fc", "hybrid"];
+const poolTypeText = (p) => (p.hybrid ? (p.cache ? "Hybrid · SSD cache" : "Hybrid · no cache") : POOL_TYPES[p.type] || p.type);
+// Hybrid pools: SSD/NVMe disks cache, the rest (HDD, md RAID) hold data, unless changed.
+const wizIsCache = (d) => (poolWiz.role[d.path] ?? (d.media === "ssd" || d.media === "nvme")) === true;
 const sizeText = (gb) => (gb >= 1000 ? `${(gb / 1024).toFixed(gb >= 10240 ? 1 : 2)} TB` : `${Math.round(gb)} GB`);
 const isFcDisk = (d) => d.transport === "fc" || d.path.startsWith("/dev/mapper/");
 
@@ -2381,11 +2763,11 @@ function wizDiskList() {
 function wizPicked() { return wizDiskList().filter((d) => poolWiz.picked.has(d.path)); }
 
 function wizStart() {
-  Object.assign(poolWiz, { step: 1, disks: {}, picked: new Set(), media: "", nameTouched: false });
+  Object.assign(poolWiz, { step: 1, disks: {}, picked: new Set(), media: "", nameTouched: false, role: {} });
   $$(".chips button", poolWiz.form).forEach((b) => b.classList.toggle("on", b.dataset.media === ""));
   $(".disk-search", poolWiz.form).value = "";
   $(".node-check-list", poolWiz.form).innerHTML = computeMembers().filter((m) => m.healthy).map((m, i) =>
-    `<label class="check"><input type="checkbox" name="nodes" value="${esc(m.name)}" ${i === 0 ? "checked" : ""}> ${esc(m.name)}</label>`).join("")
+    `<label class="check"><input type="checkbox" name="nodes" value="${esc(m.name)}" ${i === 0 ? "checked" : ""}> ${esc(nodeOptionText(m.name))}</label>`).join("")
     || `<p class="hint">No node is online.</p>`;
   wizShow();
 }
@@ -2397,7 +2779,7 @@ function wizShow() {
     li.classList.toggle("on", n === step);
     li.classList.toggle("done", n < step);
   });
-  $(".wiz-step2", form).textContent = ["local", "fc"].includes(kind) ? "Disks" : kind === "dir" ? "Folder" : "Connection";
+  $(".wiz-step2", form).textContent = DISK_KINDS.includes(kind) ? "Disks" : kind === "dir" ? "Folder" : "Connection";
   $$(".wiz-page", form).forEach((p) => {
     p.hidden = Number(p.dataset.page) !== step || (p.dataset.kinds && !p.dataset.kinds.split(" ").includes(kind));
   });
@@ -2405,7 +2787,7 @@ function wizShow() {
   $(".wiz-back", form).hidden = step === 1;
   $(".wiz-next", form).hidden = step === 3;
   $(".wiz-ok", form).hidden = step !== 3;
-  if (step === 2 && ["local", "fc"].includes(kind)) wizLoadDisks();
+  if (step === 2 && DISK_KINDS.includes(kind)) wizLoadDisks();
   if (step === 3) wizReview();
 }
 
@@ -2458,6 +2840,12 @@ function wizPickText() {
   const box = $(".wiz-pick", poolWiz.form);
   if (!picked.length) { box.innerHTML = `<span class="muted">Tick the disks for the new pool.</span>`; return; }
   const total = picked.reduce((s, d) => s + d.size_gb, 0);
+  if (wizKind() === "hybrid") {
+    const sum = (cache) => sizeText(picked.filter((d) => wizIsCache(d) === cache).reduce((s, d) => s + d.size_gb, 0));
+    box.innerHTML = `<b>Data ${sum(false)} · Cache ${sum(true)}</b><div class="hybrid-roles">${picked.map((d) => `<label class="inline"><span class="mono">${esc(d.path)}</span>
+      <select data-role="${esc(d.path)}"><option value="data" ${wizIsCache(d) ? "" : "selected"}>Data (HDD / RAID)</option><option value="cache" ${wizIsCache(d) ? "selected" : ""}>SSD cache</option></select></label>`).join("")}</div>`;
+    return;
+  }
   box.innerHTML = `<b>${picked.length} disk${picked.length > 1 ? "s" : ""} selected</b> · ${sizeText(total)} in total${wizMixNote(picked)}`;
 }
 
@@ -2466,9 +2854,9 @@ function wizSuggestName() {
   if (poolWiz.nameTouched && el.value) return;
   const kind = wizKind(), picked = wizPicked(), f = poolWiz.form.elements;
   const media = new Set(picked.map((d) => d.media));
-  let base = { nfs: "nas", iscsi: "iscsi", fc: "san", dir: "local" }[kind] || (media.size === 1 ? `${[...media][0] || "data"}` : "data");
+  let base = { nfs: "nas", iscsi: "iscsi", fc: "san", dir: "local", hybrid: "hybrid" }[kind] || (media.size === 1 ? `${[...media][0] || "data"}` : "data");
   if (kind === "nfs" && f.host.value) base = `nas-${f.host.value.split(".").pop()}`;
-  if (kind === "local") base += `-${wizNode()}`;
+  if (kind === "local" || kind === "hybrid") base += `-${wizNode()}`;
   base = base.replace(/[^a-zA-Z0-9_.-]/g, "-").replace(/^[^a-zA-Z0-9]+/, "") || "pool";
   const taken = new Set(state.pools.map((p) => p.name));
   let name = base;
@@ -2486,7 +2874,12 @@ function wizReview() {
     if (!$('input[name="format"]:checked', form) || thin.disabled) fmt.find((r) => r.value === (picked.length > 1 ? "lvm" : "disk")).checked = true;
   }
   const rows = [["Type", KIND_LABEL[kind]]];
-  if (["local", "fc"].includes(kind)) {
+  if (kind === "hybrid") {
+    const line = (d) => `${esc(d.path)} (${sizeText(d.size_gb)}${d.media ? ` ${d.media.toUpperCase()}` : ""})`;
+    const data = picked.filter((d) => !wizIsCache(d)), cache = picked.filter(wizIsCache);
+    rows.push(["Node", wizNode()], ["Data disks", data.map(line).join("<br>")], ["Cache disks", cache.map(line).join("<br>")],
+      ["Capacity", `About ${sizeText(data.reduce((s, d) => s + d.size_gb, 0))}`]);
+  } else if (DISK_KINDS.includes(kind)) {
     rows.push(["Node", wizNode()], ["Disks", picked.map((d) => `${d.path} (${sizeText(d.size_gb)}${d.media ? ` ${d.media.toUpperCase()}` : ""})`).join("<br>")],
       ["Capacity", `About ${sizeText(picked.reduce((s, d) => s + d.size_gb, 0))}`]);
   } else {
@@ -2498,9 +2891,9 @@ function wizReview() {
   }
   $(".wiz-summary", form).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${k === "Node" || k === "Type" ? esc(v) : v}</dd>`).join("");
   const withData = picked.filter((d) => !d.empty);
-  const erases = ["local", "fc", "iscsi"].includes(kind);
+  const erases = ["local", "fc", "iscsi", "hybrid"].includes(kind);
   $(".wiz-warn", form).innerHTML = (withData.length ? `<div class="wiz-note bad"><div><b>These disks still hold data, which will be erased:</b><ul>${withData.map((d) =>
-    `<li><span class="mono">${esc(d.path)}</span>: ${esc(d.contents)}</li>`).join("")}</ul></div></div>` : "") + wizMixNote(picked);
+    `<li><span class="mono">${esc(d.path)}</span>: ${esc(d.contents)}</li>`).join("")}</ul><p>Move the VMs on them to another pool first.</p></div></div>` : "") + (kind === "hybrid" ? "" : wizMixNote(picked));
   $(".wiz-confirm", form).hidden = !erases;
   $(".wiz-confirm span", form).textContent = kind === "iscsi"
     ? "I understand everything on this LUN will be erased"
@@ -2509,8 +2902,13 @@ function wizReview() {
 
 function wizCheck(step) {
   const f = poolWiz.form.elements, kind = wizKind();
-  if (step === 2 && ["local", "fc"].includes(kind) && !wizPicked().length) throw new Error("Tick at least one disk.");
-  if (step === 2 && !["local", "fc"].includes(kind)) {
+  if (step === 2 && DISK_KINDS.includes(kind) && !wizPicked().length) throw new Error("Tick at least one disk.");
+  if (step === 2 && kind === "hybrid") {
+    const cache = wizPicked().filter(wizIsCache).length;
+    if (!cache || cache === wizPicked().length) throw new Error("A hybrid pool needs at least one data disk (HDD or RAID) and one SSD for the cache.");
+  }
+  if (step === 3 && kind === "hybrid" && f.cache_mode.value === "writeback" && !confirm("Writeback keeps new writes only on the SSD until they are copied to the HDDs. If that SSD fails, VMs lose data. Use it only with a mirrored (RAID 1) SSD. Continue?")) throw new Error("Pick writethrough, or confirm writeback.");
+  if (step === 2 && !DISK_KINDS.includes(kind)) {
     if (["nfs", "iscsi"].includes(kind) && !f.host.value.trim()) throw new Error("Enter the server address.");
     if (kind === "nfs" && !f.export.value.trim().startsWith("/")) throw new Error("Enter the export path, starting with /.");
     if (kind === "iscsi" && !f.iqn.value.trim()) throw new Error("Enter the target IQN.");
@@ -2548,6 +2946,10 @@ function wizCheck(step) {
     if (poolWiz.picked.has(p)) poolWiz.picked.delete(p); else poolWiz.picked.add(p);
     wizRenderDisks();
   });
+  $(".wiz-pick", form).addEventListener("change", (e) => {
+    const sel = e.target.closest("select[data-role]");
+    if (sel) { poolWiz.role[sel.dataset.role] = sel.value === "cache"; wizPickText(); }
+  });
   $(".disk-all", form).addEventListener("change", (e) => {
     $$(".disk-rows tr[data-path]", form).forEach((tr) => {
       if (e.target.checked) poolWiz.picked.add(tr.dataset.path); else poolWiz.picked.delete(tr.dataset.path);
@@ -2565,7 +2967,14 @@ wizards["pool-dialog"] = { start: wizStart };
 handlers["pool-dialog"] = async (f) => {
   wizCheck(3);
   const kind = wizKind(), name = f.get("name"), confirm_wipe = f.get("confirm_wipe") === "on";
-  if (["local", "fc"].includes(kind)) {
+  if (kind === "hybrid") {
+    const picked = wizPicked(), gb = Number(f.get("cache_gb"));
+    await post(`/nodes/${enc(wizNode())}/pools`, {
+      name, type: "disk", confirm_wipe, devices: picked.filter((d) => !wizIsCache(d)).map((d) => d.path),
+      cache_devices: picked.filter(wizIsCache).map((d) => d.path), cache_mode: f.get("cache_mode"), cache_gb: gb > 0 ? gb : null,
+    });
+    toast(`Hybrid storage ${name} added on ${wizNode()}`);
+  } else if (DISK_KINDS.includes(kind)) {
     const devices = wizPicked().map((d) => d.path);
     const type = kind === "local" ? f.get("format") : "lvm";
     const body = type === "disk" ? { name, type, device: devices[0], confirm_wipe } : { name, type, devices, confirm_wipe };
@@ -2592,22 +3001,32 @@ handlers["pool-dialog"] = async (f) => {
 
 // ---------- nodes ----------
 
-function renderNodes() {
-  const c = state.cluster, admin = isAdmin();
-  $("#nodes-sub").textContent = `${TOPOLOGY[c.topology] || c.topology} · ${c.ha_capable ? "HA capable" : "no HA"} · ${c.quorum ? "quorum OK" : "no quorum"}`;
-  $("#nodes").innerHTML = c.members.map((m) => {
+function ipmiText(info = {}) {
+  info = info || {};
+  const ip = info.ip_address || "";
+  const valid = /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && ip.split(".").every((n) => Number(n) <= 255);
+  if (valid) return `<a href="https://${esc(ip)}/" target="_blank" rel="noopener noreferrer" title="Open BMC web console">${esc(ip)}</a>${info.source ? `<span class="vm-sub">${esc(info.source)}</span>` : ""}`;
+  return `<span class="muted">${esc(info.note || "Unavailable")}</span>`;
+}
+
+function nodeRows(c, admin) {
+  return c.members.map((m) => {
     const h = state.hosts[m.name];
     const vms = state.vms.filter((v) => v.node === m.name).length;
     const buttons = [
       m.role === "compute" ? `<a class="btn small" href="#node/${enc(m.name)}">Summary</a>` : "",
+      admin ? `<button class="small" data-node-label="${esc(m.name)}">Rename</button>` : "",
+      admin && m.role === "compute" ? `<button class="small" data-maint="${esc(m.name)}" data-on="${m.maintenance ? "" : "1"}">${m.maintenance ? "Exit maintenance" : "Maintenance"}</button>` : "",
       admin && m.role === "compute" && vms && computeMembers().length > 1 ? `<button class="small" data-evacuate="${esc(m.name)}">Evacuate</button>` : "",
       admin && !m.local ? `<button class="small danger" data-node="${esc(m.name)}">Remove</button>` : "",
     ].join("");
     return `<tr>
-      <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(m.name)}</a>` : `<span class="vm-name">${esc(m.name)}</span>`}${m.local ? '<span class="vm-sub">runs the manager</span>' : ""}</div></div></td>
+      <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a>` : `<span class="vm-name">${esc(nodeLabel(m.name))}</span>`}<span class="vm-sub">${esc(m.name)}${m.local ? " · runs the manager" : ""}</span></div></div></td>
       <td>${esc(m.role)}</td>
       <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
-      <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span></td>
+      <td>${m.role === "compute" ? ipmiText(state.summaries[m.name]?.ipmi) : '<span class="muted">Not applicable</span>'}</td>
+      <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>${m.maintenance ? ` <span class="badge plain">maintenance</span>` : ""}</td>
+      <td data-hardware-node="${esc(m.name)}">${m.role === "compute" ? '<span class="muted">Checking…</span>' : '<span class="muted">Not applicable</span>'}</td>
       <td>${h ? `${h.cpus} cores` : "–"}</td>
       <td>${h ? gbText(h.memory_mb) : "–"}</td>
       <td>${m.role === "compute" ? vms : "–"}</td>
@@ -2616,11 +3035,75 @@ function renderNodes() {
   }).join("");
 }
 
-$("#nodes").addEventListener("click", async (e) => {
+function renderCluster() {
+  const c = state.cluster, local = c.members.find((m) => m.local), created = Boolean(c.cluster_id) || c.members.length > 1;
+  const kv = (rows) => rows.map(([key,value]) => `<dt>${esc(key)}</dt><dd>${value}</dd>`).join("");
+  $("#cluster-page-create").hidden = created;
+  $("#cluster-page-add").hidden = !created;
+  $("#cluster-details").innerHTML = kv([
+    ["Name", esc(c.name || "Standalone server")],
+    ["Cluster ID", c.cluster_id ? `<span class="mono cluster-id">${esc(c.cluster_id)}</span>` : "Create a cluster to begin"],
+    ["Management node", esc(local ? nodeLabel(local.name) : "Unavailable")],
+    ["Members", String(c.members.length)],
+  ]);
+  $("#cluster-health").innerHTML = kv([
+    ["Online", `${c.members.filter((m) => m.healthy).length} / ${c.members.length}`],
+    ["Quorum", `<span class="badge ${c.quorum ? "online" : "offline"}">${c.quorum ? "OK" : "Lost"}</span>`],
+    ["Topology", created && c.members.length === 1 ? "Single-node cluster" : esc(TOPOLOGY[c.topology] || c.topology)],
+    ["Automatic VM failover", "Not implemented"],
+  ]);
+  $("#cluster-pairing").hidden = created;
+  $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
+  $("#cluster-members").innerHTML = nodeRows(c, isAdmin());
+  for (const m of c.members.filter((m) => m.role === "compute")) void loadHardwareBadge(m.name);
+}
+
+$("#cluster-copy-key").addEventListener("click", async () => {
+  try {
+    const data = await api("/cluster/pairing");
+    await navigator.clipboard.writeText(data.agent_token);
+    toast("Pairing key copied. Paste it into Add node on the cluster manager.");
+  } catch (err) { fail(err); }
+});
+
+async function loadHardwareBadge(name) {
+  const targets = [...document.querySelectorAll('[data-hardware-node]')].filter((e) => e.dataset.hardwareNode === name);
+  if (!targets.length) return;
+  try {
+    const data = await api(`/nodes/${enc(name)}/hardware`), items = data.items || [];
+    const faults = items.filter((x) => x.status === "critical"), warnings = items.filter((x) => x.status === "warning");
+    const unknown = items.filter((x) => x.status === "unknown").length;
+    const status = faults.length ? "critical" : warnings.length ? "warning" : unknown || !items.length ? "unknown" : "ok";
+    let html = hardwareBadge(status) + `<span class="vm-sub">${esc(faults[0]?.name || warnings[0]?.name || (data.collecting ? "Collecting readings…" : unknown ? `${unknown} unavailable readings` : data.note || "Supported readings within limits"))}</span>`;
+    if (!items.length && !data.collecting && !data.note) html = hardwareBadge("unknown");
+    targets.forEach((target) => { if (target.isConnected) target.innerHTML = html; });
+  } catch {
+    targets.forEach((target) => { if (target.isConnected) target.innerHTML = hardwareBadge("unknown") + '<span class="vm-sub">Status unavailable</span>'; });
+  }
+}
+
+const handleNodeAction = async (e) => {
+  const label = e.target.closest("button[data-node-label]");
   const ev = e.target.closest("button[data-evacuate]");
   const rm = e.target.closest("button[data-node]");
+  const mt = e.target.closest("button[data-maint]");
+  if (!label && !ev && !rm && !mt) return;
   try {
-    if (ev) {
+    if (label) {
+      const name = label.dataset.nodeLabel;
+      const value = prompt(`Display name for ${name} (leave blank to use the Node ID):`, nodeLabel(name));
+      if (value == null) return;
+      await patch(`/cluster/nodes/${enc(name)}`, { display_name: value.trim() });
+      toast("Node display name saved");
+    } else if (mt) {
+      const on = Boolean(mt.dataset.on), n = mt.dataset.maint;
+      const others = computeMembers().filter((x) => x.name !== n && !x.maintenance).length;
+      const vmsHere = state.vms.filter((v) => v.node === n).length;
+      if (on && !confirm(`Put ${n} into maintenance? No VM will be placed, started or moved onto it.${vmsHere && others ? ` Its ${vmsHere} VM(s) move to other nodes first.` : vmsHere ? " There is no other node to move its VMs to: they stay as they are." : ""}`)) return;
+      const r = await post(`/nodes/${enc(n)}/maintenance`, { on, evacuate: on && others > 0 });
+      const failed = r.moves.filter((j) => j.state === "failed");
+      toast(on ? `${n} is in maintenance${r.moves.length ? `; moving ${r.moves.length - failed.length} VM(s)` : ""}${failed.length ? `; ${failed.length} cannot move: ${failed[0].error}` : ""}` : `${n} is back in service`, failed.length > 0);
+    } else if (ev) {
       if (!confirm(`Move every VM off ${ev.dataset.evacuate}?`)) return;
       const jobs = await post(`/nodes/${enc(ev.dataset.evacuate)}/evacuate`);
       const failed = jobs.filter((j) => j.state === "failed");
@@ -2629,20 +3112,78 @@ $("#nodes").addEventListener("click", async (e) => {
       if (!confirm(`Remove ${rm.dataset.node} from the cluster?`)) return;
       await del(`/cluster/nodes/${enc(rm.dataset.node)}`);
     } else return;
-    await refresh("nodes");
+    await refresh("cluster");
   } catch (err) { fail(err); }
-});
+};
+$("#cluster-members").addEventListener("click", handleNodeAction);
+
+handlers["cluster-create-dialog"] = async (f) => {
+  await post("/cluster/create", { name: f.get("name").trim() });
+  toast("Cluster created. You can now add other nodes.");
+  if (currentPage() === "cluster") await refresh("cluster");
+  else location.hash = "cluster";
+};
 
 handlers["node-dialog"] = async (f) => {
-  await post("/cluster/nodes", { name: f.get("name"), role: f.get("role"), address: f.get("address") });
+  await post("/cluster/nodes", { name: f.get("name"), role: f.get("role"), address: f.get("address"), agent_token: f.get("agent_token") || null });
   toast(`${f.get("name")} joined the cluster`);
-  await refresh("nodes");
+  await refresh("cluster");
 };
 
 // ---------- one node: Summary, Network, Settings ----------
 
 const nodeFromHash = () => decodeURIComponent(location.hash.slice(6));
 const node = { name: "", summary: null, nics: [], net: null, netState: null, settings: null, timezones: [], moved: "" };
+
+let hardwareRequest = 0;
+const hardwareStatus = {
+  ok: ["running", "Normal"], warning: ["waiting", "Warning"],
+  critical: ["failed", "Fault reported"], unknown: ["plain", "Unknown"],
+};
+function hardwareBadge(status) {
+  const [style, label] = hardwareStatus[status] || hardwareStatus.unknown;
+  return `<span class="badge ${style}">${label}</span>`;
+}
+function renderHardware(data) {
+  const box = $("#node-health-content");
+  const expanded = new Map([...box.querySelectorAll('details[data-health-group]')].map((d) => [d.dataset.healthGroup, d.open]));
+  const items = data.items || [], events = data.events || [];
+  const count = (s) => items.filter((x) => x.status === s).length;
+  const stamp = data.collected_at ? new Date(data.collected_at).toLocaleString() : "Not collected yet";
+  const summary = Object.keys(hardwareStatus).map((s) =>
+    `<span>${hardwareBadge(s)} <b>${count(s)}</b></span>`).join("");
+  const categories = [...new Set(items.map((x) => x.category))];
+  const order = { critical: 0, warning: 1, unknown: 2, ok: 3 };
+  const groups = categories.map((category) => {
+    const rows = items.filter((x) => x.category === category).sort((a,b) => (order[a.status] ?? 2) - (order[b.status] ?? 2));
+    const faults = rows.filter((x) => ["critical", "warning"].includes(x.status)).length;
+    const status = rows.some((x) => x.status === "critical") ? "critical" : faults ? "warning" : rows.some((x) => x.status === "unknown") ? "unknown" : "ok";
+    return `<details class="health-group" data-health-group="${esc(category)}" ${(expanded.get(category) ?? !!faults) ? "open" : ""}><summary>${esc(category)} ${hardwareBadge(status)} <span class="muted">${rows.length} readings</span></summary>
+      <div class="table-wrap"><table><thead><tr><th>Device / sensor</th><th>Status</th><th>Reading / details</th><th>Source</th></tr></thead><tbody>${rows.map((x) =>
+        `<tr><td>${esc(x.name)}</td><td>${hardwareBadge(x.status)}</td><td>${esc(x.detail)}</td><td>${esc(x.source)}</td></tr>`).join("")}</tbody></table></div></details>`;
+  }).join("");
+  box.innerHTML = `<div class="health-counts">${summary}</div>
+    <p class="hint">${data.collecting ? "Refreshing hardware readings… · " : ""}Last collected: ${esc(stamp)} · Refresh every 60 seconds.</p>
+    ${data.error ? `<p class="health-error">${esc(data.error)}</p>` : ""}
+    ${data.note ? `<p class="hint">${esc(data.note)}</p>` : ""}
+    ${groups}
+    <p class="hint">Normal means the reported reading is within limits. Missing sensors and empty slots can show Unknown. DIMM temperature does not confirm RAM integrity; RAID controllers may hide physical disks.</p>
+    <details class="health-group" data-health-group="history" ${expanded.get("history") ? "open" : ""}><summary>BMC hardware event history <span class="muted">${events.length} matching recent events</span></summary>
+      <p class="hint">Historical events may have been repaired. They do not confirm a current fault. Dates come from the BMC clock. Only the latest 30 BMC records are checked.</p>
+      ${events.map((e) => `<p class="health-event mono">${esc(e.detail)}</p>`).join("") || `<p class="hint">${data.events_status === "available" ? "No matching hardware events in the recent records." : "Event history unavailable."}</p>`}</details>`;
+}
+async function loadNodeHardware(name, fresh) {
+  const request = ++hardwareRequest;
+  if (fresh) $("#node-health-content").innerHTML = '<p class="hint">Collecting device health…</p>';
+  try {
+    const data = await api(`/nodes/${enc(name)}/hardware`);
+    if (request === hardwareRequest && nodeFromHash() === name) renderHardware(data);
+  } catch (err) {
+    if (request === hardwareRequest && nodeFromHash() === name) renderHardware({
+      items: [], events: [], error: `Hardware status unavailable: ${err.message}`,
+    });
+  }
+}
 let netTick = null;
 
 const uptimeText = (s) => {
@@ -2661,11 +3202,24 @@ function ifaceNames() {
   return [...names].sort((a, b) => order[kind(a)] - order[kind(b)] || a.localeCompare(b, undefined, { numeric: true }));
 }
 
+function systemDiskText(d) {
+  if (!d.device) return "–";
+  const dot = d.health === "ok" ? "ok" : d.health === "failing" ? "bad" : "";
+  const bits = [
+    d.health === "ok" ? "SMART OK" : d.health === "failing" ? "SMART FAILING: replace it" : (d.note || "health unknown"),
+    d.wear_percent != null ? `${d.wear_percent}% worn` : "",
+    d.temperature_c != null ? `${d.temperature_c} °C` : "",
+    d.power_on_hours != null ? `${Math.round(d.power_on_hours / 24)} days on` : "",
+    d.reallocated_sectors ? `${d.reallocated_sectors} reallocated sectors` : "",
+    d.root_used_percent != null ? `/ ${d.root_used_percent}% used (${d.root_free_gb} GB free)` : "",
+  ].filter(Boolean);
+  return `${dot ? `<span class="dot ${dot}"></span> ` : ""}<span class="mono">${esc(d.device)}</span> ${esc(d.model || "")}<br><span class="muted">${esc(bits.join(" · "))}</span>`;
+}
 async function renderNodeDetail(auto = false) {
   const name = nodeFromHash();
   const m = state.cluster.members.find((x) => x.name === name);
-  $("#node-crumb").textContent = name;
-  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-ifaces", "#node-net-banner"].forEach((id) => { $(id).innerHTML = ""; });
+  $("#node-crumb").textContent = nodeLabel(name);
+  const clear = () => ["#node-stats", "#node-hw", "#node-sys", "#node-ports", "#node-pools", "#node-vms", "#node-ifaces", "#node-net-banner", "#node-health-content"].forEach((id) => { $(id).innerHTML = ""; });
   if (!m || m.role !== "compute") {
     $("#node-title").textContent = m ? name : "Node not found";
     $("#node-subtitle").textContent = m ? "A witness only votes for quorum; it has no host details to show." : "It may have been removed from the cluster.";
@@ -2678,13 +3232,14 @@ async function renderNodeDetail(auto = false) {
     api(`${base}/summary`), api(`${base}/nics`), api(`${base}/network`), api(`${base}/network/state`),
   ]);
   Object.assign(node, { name, summary, nics, net, netState });
+  void loadNodeHardware(name, fresh);
   if (fresh) {
     const [settings, timezones] = await Promise.all([api(`${base}/settings`), api(`${base}/timezones`)]);
     Object.assign(node, { settings, timezones, moved: "" });
     fillNodeSettings();
   }
   const s = summary;
-  $("#node-title").innerHTML = `${esc(name)} <span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>`;
+  $("#node-title").innerHTML = `${esc(nodeLabel(name))} <span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>`;
   $("#node-subtitle").textContent = [[s.vendor, s.model].filter(Boolean).join(" "), m.local ? "runs the manager" : m.address, `ibHiCS ${s.version}`].filter(Boolean).join(" · ");
 
   const vms = state.vms.filter((v) => v.node === name);
@@ -2712,6 +3267,7 @@ async function renderNodeDetail(auto = false) {
   const mgmt = nics.flatMap((n) => n.addresses.map((a) => [n.name, a]));
   $("#node-sys").innerHTML = kv([
     ["Hostname", esc(s.hostname)],
+    ["IPMI / BMC IPv4", ipmiText(s.ipmi)],
     ["Role", m.local ? "Compute, runs the manager" : esc(m.role)],
     ["Management address", mgmt.map(([n, a]) => `<span class="mono">${esc(a)}</span> <span class="muted">${esc(n)}</span>`).join("<br>")],
     ["ibHiCS", esc(s.version)],
@@ -2719,6 +3275,8 @@ async function renderNodeDetail(auto = false) {
     ["Kernel", `<span class="mono">${esc(s.kernel)}</span>`],
     ["Time zone", esc(s.timezone)],
     ["Uptime", uptimeText(s.uptime_s)],
+    ["Maintenance", m.maintenance ? `<span class="dot bad"></span> In maintenance: no VMs are placed here` : `<span class="dot ok"></span> In service`],
+    ["System disk", systemDiskText(s.system_disk || {})],
   ]);
 
   const used = (n) => n.master ? `Part of ${esc(n.master)}` : ifaceOf(n.name)?.method !== "manual" && ifaceOf(n.name) ? "Own address" : '<span class="muted">Not used</span>';
@@ -2729,6 +3287,11 @@ async function renderNodeDetail(auto = false) {
     <td>${speedText(n.speed_mbps)}</td><td>${used(n)}</td>
     <td>${n.addresses.map((a) => `<span class="mono">${esc(a)}</span>`).join("<br>") || '<span class="muted">–</span>'}</td></tr>`).join("") : empty(5, "No network ports found");
   const pools = state.pools.filter((p) => p.node === name);
+  $("#node-vms").innerHTML = vms.length ? [...vms].sort((a, b) => a.name.localeCompare(b.name)).map((v) => `<tr>
+    <td><a class="vm-link" href="#vm/${esc(v.uuid)}">${esc(v.name)}</a></td>
+    <td><span class="badge ${v.state === "running" ? "running" : "plain"}">${esc(v.state)}</span></td>
+    <td>${v.vcpus}</td><td>${gbText(v.memory_mb)}</td><td>${esc(v.os_type || "")}</td>
+  </tr>`).join("") : empty(5, "No VMs on this node.");
   $("#node-pools").innerHTML = pools.length ? pools.map((p) => `<tr>
     <td><span class="vm-name">${esc(p.name)}</span></td><td>${esc(p.type)}</td>
     <td>${num(p.allocation_gb)} GB / ${num(p.capacity_gb)} GB ${usageBar({ used: p.allocation_gb, total: p.capacity_gb || 1, from: "of the pool" })}</td>
@@ -2832,6 +3395,9 @@ function openIface(name, kind) {
   if (mtu && ![...form.elements.mtu.options].some((o) => o.value === mtu)) form.elements.mtu.add(new Option(mtu, mtu));
   form.elements.mtu.value = mtu;
   form.elements.auto.checked = cfg ? cfg.auto : true;
+  $$('input[name="roles"]', form).forEach((c) => { c.checked = (cfg?.roles || []).includes(c.value); });
+  form.elements.routes.value = (cfg?.routes || []).join("\n");
+  form.elements.flow_control.value = cfg?.flow_control || "";
   form.elements.bond_mode.value = cfg?.bond_mode || "active-backup";
   // Ports this one may use: free ones, its own, and for a bridge also bonds.
   const own = cfg?.ports || [];
@@ -2874,6 +3440,9 @@ handlers["iface-dialog"] = async (f) => {
     address: f.get("method") === "static" ? f.get("address").trim() : "",
     gateway: f.get("method") === "static" ? f.get("gateway").trim() : "",
     mtu: f.get("mtu") ? Number(f.get("mtu")) : null,
+    roles: f.getAll("roles"),
+    flow_control: kind === "ethernet" ? f.get("flow_control") || "" : "",
+    routes: f.get("routes").split("\n").map((r) => r.trim().replace(/\s+/g, " ")).filter(Boolean),
   });
   if (kind !== "ethernet") {
     cfg.ports = f.getAll("ports");
@@ -2897,6 +3466,9 @@ $("#iface-delete").addEventListener("click", async () => {
 
 function fillNodeSettings() {
   const s = node.settings, form = $("#node-settings-form");
+  $("#node-label-form").elements.display_name.value = nodeLabel(node.name);
+  $("#node-label-form").elements.display_name.disabled = !isAdmin();
+  $("#node-stable-id").textContent = node.name;
   form.elements.hostname.value = s.hostname;
   $("#node-tz").innerHTML = node.timezones.map((z) => `<option${z === s.timezone ? " selected" : ""}>${esc(z)}</option>`).join("");
   form.elements.ntp.value = s.ntp.join(", ");
@@ -2905,6 +3477,21 @@ function fillNodeSettings() {
   $("#node-time").textContent = `Node time: ${new Date(s.time).toLocaleString()}${sync}`;
   $$("input, select", form).forEach((el) => { if (el.name !== "hostname") el.disabled = !isAdmin(); });
 }
+
+$("#node-label-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = $("button[type=submit]", e.target);
+  button.disabled = true;
+  try {
+    await patch(`/cluster/nodes/${enc(node.name)}`, { display_name: e.target.elements.display_name.value.trim() });
+    await loadCluster();
+    await renderNodeDetail(true);
+    e.target.elements.display_name.value = nodeLabel(node.name);
+    fillSelects();
+    toast("Node display name saved");
+  } catch (err) { fail(err); }
+  finally { button.disabled = false; }
+});
 
 $("#node-settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -3075,7 +3662,7 @@ async function renderVMDetail() {
   $("#vm-general").innerHTML = kv([
     ["Name", esc(vm.name)],
     ["Status", `<span class="badge ${esc(vm.state)}">${esc(vm.state)}</span>`],
-    ["Node", esc(vm.node || "–")],
+    ["Node", esc(nodeOptionText(vm.node || "–"))],
     ["Group", groupOf(vm) ? `<span class="g-tag">${esc(groupPath(groupOf(vm)))}</span>` : `<span class="muted">Ungrouped</span>`],
     ["Operating system", vm.os_type ? esc(vm.os_type) : `<span class="muted">Not set</span>`],
     ["Firmware", vm.firmware === "uefi" ? "UEFI" : "BIOS"],
@@ -3114,7 +3701,7 @@ async function renderVMDetail() {
     ["i-server", "Memory", gbText(vm.memory_mb), `${vm.memory_mb} MB`],
     ...vm.disks.map((d, i) => ["i-disk", `Hard disk ${i + 1}`,
       d.used_gb != null && d.used_gb < d.size_gb ? `${num(d.used_gb)} GB / ${d.size_gb} GB` : `${d.size_gb} GB`,
-      `Pool ${esc(d.pool)} · ${esc(d.backend)}`]),
+      `Pool <b>${esc(d.pool || "unknown")}</b> · ${esc(d.backend)}${d.bus === "sata" ? " · SATA" : ""}`]),
     ...vm.nics.map((n, i) => ["i-migrate", `Network adapter ${i + 1}`, esc(n.network), `${esc(n.model)} · <span class="mono">${esc(n.mac || "auto")}</span>`]),
     ["i-disk", "CD/DVD drive", vm.iso ? "ISO attached" : "Empty", vm.iso ? `<span class="mono">${esc(vm.iso)}</span>` : ""],
     ...(vm.driver_iso ? [["i-disk", "CD/DVD drive 2", "Drivers (virtio)", `<span class="mono">${esc(vm.driver_iso)}</span>`]] : []),
@@ -3439,7 +4026,7 @@ function renderPolicies() {
 function renderJobs() {
   const jobs = state.jobs.slice(0, 50);
   $("#jobs").innerHTML = jobs.length ? jobs.map((j) => `<tr>
-    <td>${j.kind === "backup" ? "Backup" : "Restore"}${j.policy ? ` <span class="vm-sub" style="display:inline">(${esc(j.policy)})</span>` : ""}</td>
+    <td>${esc(JOB_KINDS[j.kind] || j.kind)}${j.policy ? ` <span class="vm-sub" style="display:inline">(${esc(j.policy)})</span>` : ""}</td>
     <td class="vm-name">${esc(j.vm)}</td>
     <td>${esc(j.target)}</td>
     <td>${esc(j.node || "")}</td>
@@ -3979,7 +4566,7 @@ function importCapacity() {
 function importTargetPools() {
   const sel = importForm.elements.pool, was = sel.value;
   const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
-  sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(p.name)} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
+  sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
   if (pools.some((p) => p.name === was)) sel.value = was;
   importCapacity();
 }
@@ -3989,7 +4576,7 @@ const importWiz = wizard("import-dialog", {
     const ctx = dialogContext;
     Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() });
     $("#import-submit-status").textContent = "";
-    importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+    importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
     importTargetPools();
   },
   check(step) {
@@ -4159,7 +4746,7 @@ $("#password-form").addEventListener("submit", async (e) => {
 
 loadMe().then(show).catch(fail);
 setInterval(() => {
-  if (!document.querySelector("dialog[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
+  if (!document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);
 
 
@@ -4296,3 +4883,225 @@ $("#term-form").addEventListener("submit", async (e) => {
     term.busy = false; input.disabled = false; input.focus();
   }
 });
+
+// Containers (v1.0): LXC system containers beside the VMs.
+const CT_ICONS = { debian: "🌀", ubuntu: "🟠", rockylinux: "🟢", almalinux: "🔵", alpine: "🏔️" };
+function renderContainers() {
+  const tpls = state.ctTemplates || [];
+  const q = ($("#ct-search").value || "").trim().toLowerCase();
+  const card = (t) => `<button class="ct-tpl" data-tpl="${esc(t.id)}">
+    <span class="ct-ico">${CT_ICONS[t.distro] || "📦"}</span><b>${esc(t.title)}</b><span class="muted">${t.kind === "app" ? `app · ${esc(t.base)}` : t.kind === "os" ? "operating system" : "image"}</span></button>`;
+  const match = (t) => !q || `${t.title} ${t.distro} ${t.release} ${t.id}`.toLowerCase().includes(q);
+  const groups = [["Applications", tpls.filter((t) => t.kind === "app" && match(t))], ["Popular systems", tpls.filter((t) => t.kind === "os" && match(t))]];
+  const more = tpls.filter((t) => t.kind === "image" && match(t));
+  for (const d of [...new Set(more.map((t) => t.distro))]) groups.push([d.charAt(0).toUpperCase() + d.slice(1), more.filter((t) => t.distro === d)]);
+  $("#ct-catalog").innerHTML = groups.filter(([, list]) => list.length).map(([title, list]) =>
+    `<h4 class="ct-group">${esc(title)} <span class="muted">${list.length}</span></h4>${list.map(card).join("")}`).join("") || `<p class="hint">No template matches “${esc(q)}”.</p>`;
+  const cts = [...(state.containers || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const title = (id) => tpls.find((t) => t.id === id)?.title || id;
+  $("#ct-rows").innerHTML = cts.length ? cts.map((c) => {
+    const on = c.state === "running";
+    return `<tr>
+    <td><b>${esc(c.name)}</b>${c.description ? `<br><span class="muted">${esc(c.description)}</span>` : ""}</td>
+    <td><span class="badge ${on ? "running" : "plain"}">${esc(c.state)}</span></td>
+    <td>${esc(c.node)}</td><td>${esc(title(c.template))}${c.unprivileged ? "" : ` <span class="badge plain">privileged</span>`}</td>
+    <td>${c.vcpus}</td><td>${on ? `${gbText(c.memory_used_mb)} / ` : ""}${gbText(c.memory_mb)}</td>
+    <td>${c.disk_used_gb} / ${c.disk_gb} GB</td><td>${esc(c.pool)}</td><td class="mono">${esc((c.addresses || []).join(" ") || (c.ip === "dhcp" ? "" : c.ip))}</td>
+    <td>${(c.snapshots || []).length}</td>
+    <td class="actions" data-ct="${esc(c.name)}">
+      ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
+      ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
+      <button class="small" data-act="edit">Settings</button>
+      ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
+      <button class="small danger" data-act="delete">Delete</button>
+    </td></tr>`;
+  }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
+}
+function openCtWizard(tpl = "debian-13") {
+  const label = { app: "Applications", os: "Popular systems", image: "All images" };
+  const opts = ["app", "os", "image"].map((k) => {
+    const list = (state.ctTemplates || []).filter((t) => t.kind === k);
+    return list.length ? `<optgroup label="${label[k]}">${list.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}${t.kind === "app" ? ` (${esc(t.base)})` : ""}</option>`).join("")}</optgroup>` : "";
+  }).join("");
+  $("#ct-template").innerHTML = opts;
+  openDialog("ct-dialog", null, { template: tpl });
+  $("#ct-form").elements.nesting.checked = ["app:docker", "app:npm"].includes(tpl);
+}
+$("#ct-new").addEventListener("click", () => openCtWizard());
+$("#ct-search").addEventListener("input", renderContainers);
+$("#ct-catalog").addEventListener("click", (e) => { const b = e.target.closest("[data-tpl]"); if (b) openCtWizard(b.dataset.tpl); });
+handlers["ct-dialog"] = async (f) => {
+  const num = (k) => Number(f.get(k));
+  const r = await post("/containers", {
+    name: f.get("name").trim(), template: f.get("template"), node: f.get("node") || "",
+    vcpus: num("vcpus"), memory_mb: num("memory_mb"), disk_gb: num("disk_gb"), pool: f.get("pool"),
+    network: f.get("network"), ip: f.get("ip").trim() || "dhcp", gateway: f.get("gateway").trim(), dns: f.get("dns").trim(),
+    password: f.get("password"), ssh_key: f.get("ssh_key").trim(), nesting: f.get("nesting") === "on",
+    autostart: f.get("autostart") === "on", unprivileged: f.get("unprivileged") === "on",
+  });
+  toast(`Creating ${r.name} on ${r.node}… it appears when ready (see Tasks)`);
+  setTimeout(() => load("jobs").then(renderTasks).catch(() => {}), 800);
+};
+let ctCurrent = null;
+function ctSnaps(c) {
+  $("#ct-snaps").innerHTML = (c.snapshots || []).length ? c.snapshots.map((s) => `<tr><td class="mono">${esc(s)}</td>
+    <td class="actions" data-snap="${esc(s)}"><button type="button" class="small" data-sact="restore">Restore</button><button type="button" class="small danger" data-sact="delete">Delete</button></td></tr>`).join("")
+    : `<tr><td class="muted">No snapshots.</td></tr>`;
+}
+$("#ct-rows").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const name = b.closest("[data-ct]").dataset.ct, act = b.dataset.act;
+  const c = state.containers.find((x) => x.name === name);
+  try {
+    if (act === "edit") {
+      ctCurrent = name;
+      openDialog("ct-edit-dialog", { name }, { vcpus: c.vcpus, memory_mb: c.memory_mb, disk_gb: c.disk_gb, description: c.description });
+      $("#ct-edit-form").elements.autostart.checked = c.autostart;
+      $("#ct-edit-form").elements.dns.value = c.dns || "";
+      ctNics(c);
+      ctStorage(c);
+      $("#ct-edit-title").textContent = `Container ${name}`;
+      ctSnaps(c);
+      return;
+    }
+    if (act === "console") {
+      ctCurrent = name;
+      $("#ct-console-title").textContent = `Console: ${name}`;
+      $("#ct-prompt").textContent = `root@${name} #`;
+      $("#ct-out").textContent = "";
+      $("#ct-console-dialog").showModal();
+      $("#ct-input").focus();
+      return;
+    }
+    if (act === "rename") {
+      const to = (prompt(`New name for ${name} (small letters, digits and -; also its host name)`, name) || "").trim();
+      if (!to || to === name) return;
+      await post(`/containers/${enc(name)}/rename`, { name: to });
+      toast(`${name} is now ${to}`);
+      await refresh("containers");
+      return;
+    }
+    if (act === "delete" && !confirm(`Delete container ${name} and its disk and snapshots? This cannot be undone.`)) return;
+    b.disabled = true;
+    if (act === "delete") await del(`/containers/${enc(name)}`);
+    else await post(`/containers/${enc(name)}/action`, { action: act });
+    toast(`${name}: ${act} done`);
+    await refresh("containers");
+  } catch (err) { fail(err); } finally { b.disabled = false; }
+});
+// Where a container's disk lives, and moving it to another pool (stopped only).
+function ctStorage(c) {
+  const pools = [...new Set(state.pools.filter((p) => p.active && p.node === c.node).map((p) => p.name))];
+  $("#ct-storage").innerHTML = `<p>Pool <b>${esc(c.pool)}</b> · <span class="mono">${esc(c.path || "")}/rootfs.img</span></p>
+    <label>Move to <select id="ct-move-pool">${pools.filter((p) => p !== c.pool).map((p) => `<option>${esc(p)}</option>`).join("")}</select></label>
+    <button type="button" class="small" id="ct-move" ${c.state === "running" || pools.length < 2 ? "disabled" : ""}>Move</button>
+    <span class="hint">${c.state === "running" ? "Stop the container to move it." : "Copies the disk, config and snapshots, then removes the old folder."}</span>`;
+}
+$("#ct-storage").addEventListener("click", async (e) => {
+  if (!e.target.closest("#ct-move")) return;
+  const name = ctCurrent, pool = $("#ct-move-pool").value;
+  if (!pool || !confirm(`Move ${name} to pool ${pool}?`)) return;
+  e.target.disabled = true;
+  toast(`Moving ${name} to ${pool}… (see Tasks)`);
+  setTimeout(() => load("jobs").catch(() => {}), 800);
+  try {
+    const c = await post(`/containers/${enc(name)}/move`, { pool });
+    toast(`${name} is now on ${pool}`);
+    await refresh("containers");
+    ctStorage(c);
+  } catch (err) { fail(err); } finally { e.target.disabled = false; }
+});
+// Network cards of a container: one row each, eth0 first.
+function ctNicRow(card, i, now = "") {
+  const nets = (state.networks || []).map((n) => n.name);
+  if (!nets.includes(card.network)) nets.unshift(card.network);
+  return `<tr data-nic>
+    <td class="mono">eth${i}</td>
+    <td><select data-f="network">${nets.map((n) => `<option ${n === card.network ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></td>
+    <td><input data-f="ip" value="${esc(card.ip || "dhcp")}" placeholder="dhcp or 10.0.0.50/24" size="16"></td>
+    <td><input data-f="gateway" value="${esc(card.gateway || "")}" placeholder="10.0.0.1" size="12"></td>
+    <td class="mono"><input type="hidden" data-f="mac" value="${esc(card.mac || "")}">${esc(card.mac || "new")}</td>
+    <td class="mono">${esc(now)}</td>
+    <td>${i ? `<button type="button" class="small danger" data-nic-rm>Remove</button>` : ""}</td></tr>`;
+}
+function ctNics(c) {
+  const cards = [{ network: c.network, ip: c.ip, gateway: c.gateway, mac: c.mac }, ...(c.nics || [])];
+  $("#ct-nics").innerHTML = cards.map((card, i) => ctNicRow(card, i, (c.addresses || [])[i] || "")).join("");
+  ctNicSnapshot = ctNicValues();
+}
+let ctNicSnapshot = "";
+const ctNicValues = () => JSON.stringify([...$$("#ct-nics tr[data-nic]")].map((tr) =>
+  Object.fromEntries($$("[data-f]", tr).map((el) => [el.dataset.f, el.value.trim()]))));
+$("#ct-nic-add").addEventListener("click", () => {
+  const n = $$("#ct-nics tr[data-nic]").length;
+  if (n >= 8) { toast("A container has at most 8 network cards", true); return; }
+  $("#ct-nics").insertAdjacentHTML("beforeend", ctNicRow({ network: "default", ip: "dhcp" }, n));
+});
+$("#ct-nics").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-nic-rm]")) return;
+  e.target.closest("tr").remove();
+  $$("#ct-nics tr[data-nic]").forEach((tr, i) => { tr.cells[0].textContent = `eth${i}`; });
+});
+handlers["ct-edit-dialog"] = async (f, ctx) => {
+  const c = state.containers.find((x) => x.name === ctx.name) || {};
+  const nics = ctNicValues(), dns = (f.get("dns") || "").trim();
+  if (nics !== ctNicSnapshot || dns !== (c.dns || "")) {
+    if (c.state === "running" && !confirm(`Apply the network to ${ctx.name}? It restarts for a few seconds.`)) return;
+    await api(`/containers/${enc(ctx.name)}/network`, { method: "PUT", body: JSON.stringify({ nics: JSON.parse(nics), dns }) });
+  }
+  await patch(`/containers/${enc(ctx.name)}`, {
+    vcpus: Number(f.get("vcpus")), memory_mb: Number(f.get("memory_mb")), disk_gb: Number(f.get("disk_gb")),
+    autostart: f.get("autostart") === "on", description: f.get("description"),
+  });
+  toast(`${ctx.name} changed`);
+  await refresh("containers");
+};
+$("#ct-snap-take").addEventListener("click", async () => {
+  const name = ctCurrent, snap = prompt("Snapshot name", snapshotName(name));
+  if (!snap) return;
+  try { const c = await post(`/containers/${enc(name)}/snapshots`, { name: snap.trim() }); ctSnaps(c); toast(`Snapshot taken: ${snap}`); } catch (err) { fail(err); }
+});
+$("#ct-snaps").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-sact]");
+  if (!b) return;
+  const snap = b.closest("[data-snap]").dataset.snap, name = ctCurrent;
+  if (!confirm(b.dataset.sact === "restore" ? `Restore ${name} to ${snap}? Changes since then are lost.` : `Delete snapshot ${snap}?`)) return;
+  try {
+    const c = b.dataset.sact === "restore" ? await post(`/containers/${enc(name)}/snapshots/${enc(snap)}/restore`) : await del(`/containers/${enc(name)}/snapshots/${enc(snap)}`);
+    ctSnaps(c); toast(b.dataset.sact === "restore" ? `${name} restored to ${snap}` : `Snapshot ${snap} deleted`);
+  } catch (err) { fail(err); }
+});
+$("#ct-input").addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const input = e.target, line = input.value.trim(), out = $("#ct-out");
+  if (!line) return;
+  input.value = "";
+  if (line === "clear") { out.textContent = ""; return; }
+  out.textContent += `root@${ctCurrent} # ${line}\n`;
+  input.disabled = true;
+  // The command runs on the node in the background (up to an hour); its output shows as
+  // it comes, and Stop (or Ctrl+C) ends it.
+  const name = ctCurrent, scroll = () => { out.parentElement.scrollTop = out.parentElement.scrollHeight; };
+  let text = "";
+  try {
+    const { job } = await post(`/containers/${enc(name)}/jobs`, { command: line });
+    ctJob = { name, job };
+    $("#ct-stop").hidden = false;
+    let offset = 0;
+    for (;;) {
+      const r = await api(`/containers/${enc(name)}/jobs/${job}?offset=${offset}`);
+      offset = r.offset;
+      if (r.output) { text += r.output; out.textContent += r.output; scroll(); }
+      if (r.done) { out.textContent += (text && !text.endsWith("\n") ? "\n" : "") + (r.code ? `(exit ${r.code})\n` : ""); break; }
+      if (!$("#ct-console-dialog").open) { await del(`/containers/${enc(name)}/jobs/${job}`).catch(() => {}); break; }
+      await new Promise((res) => setTimeout(res, 700));
+    }
+  } catch (err) { out.textContent += `${err.message || err}\n`; }
+  finally { ctJob = null; $("#ct-stop").hidden = true; input.disabled = false; input.focus(); scroll(); }
+});
+let ctJob = null;
+const ctStop = () => { if (ctJob) del(`/containers/${enc(ctJob.name)}/jobs/${ctJob.job}`).catch(() => {}); };
+$("#ct-stop").addEventListener("click", ctStop);
+$("#ct-console-dialog").addEventListener("keydown", (e) => { if (e.ctrlKey && e.key === "c" && ctJob) { e.preventDefault(); ctStop(); } });

@@ -1,0 +1,169 @@
+สรุปส่งต่อให้ Claude — ibHiCS HCI
+จัดทำ 11 พฤศจิกายน 2026 (Asia/Bangkok)
+
+อ่านไฟล์นี้ก่อนบันทึกเก่า: สถานะเก่าเรื่อง planning-only, มีเฉพาะ npm-vm,
+ไม่มี witness, metadata ยังอยู่ HDD และ migration ยังไม่สำเร็จ ถูกเปลี่ยนแล้ว
+สถานะ live ด้านล่างอ้างอิงการตรวจและทดสอบคืนวันที่ 10 พฤศจิกายน ไม่ใช่การตรวจซ้ำวันนี้
+
+1. ตำแหน่งงานและ Git
+- Working tree หลักที่มีงานล่าสุด:
+  /Users/ccthailand./Desktop/claude-work/ibhics-wt/virtual-storage-rf2-policy
+  branch codex/virtual-storage-rf2-policy
+- HEAD 524312a: รวม Nodes ใน Cluster, แก้เมนู VM, ปรับหน้า Storage (vstore3.7)
+- commit 4d730c9: Full clone แบบ independent reflink (vstore3.5)
+- งาน vstore3.8 ยัง UNCOMMITTED ใน working tree นี้:
+  ibhics/__init__.py, pyproject.toml, installer/install-vstore3.sh,
+  ibhics/hypervisor/libvirt_driver.py, ibhics/manager/migrations.py,
+  tests/test_libvirt_migration.py, tests/test_nodes_v09.py,
+  และไฟล์ใหม่ installer/maintenance/migration_tls.py
+- เอกสาร handoff รอบนี้ก็ยัง uncommitted ให้ตรวจ diff ก่อน commit
+- worktree home-metrics-node-name ยังอยู่ถึง 524312a ไม่มี migration3.8 ล่าสุด
+- ยังไม่ push GitHub ให้ Claude ตรวจและจัด commit/push ตามคำสั่งเจ้าของ
+- Delivery: /Users/ccthailand./Desktop/claude-work/ibhics-delivery
+
+2. เครื่องและระบบที่ต้องรักษา
+- Node1 .104 / UI https://172.16.12.104:8888
+  ID/hostname ibhics-test, display ibhics-Node1, IPMI .108; เป็น manager หลัก
+- Node2 .103 / UI https://172.16.12.103:8888
+  ID/hostname ibhics-node2, IPMI .107
+- Arbiter .105 / UI https://172.16.12.105:8888, hostname arbiter-01
+  diskless witness ไม่มีข้อมูล VM; agent port8007
+- Cluster ibhics-cluster / eb3ddd52-df98-47dc-8acd-71ea7e0e30d3
+- Storage VIP .106/24 แยกจาก IP ของ Arbiter
+- Compute ทั้งคู่ติดตั้ง 1.3.0b2+vstore3.8; Arbiter อยู่ vstore3.3
+- Node2 มี RAM fault P2-DIMMF1 ที่เจ้าของยอมรับสำหรับเครื่องทดสอบ ให้แสดงตามจริง
+- VM ที่ต้องรักษา: npm-vm และ EXWin2022 ที่ Node1,
+  TEST-ib ที่ Node2 หลัง migration สำเร็จ, Win2022-Template ที่หยุดอยู่
+  ห้ามใช้ inventory เก่าว่าเหลือ npm-vm ตัวเดียวไปลบ VM ใหม่
+- ยังไม่มี automatic VM restart HA และ manager บน Node2 ไม่ใช่ distributed control plane
+
+3. งานที่ทำแล้วก่อนรอบ Virtual Storage (รายละเอียดใน handoff เดิม)
+- Home แสดง % allocated CPU/RAM/disk เกิน100ได้และเตือนสีแดง; allocation ไม่ใช้กราฟ
+- กราฟ actual usage เก็บบน server ย้อนหลัง30วัน, ตัวเลือกเวลาและแกนเวลาปรับแล้ว
+- แยก display name กับ Node ID, rename node และ storage ได้
+- แสดง IPMI และ hardware health; standalone install -> Create Cluster -> Add node
+- หน้า Home มีลิงก์จัดการ cluster; sidebar กดโลโก้ขยาย/ย่อชื่อเมนู
+- Cluster network topology แสดงภาพรวม cluster; template เลือก storage ได้
+- ให้อ่าน docs/handoff-home-metrics-node-labels.txt และเอกสาร Arbiter ประกอบ
+
+4. Virtual Storage RF2 ทำงานจริงแล้ว
+- เจ้าของกดสร้าง virtualstorage ด้วยตนเอง: requested6703GiB, UI filesystem~6701GB
+- Data replica2ชุด (คนละ compute), DRBD Protocol C, diskless Arbiter ช่วย quorum
+- หลังทดสอบล่าสุด replicas UpToDate ทั้งคู่; NFS export active ฝั่ง Node2
+- ทั้งคู่ mount NFS 172.16.12.106:/srv/gateway-exports/virtualstorage
+  ที่ /mnt/ibhics/virtualstorage; เป็นพื้นที่ร่วมชุดเดียว ไม่บวกความจุซ้ำ
+- UI เลือก Data/SSD cache/Do not use เอง; ไม่มี Mirror/Combine ให้สับสน
+  RF2 aggregate policy: raw14904 -> หลัง RF27452 -> reserve10%745.2
+  -> metadata/service3.25 -> ปัดลง6703GiB; SSD cache ไม่นับเป็น data capacity
+  ใช้ความจุฝั่งเล็กกว่าถ้าไม่เท่ากัน; reserve10% ไม่ใช่การรับประกัน auto rebuild
+- แก้ cache chunk hardcode ที่ทำ lvconvert fail: คำนวณจากขนาด cacheจริง
+  และแก้ signature เก่าภายใน LV ที่ทำ lvcreate รอ prompt
+- กู้ failed create แบบตรวจ serial/recorded operation ไม่ replay physical wipe อัตโนมัติ
+- เลือก Writeback/Writethrough ได้และ applyทั้งคู่; ปัจจุบันเจ้าของเปิด Writeback
+  เปลี่ยนกลับจะ flush dirty ก่อน ไม่ detach/discard cache เพื่อทำให้เร็ว
+- Writeback มีความเสี่ยงต่อ pending data หาก SSD เสีย/ไฟดับ; RF2 ไม่แทน PLP/backup
+- ย้าย thin_tmeta1GiB ไป SSD ทั้งสองเครื่องแบบ online แล้ว ไม่หยุด guest
+  Node1 /dev/sdc(217481), Node2 /dev/sdd(217481), UUIDเดิมคงอยู่
+- creator สำหรับ storageใหม่ยังจัด thin metadata บน HDD ต้องแก้แยกต่างหาก
+- ผล microtest mean4.255->3.643ms, p9515.611->3.946ms เป็นตัวอย่างสั้น
+  ไม่ใช่หลักฐาน Windows install เร็วขึ้นเท่านั้นหรือ throughputสูงสุด
+
+5. Deploy VM / Template
+- Full clone ลอง filesystem FICLONE ก่อนสำหรับ qcow2ที่เข้าเงื่อนไข
+  เป็นไฟล์ independent ไม่มี backing dependency: ลบ template แล้ว cloneไม่พัง
+- ไม่มี backing/internal snapshots, capacityตรงกัน; ถ้า filesystemไม่รองรับใช้ qemu-imgเดิม
+  Storage I/O error ไม่กลบเป็น fallback; tempfile+fsync+atomic replace
+- ทดสอบ synthetic แก้ cloneไม่กระทบต้นทางและลบต้นทางยังอ่าน cloneได้
+- ดิสก์ Windows templateจริง120GiB virtual/~10.77GiB allocated clone0.0708s
+  วัดเฉพาะ disk clone ไม่รวมสร้าง VM/customization/boot Windows
+- ห้ามอ้างว่าเป็น linked clone หรือเร่งได้ทุก backend
+
+6. UI vstore3.7 ติดตั้งแล้ว
+- Virtual Storage อยู่เฉพาะส่วนบน มี usage/free/shared nodes/Browse files/Rename
+- ล่างเป็น Local & external storage; กรองเฉพาะ managed NFS ที่ตรง name+source
+  API per-node pools ยังอยู่เพื่อ VM operations
+- ปุ่ม + Add Virtual Storage แสดงเสมอ แต่ disabled พร้อมเหตุผลเมื่อมีชุดปัจจุบัน
+- ยังสร้าง VirtualStorage2 ไม่ได้ อย่ารายงานว่าเสร็จแล้ว
+- รวม Nodes เข้า Cluster, มี IPMI/health/summary/rename/maintenance/evacuate/remove
+  #nodes redirect #cluster; node detail ยังมีและ breadcrumb กลับ Cluster
+- เมนู VM ใช้ popover อยู่ใน viewport, scrollภายในได้, scroll/resizeไม่ปิด
+  ปิดด้วย outside click/Escape/action; refresh ไม่ทับเมนูที่เปิด
+- Browserตรวจ1351x710และ390x460 ผ่าน; frontendเก่าอาจต้อง hard refresh
+
+7. Migration vstore3.8 — สำเร็จจริง
+- ต้นเหตุแรก missing /etc/pki/CA/cacert.pem: ทั้งคู่ไม่มี TLS PKI/listener
+- ทำ private keys/CSRs ในเครื่องแต่ละเครื่อง, CA private key อยู่ Node1เท่านั้น
+  แลกเฉพาะ public CSRs/certs ไม่ส่ง private keys มา Mac หรือเข้า Git
+- แยก cert/key ของ libvirt RPC กับ native QEMU migration, SAN hostname+IP,
+  EKU serverAuth+clientAuth, peer verification เปิด, ไม่ใช้ no_verify
+- TLS libvirtd bind managementIP:16514, allowed DN เฉพาะ compute control certs
+  QEMU migrate_tls_force=1 และ migrate_tls_x509_verify=1
+- helper installer/maintenance/migration_tls.py มี create-ca/prepare/sign/apply/activate
+  เป็นขั้นตอน explicit/manual ยังไม่ใช่ auto enrollment เมื่อ Add node
+- แก้ permission /etc/pki parentเป็น755 เพื่อให้ QEMUอ่าน public CAได้
+  private directories/keys ยังจำกัดสิทธิ์
+- เรียง stop/start socket+libvirtdให้ถูกและตรวจ QEMU PIDคงเดิม ไม่หยุด VM
+- sourceเพิ่ม VIR_MIGRATE_TLS และ TLS_DESTINATION สำหรับ live qemu+tls
+  เพราะ RPC TLS อย่างเดียวไม่ได้เข้ารหัส native RAM migration
+- migration addressเลือก migration interfaceก่อน แล้ว fallback management IPv4
+- ทดสอบ VMชั่วคราว diskless BIOSย้ายไปกลับผ่าน TLS แล้วลบเฉพาะ VMทดสอบ
+- TEST-ib ครั้งแรกหลังTLSติด UEFI qcow2 varstore conversionไม่รองรับ
+  เตรียม destination qcow2 NVRAMจาก OVMF template โดยไม่แตะ sourceที่กำลังรัน
+  และส่ง seed ISOส่วนตัว .104->.103 ผ่าน SCPเข้ารหัส ไม่เปิดเผยเนื้อหา
+- งานจริง id2 TEST-ib UUID9310ed4c-6477-41fb-abce-f0462b34749a
+  .104->.103 live=true copy_storage=false, state=done,error=null
+  เวลา 10พ.ย.21:58:58->21:59:33 +07 (~35วินาที)
+  Node2 TEST-ib running, source definitionถูกถอดตาม migration,
+  domblkerrorไม่พบ error; RF2 UpToDateหลังงาน
+- หลักฐานปลอดภัย: migration-testib-result-vstore3.8.json ใน delivery
+- สำคัญ: destination UEFI qcow2 preparation กับการย้าย local seed ISO
+  ยังทำด้วยมือเฉพาะ TEST-ib ไม่ได้ทำอัตโนมัติใน sourceสำหรับ VMใหม่ทั้งหมด
+  ต้องเพิ่ม preflight/staging/cleanup และทดสอบก่อนอ้างว่าทุกVM migrateได้ทันที
+- Backup app3.8: Node1 /opt/ibhics/vstore3.8-backup-20261110-215542
+  Node2 /opt/ibhics/vstore3.8-backup-20261110-215540
+- PKI/config backupsอยู่ rootแต่ละเครื่อง ไม่ใส่ deliveryเพราะมีข้อมูลลับ
+
+8. งานค้างที่ Claude ควรพิจารณาต่อ
+A. Review migration3.8 diff และ helper, ทำ cert enrollment/renewal/revocation
+   + UEFI/seed staging ให้เป็น flowที่ครบ และทดสอบ failure paths
+B. Multi Virtual Storage: เจ้าของต้องการชุด2ด้วยดิสก์ใหม่ทั้งสองnode
+   ปัจจุบัน catalog/created.jsonเป็น singleton และ LINSTOR Gateway2.3.0
+   kernel NFS backend บล็อกหลายresourceบนhostเดียว ไม่ใช่แค่เพิ่มปุ่ม
+   ต้องออกแบบ per-storage catalog/status/cache/VIPconflicts/placement/failover
+   Ganeshaอาจเป็นทางเลือก แต่ต้องทดสอบและรักษา reflink compatibility
+   ห้ามย้าย backendระบบจริงโดยไม่วางแผน
+C. แก้ creator ให้ thin metadataอยู่SSDตั้งแต่เริ่ม; liveชุดปัจจุบันย้ายแล้ว
+D. รวม hotfix Arbiter login/pairing WebUI และแพ็กเกจล่าสุดเข้า ISOรุ่นรวม
+   fix1 ISOเดิมแก้ D-Bus/บันทึกpassword/networkแล้ว แต่ยังไม่รวมงานใหม่ทั้งหมด
+   hotpatch WebUI /opt/ibhics/arbiter-ui ไม่ได้อยู่ใน wheel/installerครบ
+   sourceแยก /Users/ccthailand./Desktop/claude-work/ibhics-live-arbiter-ui
+E. Automatic VM restart HA และ real host failure/power-off test ยังไม่ได้ทำ
+   isolated lab failover proofไม่ใช่ผลทดสอบดับเครื่องจริง
+
+9. ขอบเขตความปลอดภัย/วิธีทำงานต่อ
+- เจ้าของเป็นคนเลือกdiskและกด Createเอง ห้ามสร้าง/ล้างซ้ำอัตโนมัติ
+- OS Node1 /dev/sdd serial BCA11806270130235,
+  OS Node2 /dev/sdc serial BCA11710020261894 ห้ามแตะ
+- Data Node1 sda ZC172K74 / sdb ZC172HWT, cache sdc S3F3NX0K403699
+  Data Node2 sda Z1ZB97QH / sdb Z1ZB9PRT, cache sdd S3F3NX0JB00633
+  /devชื่ออาจเปลี่ยนหลังboot ต้องตรวจ serialทุกครั้ง
+- ไม่ export env, cluster.json, pairing keys, private keys หรือ seed ISO
+- isolated labบนNode2ปิดแล้ว ให้รักษา images/proofsไว้; ไม่ทำ hostpoweroffเอง
+- แจ้งความคืบหน้าเป็นระยะ เจ้าของไม่ชอบเงียบนาน
+- โทนไทย: เรียกผู้ใช้ว่า “ตัว”, เรียกตัวเอง “เรา”, ลงท้ายค่ะ/นะคะ
+
+10. เอกสารประกอบ
+- docs/virtual-storage-rf2-handoff.txt: รายละเอียดสะสมและ audit paths
+- docs/virtual-storage-create-handoff.txt: create/recoveryและlab
+- docs/virtual-storage-arbiter-handoff.txt, docs/arbiter-firstboot-fix-handoff.txt
+- docs/handoff-home-metrics-node-labels.txt: งาน Home/nodeเดิม
+- docs/CLAUDE-HANDOFF.txt: จุดเข้าเอกสาร (ข้อความเก่าด้านล่างเป็นประวัติ)
+
+11. ตรวจซ้ำก่อนส่งต่อ 11พ.ย.2026 (local source ไม่แตะ live hosts)
+- 91 tests passed: migration, libvirt migration, nodes_v09, packaging,
+  cluster_creation, cluster, full_clone, templates (13.28s)
+- มี1คำเตือน Starlette TestClient/httpx deprecation ไม่ใช่ test failure
+- Ruff ผ่านไฟล์ Pythonที่แก้ในmigration/helper/tests; git diff --checkผ่าน
+- ไม่ได้ทดสอบดับ hostจริง และไม่ได้ตรวจสถานะ VM liveใหม่ในวันที่11
+- vstore3.8-review/ มี tracked-changes.patch + new migration_tls.py + handoff
+  patchไม่รวม untrackedfiles ให้ใช้workingtreeเดิมเป็นหลัก ไม่applyซ้ำ

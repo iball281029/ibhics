@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hmac
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, status
 
@@ -16,6 +19,7 @@ from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
 from ..hypervisor.serialize import guest_to_json
 from ..importer import NodeImport, Source, SourceVM
 from ..manager.errors import install_driver_errors
+from ..manager.poollabels import PoolLabels
 from ..manager.schemas import (
     AgentBackupDelete,
     AgentBackupList,
@@ -27,12 +31,16 @@ from ..manager.schemas import (
     BackupOut,
     CdromRequest,
     CloneIn,
+    DiskMovesIn,
     HostNetworkIn,
     HostOut,
     HostSettingsIn,
     NetworkIn,
+    NodeDisplayNameIn,
+    PoolCacheIn,
     PoolCreate,
     PoolOut,
+    RenameIn,
     SnapshotIn,
     SnapshotOut,
     StopRequest,
@@ -41,6 +49,8 @@ from ..manager.schemas import (
     VMEditIn,
     VMOut,
 )
+from ..storage_cache import CacheModeIn, cache_status, set_cache_mode
+from ..storage_node import NodeProvisionIn, provision
 
 
 def create_agent_app(
@@ -50,6 +60,8 @@ def create_agent_app(
     driver: HypervisorDriver | None = None,
     backups: NodeBackup | None = None,
     imports: NodeImport | None = None,
+    pool_labels_path: Path | None = None,
+    storage_root: Path = Path("/var/lib/ibhics/virtual-storage"),
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -61,12 +73,36 @@ def create_agent_app(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad token")
 
     app = FastAPI(title=f"ibHiCS Agent ({name})", version=__version__)
+    pool_labels = PoolLabels(pool_labels_path)
+    from ..storage_jobs import StorageJobs
+
+    storage_jobs = StorageJobs(storage_root / "node-jobs")
     install_driver_errors(app)
     api = APIRouter(prefix="/agent/v1", dependencies=[Depends(check_token)])
 
     @api.get("/health")
     def health() -> dict:
         return {"name": name, "role": str(role), "version": __version__}
+
+    @api.get("/virtual-storage/readiness")
+    def storage_readiness() -> dict:
+        from ..storage_software import software_status
+
+        return software_status(str(role))
+
+    @api.get("/virtual-storage/job")
+    def storage_job() -> dict | None:
+        return storage_jobs.current()
+
+    @api.post("/virtual-storage/software", status_code=status.HTTP_202_ACCEPTED)
+    def storage_software() -> dict:
+        from ..storage_software import prepare_software
+
+        return storage_jobs.start(
+            "software",
+            {"role": str(role)},
+            lambda report: prepare_software(str(role), False, storage_root, report),
+        )
 
     if role == NodeRole.COMPUTE:
 
@@ -91,6 +127,10 @@ def create_agent_app(
         @api.get("/host/nics")
         def host_nics() -> list[dict]:
             return [asdict(n) for n in driver.host_system().nics()]
+
+        @api.get("/host/hardware")
+        def host_hardware() -> dict:
+            return driver.host_system().hardware_health()
 
         @api.get("/host/network")
         def host_network() -> dict:
@@ -132,6 +172,36 @@ def create_agent_app(
         def disks() -> list[dict]:
             return [asdict(d) for d in driver.list_local_disks()]
 
+        @api.get("/virtual-storage/inventory")
+        def virtual_storage_inventory() -> dict:
+            from ..hypervisor.storage_inventory import inventory
+
+            return inventory(driver)
+
+        @api.get("/virtual-storage/cache/{pool}")
+        def storage_cache(pool: str) -> dict:
+            return cache_status(pool)
+
+        @api.post("/virtual-storage/cache", status_code=status.HTTP_202_ACCEPTED)
+        def storage_cache_mode(body: CacheModeIn) -> dict:
+            return storage_jobs.start(
+                "cache-mode",
+                body.model_dump(),
+                lambda report: set_cache_mode(body, root=storage_root, report=report),
+            )
+
+        @api.post("/virtual-storage/provision", status_code=status.HTTP_202_ACCEPTED)
+        def storage_provision(body: NodeProvisionIn) -> dict:
+            if not body.confirm_wipe or body.selection.node != name:
+                raise ValueError(
+                    "Explicit disk erasure confirmation and matching node are required"
+                )
+            return storage_jobs.start(
+                "provision",
+                body.model_dump(),
+                lambda report: provision(driver, body, node=name, root=storage_root, report=report),
+            )
+
         @api.get("/networks")
         def networks() -> list[dict]:
             return [asdict(n) for n in driver.list_networks()]
@@ -152,6 +222,10 @@ def create_agent_app(
         def terminal(body: dict) -> dict:
             code, output = driver.run_command(str(body.get("command", "")))
             return {"code": code, "output": output}
+
+        from ..hypervisor.containers import install_agent_routes
+
+        install_agent_routes(api, driver.containers)
 
         @api.post("/net-test")
         def net_test(body: dict) -> dict:
@@ -207,6 +281,26 @@ def create_agent_app(
             snap = driver.create_snapshot(uuid, body.name, body.description, body.restart)
             return SnapshotOut(**asdict(snap))
 
+        @api.post("/vms/{uuid}/move-disks", response_model=VMOut)
+        def move_disks(uuid: str, body: DiskMovesIn) -> VMOut:
+            return VMOut.from_info(driver.move_disks(uuid, body.as_dict()))
+
+        @api.get("/vms/{uuid}/move-disks")
+        def move_disks_progress(uuid: str) -> dict:
+            return driver.disk_move_progress(uuid)
+
+        @api.post("/vms/{uuid}/to-virtio", response_model=VMOut)
+        def switch_to_virtio(uuid: str) -> VMOut:
+            return VMOut.from_info(driver.switch_to_virtio(uuid))
+
+        @api.post("/vms/{uuid}/sysprep", status_code=status.HTTP_204_NO_CONTENT)
+        def sysprep_vm(uuid: str) -> None:
+            driver.sysprep_vm(uuid)
+
+        @api.post("/vms/{uuid}/rename", response_model=VMOut)
+        def rename_vm(uuid: str, body: RenameIn) -> VMOut:
+            return VMOut.from_info(driver.rename_vm(uuid, body.name))
+
         @api.post("/vms/{uuid}/snapshots/{name}/revert", response_model=VMOut)
         def revert_snapshot(uuid: str, name: str) -> VMOut:
             return VMOut.from_info(driver.revert_snapshot(uuid, name))
@@ -228,18 +322,59 @@ def create_agent_app(
         def clone_vm(uuid: str, body: CloneIn) -> VMOut:
             return VMOut.from_info(driver.clone_vm(uuid, body.to_clone()))
 
+        @api.get("/vms/{uuid}/migration-files")
+        def migration_files(uuid: str) -> dict[str, str]:
+            files = driver.migration_files(uuid)
+            return {path: base64.b64encode(data).decode() for path, data in files.items()}
+
+        @api.post("/migration-files")
+        def stage_migration_files(body: dict) -> dict:
+            raw = body.get("files")
+            if not isinstance(raw, dict):
+                raise ValueError("files must map paths to base64 content")
+            try:
+                files = {str(p): base64.b64decode(d, validate=True) for p, d in raw.items()}
+            except (TypeError, binascii.Error):
+                raise ValueError("file content must be base64") from None
+            return {"staged": driver.stage_migration_files(files)}
+
+        @api.post("/migration-files/remove")
+        def remove_migration_files(body: dict) -> dict:
+            paths = body.get("paths")
+            if not isinstance(paths, list):
+                raise ValueError("paths must be a list")
+            return {"removed": driver.remove_migration_files([str(p) for p in paths])}
+
         # Runs until the VM has moved, which can take minutes for a busy guest.
         @api.post("/vms/{uuid}/migrate", status_code=status.HTTP_204_NO_CONTENT)
         def migrate_vm(uuid: str, body: AgentMigrate) -> None:
-            driver.migrate_vm(uuid, body.dest_uri, body.copy_storage, body.bandwidth_mib)
+            driver.migrate_vm(
+                uuid, body.dest_uri, body.copy_storage, body.bandwidth_mib, body.data_address
+            )
 
         @api.get("/pools", response_model=list[PoolOut])
         def list_pools() -> list[PoolOut]:
-            return [PoolOut.from_info(p) for p in driver.list_pools()]
+            return [
+                PoolOut.from_info(p).model_copy(update={"display_name": pool_labels.get(p.name)})
+                for p in driver.list_pools()
+            ]
+
+        @api.patch("/pools/{name}", response_model=PoolOut)
+        def rename_pool(name: str, body: NodeDisplayNameIn) -> PoolOut:
+            pool = next((p for p in driver.list_pools() if p.name == name), None)
+            if pool is None:
+                raise HTTPException(404, "storage pool does not exist")
+            label = pool_labels.set(name, body.display_name)
+            return PoolOut.from_info(pool).model_copy(update={"display_name": label})
 
         @api.post("/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
         def create_pool(body: PoolCreate) -> PoolOut:
             return PoolOut.from_info(driver.create_pool(body.to_spec()))
+
+        @api.post("/pools/{name}/cache", response_model=PoolOut)
+        def pool_cache(name: str, body: PoolCacheIn) -> PoolOut:
+            return PoolOut.from_info(driver.pool_cache(name, body.action, body.devices,
+                                                       body.mode, body.size_gb))  # fmt: skip
 
         @api.delete("/pools/{name}", status_code=status.HTTP_204_NO_CONTENT)
         def delete_pool(name: str) -> None:

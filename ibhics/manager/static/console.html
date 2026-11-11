@@ -16,6 +16,12 @@
   button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: #232936; color: var(--text); cursor: pointer; font: inherit; }
   button:disabled { opacity: .5; cursor: default; }
   #screen { flex: 1; min-height: 0; overflow: hidden; }
+  #kbd { display: none; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--bar); border-top: 1px solid var(--line); }
+  #kbd.open { display: flex; }
+  #kbd .row { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+  #kbd button { min-width: 34px; padding: 6px 7px; }
+  #kbd button.wide { min-width: 64px; } #kbd button.space { min-width: 220px; }
+  #kbd button.on { background: #1f6feb; border-color: #1f6feb; }
 </style>
 </head>
 <body>
@@ -23,11 +29,13 @@
   <strong id="title">VM Console</strong>
   <span id="status" class="wait">Connecting…</span>
   <button id="cad" disabled>Ctrl+Alt+Del</button>
+  <button id="kbd-btn" title="On-screen keyboard: Esc, Tab, F1–F12, Ctrl/Alt/Win and more">Keyboard</button>
   <button id="paste" disabled title="Type the clipboard text into the VM">Paste text</button>
   <button id="full">Fullscreen</button>
   <button id="reconnect">Reconnect</button>
 </header>
 <div id="screen"></div>
+<div id="kbd" aria-label="On-screen keyboard"></div>
 <script type="module">
 import RFB from "./novnc/core/rfb.js";
 
@@ -64,6 +72,52 @@ function connect() {
 
 document.getElementById("cad").addEventListener("click", () => rfb && rfb.sendCtrlAltDel());
 document.getElementById("reconnect").addEventListener("click", connect);
+
+// On-screen keyboard: keys a browser keeps for itself (Esc, F11, Ctrl+Alt+...), and
+// tablets. Ctrl, Alt, Shift and Win stay down for the next key, like sticky keys.
+const K = (label, keysym, code, cls = "") => ({ label, keysym, code, cls });
+const fkeys = Array.from({ length: 12 }, (_, i) => K(`F${i + 1}`, 0xffbe + i, `F${i + 1}`));
+const chars = (text) => [...text].map((c) => K(c, c.charCodeAt(0), /[a-z]/.test(c) ? `Key${c.toUpperCase()}` : /[0-9]/.test(c) ? `Digit${c}` : ""));
+const MODS = { Ctrl: [0xffe3, "ControlLeft"], Alt: [0xffe9, "AltLeft"], Shift: [0xffe1, "ShiftLeft"], Win: [0xffeb, "MetaLeft"] };
+const ROWS = [
+  [K("Esc", 0xff1b, "Escape"), ...fkeys, K("PrtSc", 0xff61, "PrintScreen"), K("Ctrl+Alt+Del", 0, "cad", "wide")],
+  [...chars("1234567890"), K("-", 0x2d, "Minus"), K("=", 0x3d, "Equal"), K("⌫", 0xff08, "Backspace", "wide")],
+  [K("Tab", 0xff09, "Tab", "wide"), ...chars("qwertyuiop"), K("Ins", 0xff63, "Insert"), K("Del", 0xffff, "Delete")],
+  [...chars("asdfghjkl"), K(";", 0x3b, "Semicolon"), K("Enter", 0xff0d, "Enter", "wide"), K("Home", 0xff50, "Home"), K("End", 0xff57, "End")],
+  [...chars("zxcvbnm"), K(",", 0x2c, "Comma"), K(".", 0x2e, "Period"), K("/", 0x2f, "Slash"), K("PgUp", 0xff55, "PageUp"), K("PgDn", 0xff56, "PageDown")],
+  [...Object.keys(MODS).map((m) => K(m, 0, `mod:${m}`, "wide")), K("Space", 0x20, "Space", "space"),
+    K("←", 0xff51, "ArrowLeft"), K("↑", 0xff52, "ArrowUp"), K("↓", 0xff54, "ArrowDown"), K("→", 0xff53, "ArrowRight")],
+];
+const kbd = document.getElementById("kbd");
+const keys = ROWS.flat();
+kbd.innerHTML = ROWS.map((row) => `<div class="row">${row.map((k) =>
+  `<button type="button" data-k="${keys.indexOf(k)}" class="${k.cls}">${k.label.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</button>`).join("")}</div>`).join("");
+const held = new Set();
+kbd.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus on the screen
+kbd.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-k]");
+  if (!b || !rfb) return;
+  const k = keys[Number(b.dataset.k)];
+  if (k.code === "cad") { rfb.sendCtrlAltDel(); return; }
+  if (k.code.startsWith("mod:")) {
+    const m = k.code.slice(4);
+    if (held.has(m)) held.delete(m); else held.add(m);
+    b.classList.toggle("on", held.has(m));
+    return;
+  }
+  for (const m of held) rfb.sendKey(MODS[m][0], MODS[m][1], true);
+  rfb.sendKey(k.keysym, k.code || null, true);
+  rfb.sendKey(k.keysym, k.code || null, false);
+  for (const m of [...held].reverse()) rfb.sendKey(MODS[m][0], MODS[m][1], false);
+  held.clear();
+  kbd.querySelectorAll("button.on").forEach((x) => x.classList.remove("on"));
+  rfb.focus();
+});
+document.getElementById("kbd-btn").addEventListener("click", (e) => {
+  kbd.classList.toggle("open");
+  e.currentTarget.classList.toggle("on", kbd.classList.contains("open"));
+  if (rfb) rfb.focus();
+});
 document.getElementById("full").addEventListener("click", () => {
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
 });

@@ -51,6 +51,9 @@ systemctl enable ibhics-firstboot.service
 systemctl enable libvirtd.service
 # QEMU may open the disk images in ibHiCS pools (virt-aa-helper skips pool volumes).
 install -D -m 0644 "$SRC/apparmor-libvirt-qemu" /etc/apparmor.d/local/abstractions/libvirt-qemu
+# Unprivileged containers: root may map container ids to 100000-165535 on this node.
+grep -q '^root:100000:65536' /etc/subuid 2>/dev/null || echo root:100000:65536 >> /etc/subuid
+grep -q '^root:100000:65536' /etc/subgid 2>/dev/null || echo root:100000:65536 >> /etc/subgid
 
 cp "$SRC/VERSION" /etc/ibhics/version
 rm -rf "$SRC"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from ..backup import BackupInfo, BackupTarget, TargetType
 from ..cluster.topology import NodeRole, Topology
@@ -50,6 +50,7 @@ class DiskOut(BaseModel):
     backend: str
     pool: str
     used_gb: float | None = None
+    bus: str = "virtio"
 
 
 class NicOut(BaseModel):
@@ -71,6 +72,7 @@ class VMCreate(BaseModel):
     driver_iso: str | None = None
     description: str = Field(default="", max_length=1024)
     os_type: str = Field(default="", max_length=64)
+    video: str = Field(default="virtio", pattern="^(virtio|vga|qxl|cirrus)$")
     # Manager only: which compute node to place the VM on. Empty picks automatically.
     node: str | None = None
 
@@ -86,6 +88,7 @@ class VMCreate(BaseModel):
             driver_iso=self.driver_iso or None,
             description=self.description,
             os_type=self.os_type,
+            video=self.video,
         )
 
 
@@ -109,6 +112,7 @@ class VMOut(BaseModel):
     linked_to: str = ""  # uuid of the template a linked clone's disks are based on
     recycled: str = ""  # when it went into the recycle bin; empty: in use
     node: str | None = None
+    video: str = "virtio"
 
     @classmethod
     def from_info(cls, info: VMInfo, node: str | None = None) -> VMOut:
@@ -122,7 +126,9 @@ class VMOut(BaseModel):
             memory_mb=spec.memory_mb,
             firmware=spec.firmware,
             disks=[
-                DiskOut(size_gb=d.size_gb, backend=d.backend, pool=d.pool, used_gb=d.used_gb)
+                DiskOut(
+                    size_gb=d.size_gb, backend=d.backend, pool=d.pool, used_gb=d.used_gb, bus=d.bus
+                )
                 for d in spec.disks
             ],
             nics=[NicOut(network=n.network, model=n.model, mac=n.mac) for n in spec.nics],
@@ -136,6 +142,7 @@ class VMOut(BaseModel):
             template=spec.template,
             linked_to=spec.linked_to,
             recycled=spec.recycled,
+            video=spec.video,
         )
 
 
@@ -194,6 +201,9 @@ class HostIfaceIn(BaseModel):
     ports: list[str] = Field(default_factory=list)
     bond_mode: str = ""
     options: list[str] = Field(default_factory=list)
+    routes: list[str] = Field(default_factory=list, description="e.g. 10.20.0.0/16 via 10.0.0.1")
+    roles: list[str] = Field(default_factory=list, description="management, migration, ...")
+    flow_control: str = Field(default="", pattern="^(|on|off)$")
 
 
 class HostNetworkIn(BaseModel):
@@ -224,6 +234,7 @@ class NetworkOut(BaseModel):
     bridge: str
     vlan: int | None = None
     nodes: list[str] = Field(default_factory=list, description="compute nodes that have it")
+    configurations: dict[str, dict] = Field(default_factory=dict)
 
 
 class DiskEditIn(BaseModel):
@@ -238,6 +249,10 @@ class NicEditIn(BaseModel):
     model: str = Field(default="virtio", pattern=r"^(virtio|e1000e|e1000|rtl8139)$")
 
 
+class RenameIn(BaseModel):
+    name: str = Field(pattern=VM_NAME_PATTERN)
+
+
 class VMEditIn(BaseModel):
     """New settings for a VM. Fields left out stay as they are; disks and nics, when
     given, are the whole list (existing ones left out are removed)."""
@@ -248,6 +263,7 @@ class VMEditIn(BaseModel):
     memory_mb: int | None = Field(default=None, ge=128)
     boot: list[str] | None = None
     autostart: bool | None = None
+    video: str | None = Field(default=None, pattern="^(virtio|vga|qxl|cirrus)$")
     disks: list[DiskEditIn] | None = Field(default=None, max_length=26)
     nics: list[NicEditIn] | None = Field(default=None, max_length=16)
     delete_removed_disks: bool = False
@@ -324,6 +340,9 @@ class HostOut(BaseModel):
     cpus: int
     memory_mb: int
     hypervisor: str
+    sockets: int = 0
+    cores: int = 0
+    threads: int = 0
 
     @classmethod
     def from_info(cls, info: HostInfo) -> HostOut:
@@ -368,6 +387,7 @@ class RecycleBinOut(BaseModel):
 
 class TemplateRequest(BaseModel):
     template: bool = True  # false: convert the template back to a VM
+    pool: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class CustomizationIn(BaseModel):
@@ -390,6 +410,7 @@ class CloneIn(BaseModel):
     description: str | None = Field(default=None, max_length=1024)
     customization: CustomizationIn | None = None
     power_on: bool = False  # manager only: start the VM once it is deployed
+    reset_identity: bool = True
 
     def to_clone(self) -> CloneSpec:
         return CloneSpec(
@@ -398,6 +419,7 @@ class CloneIn(BaseModel):
             pool=self.pool or None,
             description=self.description,
             customization=self.customization.to_customization() if self.customization else None,
+            reset_identity=self.reset_identity,
         )
 
 
@@ -417,6 +439,11 @@ class DeployOut(BaseModel):
     result: str | None = None  # the new VM's uuid
 
 
+class DiskMoveIn(BaseModel):
+    index: int = Field(ge=0, le=63)  # the disk's place in the VM, 0 = the first
+    pool: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
+
+
 class MigrateRequest(BaseModel):
     node: str | None = Field(default=None, description="destination; omit to pick one")
     copy_storage: bool | None = Field(
@@ -424,6 +451,8 @@ class MigrateRequest(BaseModel):
         description="copy disks that are not on shared storage; omit to decide automatically",
     )
     bandwidth_mib: int | None = Field(default=None, ge=1, description="limit in MiB/s")
+    # Change host and storage: after the move, disks go to these pools on the new node.
+    disks: list[DiskMoveIn] | None = Field(default=None, max_length=64)
 
 
 class MigrationOut(BaseModel):
@@ -438,30 +467,51 @@ class MigrationOut(BaseModel):
     created: str
     finished: str | None
     error: str | None
+    step: str = ""
+    disk_pools: dict[int, str] | None = None
 
 
 class AgentMigrate(BaseModel):
     dest_uri: str = Field(pattern=r"^qemu\+(tls|ssh|tcp)://[^\s/]+/system$")
     copy_storage: bool = False
     bandwidth_mib: int | None = Field(default=None, ge=1)
+    data_address: str = Field(default="", pattern=r"^([0-9]{1,3}\.){3}[0-9]{1,3}$|^$")
 
 
 class NodeJoin(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     role: NodeRole
     address: str = Field(pattern=r"^https?://", description="Agent URL, e.g. http://10.0.0.12:8007")
+    agent_token: SecretStr | None = None
 
 
 class MemberOut(BaseModel):
     name: str
+    display_name: str = ""
     role: NodeRole
     address: str | None
     local: bool
     healthy: bool
     last_error: str | None
+    maintenance: bool = False
+
+
+class NodeDisplayNameIn(BaseModel):
+    display_name: str = Field(max_length=80)
+
+
+class MaintenanceIn(BaseModel):
+    on: bool = True
+    evacuate: bool = True  # move the node's VMs to other nodes first
+
+
+class ClusterCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 
 class ClusterOut(BaseModel):
+    cluster_id: str = ""
+    name: str = ""
     topology: Topology
     quorum: bool
     ha_capable: bool
@@ -484,9 +534,35 @@ class PoolCreate(BaseModel):
     confirm_wipe: bool = Field(
         default=False, description="required for iscsi, lvm and disk: the device is erased"
     )
+    cache_devices: list[str] | None = Field(
+        default=None, max_length=16, description="disk: SSDs that cache the pool (hybrid)"
+    )
+    cache_mode: str = Field(default="writethrough", pattern="^(writethrough|writeback)$")
+    cache_gb: int | None = Field(default=None, ge=1)
 
     def to_spec(self) -> PoolSpec:
         return PoolSpec(**self.model_dump())
+
+
+class DiskMovesIn(BaseModel):
+    moves: list[DiskMoveIn] = Field(min_length=1, max_length=64)
+
+    def as_dict(self) -> dict[int, str]:
+        return {m.index: m.pool for m in self.moves}
+
+
+class PoolCacheIn(BaseModel):
+    action: str = Field(pattern="^(add|remove|mode)$")
+    devices: list[str] | None = Field(default=None, max_length=16)
+    mode: str = Field(default="writethrough", pattern="^(writethrough|writeback)$")
+    size_gb: int | None = Field(default=None, ge=1)
+    confirm_wipe: bool = False
+
+    @model_validator(mode="after")
+    def _wipe(self) -> PoolCacheIn:
+        if self.action == "add" and not self.confirm_wipe:
+            raise ValueError("adding a cache erases its SSDs; set confirm_wipe to true")
+        return self
 
 
 class LocalDiskOut(BaseModel):
@@ -502,12 +578,15 @@ class LocalDiskOut(BaseModel):
 
 class PoolOut(BaseModel):
     name: str
+    display_name: str = ""
     type: PoolType
     active: bool
     capacity_gb: float
     allocation_gb: float
     available_gb: float
     source: str
+    hybrid: bool = False
+    cache: dict | None = None
     node: str | None = None
 
     @classmethod
@@ -638,6 +717,8 @@ class JobOut(BaseModel):
     finished: str | None
     result: str | None
     error: str | None
+    step: str = ""
+    percent: float | None = None
 
 
 # Agent-only request bodies: the manager sends the whole target, credentials included.

@@ -24,8 +24,8 @@ from .. import RELEASE_NAME
 PRODUCT = "ibHiCS Hyper-Converged Infrastructure"
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 ROLES = {
-    "manager": "First node: web console + compute (start a new cluster)",
-    "compute": "Additional compute node (join an existing cluster)",
+    "manager": "Standalone server: web console + compute (create a cluster later)",
+    "compute": "Agent-only compute node (advanced / legacy setup)",
     "witness": "Witness (quorum vote for a 2-node cluster, runs no VMs)",
 }
 MANAGER_PORT = 8888
@@ -236,12 +236,14 @@ def apply(
     def step(text: str) -> None:
         print(f"  {text}...", flush=True)
 
+    # Establish console access before any network/timezone operation can fail.
+    step("Setting the root console password")
+    sh("chpasswd", stdin=f"root:{root_password}\n")
     step("Network and system settings")
     write("/etc/hostname", cfg.hostname + "\n")
     write("/etc/hosts", render_hosts(cfg))
     write("/etc/network/interfaces", render_interfaces(cfg))
     write("/etc/ibhics/ibhics.env", render_env(cfg), 0o600)  # holds the cluster token
-    write("/etc/issue", render_issue(cfg))
     # ifupdown only hands dns-nameservers to resolvconf, which is not installed, so a
     # node had no DNS and apt could not reach the mirror. Write resolv.conf ourselves.
     resolv = root / "etc/resolv.conf"
@@ -250,7 +252,6 @@ def apply(
     write("/etc/resolv.conf", render_resolv(cfg))
     sh("hostname", cfg.hostname)
     sh("timedatectl", "set-timezone", cfg.timezone)
-    sh("chpasswd", stdin=f"root:{root_password}\n")
     sh("systemctl", "restart", "networking")
 
     step("SSH access for root")
@@ -314,7 +315,15 @@ def apply(
 
     step("Starting ibHiCS")
     write("/etc/ibhics/configured", f"{cfg.role}\n")
-    sh("systemctl", "enable", "--now", service)
+    try:
+        sh("systemctl", "enable", "--now", service)
+    except RuntimeError:
+        (root / "etc/ibhics/configured").unlink(missing_ok=True)
+        raise
+    if cfg.role == "manager":
+        # Each standalone server has its own console and an agent ready for admission.
+        sh("systemctl", "enable", "--now", "ibhics-agent.service")
+    write("/etc/issue", render_issue(cfg))
     sh("systemctl", "disable", "ibhics-firstboot.service", check=False)
 
 

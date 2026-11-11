@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,10 +16,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape, quoteattr
+from xml.sax.saxutils import escape as xml_escape
 
-from . import customize, edge, terminal, vmstats
+from . import customize, edge, hybrid, terminal, vmstats
 from .base import (
+    VIDEO_MODELS,
+    VM_NAME_RE,
     CloneSpec,
     DiskSpec,
     Firmware,
@@ -50,6 +56,7 @@ from .base import (
 from .domain_xml import (
     DISK_DEVS,
     META_NS,
+    NAME_NS,
     build_domain_xml,
     build_volume_xml,
     cdrom_element,
@@ -60,9 +67,11 @@ from .domain_xml import (
     set_recycled_mark,
     set_template_flag,
     template_facts,
+    video_element,
     vm_meta,
     volume_name,
 )
+from .full_clone import try_reflink
 from .net_xml import build_network_xml, render_vlan_iface, vlan_bridge, vlan_iface_file, vlan_of
 from .pool_xml import (
     build_iscsi_session_xml,
@@ -75,6 +84,8 @@ from .pool_xml import (
 GIB = 1024**3
 SCRATCH_DIR = "/var/lib/ibhics/scratch"
 SEED_DIR = "/var/lib/ibhics/seeds"  # guest customization CDs of deployed VMs
+NVRAM_DIR = "/var/lib/libvirt/qemu/nvram"  # UEFI variables libvirt keeps per VM
+MIGRATION_FILE_LIMIT = 64 << 20
 
 try:
     import libvirt
@@ -131,11 +142,35 @@ def allow_qemu_path(path: str, rules: Path = APPARMOR_LOCAL) -> bool:
     return True
 
 
+# What virt-sysprep resets on a deployed copy (users, data and settings stay).
+log = logging.getLogger("ibhics.libvirt")
+RESTART_TIMEOUT = 180  # s a guest has to shut down for a restart that applies changes
+PROBE_SETTLE = 60  # s Windows gets to install the VirtIO disk driver
+BLOCK_COPY_POLL = 2  # s between looks at a running disk copy
+QEMU_IMG_PROGRESS = re.compile(r"\((\d+(?:\.\d+)?)/100%\)")
+
+RESET_OPERATIONS = (
+    "machine-id",
+    "ssh-hostkeys",
+    "logfiles",
+    "bash-history",
+    "tmp-files",
+    "dhcp-client-state",
+    "net-hwaddr",
+    "udev-persistent-net",
+    "utmp",
+    "crash-data",
+    "package-manager-cache",
+    "customize",
+)
+
+
 class LibvirtDriver(HypervisorDriver):
     # Backups copy disks here before they are chunked; it needs room for the largest VM
     # (raw images are sparse, so only the data actually written counts).
     scratch_dir = SCRATCH_DIR
     seed_dir = SEED_DIR
+    nvram_dir = NVRAM_DIR
     run = staticmethod(_run)
 
     @staticmethod
@@ -150,14 +185,20 @@ class LibvirtDriver(HypervisorDriver):
         self._conn = libvirt.open(uri)
         self._samples: dict[str, vmstats.Sample] = {}
         self._balloon_asked: set[str] = set()
+        self._moves: dict[str, dict] = {}  # disk moves running: uuid -> step, percent
 
     def host_info(self) -> HostInfo:
-        _model, memory_mb, cpus, *_ = self._conn.getInfo()
+        # model, memory, logical CPUs, MHz, NUMA nodes, sockets per node, cores per socket,
+        # threads per core
+        _model, memory_mb, cpus, _mhz, nodes, sockets, cores, threads = self._conn.getInfo()[:8]
         return HostInfo(
             hostname=self._conn.getHostname(),
             cpus=cpus,
             memory_mb=memory_mb,
             hypervisor=f"kvm (libvirt {self._conn.getLibVersion()})",
+            sockets=nodes * sockets,
+            cores=nodes * sockets * cores,
+            threads=cpus,
         )
 
     def list_vms(self) -> list[VMInfo]:
@@ -241,6 +282,10 @@ class LibvirtDriver(HypervisorDriver):
             if el is not None:
                 el.set("unit", "KiB")
                 el.text = str(new.memory_mb * 1024)
+        if edit.video is not None:
+            for old in root.findall("devices/video"):
+                root.find("devices").remove(old)
+            root.find("devices").append(video_element(new.video))
         if edit.boot is not None:
             os_el = root.find("os")
             for boot in os_el.findall("boot"):
@@ -370,8 +415,18 @@ class LibvirtDriver(HypervisorDriver):
         if recycled_at(root):
             raise InvalidState("this VM is in the recycle bin: restore it first")
         self._nvram_qcow2(dom)
+        self._add_tablet(dom)
         dom.create()
         return self._info(dom)
+
+    def _add_tablet(self, dom) -> None:
+        """VMs made before 1.2 (and imported ones) get the USB tablet when they start."""
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        devices = root.find("devices")
+        if devices is None or devices.find("input[@type='tablet']") is not None:
+            return
+        ET.SubElement(devices, "input", type="tablet", bus="usb")
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
 
     def stop_vm(self, uuid: str, force: bool = False) -> VMInfo:
         dom = self._lookup(uuid)
@@ -388,6 +443,17 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if not dom.isActive():
             raise InvalidState("VM is not running")
+        if self._info(dom).restart_needed:
+            # A reboot stays in the same QEMU process, which keeps the old CPU, memory and
+            # devices: power the VM off (cleanly unless forced) and start it again.
+            if force:
+                dom.destroy()
+            else:
+                try:
+                    self._power_off(dom, timeout=RESTART_TIMEOUT)
+                except InvalidState:
+                    dom.destroy()  # the guest ignored the shutdown request
+            return self.start_vm(uuid)
         if force:
             dom.reset(0)
         else:
@@ -499,6 +565,333 @@ class LibvirtDriver(HypervisorDriver):
         Path(src).unlink(missing_ok=True)
         return True
 
+    def _set_display_name(self, dom, name: str, live: bool) -> None:
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if live:
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+        xml = f"<name>{xml_escape(name)}</name>" if name else None
+        try:
+            dom.setMetadata(libvirt.VIR_DOMAIN_METADATA_ELEMENT, xml, "ibhics-name", NAME_NS, flags)
+        except libvirt.libvirtError:
+            if name:
+                raise
+
+    def _reset_identity(self, disks: list[str]) -> None:
+        """virt-sysprep on a new copy's disks: users and data stay. A disk without a Linux
+        it recognises (an appliance, BSD) is left as it is."""
+        cmd = ["virt-sysprep", "--quiet", "--operations", ",".join(RESET_OPERATIONS)]
+        for disk in disks:
+            cmd += ["-a", disk]
+        # Debian and Ubuntu do not make new SSH host keys by themselves.
+        cmd += ["--delete", "/var/lib/cloud/instance", "--delete", "/var/lib/cloud/instances"]
+        cmd += ["--firstboot-command", "test -e /etc/ssh/ssh_host_ed25519_key || ssh-keygen -A;"
+                " systemctl restart ssh sshd 2>/dev/null || true"]  # fmt: skip
+        try:
+            self.run(cmd)
+        except FileNotFoundError:
+            log.warning("identity not reset: virt-sysprep (guestfs-tools) is not installed")
+        except RuntimeError as exc:
+            if "no operating systems" in str(exc).lower():
+                log.warning("identity not reset: %s", exc)
+                return
+            raise
+
+    def disk_move_progress(self, uuid: str) -> dict:
+        return dict(self._moves.get(uuid, {}))
+
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        clones = self.linked_clones(uuid)
+        if clones:
+            raise InvalidState(f"linked clones still use these disks: {', '.join(clones)}")
+        dom = self._lookup(uuid)
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        disks = root.findall("devices/disk[@device='disk']")
+        plan = []
+        for i, pool_name in sorted(moves.items()):
+            if not 0 <= i < len(disks):
+                raise ValueError(f"this VM has no disk {i + 1}")
+            self._pool(pool_name)
+            if disk_source(root, disks[i])[0] != pool_name:
+                plan.append((i, disks[i].find("target").get("dev"), pool_name))
+        if not plan:
+            return self._info(dom)
+        if dom.snapshotNum(0):
+            raise InvalidState(
+                "this VM has snapshots, which stay inside its disk files: delete them (or "
+                "restore one and delete the rest) before moving its disks"
+            )
+        self._moves[uuid] = {"step": "Starting", "percent": 0.0}
+        try:
+            for n, (i, dev, pool_name) in enumerate(plan):
+
+                def progress(pct: float, i=i, n=n, pool_name=pool_name) -> None:
+                    self._moves[uuid] = {
+                        "step": f"Disk {i + 1} → {pool_name}",
+                        "percent": round((n + pct / 100) * 100 / len(plan), 1),
+                    }
+
+                progress(0)
+                self._move_disk(dom, dev, pool_name, progress)
+        finally:
+            self._moves.pop(uuid, None)
+        return self._info(self._lookup(uuid))
+
+    def _move_disk(self, dom, dev: str, pool_name: str, progress) -> None:
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        disk = next(d for d in root.findall("devices/disk[@device='disk']")
+                    if d.find("target").get("dev") == dev)  # fmt: skip
+        src = self._volume(disk)
+        src_fmt = (disk.find("driver").get("type") if disk.find("driver") is not None else "") \
+            or "raw"  # fmt: skip
+        dest_pool = self._pool(pool_name)
+        if not dest_pool.isActive():
+            raise InvalidState(f"pool {pool_name} is offline")
+        backend = _backend(dest_pool)
+        name = src.name().removesuffix(".qcow2") + (".qcow2" if backend == "file" else "")
+        if name in dest_pool.listVolumes():
+            raise InvalidState(f"pool {pool_name} already has a volume named {name}")
+        vol = ET.fromstring(build_volume_xml("x", 0, DiskSpec(size_gb=1, backend=backend)))
+        vol.find("name").text = name
+        cap = vol.find("capacity")
+        cap.set("unit", "bytes")
+        cap.text = str(src.info()[1])
+        new = dest_pool.createXML(ET.tostring(vol, encoding="unicode"), 0)
+        try:
+            if dom.isActive():
+                self._block_copy(dom, dev, new.path(), backend, progress)
+            else:
+                self._offline_copy(src.path(), src_fmt, new.path(), backend, progress)
+        except BaseException:
+            new.delete(0)
+            raise
+        # The definition: the disk now names the new volume (bus, boot order, address and
+        # serial stay), and the metadata says which pool and volume it is.
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        devices = root.find("devices")
+        old = next(d for d in devices.findall("disk[@device='disk']")
+                   if d.find("target").get("dev") == dev)  # fmt: skip
+        bus = old.find("target").get("bus", "virtio")
+        el = disk_element(DiskSpec(size_gb=1, backend=backend, pool=pool_name, bus=bus), name, dev)
+        for keep in ("boot", "address", "serial", "iotune"):
+            for child in old.findall(keep):
+                el.append(child)
+        devices.insert(list(devices).index(old), el)
+        devices.remove(old)
+        for meta in root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk"):
+            if meta.get("dev") == dev:
+                meta.set("pool", pool_name)
+                meta.set("volume", name)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        vm_meta = root.find(f"metadata/{{{META_NS}}}vm")
+        if dom.isActive() and vm_meta is not None:
+            # The running domain keeps its own copy of the metadata, which VMInfo reads.
+            dom.setMetadata(libvirt.VIR_DOMAIN_METADATA_ELEMENT,
+                            ET.tostring(vm_meta, encoding="unicode"), "ibhics", META_NS,
+                            libvirt.VIR_DOMAIN_AFFECT_LIVE)  # fmt: skip
+        src.delete(0)
+        progress(100)
+
+    @staticmethod
+    def _offline_copy(src: str, src_fmt: str, dest: str, backend: str, progress) -> None:
+        fmt = "qcow2" if backend == "file" else "raw"
+        proc = subprocess.Popen(
+            ["qemu-img", "convert", "-p", "-n", "-f", src_fmt, "-O", fmt, src, dest],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        )  # fmt: skip
+        buf = b""
+        while chunk := proc.stdout.read1(256):
+            buf = (buf + chunk)[-200:]
+            for m in QEMU_IMG_PROGRESS.finditer(buf.decode(errors="replace")):
+                progress(float(m.group(1)))
+        if proc.wait():
+            raise InvalidState(f"copying the disk failed: {proc.stderr.read().decode()[-400:]}")
+
+    def _block_copy(self, dom, dev: str, dest: str, backend: str, progress) -> None:
+        if backend == "file":
+            xml = f"<disk type='file'><source file={quoteattr(dest)}/><driver type='qcow2'/></disk>"
+        else:
+            xml = f"<disk type='block'><source dev={quoteattr(dest)}/><driver type='raw'/></disk>"
+        dom.blockCopy(dev, xml, None, libvirt.VIR_DOMAIN_BLOCK_COPY_REUSE_EXT
+                      | libvirt.VIR_DOMAIN_BLOCK_COPY_TRANSIENT_JOB)  # fmt: skip
+        try:
+            while True:
+                info = dom.blockJobInfo(dev, 0)
+                if not info:
+                    raise InvalidState("the disk copy stopped: see the node's libvirt log")
+                if info.get("end"):
+                    progress(min(99.0, 100 * info["cur"] / info["end"]))
+                if info.get("end") and info["cur"] == info["end"]:
+                    try:  # both copies are in step: QEMU switches to the new one
+                        dom.blockJobAbort(dev, libvirt.VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT)
+                        return
+                    except libvirt.libvirtError:
+                        pass  # not ready yet
+                time.sleep(BLOCK_COPY_POLL)
+        except BaseException:
+            try:
+                dom.blockJobAbort(dev, 0)
+            except libvirt.libvirtError:
+                pass
+            raise
+
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        dom = self._lookup(uuid)
+        root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        sata = [
+            d
+            for d in root.findall("devices/disk[@device='disk']")
+            if d.find("target") is not None and d.find("target").get("bus") == "sata"
+        ]
+        if not sata:
+            raise InvalidState("this VM's disks are VirtIO already")
+        was_running = bool(dom.isActive())
+        if was_running:
+            try:
+                self._power_off(dom, timeout=RESTART_TIMEOUT)
+            except InvalidState:
+                dom.destroy()
+        # 1. Once with a small VirtIO disk: Windows finds it and binds viostor (from the
+        #    guest tools), which then loads at boot.
+        pool = self._pool(disk_source(root, sata[0])[0] or "default")
+        probe_disk = DiskSpec(size_gb=1, backend=_backend(pool))
+        name = root.findtext("name")
+        vol_xml = ET.fromstring(build_volume_xml(name, 99, probe_disk))
+        vol_xml.find("name").text = f"{file_name(name)}-virtio-probe" + (
+            ".qcow2" if probe_disk.backend == "file" else ""
+        )
+        probe = pool.createXML(ET.tostring(vol_xml, encoding="unicode"), 0)
+        try:
+            with_probe = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+            el = disk_element(probe_disk, probe.name(), "vdz")
+            source = el.find("source")
+            for k in list(source.attrib):
+                del source.attrib[k]
+            source.set("file" if probe_disk.backend == "file" else "dev", probe.path())
+            if probe_disk.backend == "file":
+                el.set("type", "file")
+            else:
+                el.set("type", "block")
+            with_probe.find("devices").append(el)
+            self._conn.defineXML(ET.tostring(with_probe, encoding="unicode"))
+            dom = self._lookup(uuid)
+            self.start_vm(uuid)
+            self._wait_guest_agent(dom, timeout=900)
+            time.sleep(PROBE_SETTLE)  # Plug and Play installs the driver for the new disk
+            try:
+                self._power_off(dom, timeout=RESTART_TIMEOUT)
+            except InvalidState:
+                dom.destroy()
+        finally:
+            # 2. Probe disk out, SATA disks onto VirtIO (vda, vdb, ...).
+            root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+            devices = root.find("devices")
+            for d in devices.findall("disk[@device='disk']"):
+                if d.find("target") is not None and d.find("target").get("dev") == "vdz":
+                    devices.remove(d)
+            probe.delete(0)
+        used = {d.find("target").get("dev") for d in devices.findall("disk[@device='disk']")}
+        free = (f"vd{c}" for c in DISK_DEVS if f"vd{c}" not in used)
+        meta = root.find(f"metadata/{{{META_NS}}}vm")
+        for d in devices.findall("disk[@device='disk']"):
+            target = d.find("target")
+            if target.get("bus") != "sata":
+                continue
+            old, new = target.get("dev"), next(free)
+            target.set("dev", new)
+            target.set("bus", "virtio")
+            address = d.find("address")
+            if address is not None:
+                d.remove(address)
+            if meta is not None:
+                for entry in meta.findall(f"{{{META_NS}}}disk"):
+                    if entry.get("dev") == old:
+                        entry.set("dev", new)
+        self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+        if was_running:
+            return self.start_vm(uuid)
+        return self._info(self._lookup(uuid))
+
+    def _wait_guest_agent(self, dom, timeout: float) -> None:
+        import libvirt_qemu
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                libvirt_qemu.qemuAgentCommand(dom, '{"execute":"guest-ping"}', 5, 0)
+                return
+            except libvirt.libvirtError:
+                if time.monotonic() > deadline:
+                    raise InvalidState(
+                        "Windows did not start its guest agent: install the guest tools in it "
+                        "first (⋯ → Insert guest tools CD). Nothing was switched."
+                    ) from None
+                time.sleep(5)
+
+    def sysprep_vm(self, uuid: str) -> None:
+        dom = self._lookup(uuid)
+        if not dom.isActive():
+            raise InvalidState("start the VM (with its guest tools) to run sysprep")
+        import libvirt_qemu
+
+        command = {
+            "execute": "guest-exec",
+            "arguments": {
+                "path": r"C:\Windows\System32\Sysprep\sysprep.exe",
+                "arg": ["/generalize", "/oobe", "/shutdown", "/quiet"],
+            },
+        }
+        try:
+            libvirt_qemu.qemuAgentCommand(dom, json.dumps(command), 30, 0)
+        except libvirt.libvirtError as exc:
+            raise InvalidState(
+                f"the guest agent did not answer ({exc}): install the guest tools in the VM, "
+                "or run sysprep /generalize /oobe /shutdown there yourself"
+            ) from None
+
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        if not VM_NAME_RE.match(name):
+            raise ValueError("VM names use letters (Thai too), digits and '_.-'")
+        dom = self._lookup(uuid)
+        if dom.name() == name:
+            return self._info(dom)
+        try:
+            self._conn.lookupByName(name)
+        except libvirt.libvirtError:
+            pass
+        else:
+            raise VMExists(f"VM named {name!r} already exists")
+        if dom.isActive():
+            # A running domain keeps its libvirt name; the new one shows everywhere until
+            # the next rename while it is off, which renames the domain itself.
+            self._set_display_name(dom, name, live=True)
+            return self._info(dom)
+        # libvirt renames only a domain without snapshots: keep their XML, drop only the
+        # metadata, rename, then define them again under the new name.
+        topo = getattr(libvirt, "VIR_DOMAIN_SNAPSHOT_LIST_TOPOLOGICAL", 0)
+        snaps = dom.listAllSnapshots(topo)
+        current = dom.snapshotCurrent(0).getName() if dom.hasCurrentSnapshot(0) else ""
+        saved = [(s.getName(), s.getXMLDesc(0)) for s in snaps]
+        for snap in reversed(snaps):
+            snap.delete(libvirt.VIR_DOMAIN_SNAPSHOT_DELETE_METADATA_ONLY)
+        renamed = False
+        try:
+            dom.rename(name, 0)
+            renamed = True
+            self._set_display_name(dom, "", live=False)
+        finally:
+            dom = self._lookup(uuid)
+            for snap_name, xml in saved:
+                root = ET.fromstring(xml)
+                for tag in ("domain/name", "inactiveDomain/name"):
+                    el = root.find(tag)
+                    if el is not None and renamed:
+                        el.text = name
+                flags = libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REDEFINE
+                if snap_name == current:
+                    flags |= libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_CURRENT
+                dom.snapshotCreateXML(ET.tostring(root, encoding="unicode"), flags)
+        return self._info(dom)
+
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         dom = self._lookup(uuid)
         if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
@@ -606,10 +999,17 @@ class LibvirtDriver(HypervisorDriver):
                 driver = el.find("driver")
                 src_fmt = driver.get("type", "qcow2") if driver is not None else "qcow2"
                 dst_fmt = "raw" if disk.backend == "block" else "qcow2"
+                if src_fmt == dst_fmt == "qcow2" and try_reflink(
+                    base.path(), vol.path(), int(disk.size_gb * 1024**3)
+                ):
+                    logging.getLogger(__name__).info("Full clone %s used reflink", clone.name)
+                    continue
                 self.run(
                     ["qemu-img", "convert", "-n", "-f", src_fmt, "-O", dst_fmt]
                     + [base.path(), vol.path()]
                 )
+            if clone.reset_identity and "windows" not in spec.os_type.lower():
+                self._reset_identity([vol.path() for vol in created])
             if clone.customization:
                 seed = Path(self.seed_dir) / f"{file_name(spec.name)}-seed.iso"
                 files = customize.seed_files(clone.customization, spec.name, new_uuid)
@@ -642,6 +1042,7 @@ class LibvirtDriver(HypervisorDriver):
                 continue
             kind, source = described
             _state, capacity, allocation, available = pool.info()
+            vg = hybrid.vg_of(source) if kind == PoolType.DISK else None
             result.append(
                 PoolInfo(
                     name=pool.name(),
@@ -651,16 +1052,65 @@ class LibvirtDriver(HypervisorDriver):
                     allocation_gb=round(allocation / GIB, 1),
                     available_gb=round(available / GIB, 1),
                     source=source,
+                    hybrid=vg is not None,
+                    cache=hybrid.stats(self.lvm, vg) if vg else None,
                 )
             )
         return result
+
+    lvm = staticmethod(hybrid.run_lvm)
+
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        described = describe_pool_xml(self._pool(name).XMLDesc(0), {})
+        vg = hybrid.vg_of(described[1]) if described else None
+        if not vg:
+            raise InvalidState(
+                f"{name} is not a hybrid pool: an SSD cache needs a pool made as Hybrid. "
+                "Move its VMs to another pool, remove it and add it again as Hybrid."
+            )
+        if action == "add":
+            if not devices:
+                raise ValueError("pick the SSDs for the cache")
+            self.clear_disks(devices)
+            hybrid.add_cache(self.lvm, vg, devices, mode, size_gb)
+        elif action == "remove":
+            hybrid.remove_cache(self.lvm, vg)
+        elif action == "mode":
+            hybrid.set_mode(self.lvm, vg, mode)
+        else:
+            raise ValueError("action is add, remove or mode")
+        return next(p for p in self.list_pools() if p.name == name)
 
     def create_pool(self, spec: PoolSpec) -> PoolInfo:
         spec.validate()
         if spec.name in self._pool_names() or iscsi_session_name(spec.name) in self._pool_names():
             raise InvalidState(f"a pool named {spec.name!r} already exists")
 
-        if spec.type == PoolType.LVM:
+        made_vg = None
+        if spec.type == PoolType.DISK and spec.cache_devices:
+            # Hybrid: HDDs + SSD cache in a volume group of its own; XFS goes on its data
+            # volume below, as on a plain thin pool's disk.
+            data, cache = spec.all_devices(), list(spec.cache_devices)
+            self.clear_disks([*data, *cache])
+            made_vg = hybrid.vg_name(spec.name)
+            try:
+                device = hybrid.build(self.lvm, spec.name, data, cache, spec.cache_mode,
+                                      spec.cache_gb)  # fmt: skip
+            except Exception:
+                try:
+                    hybrid.destroy(self.lvm, made_vg)
+                except RuntimeError:
+                    pass
+                raise
+            spec = replace(spec, device=device, devices=None, cache_devices=None)
+        elif spec.type == PoolType.LVM:
             # libvirt finds the volume group by the device name pvs reports (/dev/sda), so a
             # /dev/disk/by-id link would make the pool fail to start after vgcreate.
             # (/dev/mapper names are what pvs reports for multipath, so they stay.)
@@ -668,10 +1118,10 @@ class LibvirtDriver(HypervisorDriver):
                 os.path.realpath(d) if d.startswith("/dev/disk/") else d for d in spec.all_devices()
             ]
             spec = replace(spec, device=devices[0], devices=devices)
-        if spec.type == PoolType.DISK:
+        if spec.type == PoolType.DISK and not made_vg:
             # The pool mounts its disk on every start, so it must not follow /dev/sdX letters.
             spec = replace(spec, device=stable_device(spec.all_devices()[0]), devices=None)
-        if spec.type in (PoolType.LVM, PoolType.DISK):
+        if spec.type in (PoolType.LVM, PoolType.DISK) and not made_vg:
             # Old partitions, another system's LVM or a Ceph OSD would make the build fail;
             # the caller confirmed the erase, so clear them first.
             self.clear_disks(spec.all_devices())
@@ -712,6 +1162,11 @@ class LibvirtDriver(HypervisorDriver):
         except Exception:
             if session is not None:
                 _undefine(session)
+            if made_vg:
+                try:
+                    hybrid.destroy(self.lvm, made_vg)
+                except RuntimeError:
+                    pass
             raise
         if spec.type == PoolType.DIR and spec.path:
             allow_qemu_path(spec.path)
@@ -826,6 +1281,30 @@ class LibvirtDriver(HypervisorDriver):
             pass
         Path(vlan_iface_file(vlan)).unlink(missing_ok=True)
 
+    def containers(self):
+        from .containers import LxcContainers
+
+        def run(cmd: list[str]) -> tuple[int, str]:
+            try:
+                done = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=3600, stdin=subprocess.DEVNULL
+                )
+            except subprocess.TimeoutExpired:
+                return 124, f"{cmd[0]}: no answer within an hour"
+            except FileNotFoundError:
+                return 127, f"{cmd[0]}: not installed on this node (package lxc)"
+            return done.returncode, done.stdout + done.stderr
+
+        def bridge(network: str) -> str:
+            bridges = self._bridges()
+            if network not in bridges:
+                raise InvalidState(f"no network named {network!r}")
+            return bridges[network]
+
+        return LxcContainers(
+            self.pool_path, bridge, run, lambda: [p.name for p in self.list_pools()]
+        )
+
     def host_system(self):
         from .host import LinuxHost
 
@@ -917,7 +1396,11 @@ class LibvirtDriver(HypervisorDriver):
             disks = root.findall("./devices/disk[@device='disk']")
             if any(disk_source(root, d)[0] == name for d in disks):
                 raise InvalidState(f"VM {dom.name()!r} still has disks in pool {name!r}")
+        described = describe_pool_xml(pool.XMLDesc(0), {})
+        vg = hybrid.vg_of(described[1]) if described else None
         _undefine(pool)
+        if vg:  # a hybrid pool's volume group is its own: free its disks with it
+            hybrid.destroy(self.lvm, vg)
         try:
             _undefine(self._conn.storagePoolLookupByName(iscsi_session_name(name)))
         except libvirt.libvirtError:
@@ -929,6 +1412,7 @@ class LibvirtDriver(HypervisorDriver):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
         dom = self._lookup(uuid)
         # Peer-to-peer: this node's libvirtd connects to the destination's itself, over TLS
@@ -941,6 +1425,8 @@ class LibvirtDriver(HypervisorDriver):
         )
         if dom.isActive():
             flags |= libvirt.VIR_MIGRATE_LIVE | libvirt.VIR_MIGRATE_AUTO_CONVERGE
+            if dest_uri.startswith("qemu+tls://"):
+                flags |= libvirt.VIR_MIGRATE_TLS
             if copy_storage:
                 # libvirt creates same-named volumes in the same-named pools on the other side.
                 flags |= libvirt.VIR_MIGRATE_NON_SHARED_DISK
@@ -952,8 +1438,15 @@ class LibvirtDriver(HypervisorDriver):
         disks = root.findall("./devices/disk[@device='disk']")
         volumes = [self._volume(d) for d in disks] if copy_storage else []
         params = {}
+        if flags & getattr(libvirt, "VIR_MIGRATE_TLS", 0):
+            params[libvirt.VIR_MIGRATE_PARAM_TLS_DESTINATION] = urlparse(dest_uri).hostname
         if bandwidth_mib:
             params[libvirt.VIR_MIGRATE_PARAM_BANDWIDTH] = bandwidth_mib
+        if data_address:
+            # Memory and disk data over the destination's migration interface.
+            params[libvirt.VIR_MIGRATE_PARAM_URI] = f"tcp://{data_address}"
+            if copy_storage:
+                params[libvirt.VIR_MIGRATE_PARAM_DISKS_URI] = f"tcp://{data_address}"
         precreated = []
         try:
             if copy_storage:
@@ -968,6 +1461,88 @@ class LibvirtDriver(HypervisorDriver):
             raise MigrationFailed(str(exc)) from None
         for vol in volumes:  # the copies now live on the destination
             vol.delete(0)
+
+    def _local_file_roots(self) -> tuple[Path, ...]:
+        return (Path(self.nvram_dir), Path(self.seed_dir))
+
+    def _stageable(self, path: str) -> Path | None:
+        """`path` if it is a plain file name directly inside the NVRAM or seed folder."""
+        p = Path(path)
+        if not p.is_absolute() or p.name in ("", ".", "..") or p.name.startswith("."):
+            return None
+        return p if p.parent in self._local_file_roots() else None
+
+    def _local_files_of(self, root) -> list[str]:
+        paths = [(root.findtext("os/nvram") or "").strip()]
+        for drive in root.findall("./devices/disk[@device='cdrom']/source"):
+            paths.append(drive.get("file") or "")
+        return [p for p in paths if p and self._stageable(p)]
+
+    def _files_in_use(self) -> set[str]:
+        used = set()
+        for dom in self._conn.listAllDomains():
+            try:
+                xml = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+            except libvirt.libvirtError:
+                continue
+            used.update(self._local_files_of(ET.fromstring(xml)))
+        return used
+
+    def migration_files(self, uuid: str) -> dict[str, bytes]:
+        root = ET.fromstring(self._lookup(uuid).XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        files = {}
+        for path in self._local_files_of(root):
+            p = Path(path)
+            if p.is_file() and not p.is_symlink():
+                if p.stat().st_size > MIGRATION_FILE_LIMIT:
+                    raise InvalidState(f"{p.name} is too large to send with the VM")
+                files[path] = p.read_bytes()
+        return files
+
+    def stage_migration_files(self, files: dict[str, bytes]) -> list[str]:
+        targets = {}
+        for path, data in files.items():
+            p = self._stageable(path)
+            if p is None:
+                raise ValueError(f"refusing to stage {path!r}: not an NVRAM or seed file")
+            if len(data) > MIGRATION_FILE_LIMIT:
+                raise ValueError(f"{p.name} is too large")
+            targets[p] = data
+        busy = self._files_in_use() & {str(p) for p in targets}
+        if busy:
+            raise InvalidState(f"another VM here already uses {', '.join(sorted(busy))}")
+        written = []
+        try:
+            for p, data in targets.items():
+                p.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".stage-")
+                try:
+                    with os.fdopen(fd, "wb") as out:
+                        out.write(data)
+                        out.flush()
+                        os.fsync(out.fileno())
+                    os.chmod(tmp, 0o600 if p.parent == Path(self.nvram_dir) else 0o644)
+                    os.replace(tmp, p)
+                except BaseException:
+                    Path(tmp).unlink(missing_ok=True)
+                    raise
+                written.append(str(p))
+        except BaseException:
+            for path in written:
+                Path(path).unlink(missing_ok=True)
+            raise
+        return written
+
+    def remove_migration_files(self, paths: list[str]) -> list[str]:
+        used = self._files_in_use()
+        removed = []
+        for path in paths:
+            p = self._stageable(path)
+            if p is None or str(p) in used or p.is_symlink() or not p.is_file():
+                continue
+            p.unlink()
+            removed.append(str(p))
+        return removed
 
     def _precreate_block_disks(self, dest_uri, root, disks, volumes) -> list:
         """libvirt creates the destination copy of a volume disk itself, but not of a
@@ -1138,9 +1713,11 @@ class LibvirtDriver(HypervisorDriver):
         source = disk.find("source")
         if source is not None and source.get("volume"):
             return self._pool(source.get("pool")).storageVolLookupByName(source.get("volume"))
-        if source is not None and source.get("dev"):
+        # <source dev> (LVM) or <source file>: a disk moved or added by hand (virsh).
+        path = (source.get("dev") or source.get("file")) if source is not None else None
+        if path:
             try:
-                return self._conn.storageVolLookupByPath(source.get("dev"))
+                return self._conn.storageVolLookupByPath(path)
             except libvirt.libvirtError:
                 pass
         raise InvalidState("only disks in ibHiCS storage pools can be backed up")
@@ -1170,6 +1747,19 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             raise VMNotFound(uuid) from None
 
+    def _pool_of_path(self, path: str | None) -> str:
+        """The pool whose folder holds this file (a volume libvirt has not listed yet)."""
+        if not path:
+            return ""
+        for pool in self._conn.listAllStoragePools():
+            try:
+                target = ET.fromstring(pool.XMLDesc(0)).findtext("target/path") or ""
+            except libvirt.libvirtError:
+                continue
+            if target and path.startswith(target.rstrip("/") + "/"):
+                return pool.name()
+        return ""
+
     def _info(self, dom) -> VMInfo:
         state, _reason = dom.state()
         xml = dom.XMLDesc(0)
@@ -1187,6 +1777,7 @@ class LibvirtDriver(HypervisorDriver):
                 # Not in a pool we know (a hand-written disk): ask QEMU/libvirt directly.
                 source = el.find("source")
                 path = source.get("dev") or source.get("file") if source is not None else None
+                disk.pool = disk.pool or self._pool_of_path(path)
                 try:
                     capacity, allocation, _physical = dom.blockInfo(path)
                 except (TypeError, libvirt.libvirtError):
@@ -1286,12 +1877,19 @@ def _random_mac() -> str:
     return "52:54:00:" + ":".join(f"{b:02x}" for b in os.urandom(3))
 
 
+def _video_of(root) -> str:
+    model = root.find("devices/video/model")
+    kind = model.get("type", "virtio") if model is not None else "virtio"
+    return kind if kind in VIDEO_MODELS else "virtio"
+
+
 def _restart_key(root) -> tuple:
     memory = root.find("memory")
     return (
         root.findtext("vcpu"),
         memory.text if memory is not None else None,
         [b.get("dev") for b in root.findall("os/boot")],
+        _video_of(root),
     )
 
 
@@ -1318,8 +1916,16 @@ def disk_source(root, disk) -> tuple[str, str]:
         return source.get("pool", ""), source.get("volume")
     target = disk.find("target")
     dev = target.get("dev") if target is not None else None
-    for meta in root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk"):
+    metas = root.findall(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk")
+    for meta in metas:
         if meta.get("dev") == dev:
+            return meta.get("pool", ""), meta.get("volume", "")
+    # The domain was edited by hand (e.g. virsh: vda -> sdc) and the metadata kept the old
+    # device name: match the volume by the file or device the disk points at instead.
+    path = (source.get("dev") or source.get("file") or "") if source is not None else ""
+    name = path.rsplit("/", 1)[-1]
+    for meta in metas:
+        if name and meta.get("volume") == name:
             return meta.get("pool", ""), meta.get("volume", "")
     return "", ""
 
@@ -1339,6 +1945,9 @@ def _spec_from_xml(xml: str) -> VMSpec:
                 size_gb=0,  # capacity lives on the volume, not in the domain XML
                 backend=backend,
                 pool=disk_source(root, disk)[0],
+                bus="sata"
+                if (disk.find("target") is not None and disk.find("target").get("bus") == "sata")
+                else "virtio",
             )
         )
     nics = [
@@ -1362,7 +1971,8 @@ def _spec_from_xml(xml: str) -> VMSpec:
     uefi = os_el is not None and (os_el.get("firmware") == "efi" or os_el.find("nvram") is not None)
     firmware = Firmware.UEFI if uefi else Firmware.BIOS
     return VMSpec(
-        name=root.findtext("name", ""),
+        name=root.findtext(f"metadata/{{{NAME_NS}}}name") or root.findtext("name", ""),
+        video=_video_of(root),
         vcpus=int(root.findtext("vcpu", "1")),
         memory_mb=memory_mb,
         firmware=firmware,

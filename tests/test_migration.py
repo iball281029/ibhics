@@ -197,3 +197,83 @@ def test_agent_rejects_other_destinations(env):
     agent = env.agents.client("http://node2:8007", TOKEN)
     resp = agent.request("POST", "/vms/x/migrate", json={"dest_uri": "file:///etc/passwd"})
     assert resp.status_code == 422
+
+
+def test_change_host_and_storage(env):
+    # VMware's "change both": to node2, then its disk onto node2's hybrid pool.
+    resp = env.client.post("/api/v1/nodes/node2/pools", json={"name": "hybrid01", "type": "dir"})
+    assert resp.status_code == 201, resp.text
+    uuid = env.create_vm("npm-vm")
+    bad = env.migrate(uuid, node="node2", disks=[{"index": 0, "pool": "nope"}])
+    assert bad.status_code == 409 and "no active storage pool" in bad.json()["detail"]
+    resp = env.migrate(uuid, node="node2", disks=[{"index": 0, "pool": "hybrid01"}])
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["disk_pools"] == {"0": "hybrid01"}
+    vm = env.client.get(f"/api/v1/vms/{uuid}").json()
+    assert vm["node"] == "node2" and vm["disks"][0]["pool"] == "hybrid01"
+    [done] = env.client.get("/api/v1/migrations").json()
+    assert done["state"] == "done" and done["step"] == ""
+
+
+class Files:
+    """Records the UEFI/seed file staging calls a driver receives."""
+
+    def __init__(self, driver, files=None):
+        self.staged, self.removed = [], []
+        driver.migration_files = lambda _uuid: dict(files or {})
+        driver.stage_migration_files = self.stage
+        driver.remove_migration_files = self.remove
+
+    def stage(self, files):
+        self.staged.append(files)
+        return sorted(files)
+
+    def remove(self, paths):
+        self.removed.append(sorted(paths))
+        return sorted(paths)
+
+
+NVRAM = "/var/lib/libvirt/qemu/nvram/vm_VARS.qcow2"
+SEED = "/var/lib/ibhics/seeds/vm-seed.iso"
+
+
+def test_uefi_and_seed_files_travel_with_the_vm(env):
+    source = Files(env.node1, {NVRAM: b"vars\x00\xff", SEED: b"seed"})
+    target = Files(env.node2)
+    uuid = env.create_vm("uefi")
+    assert env.migrate(uuid, node="node2").status_code == 202
+    [job] = env.client.get("/api/v1/migrations").json()
+    assert job["state"] == "done", job
+    # through node2's agent: the bytes arrive intact
+    assert target.staged == [{NVRAM: b"vars\x00\xff", SEED: b"seed"}]
+    assert target.removed == []
+    assert source.removed == [[SEED, NVRAM]]
+    assert env.where(uuid) == "node2"
+
+
+def test_failed_migration_removes_the_staged_files(env):
+    env.node1.peers = {}
+    Files(env.node1, {NVRAM: b"vars"})
+    target = Files(env.node2)
+    uuid = env.create_vm("uefi")
+    env.migrate(uuid, node="node2")
+    [job] = env.client.get("/api/v1/migrations").json()
+    assert job["state"] == "failed"
+    assert target.removed == [[NVRAM]]
+    assert env.where(uuid) == "node1"
+
+
+def test_staging_refusal_stops_the_migration(env):
+    Files(env.node1, {NVRAM: b"vars"})
+
+    def refuse(_files):
+        from ibhics.hypervisor import InvalidState
+
+        raise InvalidState(f"another VM here already uses {NVRAM}")
+
+    env.node2.stage_migration_files = refuse
+    uuid = env.create_vm("uefi")
+    env.migrate(uuid, node="node2")
+    [job] = env.client.get("/api/v1/migrations").json()
+    assert job["state"] == "failed" and "already uses" in job["error"]
+    assert env.where(uuid) == "node1"

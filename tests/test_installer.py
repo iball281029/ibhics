@@ -79,7 +79,7 @@ def test_console_banner_says_where_to_go():
     assert "https://10.0.0.11:8888" in setup.render_issue(cfg())
     issue = setup.render_issue(cfg("compute", hostname="node2", address="10.0.0.12/24"))
     assert "Join node" in issue and "http://10.0.0.12:8007" in issue
-    assert "beta version 0.8" in issue
+    assert "beta version 1.3" in issue
 
 
 def test_apply_manager(tmp_path):
@@ -362,3 +362,49 @@ def test_custom_folder_pool_added_to_apparmor(tmp_path):
     assert not allow_qemu_path("/data/vms", rules)  # once only
     assert not allow_qemu_path("/var/lib/ibhics/pools/big", rules)  # already covered
     assert rules.read_text().splitlines()[-1] == "/data/vms/** rwk,"
+
+
+def test_test_install_opens_the_disk_with_libguestfs_first():
+    # On an ibHiCS node the host's VG is also "ibhics": renaming the test disk's VG
+    # (the nbd path) can fail, so virt-customize, which every node has, comes first.
+    text = (INSTALLER / "test-install.sh").read_text()
+    vc, nbd = text.index("if command -v virt-customize"), text.index("qemu-nbd -c /dev/nbd0")
+    assert vc < text.index("elif command -v guestfish") < nbd
+    assert "--upload answers.conf:/etc/ibhics/answers.conf" in text
+    assert "RENAME_FAILED" in text  # a failed rename stops before first boot, not hangs
+
+
+def test_test_install_defines_pause_on_every_path():
+    # pause is used in step 3 too, so it is defined before step 2's branches.
+    text = (INSTALLER / "test-install.sh").read_text()
+    assert text.index("pause() {") < text.index('echo ">> 2/4')
+
+
+def test_console_password_saved_before_timezone_failure(tmp_path):
+    class FailedTimezone(Recorder):
+        def __call__(self, cmd, **kwargs):
+            result = super().__call__(cmd, **kwargs)
+            if cmd[0] == "timedatectl":
+                return subprocess.CompletedProcess(cmd, 1, "", "system bus unavailable")
+            return result
+
+    run = FailedTimezone()
+    with pytest.raises(RuntimeError, match="system bus unavailable"):
+        setup.apply(cfg("witness"), "test-console-password", None, root=tmp_path, run=run)
+    assert (["chpasswd"], "root:test-console-password\n") in run.calls
+    assert not (tmp_path / "etc/ibhics/configured").exists()
+    assert not (tmp_path / "etc/issue").exists()
+
+
+def test_failed_agent_start_does_not_mark_appliance_ready(tmp_path):
+    class FailedAgent(Recorder):
+        def __call__(self, cmd, **kwargs):
+            result = super().__call__(cmd, **kwargs)
+            if cmd == ["systemctl", "enable", "--now", "ibhics-agent.service"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "agent failed")
+            return result
+
+    with pytest.raises(RuntimeError, match="agent failed"):
+        setup.apply(cfg("witness"), "test-console-password", None, root=tmp_path, run=FailedAgent())
+    assert not (tmp_path / "etc/ibhics/configured").exists()
+    assert not (tmp_path / "etc/issue").exists()

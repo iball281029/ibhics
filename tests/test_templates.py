@@ -318,7 +318,7 @@ def test_libvirt_linked_clone_makes_overlay(lvd):
     vol = ET.fromstring(d._conn.pool.created[0])
     assert vol.findtext("name") == "web1-disk0.qcow2"
     assert vol.findtext("backingStore/path") == "/pool/tpl-disk0.qcow2"
-    assert d.commands == []  # nothing copied
+    assert [c[0] for c in d.commands] == ["virt-sysprep"]  # nothing copied, identity reset
     assert vm.spec.linked_to == "src" and d.linked_clones("src") == ["web1"]
     with pytest.raises(InvalidState, match="web1"):
         d.set_template("src", False)
@@ -326,11 +326,34 @@ def test_libvirt_linked_clone_makes_overlay(lvd):
 
 def test_libvirt_full_clone_copies_into_block_pool(lvd):
     d = lvd(kind="logical")  # the template's disk is qcow2; the target pool is LVM
-    d.clone_vm("src", CloneSpec(name="db1"))
+    d.clone_vm("src", CloneSpec(name="db1", reset_identity=False))
     assert d.commands == [
         ["qemu-img", "convert", "-n", "-f", "qcow2", "-O", "raw"]
         + ["/pool/tpl-disk0.qcow2", "/pool/db1-disk0"]
     ]
+
+
+def test_libvirt_full_clone_uses_reflink_without_linking_template(lvd, monkeypatch):
+    d = lvd()
+    calls = []
+    monkeypatch.setattr(lv, "try_reflink", lambda *args: calls.append(args) or True)
+    vm = d.clone_vm("src", CloneSpec(name="fast-full", reset_identity=False))
+    assert d.commands == []
+    assert calls[0][:2] == ("/pool/tpl-disk0.qcow2", "/pool/fast-full-disk0.qcow2")
+    assert not vm.spec.linked_to
+    assert ET.fromstring(d._conn.pool.created[0]).find("backingStore") is None
+
+
+def test_libvirt_deploy_resets_linux_identity(lvd):
+    d = lvd()
+    d.clone_vm("src", CloneSpec(name="web2"))
+    sysprep = d.commands[-1]
+    assert sysprep[0] == "virt-sysprep" and "/pool/web2-disk0.qcow2" in sysprep
+    ops = sysprep[sysprep.index("--operations") + 1].split(",")
+    assert {"machine-id", "ssh-hostkeys", "net-hwaddr", "udev-persistent-net"} <= set(ops)
+    assert "user-account" not in ops  # users and data stay
+    assert "/var/lib/cloud/instances" in sysprep
+    assert any("ssh-keygen -A" in a for a in sysprep)
 
 
 def test_libvirt_linked_clone_refused_on_block_pool(lvd):
@@ -404,3 +427,40 @@ def test_deployed_vm_joins_template_group(env):
     env.client.post(f"/api/v1/vms/{uuid}/clone", json={"name": "c1"})
     new = env.client.get("/api/v1/deploys").json()[0]["result"]
     assert env.client.get("/api/v1/vm-groups").json()["members"][new] == group
+
+
+def test_template_storage_on_remote_node(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("archive", node="node2", start=False)
+    api = env.client
+    res = api.post(f"/api/v1/vms/{uuid}/template", json={"pool": "shared"})
+    assert res.status_code == 200, res.text
+    assert res.json()["template"] and res.json()["node"] == "node2"
+    assert {d["pool"] for d in res.json()["disks"]} == {"shared"}
+    assert api.get("/api/v1/backup/jobs").json()[0]["state"] == "done"
+
+
+def test_template_storage_rejects_running_vm_before_move(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("running")
+    res = env.client.post(f"/api/v1/vms/{uuid}/template", json={"pool": "shared"})
+    assert res.status_code == 409
+    vm = env.client.get(f"/api/v1/vms/{uuid}").json()
+    assert not vm["template"] and vm["disks"][0]["pool"] == "default"
+
+
+def test_template_storage_failure_does_not_mark_template(env):
+    uuid = env.create_vm("stopped", start=False)
+    res = env.client.post(f"/api/v1/vms/{uuid}/template", json={"pool": "missing"})
+    assert res.status_code == 409
+    assert not env.client.get(f"/api/v1/vms/{uuid}").json()["template"]
+
+
+def test_template_storage_does_not_break_linked_clones(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("base", start=False)
+    env.client.post(f"/api/v1/vms/{uuid}/template", json={})
+    env.node1.clone_vm(uuid, CloneSpec(name="dependent", linked=True))
+    res = env.client.post(f"/api/v1/vms/{uuid}/template", json={"pool": "shared"})
+    assert res.status_code == 409, res.text
+    assert env.node1.get_vm(uuid).spec.disks[0].pool == "default"

@@ -46,6 +46,7 @@
   <symbol id="i-hdd" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="11" r="4"/><path d="M12 11h.01M6 17h3"/></g></symbol>
   <symbol id="i-power" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></g></symbol>
   <symbol id="i-template" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 3 7.5 12 12l9-4.5z"/><path d="m3 12 9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></g></symbol>
+  <symbol id="i-ct" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></g></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></g></symbol>
   <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></g></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
@@ -59,14 +60,15 @@
 </svg>
 
 <aside class="rail">
-  <a class="logo" href="#home" aria-label="ibHiCS home" data-label="ibHiCS"><svg><use href="#logo"/></svg></a>
+  <button class="logo" id="rail-toggle" type="button" aria-label="Expand navigation" aria-expanded="false" aria-controls="menu"><svg><use href="#logo"/></svg><span class="rail-title">ibHiCS</span></button>
   <nav id="menu">
     <a href="#home" data-page="home" data-label="Dashboard"><svg><use href="#i-home"/></svg></a>
     <a href="#compute" data-page="compute" data-label="Virtual Machines"><svg><use href="#i-compute"/></svg></a>
+    <a href="#containers" data-page="containers" data-label="Containers"><svg><use href="#i-ct"/></svg></a>
     <a href="#templates" data-page="templates" data-label="Templates"><svg><use href="#i-template"/></svg></a>
     <a href="#storage" data-page="storage" data-label="Storage"><svg><use href="#i-storage"/></svg></a>
     <a href="#network" data-page="network" data-label="Network"><svg><use href="#i-nic"/></svg></a>
-    <a href="#nodes" data-page="nodes" data-label="Nodes"><svg><use href="#i-nodes"/></svg></a>
+    <a href="#cluster" data-page="cluster" data-label="Cluster"><svg><use href="#i-nodes"/></svg></a>
     <a href="#backup" data-page="backup" data-label="Backup"><svg><use href="#i-backup"/></svg></a>
     <a href="#migrate" data-page="migrate" data-label="Migrate"><svg><use href="#i-migrate"/></svg></a>
     <a href="#terminal" data-page="terminal" data-label="Terminal" class="admin-only"><svg><use href="#i-term"/></svg></a>
@@ -81,7 +83,7 @@
       <small>Tasks</small><span id="tasks-count"><span class="dot"></span> None running</span>
       <div class="dropdown tasks-panel" id="tasks-panel"></div>
     </div>
-    <div class="meta wide"><small>Cluster</small><span id="topology">…</span></div>
+    <div class="meta wide"><small>Cluster</small><a href="#cluster" id="topology">…</a></div>
     <div class="meta wide"><small>Quorum</small><span id="quorum"><span class="dot"></span> …</span></div>
     <div class="menu-btn meta" id="user-menu" tabindex="0">
       <small>Username</small><span><span id="whoami">…</span><svg class="chev"><use href="#i-chev"/></svg></span>
@@ -105,6 +107,7 @@
         <div class="overview">
           <div>
             <div class="block-title">Cluster: <span class="val" id="cluster-state">…</span></div>
+            <div class="home-cluster-navigation"><strong id="home-cluster-name"></strong><a href="#cluster">Manage cluster →</a></div>
             <div class="cluster-box" id="cluster-box"></div>
           </div>
           <div>
@@ -120,7 +123,7 @@
       </div>
       <div class="lower">
         <div class="sheet">
-          <div class="toolbar"><h3>Nodes</h3><span class="spacer"></span><a href="#nodes">View all</a></div>
+          <div class="toolbar"><h3>Nodes</h3><span class="spacer"></span><a href="#cluster">View all</a></div>
           <div class="node-list-cards" id="home-nodes"></div>
         </div>
         <div class="sheet">
@@ -247,14 +250,18 @@
     </section>
 
     <section class="page" id="page-storage">
+      <div class="sheet" style="margin-bottom:18px">
+        <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a><button id="vs-prepare" class="admin-only" disabled>Prepare storage</button><button id="vs-create" class="primary admin-only" disabled>+ Add Virtual Storage</button></div>
+        <div id="virtual-storage-status" style="padding:20px">Checking storage readiness…</div>
+      </div>
       <div class="sheet">
         <div class="page-head">
-          <h1>Storage</h1><span class="sub">Pools on each node: local disk, NFS, iSCSI or FC</span>
+          <h1>Local &amp; external storage</h1><span class="sub">Node-local pools and external storage connections</span>
           <span class="spacer"></span>
           <button class="primary admin-only" data-open="pool-dialog">+ Add storage</button>
         </div>
         <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>Pool</th><th>Node</th><th>Type</th><th>Source</th><th style="min-width:220px">Usage</th><th></th></tr></thead>
+          <thead><tr><th>Pool</th><th>Scope / nodes</th><th>Type</th><th>Source</th><th style="min-width:220px">Usage</th><th></th></tr></thead>
           <tbody id="pools"></tbody>
         </table></div>
       </div>
@@ -343,23 +350,26 @@
       </div>
     </section>
 
-    <section class="page" id="page-nodes">
+    <section class="page" id="page-cluster">
       <div class="sheet">
-        <div class="page-head">
-          <h1>Nodes</h1><span class="sub" id="nodes-sub"></span>
-          <span class="spacer"></span>
-          <button class="primary admin-only" data-open="node-dialog">+ Add node</button>
+        <div class="page-head"><h1>Cluster management</h1><span class="spacer"></span>
+          <button class="primary admin-only" id="cluster-page-create" data-open="cluster-create-dialog">Create cluster</button>
+          <button class="primary admin-only" id="cluster-page-add" data-open="node-dialog" hidden>+ Add node</button>
         </div>
-        <div class="table-wrap" style="margin-top:14px"><table>
-          <thead><tr><th>Name</th><th>Role</th><th>Address</th><th>Status</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead>
-          <tbody id="nodes"></tbody>
-        </table></div>
-        <p class="hint section" style="padding-top:14px">High availability needs at least two compute nodes and a witness. Changes need a majority of members online (quorum). Evacuate moves every VM off a node before maintenance.</p>
+        <div class="cards"><div class="card"><h3>Cluster</h3><dl class="kv" id="cluster-details"></dl></div>
+          <div class="card"><h3>Health and quorum</h3><dl class="kv" id="cluster-health"></dl></div></div>
+        <div class="card wide" id="cluster-pairing"><h3>Connect this standalone server</h3><div class="body">
+          <p class="hint">To add this server to a cluster, copy its pairing key and use its Node ID and agent address on the cluster's Add node form.</p>
+          <p id="cluster-pairing-address"></p><button class="admin-only" id="cluster-copy-key">Copy pairing key</button>
+        </div></div>
+        <div class="toolbar"><h3>Nodes and Arbiter</h3></div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Address</th><th>IPMI / BMC</th><th>Status</th><th>Device health</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead><tbody id="cluster-members"></tbody></table></div>
+        <p class="hint section">Create a cluster on the first server, then add other independently installed servers. A two-node cluster needs an independent witness for resilient quorum. Automatic VM failover is not implemented.</p>
       </div>
     </section>
 
     <section class="page" id="page-node">
-      <div class="crumb"><a href="#nodes">Nodes</a><svg><use href="#i-chev"/></svg><span id="node-crumb"></span></div>
+      <div class="crumb"><a href="#cluster">Nodes</a><svg><use href="#i-chev"/></svg><span id="node-crumb"></span></div>
       <div class="sheet">
         <div class="vm-head">
           <span class="avatar big"><svg><use href="#i-nodes"/></svg></span>
@@ -378,6 +388,9 @@
             <div class="card"><h3>Hardware</h3><dl class="kv" id="node-hw"></dl></div>
             <div class="card"><h3>System</h3><dl class="kv" id="node-sys"></dl></div>
           </div>
+          <div class="card wide" id="node-health"><h3>Device health</h3>
+            <div class="body" id="node-health-content"><p class="hint">Loading hardware status…</p></div>
+          </div>
           <div class="card wide"><h3>Network ports</h3><div class="table-wrap"><table>
             <thead><tr><th>Port</th><th>Link</th><th>Speed</th><th>Used by</th><th>IP address</th></tr></thead>
             <tbody id="node-ports"></tbody>
@@ -385,6 +398,10 @@
           <div class="card wide"><h3>Storage pools</h3><div class="table-wrap"><table>
             <thead><tr><th>Pool</th><th>Type</th><th>Used</th><th>Free</th></tr></thead>
             <tbody id="node-pools"></tbody>
+          </table></div></div>
+          <div class="card wide"><h3>Virtual machines on this node</h3><div class="table-wrap"><table>
+            <thead><tr><th>VM</th><th>State</th><th>vCPU</th><th>Memory</th><th>OS</th></tr></thead>
+            <tbody id="node-vms"></tbody>
           </table></div></div>
         </div>
         <div class="subpage" id="tab-node-network">
@@ -397,6 +414,13 @@
           </table></div>
         </div>
         <div class="subpage" id="tab-node-settings">
+          <form id="node-label-form" class="settings-form node-label-form">
+            <div class="card wide"><h3>Node display name</h3><div class="body form-grid one">
+              <label>Display name <input name="display_name" maxlength="80" placeholder="e.g. Production Server 01" autocomplete="off"></label>
+              <p class="hint">Node ID: <code id="node-stable-id"></code>. This ID and the Linux hostname stay the same. Leave the display name blank to use the Node ID.</p>
+              <div><button class="primary admin-only" type="submit">Save display name</button></div>
+            </div></div>
+          </form>
           <form id="node-settings-form" class="settings-form">
             <div class="cards">
               <div class="card"><h3>Name and time</h3><div class="body form-grid one">
@@ -544,6 +568,21 @@
           <div><b>3</b><span>Deploy VMs from it: each VM gets its own copy of the template's disks.</span></div>
         </div>
         <div class="tpl-grid" id="tpl-grid"></div>
+      </div>
+    </section>
+
+    <section class="page" id="page-containers">
+      <div class="sheet">
+        <div class="page-head"><h1>Containers</h1><span class="sub">Linux system containers (LXC): they share the node's kernel, start in a second and use only the memory their programs use. Unprivileged, on the same networks and storage as VMs.</span>
+          <span class="spacer"></span>
+          <button class="primary" id="ct-new">+ New container</button>
+        </div>
+        <div class="ct-head"><h3 class="ct-sub">Templates</h3><input id="ct-search" type="search" placeholder="Search templates: ubuntu, nginx, alpine…" autocomplete="off"></div>
+        <div class="ct-catalog" id="ct-catalog"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Name</th><th>State</th><th>Node</th><th>Template</th><th>vCPU</th><th>Memory</th><th>Disk</th><th>Pool</th><th>IP</th><th>Snapshots</th><th></th></tr></thead>
+          <tbody id="ct-rows"></tbody>
+        </table></div>
       </div>
     </section>
 
@@ -847,6 +886,7 @@
     <div class="subpage active body" id="tab-pv-summary">
       <div class="pv-stats stats" style="padding:0"></div>
       <dl class="kv pv-kv" style="padding:18px 0 0"></dl>
+      <div class="pv-cache" hidden></div>
       <p class="wiz-label">VM disks in this pool</p>
       <div class="table-wrap disk-table"><table><thead><tr><th>VM</th><th>Disk</th><th>Size</th><th>Status</th></tr></thead><tbody class="pv-disks"></tbody></table></div>
     </div>
@@ -865,6 +905,45 @@
   </form>
 </dialog>
 
+<dialog id="virtual-storage-dialog" class="wizard">
+  <form method="dialog" id="virtual-storage-form">
+    <header><h3>Create Virtual Storage</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p class="hint">Choose the data and optional SSD cache disks on each node. Arbiter stores no VM data.</p>
+      <section class="vs-protection">
+        <b>Data protection: RF2 · two copies across two nodes</b>
+        <p>All selected data disks add capacity. One data copy is stored on each node; no additional local mirror is created.</p>
+        <details><summary>How protection and capacity work</summary>
+          <ol><li>Selected HDDs provide data capacity; SSDs selected as cache do not add usable capacity.</li>
+          <li>RF2 keeps one synchronous copy on each data node. With balanced nodes, capacity after replication is half of their combined raw data capacity.</li>
+          <li>This setup leaves 10% unallocated headroom and reserves metadata/service space. This is shown separately below.</li>
+          <li>Arbiter stores no VM data. It helps the surviving node decide whether it can continue serving storage.</li>
+          <li>Storage failover moves the VIP to the surviving node. Automatic VM restart and disk-level rebalancing are not provided by this storage setup.</li></ol>
+        </details>
+      </section>
+      <div class="form-grid">
+        <label>Name<input name="name" value="hybrid01" required pattern="[a-z][a-z0-9\-]{0,30}" title="Use lowercase letters, numbers and hyphens"><span class="vm-sub">Lowercase letters, numbers and hyphens.</span></label>
+        <label>Storage VIP<input name="virtual_ip" value="172.16.12.106" required></label>
+        <label>Network prefix<input name="prefix" type="number" min="1" max="30" value="24" required></label>
+        <label>Calculated capacity (GiB)<input name="size_gib" type="number" min="1" readonly><span class="vm-sub">Automatic from selected disks and RF2.</span></label>
+        <label>Arbiter<select name="arbiter" required></select></label>
+      </div>
+      <div id="vs-disk-picker">Reading disks…</div>
+      <p id="vs-capacity" class="hint"></p>
+      <div id="vs-capacity-breakdown" hidden></div>
+      <section id="vs-review" hidden>
+        <h3>Review selected disks</h3>
+        <div id="vs-review-details"></div>
+        <p class="vs-erase">Everything on the listed data and cache disks will be erased. The same data is stored on both nodes; their capacities are not added together.</p>
+        <label class="check"><input type="checkbox" name="confirm_wipe"> I confirm that the listed disks may be erased.</label>
+        <label>Type the storage name to confirm<input name="confirm_name" autocomplete="off"></label>
+      </section>
+      <p id="vs-form-error" role="alert" class="vs-erase" hidden></p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" id="vs-review-button" class="primary">Review selection</button><button id="vs-submit" class="primary" value="ok" hidden>Create Virtual Storage</button></footer>
+  </form>
+</dialog>
+
 <dialog id="pool-dialog" class="wizard">
   <form method="dialog" id="pool-form" novalidate>
     <header><h3>Add storage</h3><button value="cancel" formnovalidate>×</button></header>
@@ -878,6 +957,8 @@
         <div class="type-cards">
           <label class="type-card"><input type="radio" name="kind" value="local" checked>
             <svg><use href="#i-hdd"/></svg><span><b>Local disks</b><em>Disks inside a node: SSD, HDD or NVMe. No RAID needed.</em></span></label>
+          <label class="type-card"><input type="radio" name="kind" value="hybrid">
+            <svg><use href="#i-hdd"/></svg><span><b>Hybrid (HDD + SSD cache)</b><em>Large HDDs or a RAID for data, an SSD in front for speed.</em></span></label>
           <label class="type-card"><input type="radio" name="kind" value="nfs">
             <svg><use href="#i-storage"/></svg><span><b>NFS</b><em>A folder shared by a NAS. Can be added to every node.</em></span></label>
           <label class="type-card"><input type="radio" name="kind" value="iscsi">
@@ -889,7 +970,7 @@
         </div>
       </section>
 
-      <section class="wiz-page" data-page="2" data-kinds="local fc">
+      <section class="wiz-page" data-page="2" data-kinds="local fc hybrid">
         <div class="wiz-bar">
           <label class="inline">Node <select name="node" class="node-list"></select></label>
           <div class="chips" role="group" aria-label="Disk type">
@@ -930,6 +1011,13 @@
           <label class="type-card small"><input type="radio" name="format" value="lvm">
             <span><b>Thick (LVM)</b><em>Fast block storage. Joins several disks into one pool.</em></span></label>
         </div>
+        <div class="form-grid" data-kinds="hybrid">
+          <label>Cache mode <select name="cache_mode">
+            <option value="writethrough" selected>Writethrough (safe): writes go to the HDDs at once</option>
+            <option value="writeback">Writeback (faster writes): needs a mirrored SSD</option></select></label>
+          <label>Cache size (GB) <input name="cache_gb" type="number" min="1" placeholder="All of the SSD"></label>
+          <p class="hint wide">The SSD keeps the blocks VMs use most; the HDDs hold everything. The cache can be removed or added later in the pool's Summary.</p>
+        </div>
         <dl class="kv wiz-summary"></dl>
         <div class="wiz-warn"></div>
         <label class="check wiz-confirm"><input name="confirm_wipe" type="checkbox"> <span></span></label>
@@ -968,8 +1056,18 @@
       <label>MTU
         <select name="mtu"><option value="">Default (1500)</option><option value="1500">1500</option><option value="9000">9000 (jumbo frames)</option></select>
       </label>
+      <label data-kind="ethernet">Flow control
+        <select name="flow_control"><option value="">Leave as it is</option><option value="on">On (pause frames)</option><option value="off">Off</option></select>
+      </label>
       <label data-for="static">Address with prefix <input name="address" placeholder="10.0.0.11/24"></label>
       <label data-for="static">Gateway (blank = none) <input name="gateway" placeholder="none"></label>
+      <fieldset class="vm-checks wide"><legend>Used for</legend><div class="vm-check-list">
+        <label class="check"><input type="checkbox" name="roles" value="management"> Management</label>
+        <label class="check"><input type="checkbox" name="roles" value="migration"> VM migration</label>
+        <label class="check"><input type="checkbox" name="roles" value="storage"> Storage (iSCSI/NFS)</label>
+        <label class="check"><input type="checkbox" name="roles" value="vm"> VM uplink</label>
+      </div></fieldset>
+      <label class="wide">Static routes (one per line) <textarea name="routes" rows="2" placeholder="10.20.0.0/16 via 10.0.0.1"></textarea></label>
       <label class="check wide"><input name="auto" type="checkbox" checked> Bring up at boot</label>
       <p class="hint wide" id="iface-note"></p>
     </div>
@@ -977,13 +1075,26 @@
   </form>
 </dialog>
 
+<dialog id="cluster-create-dialog">
+  <form method="dialog" id="cluster-create-form">
+    <header><h3>Create cluster</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid one">
+      <label>Cluster name <input name="name" required maxlength="80" value="ibhics-cluster" autocomplete="off"></label>
+      <p class="hint">This server becomes the first member and runs cluster management. Existing VMs stay on this server. Add other nodes after they have been installed independently.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create cluster</button></footer>
+  </form>
+</dialog>
+
 <dialog id="node-dialog">
   <form method="dialog" id="node-form">
     <header><h3>Add node to cluster</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
-      <label>Node name <input name="name" required placeholder="node2"></label>
+      <label>Node ID <input name="name" required placeholder="ibhics-node2"></label>
       <label>Role <select name="role"><option value="compute">Compute</option><option value="witness">Witness</option></select></label>
       <label>Agent URL <input name="address" required placeholder="http://10.0.0.12:8007"></label>
+      <label>Pairing key <input name="agent_token" type="password" autocomplete="off" placeholder="Copy from the standalone server's Cluster page"></label>
+      <p class="hint">Each independently installed server keeps its own key. A legacy agent using this cluster's shared key may leave this blank.</p>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add node</button></footer>
   </form>
@@ -1152,6 +1263,74 @@
   </form>
 </dialog>
 
+<dialog id="ct-dialog" class="wide-dialog">
+  <form method="dialog" id="ct-form">
+    <header><h3>New container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <h4 class="wide">1. Template</h4>
+      <label class="wide">Template <select name="template" id="ct-template"></select></label>
+      <label>Name (also its host name) <input name="name" required maxlength="63" pattern="[a-z0-9][a-z0-9\-]*" title="Small letters, digits and -" autocomplete="off" placeholder="web-01"></label>
+      <label>Node <select name="node" class="node-list-auto"></select></label>
+      <h4 class="wide">2. Resources and network</h4>
+      <label>vCPU <input name="vcpus" type="number" min="1" max="256" value="1"></label>
+      <label>Memory (MB) <input name="memory_mb" type="number" min="64" step="64" value="512"></label>
+      <label>Disk (GB) <input name="disk_gb" type="number" min="1" value="8"></label>
+      <label>Storage pool <select name="pool" class="pool-list"></select></label>
+      <label>Network <select name="network" class="net-list"></select></label>
+      <label>IP address <input name="ip" value="dhcp" placeholder="dhcp or 10.0.0.50/24"></label>
+      <label>Gateway <input name="gateway" placeholder="10.0.0.1"></label>
+      <label>DNS servers <input name="dns" placeholder="8.8.8.8 1.1.1.1"></label>
+      <h4 class="wide">3. Access</h4>
+      <label>Root password <input name="password" type="password" autocomplete="new-password" minlength="6"></label>
+      <label class="wide">SSH public key (optional) <textarea name="ssh_key" rows="2" placeholder="ssh-ed25519 AAAA... you@laptop"></textarea></label>
+      <label class="check"><input type="checkbox" name="nesting"> Allow Docker/nesting inside</label>
+      <label class="check"><input type="checkbox" name="autostart"> Start when the node boots</label>
+      <label class="check"><input type="checkbox" name="unprivileged" checked> Unprivileged (recommended)</label>
+      <p class="hint wide">The image downloads from images.linuxcontainers.org the first time, so the node needs internet. The new container appears in the list when it is ready (see Tasks).</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Create</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-edit-dialog">
+  <form method="dialog" id="ct-edit-form">
+    <header><h3 id="ct-edit-title">Container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>vCPU <input name="vcpus" type="number" min="1" max="256"></label>
+      <label>Memory (MB) <input name="memory_mb" type="number" min="64" step="64"></label>
+      <label>Disk (GB, grow only) <input name="disk_gb" type="number" min="1"></label>
+      <label class="check"><input type="checkbox" name="autostart"> Start when the node boots</label>
+      <label class="wide">Description <input name="description" maxlength="500"></label>
+      <p class="hint wide">CPU, memory and disk change live, without a restart.</p>
+      <div class="wide ct-net"><b>Network</b> <button type="button" class="small" id="ct-nic-add">+ Network card</button>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Card</th><th>Network (VLAN)</th><th>IP</th><th>Gateway</th><th>MAC</th><th>Now</th><th></th></tr></thead>
+          <tbody id="ct-nics"></tbody>
+        </table></div>
+        <label>DNS servers <input name="dns" placeholder="8.8.8.8 1.1.1.1"></label>
+        <p class="hint">IP is <code>dhcp</code> or an address with its prefix, e.g. <code>10.0.0.50/24</code>. Changing the network restarts a running container (a few seconds).</p>
+      </div>
+      <div class="wide ct-storage"><b>Storage</b><div id="ct-storage"></div></div>
+      <div class="wide"><b>Snapshots</b> <button type="button" class="small" id="ct-snap-take">Take snapshot</button>
+        <table><tbody id="ct-snaps"></tbody></table></div>
+    </div>
+    <footer><button value="cancel" formnovalidate>Close</button><button class="primary" value="ok">Save</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-console-dialog" class="wide-dialog">
+  <form method="dialog" id="ct-console-form">
+    <header><h3 id="ct-console-title">Console</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <div class="term"><pre id="ct-out"></pre>
+        <div class="ct-line"><span class="term-prompt" id="ct-prompt">#</span><input id="ct-input" spellcheck="false" placeholder="apt update" maxlength="4000" autocomplete="off"></div>
+      </div>
+      <p class="hint">Runs as root inside the container (admins only). Each line runs on its own, like ssh host 'command'; long commands (apt upgrade, docker pull) stream their output and may run up to an hour. <button type="button" class="small danger" id="ct-stop" hidden>Stop (Ctrl+C)</button></p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Close</button></footer>
+  </form>
+</dialog>
+
 <dialog id="snap-dialog">
   <form method="dialog" id="snap-form">
     <header><h3>Take snapshot</h3><button value="cancel" formnovalidate>×</button></header>
@@ -1162,6 +1341,19 @@
       <label class="wide check snap-restart" hidden><input type="checkbox" name="restart" checked> Shut down and start again if needed (once per UEFI VM, so later snapshots work while it runs)</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Take snapshot</button></footer>
+  </form>
+</dialog>
+
+<dialog id="template-storage-dialog">
+  <form method="dialog" id="template-storage-form">
+    <header><h3>Template storage</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p><b id="template-storage-name"></b></p>
+      <label>Store template disks on <select name="pool"></select></label>
+      <p class="hint">Storage is on this template's node. The VM must be shut down. Disks move before it becomes a template; follow progress in Tasks.</p>
+      <p class="hint" id="template-storage-windows" hidden>Windows: run sysprep /generalize /oobe /shutdown before converting so deployed VMs have their own identity.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save template</button></footer>
   </form>
 </dialog>
 
@@ -1195,7 +1387,9 @@
       </div>
       <p class="hint" data-for="linux">The VM gets a small CD that cloud-init reads on its first boot: host name, the admin user with sudo, password and SSH keys. The template needs cloud-init installed.</p>
       <p class="hint" data-for="windows">The VM gets a CD with an answer file that Windows reads when it first starts after sysprep: computer name, Administrator password and, if given, a local admin user. Time zone uses Windows names, e.g. <em>SE Asia Standard Time</em>.</p>
-      <label class="check" style="margin-top:12px"><input type="checkbox" name="power_on" checked> Power on when deployed</label>
+      <label class="check" style="margin-top:12px"><input type="checkbox" name="reset_identity" checked> Give the new VM its own identity</label>
+      <p class="hint" id="deploy-identity">Always new: VM UUID and MAC addresses. Linux, before its first boot: machine-id, SSH host keys, cloud-init state, logs and shell history, DHCP leases and persistent NIC names (users and data stay). Windows: a new SID and computer name come from sysprep; deploy from a template that was generalized.</p>
+      <label class="check"><input type="checkbox" name="power_on" checked> Power on when deployed</label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Deploy VM</button></footer>
   </form>
@@ -1214,8 +1408,21 @@
 
 <dialog id="migrate-dialog">
   <form method="dialog" id="migrate-form">
-    <header><h3>Live migrate VM</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
+    <header><h3 id="migrate-title">Migrate VM</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <div class="type-cards">
+        <label class="type-card"><input type="radio" name="mode" value="host">
+          <svg><use href="#i-nodes"/></svg><span><b>Change host</b><em class="mig-host-why">Move the VM to another node; a running VM keeps running.</em></span></label>
+        <label class="type-card"><input type="radio" name="mode" value="both">
+          <svg><use href="#i-migrate"/></svg><span><b>Change host and storage</b><em class="mig-both-why">Move the VM to another node and its disks to pools you pick there.</em></span></label>
+        <label class="type-card"><input type="radio" name="mode" value="storage">
+          <svg><use href="#i-storage"/></svg><span><b>Change storage</b><em>Move its disks to another pool on the same node, running or not.</em></span></label>
+      </div>
+      <div data-mig="storage both">
+        <div class="table-wrap disk-table"><table><thead><tr><th>Disk</th><th>Size</th><th>Now in</th><th>Move to</th></tr></thead><tbody class="mig-disks"></tbody></table></div>
+        <p class="hint">A running VM keeps running: its disk is copied, then QEMU switches to the copy. The old volume is deleted afterwards. Follow it in Tasks. VMs with snapshots must delete them first.</p>
+      </div>
+    <div class="form-grid" data-mig="host both">
       <label>Destination node <select name="node" class="node-list-auto"></select></label>
       <label>Disk copy
         <select name="copy_storage">
@@ -1224,8 +1431,9 @@
         </select>
       </label>
       <label>Bandwidth limit (MiB/s, optional) <input name="bandwidth_mib" type="number" min="1"></label>
+      <p class="hint wide">A running VM keeps running while it moves. A stopped VM can move only if its disks are on shared storage.</p>
     </div>
-    <p class="hint" style="padding:0 18px">A running VM keeps running while it moves. A stopped VM can move only if its disks are on shared storage.</p>
+    </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Migrate</button></footer>
   </form>
 </dialog>
@@ -1331,6 +1539,9 @@
 </dialog>
 
 <div id="toast"></div>
+<script src="history-time.js"></script>
+<script src="storage-view.js"></script>
 <script src="app.js"></script>
+<script src="virtual-storage.js"></script>
 </body>
 </html>

@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from . import customize
 from .base import (
+    VM_NAME_RE,
     CloneSpec,
     DiskSpec,
     GuestInfo,
@@ -60,6 +61,7 @@ class FakeDriver(HypervisorDriver):
             "default": (PoolSpec(name="default", type=PoolType.DIR), 1000.0)
         }
         self._disks: dict[str, list[bytearray]] = {}
+        self._caches: dict[str, dict | None] = {}  # hybrid pools: their cache, or None
         # Set to a folder to give file-based fake pools real files (datastore browser).
         self.files_root: Path | None = None
         # Where each VM's "screen" is. By default a running VM gets a small built-in VNC
@@ -176,7 +178,8 @@ class FakeDriver(HypervisorDriver):
             vm = self._get(uuid)
             if vm.state != VMState.RUNNING:
                 raise InvalidState("VM is not running")
-            return copy.deepcopy(vm)  # a reboot keeps the same QEMU: pending changes wait
+            vm.restart_needed = False  # pending changes: power off and on, so they apply
+            return copy.deepcopy(vm)
 
     def delete_vm(self, uuid: str) -> None:
         with self._lock:
@@ -220,6 +223,50 @@ class FakeDriver(HypervisorDriver):
             disks = [bytearray(d) for d in self._disks[uuid]]
             snaps.append((info, copy.deepcopy(vm.spec), disks, vm.state))
             return copy.deepcopy(info)
+
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        self._refuse_if_linked(uuid, "moving its storage")
+        with self._lock:
+            vm = self._get(uuid)
+            for i, pool in moves.items():
+                if not 0 <= i < len(vm.spec.disks):
+                    raise ValueError(f"this VM has no disk {i + 1}")
+                if pool not in self._pools:
+                    raise PoolNotFound(pool)
+            for i, pool in moves.items():
+                disk = vm.spec.disks[i]
+                disk.pool = pool
+                disk.backend = self._pools[pool][0].disk_backend
+            return copy.deepcopy(vm)
+
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        with self._lock:
+            vm = self._get(uuid)
+            if not any(d.bus == "sata" for d in vm.spec.disks):
+                raise InvalidState("this VM's disks are VirtIO already")
+            for d in vm.spec.disks:
+                d.bus = "virtio"
+            return copy.deepcopy(vm)
+
+    def sysprep_vm(self, uuid: str) -> None:
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.state != VMState.RUNNING:
+                raise InvalidState("start the VM (with its guest tools) to run sysprep")
+            if "windows" not in vm.spec.os_type.lower():
+                raise InvalidState("sysprep is for Windows VMs")
+            vm.state = VMState.STOPPED
+
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        if not VM_NAME_RE.match(name):
+            raise ValueError("VM names use letters (Thai too), digits and '_.-'")
+        with self._lock:
+            vm = self._get(uuid)
+            if vm.spec.name != name:
+                if any(v.spec.name == name for v in self._vms.values()):
+                    raise VMExists(f"VM named {name!r} already exists")
+                vm.spec.name = name
+            return copy.deepcopy(vm)
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         with self._lock:
@@ -332,7 +379,39 @@ class FakeDriver(HypervisorDriver):
             if spec.name in self._pools:
                 raise InvalidState(f"a pool named {spec.name!r} already exists")
             self._pools[spec.name] = (copy.deepcopy(spec), 500.0)
+            if spec.cache_devices:
+                self._caches[spec.name] = _fake_cache(spec.cache_mode, spec.cache_gb or 100)
             return self._pool_info(spec.name)
+
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        with self._lock:
+            if name not in self._pools:
+                raise PoolNotFound(name)
+            if name not in self._caches:
+                raise InvalidState(f"{name} is not a hybrid pool")
+            have = self._caches[name]
+            if mode not in ("writethrough", "writeback"):
+                raise ValueError("cache mode is writethrough or writeback")
+            if action == "add":
+                if have:
+                    raise InvalidState("this pool has a cache already; remove it first")
+                if not devices:
+                    raise ValueError("pick the SSDs for the cache")
+                self._caches[name] = _fake_cache(mode, size_gb or 100)
+            elif action in ("remove", "mode"):
+                if not have:
+                    raise InvalidState("this pool has no cache")
+                self._caches[name] = None if action == "remove" else {**have, "mode": mode}
+            else:
+                raise ValueError("action is add, remove or mode")
+            return self._pool_info(name)
 
     def delete_pool(self, name: str) -> None:
         with self._lock:
@@ -349,6 +428,7 @@ class FakeDriver(HypervisorDriver):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
         dest = self.peers.get(urlparse(dest_uri).hostname or "")
         if dest is None:
@@ -420,6 +500,15 @@ class FakeDriver(HypervisorDriver):
                     raise InvalidState(f"VM {vm.spec.name!r} is still on network {name!r}")
             if self._networks.pop(name, None) is None:
                 raise InvalidState(f"no network named {name!r}")
+
+    def containers(self):
+        from .containers import FakeContainers
+
+        if getattr(self, "_containers", None) is None:
+            self._containers = FakeContainers(
+                lambda: {n.name for n in self.list_networks()}, lambda: set(self._pools)
+            )
+        return self._containers
 
     def host_system(self):
         from .host import FakeHost
@@ -572,6 +661,8 @@ class FakeDriver(HypervisorDriver):
             allocation_gb=float(used),
             available_gb=capacity - used,
             source=source,
+            hybrid=bool(spec.cache_devices) or name in self._caches,
+            cache=self._caches.get(name),
         )
 
     def _get(self, uuid: str) -> VMInfo:
@@ -586,4 +677,9 @@ def _random_mac() -> str:
 
 
 def _restart_key(spec: VMSpec) -> tuple:
-    return (spec.vcpus, spec.memory_mb, spec.boot)
+    return (spec.vcpus, spec.memory_mb, spec.boot, spec.video)
+
+
+def _fake_cache(mode: str, size_gb: int) -> dict:
+    return {"mode": mode, "size_gb": float(size_gb), "used_pct": 42.0, "dirty_gb": 0.0,
+            "read_hit_pct": 87.5, "write_hit_pct": 61.0, "hit_pct": 80.2}  # fmt: skip

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import itertools
 import socket
 import threading
@@ -37,6 +38,10 @@ class Migration:
     state: str = "queued"  # queued, running, done, failed
     finished: str | None = None
     error: str | None = None
+    step: str = ""
+    # Change host and storage: after the move, these disks (by order) go to these pools
+    # on the new node.
+    disk_pools: dict[int, str] | None = None
 
 
 @dataclass
@@ -78,6 +83,22 @@ class MigrationManager:
         host = self._local_host if member.local else urlparse(member.address).hostname
         return TRANSPORTS[self._transport].format(host=host)
 
+    def migration_address(self, member: Member) -> str:
+        """Prefer a migration interface; otherwise use the reachable management address."""
+        fallback = self._local_host if member.local else urlparse(member.address).hostname or ""
+        try:
+            fallback = str(ipaddress.IPv4Address(fallback))
+        except ValueError:
+            fallback = ""  # Existing DNS-based installations retain libvirt's own resolution.
+        try:
+            net = member.driver.host_system().network()
+        except Exception:
+            return fallback
+        for iface in net.interfaces:
+            if "migration" in iface.roles and iface.method == "static" and iface.address:
+                return iface.address.split("/")[0]
+        return fallback
+
     # Planning
 
     def plan(self, uuid: str, node: str | None = None, copy_storage: bool | None = None) -> Plan:
@@ -95,12 +116,13 @@ class MigrationManager:
             target = self._cluster.member(node)
             if target.name == source.name:
                 raise InvalidState(f"VM {vm.spec.name!r} is already on {node}")
+            self._cluster.require_in_service(target)
             return Plan(source, vm, target, self._check(source, vm, target, copy_storage))
 
         reasons = []
         best = None
         for target in self._cluster.compute_members():
-            if target.name == source.name:
+            if target.name == source.name or target.maintenance:
                 continue
             try:
                 copy = self._check(source, vm, target, copy_storage)
@@ -159,13 +181,28 @@ class MigrationManager:
         node: str | None = None,
         copy_storage: bool | None = None,
         bandwidth_mib: int | None = None,
+        disk_pools: dict[int, str] | None = None,
     ) -> Migration:
         plan = self.plan(uuid, node, copy_storage)
+        if disk_pools:
+            disks = plan.vm.spec.disks
+            pools = {p.name: p for p in plan.target.driver.list_pools()}
+            for i, pool in disk_pools.items():
+                if not 0 <= i < len(disks):
+                    raise ValueError(f"{plan.vm.spec.name} has no disk {i + 1}")
+                if pool not in pools or not pools[pool].active:
+                    raise InvalidState(f"{plan.target.name} has no active storage pool {pool!r}")
+            moving = any(disks[i].pool != p for i, p in disk_pools.items())
+            if moving and plan.source.driver.list_snapshots(uuid):
+                raise InvalidState(
+                    f"{plan.vm.spec.name} has snapshots: delete them before moving its disks"
+                )
         with self._lock:
             if uuid in self._moving:
                 raise InvalidState(f"VM {plan.vm.spec.name!r} is already being migrated")
             self._moving.add(uuid)
             job = self._new(plan.vm, plan.source.name, plan.target.name, plan.copy_storage)
+            job.disk_pools = dict(disk_pools) if disk_pools else None
         self._executor.submit(self._run, job, plan, bandwidth_mib)
         return job
 
@@ -201,9 +238,30 @@ class MigrationManager:
     def _run(self, job: Migration, plan: Plan, bandwidth_mib: int | None) -> None:
         job.state = "running"
         try:
-            plan.source.driver.migrate_vm(
-                job.uuid, self.uri(plan.target), plan.copy_storage, bandwidth_mib
-            )
+            job.step = "Preparing UEFI and seed files"
+            files = plan.source.driver.migration_files(job.uuid)
+            staged = plan.target.driver.stage_migration_files(files) if files else []
+            job.step = f"Moving to {plan.target.name}"
+            try:
+                plan.source.driver.migrate_vm(
+                    job.uuid,
+                    self.uri(plan.target),
+                    plan.copy_storage,
+                    bandwidth_mib,
+                    self.migration_address(plan.target),
+                )
+            except Exception:
+                _quietly(plan.target.driver.remove_migration_files, staged)
+                raise
+            # The source no longer defines the VM; drop its now unused copies.
+            _quietly(plan.source.driver.remove_migration_files, list(files))
+            disks = plan.vm.spec.disks
+            moves = {i: p for i, p in (job.disk_pools or {}).items() if disks[i].pool != p}
+            if moves:
+                # Then onto the pools picked on the new node (the VM keeps running).
+                job.step = "Moving disks to " + ", ".join(sorted(set(moves.values())))
+                plan.target.driver.move_disks(job.uuid, moves)
+            job.step = ""
         except Exception as exc:  # the job records every failure; nothing else is waiting
             job.state, job.error = "failed", str(exc) or type(exc).__name__
         else:
@@ -215,6 +273,15 @@ class MigrationManager:
 
     def _now(self) -> str:
         return self._clock().isoformat(timespec="seconds")
+
+
+def _quietly(remove: Callable[[list[str]], list[str]], paths: list[str]) -> None:
+    """Best-effort cleanup that must not hide the migration's own result."""
+    if paths:
+        try:
+            remove(paths)
+        except Exception:
+            pass
 
 
 def _shared(src: PoolInfo | None, dst: PoolInfo) -> bool:

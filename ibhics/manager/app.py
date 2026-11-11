@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import re
 import socket
 from dataclasses import asdict
@@ -22,6 +23,11 @@ from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNot
 from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
+from ..storage import VirtualStoragePlan, save_plan
+from ..storage_cache import CacheModeIn
+from ..storage_cluster import StorageController, inventories
+from ..storage_create import StorageCreateConfirm, StorageCreateSpec
+from ..storage_software import software_status
 from . import datastore
 from .auth import Auth, AuthError, Forbidden, Role, User
 from .backups import BackupManager, Policy
@@ -30,6 +36,7 @@ from .edge import EdgeManager
 from .errors import install_cluster_errors, install_driver_errors
 from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
+from .poollabels import PoolLabels
 from .recycle import RecycleBin
 from .schemas import (
     AuditOut,
@@ -39,8 +46,10 @@ from .schemas import (
     BackupTargetOut,
     CdromRequest,
     CloneIn,
+    ClusterCreate,
     ClusterOut,
     DeployOut,
+    DiskMovesIn,
     EdgeOut,
     FirewallRuleIn,
     FolderIn,
@@ -56,22 +65,26 @@ from .schemas import (
     LocalDiskOut,
     LoginOut,
     LoginRequest,
+    MaintenanceIn,
     MemberOut,
     MigrateRequest,
     MigrationOut,
     NetTestIn,
     NetworkIn,
     NetworkOut,
+    NodeDisplayNameIn,
     NodeJoin,
     PasswordChange,
     PolicyIn,
     PolicyOut,
+    PoolCacheIn,
     PoolCreate,
     PoolFileOut,
     PoolOut,
     PowerIn,
     RecycleBinOut,
     RecycledOut,
+    RenameIn,
     RestoreRequest,
     RouterIn,
     SnapshotIn,
@@ -97,6 +110,7 @@ from .schemas import (
     VMSnapshotOut,
     VMStatsOut,
 )
+from .usage import UsageHistory
 from .vmgroups import VMGroups
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -136,12 +150,22 @@ async def receive_file(request: Request, target: Path) -> int:
 
 # Viewers may read everything and operators may change VMs; these need an admin.
 ADMIN_ROUTES = {
+    ("POST", f"{API}/virtual-storage/software"),
+    ("POST", f"{API}/virtual-storage/review"),
+    ("POST", f"{API}/virtual-storage/create"),
+    ("POST", f"{API}/virtual-storage/cache"),
+    ("PUT", f"{API}/virtual-storage/plan"),
+    ("PATCH", f"{API}/nodes/{{name}}/pools/{{pool}}"),
+    ("GET", f"{API}/cluster/pairing"),
+    ("POST", f"{API}/cluster/create"),
+    ("PATCH", f"{API}/cluster/nodes/{{name}}"),
     ("POST", f"{API}/cluster/nodes"),
     ("DELETE", f"{API}/cluster/nodes/{{name}}"),
     ("POST", f"{API}/nodes/{{name}}/pools"),
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}"),
     ("DELETE", f"{API}/nodes/{{name}}/pools/{{pool}}/files"),
     ("POST", f"{API}/nodes/{{name}}/evacuate"),
+    ("POST", f"{API}/nodes/{{name}}/maintenance"),
     ("PUT", f"{API}/nodes/{{name}}/network"),
     ("POST", f"{API}/nodes/{{name}}/network/confirm"),
     ("POST", f"{API}/nodes/{{name}}/network/undo"),
@@ -163,6 +187,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/networks/{{name}}"),
     ("DELETE", f"{API}/migrate/sources/{{name}}"),
     ("POST", f"{API}/nodes/{{name}}/terminal"),
+    ("POST", f"{API}/containers/{{name}}/exec"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
 SELF_ROUTES = {f"{API}/auth/me", f"{API}/auth/logout", f"{API}/auth/password"}
@@ -207,6 +232,9 @@ def create_app(
     deploys: DeployManager | None = None,
     recycle_days: int = 0,
     edge_state: Path | None = None,
+    usage: UsageHistory | None = None,
+    virtual_storage_path: Path = Path("/var/lib/ibhics/virtual-storage.json"),
+    pool_labels_path: Path | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -214,6 +242,10 @@ def create_app(
         cluster = Cluster.standalone(socket.gethostname(), cluster)
     backups = backups or BackupManager(cluster)
     groups = groups or VMGroups()
+    pool_labels = PoolLabels(pool_labels_path)
+    storage_controller = StorageController(
+        cluster, virtual_storage_path.with_name("virtual-storage-runtime")
+    )
 
     def backing_up(vm_name: str) -> bool:
         return any(
@@ -235,6 +267,18 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
+        metrics_task = None
+        if usage is not None:
+
+            async def sample_usage():
+                while True:
+                    try:
+                        await asyncio.to_thread(usage.collect, cluster)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Resource history collection failed")
+                    await asyncio.sleep(10)
+
+            metrics_task = asyncio.create_task(sample_usage())
         task = None
         if heartbeat_interval > 0:
 
@@ -255,7 +299,7 @@ def create_app(
 
             scheduler = asyncio.create_task(schedule())
         yield
-        for t in (task, scheduler):
+        for t in (task, scheduler, metrics_task):
             if t:
                 t.cancel()
 
@@ -405,32 +449,80 @@ def create_app(
     def cluster_status() -> ClusterOut:
         topology = cluster.topology()
         return ClusterOut(
+            cluster_id=cluster.cluster_id,
+            name=cluster.cluster_name,
             topology=topology,
             quorum=cluster.has_quorum(),
             ha_capable=topology in (Topology.TWO_NODE_WITNESS, Topology.CLUSTER),
             members=[
                 MemberOut(
                     name=m.name,
+                    display_name=m.display_name or m.name,
                     role=m.role,
                     address=m.address,
                     local=m.local,
                     healthy=cluster.is_healthy(m),
                     last_error=m.last_error,
+                    maintenance=m.maintenance,
                 )
                 for m in cluster.members()
             ],
         )
 
+    @api.get("/usage/history")
+    def usage_history(
+        range: str = "now", resolution: str | None = None, utc_offset: int = 0
+    ) -> dict:
+        if usage is None:
+            return {"points": [], "range": range, "note": "Server history is not configured"}
+        try:
+            return usage.history(range, resolution=resolution, utc_offset=utc_offset)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.post("/cluster/create", response_model=ClusterOut, status_code=status.HTTP_201_CREATED)
+    def create_cluster(body: ClusterCreate) -> ClusterOut:
+        cluster.create_cluster(body.name)
+        return cluster_status()
+
+    @api.get("/cluster/pairing")
+    def cluster_pairing(request: Request, response: Response) -> dict:
+        response.headers["Cache-Control"] = "no-store"
+        host = request.url.hostname
+        if ":" in host:
+            host = f"[{host}]"
+        return {**cluster.pairing(), "address": f"http://{host}:8007"}
+
     @api.post("/cluster/nodes", response_model=MemberOut, status_code=status.HTTP_201_CREATED)
     def join_node(body: NodeJoin) -> MemberOut:
-        member = cluster.join(body.name, body.role, body.address)
+        member = cluster.join(
+            body.name,
+            body.role,
+            body.address,
+            body.agent_token.get_secret_value() if body.agent_token else "",
+        )
         return MemberOut(
             name=member.name,
+            display_name=member.display_name or member.name,
             role=member.role,
             address=member.address,
             local=member.local,
             healthy=cluster.is_healthy(member),
             last_error=None,
+        )
+
+    @api.patch("/cluster/nodes/{name}", response_model=MemberOut)
+    def update_node_display_name(name: str, body: NodeDisplayNameIn) -> MemberOut:
+        member = cluster.set_display_name(name, body.display_name)
+        return MemberOut(
+            name=member.name,
+            display_name=member.display_name or member.name,
+            role=member.role,
+            address=member.address,
+            local=member.local,
+            healthy=cluster.is_healthy(member),
+            last_error=member.last_error,
+            maintenance=member.maintenance,
         )
 
     @api.delete("/cluster/nodes/{name}", status_code=status.HTTP_204_NO_CONTENT)
@@ -458,6 +550,10 @@ def create_app(
     @api.get("/nodes/{name}/nics")
     def node_nics(name: str) -> list[dict]:
         return [asdict(n) for n in host_of(name).nics()]
+
+    @api.get("/nodes/{name}/hardware")
+    def node_hardware(name: str) -> dict:
+        return host_of(name).hardware_health()
 
     @api.get("/nodes/{name}/network")
     def node_network(name: str) -> dict:
@@ -513,6 +609,7 @@ def create_app(
             for net in member.driver.list_networks():
                 out = found.setdefault(net.name, NetworkOut(**asdict(net)))
                 out.nodes.append(member.name)
+                out.configurations[member.name] = {"bridge": net.bridge, "vlan": net.vlan}
         return sorted(found.values(), key=lambda n: (n.vlan or 0, n.name))
 
     @api.post("/networks", response_model=NetworkOut, status_code=status.HTTP_201_CREATED)
@@ -588,14 +685,47 @@ def create_app(
             except NodeUnavailable as exc:
                 member.last_error = str(exc)
                 continue
-            result.extend(PoolOut.from_info(pool, member.name) for pool in pools)
+            for pool in pools:
+                out = PoolOut.from_info(pool, member.name)
+                if member.local:
+                    out.display_name = pool_labels.get(pool.name)
+                result.append(out)
         return result
+
+    @api.patch("/nodes/{name}/pools/{pool}", response_model=PoolOut)
+    def rename_pool(name: str, pool: str, body: NodeDisplayNameIn) -> PoolOut:
+        cluster.require_quorum()
+        member = cluster.member(name)
+        info = next((p for p in member.driver.list_pools() if p.name == pool), None)
+        if info is None:
+            raise HTTPException(404, "storage pool does not exist")
+        if member.local:
+            label = pool_labels.set(pool, body.display_name)
+        else:
+            response = member.client.request(
+                "PATCH", f"/pools/{pool}", json={"display_name": body.display_name}
+            )
+            response.raise_for_status()
+            label = response.json()["display_name"]
+        return PoolOut.from_info(info, name).model_copy(update={"display_name": label})
 
     @api.post("/nodes/{name}/pools", response_model=PoolOut, status_code=status.HTTP_201_CREATED)
     def create_pool(name: str, body: PoolCreate) -> PoolOut:
         cluster.require_quorum()
         member = cluster.member(name)
         return PoolOut.from_info(member.driver.create_pool(body.to_spec()), member.name)
+
+    @api.post("/nodes/{name}/pools/{pool}/cache", response_model=PoolOut)
+    def pool_cache(name: str, pool: str, body: PoolCacheIn) -> PoolOut:
+        """A hybrid pool's SSD cache: add, remove (flushes dirty blocks first) or mode."""
+        cluster.require_quorum()
+        member = cluster.member(name)
+        info = backups.run_task(
+            "pool-cache", f"{body.action} {body.mode if body.action != 'remove' else ''}".strip(),
+            pool, member.name, f"pool:{pool}",
+            lambda: member.driver.pool_cache(pool, body.action, body.devices, body.mode,
+                                             body.size_gb))  # fmt: skip
+        return PoolOut.from_info(info, member.name)
 
     @api.delete("/nodes/{name}/pools/{pool}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_pool(name: str, pool: str) -> None:
@@ -648,6 +778,114 @@ def create_app(
 
     # VMs: reads work without quorum so operators can see what is going on;
     # anything that changes state needs a majority of nodes.
+
+    @api.get("/virtual-storage")
+    def virtual_storage() -> dict:
+        nodes = []
+        for member in cluster.members():
+            try:
+                if member.local:
+                    probe = software_status(str(member.role), controller=True)
+                else:
+                    response = member.client.request("GET", "/virtual-storage/readiness")
+                    response.raise_for_status()
+                    probe = response.json()
+            except Exception as exc:
+                probe = {"module_available": False, "resources": [], "error": str(exc)}
+            nodes.append(
+                {
+                    "name": member.name,
+                    "display_name": member.display_name,
+                    "role": str(member.role),
+                    "healthy": cluster.is_healthy(member),
+                    **probe,
+                }
+            )
+        plan = None
+        if virtual_storage_path.exists():
+            plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
+        runtime = storage_controller.status()
+        resource = runtime["resource"]
+        active = bool(resource and resource.get("status", {}).get("service") == "Started")
+        phase = "planned" if plan else "unconfigured"
+        if runtime["created"]:
+            phase = "ready" if active and resource["status"].get("state") == "OK" else "degraded"
+            syncing = any(
+                str(peer.get("replication-state", "")).startswith("Sync")
+                for node in nodes
+                for r in node.get("resources", [])
+                if r.get("name") == runtime["created"]["spec"]["name"]
+                for connection in r.get("connections", [])
+                for peer in connection.get("peer_devices", [])
+            )
+            if active and syncing:
+                phase = "syncing"
+        job = runtime["job"]
+        if job and job["state"] in ("queued", "running"):
+            phase = {"cache-mode": "changing-cache", "software": "preparing"}.get(
+                job["kind"], "creating"
+            )
+        # A saved plan alone is never evidence of replicated storage being online.
+        return {
+            "nodes": nodes,
+            "plan": plan.model_dump() if plan else None,
+            "phase": phase,
+            "active": active,
+            "activation_supported": True,
+            "cache": storage_controller.cache(),
+            **runtime,
+        }
+
+    @api.get("/virtual-storage/inventory")
+    def virtual_storage_inventory() -> dict:
+        return {"nodes": list(inventories(cluster).values())}
+
+    @api.post("/virtual-storage/software", status_code=status.HTTP_202_ACCEPTED)
+    def virtual_storage_prepare() -> dict:
+        return storage_controller.prepare()
+
+    @api.post("/virtual-storage/review")
+    def virtual_storage_review(body: StorageCreateSpec) -> dict:
+        return storage_controller.review(body)
+
+    @api.post("/virtual-storage/create", status_code=status.HTTP_202_ACCEPTED)
+    def virtual_storage_create(body: StorageCreateConfirm) -> dict:
+        return storage_controller.create(body.token, body.confirm_name, body.confirm_wipe)
+
+    @api.post("/virtual-storage/cache", status_code=status.HTTP_202_ACCEPTED)
+    def virtual_storage_cache(body: CacheModeIn) -> dict:
+        return storage_controller.change_cache(body)
+
+    @api.put("/virtual-storage/plan")
+    def virtual_storage_plan(body: VirtualStoragePlan) -> dict:
+        cluster.require_quorum()
+        from ..cluster.topology import NodeRole
+
+        for node in body.nodes:
+            if cluster.member(node.name).role != NodeRole.COMPUTE:
+                raise InvalidState(f"{node.name} is not a compute node")
+        arbiter = next((m for m in cluster.members() if m.name == body.arbiter_name), None)
+        if not arbiter or arbiter.role != NodeRole.WITNESS or not cluster.is_healthy(arbiter):
+            raise InvalidState("add an online Arbiter witness to the cluster first")
+        for member, vm in cluster.all_vms():
+            if member.name in {n.name for n in body.nodes}:
+                if any(d.pool == body.name for d in vm.spec.disks):
+                    raise InvalidState(
+                        f"{vm.spec.name} still uses {body.name}; move its disks first"
+                    )
+        save_plan(body, virtual_storage_path)
+        return {"phase": "planned", "active": False, "configuration": body.drbd_config()}
+
+    @api.get("/virtual-storage/configuration", response_class=Response)
+    def virtual_storage_configuration() -> Response:
+        if not virtual_storage_path.exists():
+            raise HTTPException(404, "save a Virtual Storage plan first")
+        plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
+        return Response(
+            plan.drbd_config(),
+            media_type="text/plain",
+            headers={"Content-Disposition": f'attachment; filename="{plan.name}.res"'},
+        )
 
     @api.get("/vms", response_model=list[VMOut])
     def list_vms() -> list[VMOut]:
@@ -751,6 +989,60 @@ def create_app(
         member, _ = cluster.find_vm(uuid)
         return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
 
+    @api.post("/vms/{uuid}/move-disks", response_model=VMOut)
+    def move_disks(uuid: str, body: DiskMovesIn) -> VMOut:
+        """Disks to other pools on the VM's node (running or not), as a task with %."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        moves = body.as_dict()
+        detail = ", ".join(f"disk {i + 1} → {p}" for i, p in moves.items())
+        driver = member.driver
+        info = backups.run_task("move-disks", detail, vm.spec.name, member.name, uuid,
+                                lambda: driver.move_disks(uuid, moves),
+                                progress=lambda: driver.disk_move_progress(uuid))  # fmt: skip
+        return VMOut.from_info(info, member.name)
+
+    @api.post("/vms/{uuid}/to-virtio", response_model=VMOut)
+    def switch_to_virtio(uuid: str) -> VMOut:
+        """SATA disks of a Windows VM onto VirtIO, after its guest tools are installed."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        info = backups.run_task("to-virtio", "disks", vm.spec.name, member.name, uuid,
+                                lambda: member.driver.switch_to_virtio(uuid))  # fmt: skip
+        return VMOut.from_info(info, member.name)
+
+    @api.post("/vms/{uuid}/sysprep", status_code=status.HTTP_202_ACCEPTED)
+    def sysprep_vm(uuid: str) -> dict:
+        """Generalize a running Windows VM (new SID per copy); it shuts down when done."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        if "windows" not in vm.spec.os_type.lower():
+            raise InvalidState("sysprep is for Windows VMs")
+        backups.run_task("sysprep", "generalize", vm.spec.name, member.name, uuid,
+                         lambda: member.driver.sysprep_vm(uuid))  # fmt: skip
+        return {"vm": vm.spec.name, "state": "generalizing"}
+
+    @api.post("/vms/{uuid}/rename", response_model=VMOut)
+    def rename_vm(uuid: str, body: RenameIn) -> VMOut:
+        """A new name for a stopped VM; backup policies follow it."""
+        cluster.require_quorum()
+        member, vm = cluster.find_vm(uuid)
+        old = vm.spec.name
+        if body.name != old:
+            for _, other in cluster.all_vms():
+                if other.spec.name == body.name:
+                    raise VMExists(f"VM named {body.name!r} already exists in the cluster")
+        info = backups.run_task(
+            "rename",
+            f"{old} → {body.name}",
+            old,
+            member.name,
+            uuid,
+            lambda: member.driver.rename_vm(uuid, body.name),
+        )
+        backups.rename_vm(old, body.name)
+        return VMOut.from_info(info, member.name)
+
     @api.post("/vms/{uuid}/guest-tools", response_model=VMOut)
     def insert_guest_tools(uuid: str) -> VMOut:
         """The guest tools CD (virtio drivers and guest agent) in the VM's drive."""
@@ -770,6 +1062,7 @@ def create_app(
     def start_vm(uuid: str) -> VMOut:
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
+        cluster.require_in_service(member)
         return VMOut.from_info(member.driver.start_vm(uuid), member.name)
 
     @api.post("/vms/{uuid}/stop", response_model=VMOut)
@@ -782,8 +1075,14 @@ def create_app(
     @api.post("/vms/{uuid}/restart", response_model=VMOut)
     def restart_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
         cluster.require_quorum()
-        member, _ = cluster.find_vm(uuid)
-        vm = member.driver.restart_vm(uuid, force=bool(body and body.force))
+        member, vm = cluster.find_vm(uuid)
+        force = bool(body and body.force)
+        if vm.restart_needed:  # power off and on to apply the changes: a task, it takes a while
+            cluster.require_in_service(member)
+            vm = backups.run_task("restart", "apply changes", vm.spec.name, member.name, uuid,
+                                  lambda: member.driver.restart_vm(uuid, force=force))  # fmt: skip
+        else:
+            vm = member.driver.restart_vm(uuid, force=force)
         return VMOut.from_info(vm, member.name)
 
     @api.delete("/vms/{uuid}", status_code=status.HTTP_204_NO_CONTENT)
@@ -908,8 +1207,26 @@ def create_app(
     def set_template(uuid: str, body: TemplateRequest) -> VMOut:
         cluster.require_quorum()
         member, vm = cluster.find_vm(uuid)
-        if not body.template and deploys.busy(uuid):
+        if deploys.busy(uuid):
             raise InvalidState(f"a VM is being deployed from {vm.spec.name!r}; wait for it")
+        if body.pool is not None:
+            if not body.template:
+                raise InvalidState("choose storage when converting to a template")
+            if vm.state != VMState.STOPPED:
+                raise InvalidState("shut the VM down before converting it to a template")
+            if not any(p.name == body.pool and p.active for p in member.driver.list_pools()):
+                raise InvalidState(f"no active pool named {body.pool!r} on {member.name}")
+            moves = {i: body.pool for i, d in enumerate(vm.spec.disks) if d.pool != body.pool}
+            if moves:
+                backups.run_task(
+                    "move-disks",
+                    f"template storage → {body.pool}",
+                    vm.spec.name,
+                    member.name,
+                    uuid,
+                    lambda: member.driver.move_disks(uuid, moves),
+                    progress=lambda: member.driver.disk_move_progress(uuid),
+                )
         return VMOut.from_info(member.driver.set_template(uuid, body.template), member.name)
 
     @api.post("/vms/{uuid}/clone", response_model=DeployOut, status_code=status.HTTP_202_ACCEPTED)
@@ -928,12 +1245,26 @@ def create_app(
     )
     def migrate_vm(uuid: str, body: MigrateRequest | None = None) -> MigrationOut:
         body = body or MigrateRequest()
-        job = migrations.start(uuid, body.node, body.copy_storage, body.bandwidth_mib)
+        pools = {d.index: d.pool for d in body.disks} if body.disks else None
+        job = migrations.start(uuid, body.node, body.copy_storage, body.bandwidth_mib, pools)
         return MigrationOut(**job.__dict__)
 
     @api.get("/migrations", response_model=list[MigrationOut])
     def list_migrations() -> list[MigrationOut]:
         return [MigrationOut(**job.__dict__) for job in migrations.jobs()]
+
+    @api.post("/nodes/{name}/maintenance")
+    def node_maintenance(name: str, body: MaintenanceIn) -> dict:
+        """Enter maintenance: no new VMs land here; with evacuate, running VMs move away
+        (stopped ones too). Exit: back in service."""
+        cluster.require_quorum()
+        member = cluster.set_maintenance(name, body.on)
+        jobs = migrations.evacuate(name) if body.on and body.evacuate else []
+        return {
+            "node": member.name,
+            "maintenance": member.maintenance,
+            "moves": [MigrationOut(**j.__dict__).model_dump() for j in jobs],
+        }
 
     @api.post(
         "/nodes/{name}/evacuate",
@@ -1239,6 +1570,10 @@ def create_app(
     )
     def run_policy(name: str) -> list[JobOut]:
         return [JobOut(**job.__dict__) for job in backups.run_policy(name)]
+
+    from . import containers_api
+
+    containers_api.install(api, cluster, backups)
 
     app.include_router(public)
     app.include_router(api)

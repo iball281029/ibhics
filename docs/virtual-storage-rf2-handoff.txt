@@ -1,0 +1,261 @@
+CURRENT 2026-11-11: docs/CLAUDE-HANDOFF-2026-11-11.txt supersedes older state below.
+TEST-ib migration job2 succeeded Nov10 21:59:33+07 to Node2, live, no disk copy.
+TLS installed both computes vstore3.8; UEFI/seed preparation manual for TEST-ib.
+Previous ACTIVE migration investigation text below is historical. No GitHub push.
+
+LATEST UI vstore3.7 — 2026-11-10
+Both computes now vstore3.7, Arbiter remains vstore3.3.
+Virtual Storage appears only in upper section with usage/free capacity/shared nodes,
+Browse files and shared Rename. Per-node API mounts retained; bottom local/external
+pools exclude only exact managed Virtual Storage name+NFS source (other NFS retained).
++ Add Virtual Storage stays visible, currently disabled with explicit additional-storage
+not-enabled explanation. Do NOT claim multiple Virtual Storage creation implemented.
+Owner asked future VirtualStorage2 with new disks on each data node. Confirmed correct
+design, needs independent disks/replicas and shared Arbiter. Current kernel Gateway
+allows only one kernel NFS resource (LINBIT v2.3.0 pkg/nfs/nfs.go checkExistingConfigs).
+Multiple instances need tested backend support (e.g. Ganesha), per-storage catalog,
+status/cache controls and VIP conflict checks; avoid breaking current reflink support.
+No current kernel/Ganesha migration attempted.
+
+Consolidated Nodes into Cluster; removed duplicate page/menu, existing full nodeRows
+with IPMI/hardware/maintenance/evacuate/rename/remove remain in Cluster. Individual
+node detail retained, active rail now Cluster, old #nodes bookmark redirects #cluster.
+Menu fix: removed duplicate positioning/scroll-dismiss handlers; manual popover top
+layer avoids clipping, viewport clamped max-height with internal scroll, repositions
+on scroll/resize, outside click/Escape/action closes. Auto refresh pauses while menu
+open, including in-flight compute refresh check. Browser verified long menu fits
+1351x710 and 390x460, remains open on scroll/auto refresh, outside/Escape dismiss.
+20 cluster+packaging tests passed, JS syntax passed. Live app health both computes OK.
+Backups Node2 /opt/ibhics/vstore3.7-backup-20261110-214331,
+Node1 /opt/ibhics/vstore3.7-backup-20261110-214333.
+New VM inventory currently npm-vm, EXWin2022, TEST-ib running on Node1; template
+Win2022-Template stopped. Preserve all. Older only-NPM inventories superseded.
+
+ACTIVE FOLLOW-UP: owner tried live migration TEST-ib -> Node2; fails immediately
+missing /etc/pki/CA/cacert.pem. Neither compute has libvirt TLS listener/certs.
+Investigating secure RPC+native QEMU migration TLS, preserving certificate validation.
+No successful real migration claimed yet.
+
+LATEST vstore3.5 — INDEPENDENT FULL CLONE ACCELERATION
+Owner complained full deploy slow; explicitly cancelled running deploy to install
+Guest Tools first, then requested fix. Exact qemu-img copy PID 193307 stopped via
+SIGINT; existing clone cleanup removed partial vm-6cffdb5950-disk0.qcow2. Template
+and npm-vm preserved. Old deploy may display failed because no cancel API exists.
+
+Previous file-backed full clone always ran qemu-img convert through NFS client,
+forcing physical data read/write even when filesystem supports independent COW clone.
+NEW: qcow2->qcow2 full clone first tries Linux FICLONE (works through real NFS4.2
+on this XFS export). Independent file with NO qcow2 backing dependency; not linked.
+Only matching virtual capacity, no backing image and no internal snapshots accepted.
+Block targets, format/size changes, backing chains, internal snapshots and unsupported
+reflink filesystems retain existing qemu-img conversion path. Storage EIO is propagated.
+Temporary sibling, fsync, preserve target ownership/mode, verify image, atomic replace
+and directory fsync. Unsupported path leaves original libvirt target intact. Temp file
+cleaned on failure. Source mtime/size rechecked; normal stopped-source requirement kept.
+Linux identity reset and optional guest customization still run after cloning.
+
+Both computes upgraded to 1.3.0b2+vstore3.5; Arbiter still vstore3.3 (no clone engine).
+Backups Node2 /opt/ibhics/vstore3.5-backup-20261110-183548,
+Node1 /opt/ibhics/vstore3.5-backup-20261110-183549.
+Validation: 41 tests passed (templates/full-clone/packaging), ruff passed.
+Live NFS synthetic qcow2 120GiB / 12MiB written cloned in 0.0349s; full qemu-img
+compare passed, destination modifications did not alter source, deleting source did not
+break clone. All test files removed. /root/ibhics-full-clone-proof.json Node1.
+ACTUAL stopped Win2022-Template (120GiB virtual/~10.77GiB allocated) temporary full
+clone in 0.0708s. No backing file, sampled physical bytes match, temp clone removed.
+Proof /root/ibhics-real-template-clone-proof.json Node1. This measures disk clone only,
+not complete deploy/customization/Windows boot. No real VM deployed automatically.
+RF2 UpToDate, metadata stays SSD, caches Writeback, npm-vm HTTP200.
+Owner can convert source to template after Guest Tools and retry normal Full clone.
+No GitHub push; Claude should review/push later.
+
+LATEST LIVE OPTIMIZATION APPLIED — 2026-11-10 18:24 local
+Owner confirmed Windows installation finished and explicitly instructed proceed.
+Moved ONLY thin_tmeta (1GiB) to existing SSD free extents, sequentially Node1 then
+Node2, online pvmove with validated serials/VG/UUID/DRBD and node provision/job locks.
+Node1 thin_tmeta now /dev/sdc(217481), UUID uNopvV-H7k1-eC9m-uYFx-AWpy-MOlw-wkZSgK.
+Node2 thin_tmeta now /dev/sdd(217481), UUID 2e2s8K-6YW9-SLSb-fq7u-tMlD-7GaO-mRKtpv.
+UUIDs retained. Data LVs/cache unchanged, no storage re-creation, no guest stop/reboot.
+Audits /root/ibhics-metadata-to-ssd-20261110-182259 on Node1 and
+/root/ibhics-metadata-to-ssd-20261110-182345 on Node2 include VG before/after backups.
+Both real caches remain WRITEBACK; replication Protocol C verified via drbdsetup show
+--show-defaults, only protocol lines emitted (never dump shared-secret configuration).
+DRBD both copies UpToDate, Arbiter Connected/Diskless, Win2022-Template running,
+virsh domblkerror No errors found, npm-vm HTTP 200.
+
+Before/after non-destructive microtest on Node1 shared NFS mount: 128 random-offset
+16KiB writes with fdatasync each, fresh sparse 64MiB file, read-back verified, removed.
+Before mean 4.255ms/p95 15.611ms; after mean 3.643ms/p95 3.946ms. Mean -14.4%.
+One short sample each, cache/workload effects uncontrolled: NOT Windows installation
+speedup, NOT storage throughput ceiling, NOT proof of Hybrid performance equivalence.
+Evidence /root/ibhics-metadata-perf-before.json and ...-after.json on Node1.
+Helper /root/ibhics-metadata-perf.py writes only unique temporary files on shared mount.
+Historical 100ms Windows write sample was a DIFFERENT workload during installation;
+do not compare it to this microtest as if a measured 25x speedup.
+
+User also asked RF2 operation: 2 full replicas on separate compute nodes, protocol C
+synchronous acknowledgment, diskless Arbiter quorum tiebreaker. Approx half raw total
+before reserves (or smaller node if asymmetric). No automatic VM restart HA in ibHiCS.
+Current creator source still places thin metadata on HDD by default; future creation
+policy should be updated separately. No application upgrade/source allocation change
+was made in this live migration turn. No GitHub push; Claude review/push later.
+
+LATEST OPTIMIZATION PREPARATION — METADATA MOVE NOT YET APPLIED
+Owner wants Hybrid-like speed. Pending answer whether Windows installation finished.
+No real metadata/data migration applied. Do not treat elapsed time as installation done.
+Actual isolated LVM pvmove --name ibhv-vs-rf2-aggregate/thin_tmeta from virtual HDD
+to virtual SSD while direct fsynced writes continue PASSED; test LV removed and
+lab guest stopped. Proof Node2 /root/ibhics-vstorage-lab/metadata-move-proof.log.
+This validates online mechanics, NOT performance equivalence on real hardware.
+Serial/UUID/VG/DRBD/cache guarded one-off helper prepared and DRY-RUN PASSED on
+both real hosts /root/move-thin-metadata-to-ssd.py. Default read-only; --apply mutates.
+Private delivery vstore-private/move-thin-metadata-to-ssd.py. Keep private, serial-bound.
+Targets only 1GiB thin_tmeta, retaining LV UUID and all data/cache LVs. Source sda on
+both; destination Node1 sdc, Node2 sdd, each ~45GiB free. Locks node provision/job;
+requires both DRBD copies UpToDate/quorate/Connected and cache writeback.
+If live relocation later authorized at suitable time: secondary Node1 first, verify,
+then Node2; sample same workload and report actual change without promised speedup.
+Future creator should place thin metadata on SSD when cache exists; current creator
+still allocates thin metadata on HDD. No source allocation change in this turn.
+
+LATEST LIVE CACHE / PERFORMANCE CHECK 2026-11-10
+Owner subsequently chose Writeback and pressed Apply themselves during Windows setup.
+Both real caches now WRITEBACK, cache hits/dirty blocks present, RF2 all UpToDate.
+Earlier instruction to keep Writethrough described pre-click state and is superseded.
+Read-only 10.04-second live sample while installing Win2022-Template: guest disk
+9.71 MiB/s writes, 695 write requests, mean QEMU write request duration 99.86 ms;
+CPU 0.74 core busy, ISO read 6.31 MiB/s at average 0.26 ms (not a controlled benchmark).
+Node2 SSD /dev/sdd 21.55 MiB/s writes, await 0.28 ms, busy 5.9%; HDD sda/sdb
+await 7.43/9.41 ms. Thin pool metadata thin_tmeta on HDD sda on BOTH nodes,
+SSD cache covers thin_tdata only. Metadata placement and synchronous qcow2/NFS/DRBD
+path are candidates for further profiling, NOT a proven single bottleneck.
+VM disk VirtIO/qcow2 cache=none, NFS4.2 hard TCP rsize/wsize 1MiB, sync server exports,
+storage export primary Node2 while VM runs Node1, eno1 link 1000 Mbps. No evidence
+from this sample that CPU or ISO reads are saturated. No pre-change baseline, so
+DO NOT quantify speedup or claim network saturation. No runtime tuning, VM stop,
+replication change or cache adjustment performed during this diagnostic turn.
+
+LATEST vstore3.4 CACHE SETTINGS — 2026-11-10
+Owner requested faster writes and selectable cache modes, then reported installing
+Windows Server. Agreed to add UI but DEFER changing real cache mode until installation
+finishes. DO NOT claim Writeback is currently enabled or change it automatically.
+Both computes upgraded to vstore3.4; Arbiter remains vstore3.3 (no cache on witness).
+Live authenticated GET confirms both caches writethrough/smq, dirty_bytes=0, RF2 ready.
+Win2022-Template and npm-vm are running on Node1: preserve both.
+
+Storage > Virtual Storage now has SSD cache settings (Writeback / Writethrough),
+per-node actual mode and dirty MiB, Apply to both nodes, admin-only mutation route.
+Manager requires healthy complete RF2/Arbiter, created name match and readable caches.
+Durable single job changes both compute nodes; partial failure remains visible per node.
+Node helper only targets validated ibhv-<name>/thin_tdata of type cache. No disk erasure,
+cache removal, replication protocol changes, guest shutdown or host reboot.
+Returning to writethrough: cleaner policy destages dirty data first, 10-minute limit,
+then cache mode changes and original policy restored. Timeout leaves writeback mode;
+no forced detach/discard. Writeback can lose pending dirty data if cache devices fail;
+RF2 does not replace SSD PLP/backups. No guarantee this is fastest for every workload.
+
+Validation: 16 targeted tests passed incl real-size cache regression, flush timeout,
+healthy-replica gate and both-node orchestration; ruff/JS syntax passed.
+Browser preview verified mode picker and exact POST payload to mock API only.
+ACTUAL isolated Linux/LVM round-trip: writeback -> write/fsync 64 MiB (dirty 67108864)
+-> cleaner flush -> writethrough dirty 0, disposable LV removed. Lab guest stopped.
+Proof Node2 /root/ibhics-vstorage-lab/cache-mode-proof.log. Real cache never changed.
+App backups Node2 /opt/ibhics/vstore3.4-backup-20261110-180412 and
+Node1 /opt/ibhics/vstore3.4-backup-20261110-180414.
+No GitHub push; Claude review/push later. Arbiter ISO/UI integration still pending.
+
+LATEST vstore3.3 UPDATE — 2026-11-10
+Shared NFS exports now display once in Storage, with cluster scope and member node names.
+Per-node API mounts retained for VM placement, browse uses active mount. Local default
+pools remain separate. Rename updates every member mount; per-node Remove hidden on
+shared row. Home pool count/capacity/usage and new server history samples count each
+NFS source once. Existing history is not rewritten. Virtual Storage status polls every
+10 seconds while idle so an externally repaired failed job does not remain stale.
+Browser verified 4 mounts -> 3 visible rows (two local defaults + one shared export).
+Regression suite 19 passed plus Node storage-view grouping checks; JS syntax passed.
+Both computes and Arbiter application upgraded to 1.3.0b2+vstore3.3. Physical storage
+layout unchanged: real RF2 and Arbiter remain connected. npm-vm HTTP 200.
+Backups: /opt/ibhics/vstore3.3-backup-20261110-172226 on Node2,
+/opt/ibhics/vstore3.3-backup-20261110-172227 on Node1.
+No GitHub push. Claude should review this and prior RF2/cache changes together.
+
+PREVIOUS vstore3.2 RECORD (details below remain useful):
+Virtual Storage RF2 vstore3.2 — latest handoff, 2026-11-10
+Supersedes vstore2 layout/capacity/planning-only/live-empty-disk descriptions.
+No GitHub push. Owner requested Claude review and push later.
+
+LIVE SUCCESS:
+The OWNER selected disks, confirmed erasure and pressed Create for virtualstorage.
+Initial job c5abb3db573347538b97f7c3ae0d2cf6 failed attaching Node1 cache:
+849.54 GiB cache / hardcoded 256 KiB chunks exceeded LVM's 1,000,000 chunk limit.
+Fixed by reusing hypervisor.hybrid.chunk_size, calculated from actual cache LV size:
+1024 KiB chunks on both real SSD caches. Added regression test with actual 912181428224 bytes.
+A second failure on Node2 exposed an old ceph_bluestore signature INSIDE the newly
+allocated cache LV extents. Added lvcreate -y after explicit operator disk confirmation.
+Whole-disk wipefs cannot remove every historical signature inside later LV extents.
+
+Recovery explicitly inspected serials, PV membership, LV types and original job/audits.
+Node1 existing thin pool retained; cache attached without replaying physical disk erasure.
+Node2 original preparation was attempted once; missing cache LV created/attached in place.
+No OS/NPM disk erased; no forced-primary/data-discard/split-brain recovery was used.
+Refactored StorageController._connect for prepared providers; no public auto-resume route.
+Final connect-only job 4e4593ebea07402287d2af9a41589a40 completed 13:47:17 local.
+All historical failed jobs retained. Root-only maintenance scripts remain on hosts;
+not shipped as a generic retry command and not automatically executed after failure.
+
+Current storage: virtualstorage, RF2, requested 6703 GiB, VIP 172.16.12.106/24.
+Node1 .104 ibhics-test/display ibhics-Node1; Node2 .103 ibhics-node2; Arbiter .105 arbiter-01.
+All three application packages upgraded to 1.3.0b2+vstore3.2 with health checks.
+Storage controller and gateway remain on Node1, data export primary currently Node2.
+Both data volumes and private gateway metadata volumes UpToDate on both data nodes.
+Witness diskless, connections established. Gateway resource status OK, service Started.
+Both libvirt pools active/autostart, same NFS export /srv/gateway-exports/virtualstorage
+mounted at /mnt/ibhics/virtualstorage on both nodes via VIP. No VM moved automatically.
+A fresh 2 MiB file was written+fsynced through Node1 and read through Node2:
+SHA256 ca8bc86b083275fc9cd0ce14d3c9d00758a2cbae993054c0afa863d3be327ea1.
+Temporary file removed, proof retained /root/ibhics-virtualstorage-io-proof.json on Node1.
+npm-vm still running from Local-node1/default, HTTP .194:81 returns 200.
+No real host failover/power-off test performed. Earlier abrupt failover test was ISOLATED lab.
+All lab QEMU guests now stopped again; qcow2 images and validation proofs preserved.
+
+RF2 POLICY CHANGE:
+Owner rejected local Mirror/Combine choices. Removed both UI options and backend layout.
+Data disks aggregate inside each node with LVM thin; no local md RAID creation.
+Fixed 2 full copies across two compute nodes, diskless Arbiter stores NO VM data.
+RF3/legacy layout fields rejected. Agents expose creation policy rf2-aggregate-v1;
+manager refuses old agents before reviewing or erasing disks.
+Calculated capacity readonly; all selected data capacity used, SSD caches excluded:
+raw both nodes 14904 GiB -> RF2 7452 -> 10% unallocated 745.2 -> metadata/service
+3.25 GiB -> floored estimated logical maximum 6703 GiB. Unequal nodes limited by smaller.
+10% headroom is NOT an automatic rebuild guarantee. Local disk failure can lose that
+node's copy; second node retains the other. No automatic per-disk rebalance/DSF equivalence.
+
+Selected physical disks (now owned by ibhv-virtualstorage, NOT empty anymore):
+Node1 /dev/sda ZC172K74, /dev/sdb ZC172HWT; SSD /dev/sdc S3F3NX0K403699.
+Node2 /dev/sda Z1ZB97QH, /dev/sdb Z1ZB9PRT; SSD /dev/sdd S3F3NX0JB00633.
+Protected OS: Node1 /dev/sdd BCA11806270130235; Node2 /dev/sdc BCA11710020261894.
+Keep Node2 accepted P2-DIMMF1 RAM fault and Node1 SMART warning visible.
+
+Validation:
+Latest targeted storage/node/workflow/inventory/hybrid/packaging suite: 36 passed.
+After _connect extraction: node/create/workflow 22 passed, ruff passed.
+Earlier RF2 suite 63 passed; isolated two-data-disk aggregate+cache actual kernel/LVM test
+thin pool 4.902 GiB from two 3 GiB virtual disks, no local RAID created.
+Historical broad vstore2 suite 604 passed, 2 pre-existing failures in home_metrics and
+installer AppArmor folder pool tests; do not claim full suite green.
+
+Application backups:
+Node1 /opt/ibhics/vstore3.2-backup-20261110-134758
+Node2 /opt/ibhics/vstore3.2-backup-20261110-134752
+Arbiter /opt/ibhics/vstore3.2-backup-20261110-134815
+Original cleanup audits and earlier test proofs documented in virtual-storage-create-handoff.txt.
+
+LIMITATIONS / STILL PENDING:
+- Arbiter standalone root-authenticated pairing-key Web UI is live, but not integrated into
+  wheel/installer/new ISO. Existing fix1 ISO repairs firstboot/dbus/password persistence.
+  Do not claim new vstore3.2 Arbiter ISO has been built. User deferred ISO integration until last.
+- New ISO should include offline DRBD/LINSTOR and root UI, generate unique TLS keys per VM.
+  Use Node2 /var/lib/ibhics for build temp/output; root has only ~3.5 GiB free.
+- Control plane is not distributed/HA; existing data-plane Reactor handles storage failover.
+- No automatic VM restart HA. Only one kernel NFS Virtual Storage supported.
+- No automatic retry of destructive creation; inspect failed operation before explicit recovery.

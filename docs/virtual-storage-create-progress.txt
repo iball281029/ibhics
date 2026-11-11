@@ -1,0 +1,59 @@
+SUPERSEDED: read docs/virtual-storage-create-handoff.txt for the deployed vstore2 state.
+The notes below are an earlier development checkpoint; live disks are now cleaned and
+software deployed. The owner, not Codex, will press Create on real storage.
+
+Virtual Storage creation work in progress — 2026-11-10
+
+Branch: codex/virtual-storage-create (base b24c738).
+No GitHub push. This feature has NOT been deployed to the live managers.
+
+Completed in this branch:
+- Read-only per-node physical disk inventory, including mounted reclaimable pools.
+- OS mounts, swap, VM active/persistent/snapshot/backing-store references block selection.
+- Shared RAID, cache and LVM physical volume dependencies require complete selection.
+- Review validates inventory fingerprint, local whole-disk paths, cache media and capacity.
+- Local provisioning helper revalidates before mutation, retains XML/audit backups,
+  refuses silent replay, builds LVM thin storage with optional writethrough SSD cache.
+- Durable single-operation job journal draft. No create/provision HTTP routes yet.
+- Software preparation script for Debian 13: pinned LINSTOR, Reactor, Gateway and DRBD9.
+  Still under integration testing; do not call it on live nodes before verification.
+
+Validation:
+- 25 focused tests passed (inventory, creation review, existing Virtual Storage planning).
+- Real node inventories tested read-only against .104 and .103.
+- Real LVM thin + SSD cache creation passed on two isolated disposable QEMU guests.
+- LINSTOR/Gateway integration is unfinished. First NFS creation rolled back because
+  satellites lacked allowExtFiles configuration. Installer correction being tested.
+- Gateway and controller bind localhost; NFS resource/replication/failover unverified.
+
+Live data:
+- NO live physical disk cleared, no live Virtual Storage created.
+- npm-vm remains on Node1 default pool (Local-node1). hybrid01 remains intact.
+- Live compute packages unchanged; new files only under /root/ibhics-vstorage-prepare.
+- Arbiter .105 Web UI hot patch remains as previously documented; integrate ISO last.
+
+Isolated lab on Node2 (.103):
+- /root/ibhics-vstorage-lab; qcow2 overlays based on /root/arbiter-build/test-r2/install.qcow2.
+- vs-test1/2/3: 192.0.2.11/.12/.13 on bridge ibhvs-test, NO physical uplink.
+- Reserved test VIP 192.0.2.16. No real data disks attached to guests.
+- SSH key /root/ibhics-vstorage-lab/key, root in guests only.
+- OS disk order differs with extra disks: identify test disks by VS-TEST-DATA-N and
+  VS-TEST-CACHE-N serials, NEVER assume /dev/vda is a data disk.
+- Thin/cache VG ibhv-vs-test successfully created on vs-test1 and vs-test2.
+- Three 3GB RAM QEMU processes recorded in nodeN/qemu.pid, 2 vCPU each.
+- Logs: nodeN/prepare*.log, replication.log. No NFS resource currently after rollback.
+- Guest outbound DNS via QEMU's default resolver was unreliable; isolated host-side
+  DNS helper listens ONLY on 192.0.2.254:53. PID dns.pid, script test-lab-dns.py.
+- Guest ens3 NAT changed to static 10.0.2.15/24 gateway 10.0.2.2; ens4 storage .11-.13.
+- Some earlier prepare retries failed at DNS before changes. Latest prepare script
+  adds dbus, iptables, iputils-arping and allowExtFiles on all satellites (incl witness).
+- Keep final tested Arbiter ISO r5 and gold VM. Only obsolete r2/r3/r4 intermediate
+  ISO builds were removed to recover ~3GB on Node2; delivered final ISO unchanged.
+
+Next:
+1. Finish preparing lab satellites (ensure dbus + allowExtFiles applied).
+2. Retry NFS gateway creation using existing lab nodes/resource group, confirm diskless
+   third replica, synchronous data copies, actual NFS I/O and failover/no-quorum behavior.
+3. Add manager/agent job APIs and creation wizard, integrate package preparation asset.
+4. Finish regression, deploy software without wiping physical disks. Owner chooses
+   disks and presses Create themselves. Update Claude handoff, integrate Arbiter UI ISO last.

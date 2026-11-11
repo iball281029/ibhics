@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import threading
 from dataclasses import asdict
 from urllib.parse import quote
@@ -129,7 +130,9 @@ class RemoteDriver(HypervisorDriver):
         return info_from_json(self._ok(resp, uuid).json())
 
     def restart_vm(self, uuid: str, force: bool = False) -> VMInfo:
-        resp = self._client.request("POST", f"/vms/{uuid}/restart", json={"force": force})
+        resp = self._client.request(
+            "POST", f"/vms/{uuid}/restart", json={"force": force}, timeout=None
+        )
         return info_from_json(self._ok(resp, uuid).json())
 
     def delete_vm(self, uuid: str) -> None:
@@ -148,6 +151,33 @@ class RemoteDriver(HypervisorDriver):
         if resp.status_code == 422:
             raise ValueError(str(resp.json().get("detail")))
         return SnapshotInfo(**self._ok(resp, uuid).json())
+
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        body = {"moves": [{"index": i, "pool": p} for i, p in moves.items()]}
+        resp = self._client.request("POST", f"/vms/{uuid}/move-disks", json=body, timeout=None)
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def disk_move_progress(self, uuid: str) -> dict:
+        try:
+            resp = self._client.request("GET", f"/vms/{uuid}/move-disks", timeout=10)
+            return resp.json() if resp.status_code == 200 else {}
+        except Exception:  # noqa: BLE001 - progress is best effort
+            return {}
+
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/to-virtio", timeout=None)
+        return info_from_json(self._ok(resp, uuid).json())
+
+    def sysprep_vm(self, uuid: str) -> None:
+        self._ok(self._client.request("POST", f"/vms/{uuid}/sysprep", timeout=60), uuid)
+
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        resp = self._client.request("POST", f"/vms/{uuid}/rename", json={"name": name})
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        if resp.status_code == 409 and "already exists" in resp.json().get("detail", ""):
+            raise VMExists(resp.json()["detail"])
+        return info_from_json(self._ok(resp, uuid).json())
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
         resp = self._client.request(
@@ -183,14 +213,46 @@ class RemoteDriver(HypervisorDriver):
             raise PoolNotFound(resp.json()["detail"].removeprefix("storage pool not found: "))
         return info_from_json(self._ok(resp, uuid).json())
 
+    def migration_files(self, uuid: str) -> dict[str, bytes]:
+        resp = self._client.request("GET", f"/vms/{uuid}/migration-files", timeout=60)
+        if resp.status_code == 404 and "VM not found" not in resp.text:
+            return {}  # an agent from before file staging: libvirt alone moves the VM
+        data = self._ok(resp, uuid).json()
+        return {path: base64.b64decode(content) for path, content in data.items()}
+
+    def stage_migration_files(self, files: dict[str, bytes]) -> list[str]:
+        body = {"files": {p: base64.b64encode(d).decode() for p, d in files.items()}}
+        resp = self._client.request("POST", "/migration-files", json=body, timeout=60)
+        if resp.status_code == 404:
+            raise InvalidState(
+                f"{self._client.address} cannot receive UEFI/seed files; update that node first"
+            )
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        return list(self._ok(resp).json()["staged"])
+
+    def remove_migration_files(self, paths: list[str]) -> list[str]:
+        resp = self._client.request(
+            "POST", "/migration-files/remove", json={"paths": paths}, timeout=60
+        )
+        if resp.status_code == 404:
+            return []
+        return list(self._ok(resp).json()["removed"])
+
     def migrate_vm(
         self,
         uuid: str,
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
-        body = {"dest_uri": dest_uri, "copy_storage": copy_storage, "bandwidth_mib": bandwidth_mib}
+        body = {
+            "dest_uri": dest_uri,
+            "copy_storage": copy_storage,
+            "bandwidth_mib": bandwidth_mib,
+            "data_address": data_address,
+        }
         resp = self._client.request("POST", f"/vms/{uuid}/migrate", json=body, timeout=None)
         detail = str(resp.json().get("detail", "")) if resp.content else ""
         if resp.status_code == 502:
@@ -242,6 +304,11 @@ class RemoteDriver(HypervisorDriver):
     def host_system(self) -> RemoteHost:
         return RemoteHost(self._client)
 
+    def containers(self):
+        from ..hypervisor.containers import RemoteContainers
+
+        return RemoteContainers(self._client)
+
     def list_local_disks(self):
         from ..hypervisor.disks import LocalDisk
 
@@ -253,6 +320,23 @@ class RemoteDriver(HypervisorDriver):
     def create_pool(self, spec: PoolSpec) -> PoolInfo:
         body = {k: str(v) if k == "type" else v for k, v in spec.__dict__.items()}
         resp = self._client.request("POST", "/pools", json=body)
+        if resp.status_code == 422:
+            raise ValueError(str(resp.json().get("detail")))
+        return _pool_info(self._ok(resp).json())
+
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        body = {"action": action, "devices": devices, "mode": mode, "size_gb": size_gb,
+                "confirm_wipe": True}  # fmt: skip
+        resp = self._client.request("POST", f"/pools/{name}/cache", json=body, timeout=None)
+        if resp.status_code == 404:
+            raise PoolNotFound(name)
         if resp.status_code == 422:
             raise ValueError(str(resp.json().get("detail")))
         return _pool_info(self._ok(resp).json())
@@ -414,6 +498,20 @@ class RemoteHost:
 
     def summary(self) -> host.NodeSummary:
         return host.NodeSummary(**self._call("GET", "/summary"))
+
+    def hardware_health(self) -> dict:
+        resp = self._client.request("GET", "/host/hardware")
+        if resp.status_code == 404:
+            return {
+                "items": [],
+                "events": [],
+                "collected_at": None,
+                "collecting": False,
+                "note": "Upgrade this node agent to enable hardware monitoring",
+            }
+        if resp.status_code >= 400:
+            raise NodeUnavailable(f"Hardware query: HTTP {resp.status_code}")
+        return resp.json()
 
     def nics(self) -> list[host.HostNic]:
         return [host.HostNic(**n) for n in self._call("GET", "/nics")]

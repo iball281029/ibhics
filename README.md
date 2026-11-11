@@ -4,7 +4,7 @@ Open-source hyper-converged infrastructure platform.
 
 ibHiCS รวม compute, storage และ network ไว้ในระบบเดียว ติดตั้งบนเซิร์ฟเวอร์ x86 ทั่วไป (Dell, HPE, Lenovo, Supermicro) และจัดการทั้งหมดผ่าน Web Console กับ REST API แนวคิดคล้าย Proxmox VE แต่เน้นประสบการณ์ใช้งานแบบ appliance
 
-> สถานะ: **ibHiCS Hyper-Converged Infrastructure beta version 0.8** (`0.8.0b3`) รุ่นทดลองใช้ ยังไม่แนะนำสำหรับ production
+> สถานะ: **ibHiCS Hyper-Converged Infrastructure beta version 1.3** (`1.3.0b2`) รุ่นทดลองใช้ ยังไม่แนะนำสำหรับ production
 
 ## สถาปัตยกรรม
 
@@ -72,11 +72,22 @@ sudo python -m ibhics.manager --driver libvirt --host 0.0.0.0
 
 ## รูปแบบการติดตั้ง
 
-| รูปแบบ | เครื่อง | HA |
+| รูปแบบ | เครื่อง | Quorum |
 | --- | --- | --- |
-| Standalone | 1 node | ไม่มี |
-| 2 node + witness | 2 compute + witness 1 เครื่อง (mini PC หรือ VM ที่อื่น) | ทน node ล่มได้ 1 เครื่อง |
-| Cluster | 3 compute ขึ้นไป | มี |
+| Standalone | 1 node | 1 จาก 1 |
+| 2 node + witness | 2 compute + witness 1 เครื่อง (mini PC หรือ VM ที่อื่น) | ต้อง online อย่างน้อย 2 จาก 3 |
+| Cluster | 3 compute ขึ้นไป | ต้อง online มากกว่าครึ่งของสมาชิกที่มีสิทธิ์โหวต |
+
+รุ่นปัจจุบันรองรับการบริหารหลาย node และการย้าย VM ระหว่างเครื่องที่ยังทำงานอยู่
+ตารางข้างต้นเป็นรูปแบบ quorum ไม่ใช่การรับรอง automatic VM failover:
+ยังไม่มีการ restart VM บน node อื่นอัตโนมัติเมื่อ host ล่ม, manager failover,
+fencing หรือ distributed storage replication ครบชุด การเพิ่ม compute node
+ไม่ได้ทำให้ดิสก์ local กลายเป็น shared storage; การย้าย VM ต้องเตรียม
+shared storage หรือคัดลอกดิสก์ พร้อม network และ libvirt migration transport ให้ตรงกัน
+
+หน้า Nodes และ Node Summary แสดง IPMI/BMC IPv4 จาก `ipmitool -I open lan print`
+ของแต่ละ node โดยอ่านอย่างเดียวและ cache 5 นาที ต้องติดตั้ง `ipmitool` บน compute
+node และมี local IPMI device หากอ่านไม่ได้จะแสดงสถานะ unavailable โดยไม่ทำให้ summary ล้มเหลว
 
 Manager รันบน compute node แรก ส่วนเครื่องอื่นรัน Agent ทุกเครื่องใช้ token เดียวกัน:
 
@@ -310,3 +321,56 @@ ibHiCS ใช้ license [GNU AGPLv3](LICENSE) ใช้งาน ติดต�
 Web console ใช้ [noVNC](https://github.com/novnc/noVNC) 1.6.0 (MPL-2.0) และ pako (MIT) ที่รวมไว้ใน `ibhics/manager/static/novnc/` พร้อมไฟล์ license ของแต่ละโครงการ
 
 ผู้ร่วมพัฒนาต้องยอมรับ [Contributor License Agreement](CLA.md) ก่อน PR แรกจะถูก merge ดูขั้นตอนใน [CONTRIBUTING.md](CONTRIBUTING.md)
+
+Node Summary also includes **Device health**: local IPMI SDR readings for fans,
+PSUs, temperature and voltage, Linux EDAC memory error counters, and read-only
+SMART health for discoverable disks. A background collector caches readings for
+60 seconds without blocking the normal node summary. The page shows collection
+time, normal/warning/fault/unknown counts, expandable device groups and a separate
+recent BMC event history. Unknown includes unsupported telemetry and empty slots;
+a normal temperature does not prove RAM integrity. BMC history may describe
+repaired faults and uses the BMC clock. RAID controllers can hide physical disks.
+Missing or older agents show monitoring unavailable instead of a healthy status.
+No SMART self-tests, counter resets, SEL clears or IPMI configuration writes run.
+
+Verified POST or service findings that runtime sensors cannot rediscover can be
+recorded on that node in root-owned `/etc/ibhics/hardware-issues.json`. This is a
+JSON array of objects with `category`, `name`, `status` (`warning` or `critical`),
+`detail`, `source` and ISO8601 `observed_at`. These findings are explicitly labelled
+as recorded evidence and remain visible until removed after verified repair.
+The Nodes overview also shows hardware health separately from agent connectivity.
+
+A standalone server can become the first cluster member from **Nodes → Create
+cluster**. The admin enters a name; ibHiCS persists a new Cluster ID and keeps the
+local node, its display name and VMs. The **Add node** action appears afterwards.
+Creating a one-node cluster does not enable HA or add other servers automatically.
+Default installation starts each server with its own web console and agent;
+agent-only installation remains an advanced legacy option.
+
+Home resource charts use persistent server history in
+`/var/lib/ibhics/usage.sqlite3` (override with `IBHICS_USAGE_FILE`). The manager
+samples CPU, RAM and physical pool usage every 10 seconds even without an open
+browser. Samples older than 30 days are purged on startup and subsequent writes.
+History survives logout and manager restarts. Choose live/10 minutes, 5 minutes,
+30 minutes, 1 day, 7 days or 30 days; long periods use average buckets and roughly
+180 plotted points. Missing readings remain gaps. Allocation has no charts.
+History storage use is visible beside the filter. A 259,200-row/30-day benchmark
+with this schema used 19.56 MiB excluding temporary WAL files. Retention does not
+create data for periods before the feature was installed.
+
+Open **Cluster management** from the sidebar, the cluster name in the top bar, or
+**Home → Manage cluster**. It shows cluster identity, controller, membership,
+quorum and node actions. On a standalone server, an admin can copy its pairing
+key from this page. Add its Node ID, agent URL and pairing key on the controller.
+Each node keeps its own agent credential; per-node keys are stored only in the
+controller's root-readable membership file and are omitted from normal API replies.
+The legacy shared-key agent flow remains compatible. Adding a node still requires
+an explicit Add action; installing/upgrading a server never enrolls it automatically.
+
+History resolution and its time grid are now explicit: Now shows the last 10
+minutes with 5-minute clock ticks; Every 5 min shows 30 minutes with 5-minute
+buckets/ticks; Every 30 min shows 3 hours with 30-minute buckets/ticks; Daily
+shows 7 days and Every 7 days shows 30 days. Ticks and aggregate buckets align
+to clock boundaries using the browser UTC offset. Legacy range API requests
+remain compatible. The ib logo expands/collapses the navigation rail and saves
+that preference locally; narrow screens use an overlay.

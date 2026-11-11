@@ -54,3 +54,22 @@ def test_source_networks_are_read():
         "net0: virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=20\n",
     )
     assert qm.networks == ["vmbr0 VLAN 20", "vmbr1"]
+
+
+def test_cluster_network_reports_per_node_configuration(tmp_path):
+    from test_migration import Env
+
+    env = Env(tmp_path)
+    from ibhics.hypervisor import NetworkSpec
+
+    env.node1.create_network(NetworkSpec(name="service", vlan=101))
+    env.node2.create_network(NetworkSpec(name="service", vlan=102))
+    nets = env.client.get("/api/v1/networks").json()
+    default = next(n for n in nets if n["name"] == "default")
+    service = next(n for n in nets if n["name"] == "service")
+    assert set(default["nodes"]) == {"node1", "node2"}
+    assert service["configurations"]["node1"]["vlan"] == 101
+    assert service["configurations"]["node2"]["vlan"] == 102
+    env.node2.delete_network("service")
+    service = next(n for n in env.client.get("/api/v1/networks").json() if n["name"] == "service")
+    assert service["nodes"] == ["node1"]

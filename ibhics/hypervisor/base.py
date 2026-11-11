@@ -57,6 +57,9 @@ class NicSpec:
     mac: str | None = None
 
 
+VIDEO_MODELS = ("virtio", "vga", "qxl", "cirrus")
+
+
 @dataclass
 class VMSpec:
     name: str
@@ -83,8 +86,13 @@ class VMSpec:
     # When the VM went into the recycle bin (ISO 8601); empty while it is in use. A recycled
     # VM keeps its disks but cannot start until it is restored.
     recycled: str = ""
+    # The display adapter: virtio (fast, Windows 10/2016+ and Linux), vga (standard VGA:
+    # older Windows, which shows a black screen with virtio), qxl or cirrus.
+    video: str = "virtio"
 
     def validate(self) -> None:
+        if self.video not in VIDEO_MODELS:
+            raise ValueError(f"video is one of {', '.join(VIDEO_MODELS)}")
         if len(self.os_type) > 64:
             raise ValueError("os_type is at most 64 characters")
         if not VM_NAME_RE.match(self.name):
@@ -148,6 +156,10 @@ class CloneSpec:
     pool: str | None = None  # full clones: put every disk here; None: beside the source's
     customization: Customization | None = None
     description: str | None = None  # None: the source's
+    # Linux: give the copy its own identity before it first boots (machine-id, SSH host
+    # keys, cloud-init state, logs, persistent NIC names). Windows gets a new SID only
+    # from sysprep (see sysprep_vm).
+    reset_identity: bool = True
 
     def validate(self) -> None:
         if not VM_NAME_RE.match(self.name):
@@ -180,6 +192,7 @@ def clone_spec(source: VMSpec, clone: CloneSpec, source_uuid: str = "") -> VMSpe
         os_type=source.os_type,
         boot=["hd"],
         linked_to=source_uuid if clone.linked else "",
+        video=source.video,
     )
 
 
@@ -227,6 +240,11 @@ class PoolSpec:
     devices: list[str] | None = None
     # Creating an LVM volume group erases the device; callers must say they mean it.
     confirm_wipe: bool = False
+    # disk only: a hybrid pool. `devices` (HDDs or an md RAID) hold the data and these
+    # SSDs cache it (LVM dm-cache); cache_gb None uses all of them.
+    cache_devices: list[str] | None = None
+    cache_mode: str = "writethrough"
+    cache_gb: int | None = None
 
     @property
     def disk_backend(self) -> str:
@@ -262,8 +280,19 @@ class PoolSpec:
                 raise ValueError(f"{self.type} pool needs a block device path under /dev/")
             if len(set(devices)) != len(devices):
                 raise ValueError("the same disk is listed twice")
-            if self.type == PoolType.DISK and len(devices) > 1:
+            if self.type == PoolType.DISK and len(devices) > 1 and not self.cache_devices:
                 raise ValueError("a thin (XFS) pool takes one disk; use LVM for several")
+            if self.cache_devices:
+                if self.type != PoolType.DISK:
+                    raise ValueError("an SSD cache goes on a thin (XFS) pool")
+                if not all(DEV_RE.match(d) for d in self.cache_devices):
+                    raise ValueError("cache disks are block device paths under /dev/")
+                if set(self.cache_devices) & set(devices):
+                    raise ValueError("a disk cannot hold data and cache both")
+                if self.cache_mode not in ("writethrough", "writeback"):
+                    raise ValueError("cache mode is writethrough or writeback")
+                if self.cache_gb is not None and self.cache_gb < 1:
+                    raise ValueError("the cache is at least 1 GB")
         if self.type in WIPE_POOL_TYPES and not self.confirm_wipe:
             raise ValueError("this pool erases its device; set confirm_wipe to true")
 
@@ -277,6 +306,11 @@ class PoolInfo:
     allocation_gb: float
     available_gb: float
     source: str = ""  # human-readable origin: path, host:/export, iqn/lun, device
+    # Hybrid pools: their SSD cache (mode, size_gb, used_pct, dirty_gb, hit ratios).
+    # hybrid is true for any pool on its own volume group, with a cache or without.
+    hybrid: bool = False
+    cache: dict | None = None
+    display_name: str = ""
 
 
 class PoolNotFound(LookupError):
@@ -372,6 +406,7 @@ class VMEdit:
     memory_mb: int | None = None
     boot: list[str] | None = None
     autostart: bool | None = None
+    video: str | None = None
     disks: list[DiskEdit] | None = None
     nics: list[NicEdit] | None = None
     # Removing a disk detaches it; this also deletes its volume and data.
@@ -380,7 +415,7 @@ class VMEdit:
     def apply_to(self, spec: VMSpec) -> VMSpec:
         """The VMSpec this edit asks for, validated; disks and NICs are checked apart."""
         new = VMSpec(**{**spec.__dict__})
-        for name in ("description", "os_type", "vcpus", "memory_mb", "boot", "autostart"):
+        for name in ("description", "os_type", "vcpus", "memory_mb", "boot", "autostart", "video"):
             if getattr(self, name) is not None:
                 setattr(new, name, getattr(self, name))
         new.validate()
@@ -452,9 +487,12 @@ class GuestInfo:
 @dataclass
 class HostInfo:
     hostname: str
-    cpus: int
+    cpus: int  # logical CPUs (threads): what vCPUs run on
     memory_mb: int
     hypervisor: str
+    sockets: int = 0
+    cores: int = 0  # physical cores, all sockets
+    threads: int = 0  # = cpus
 
 
 class VMNotFound(LookupError):
@@ -507,6 +545,18 @@ class HypervisorDriver(abc.ABC):
     @abc.abstractmethod
     def create_pool(self, spec: PoolSpec) -> PoolInfo: ...
 
+    def pool_cache(
+        self,
+        name: str,
+        action: str,
+        devices: list[str] | None = None,
+        mode: str = "writethrough",
+        size_gb: int | None = None,
+    ) -> PoolInfo:
+        """A hybrid pool's SSD cache: add (erases the SSDs), remove (flushes first) or
+        mode (writethrough/writeback)."""
+        raise NotImplementedError
+
     @abc.abstractmethod
     def delete_pool(self, name: str) -> None:
         """Stop managing the pool. Data on it (images, LVM volumes) is left in place."""
@@ -517,14 +567,31 @@ class HypervisorDriver(abc.ABC):
         dest_uri: str,
         copy_storage: bool = False,
         bandwidth_mib: int | None = None,
+        data_address: str = "",
     ) -> None:
-        """Move the VM to the node whose libvirt daemon is at `dest_uri`.
+        """Move the VM to the node whose libvirt daemon is at `dest_uri`. With
+        `data_address` the VM's memory and disks travel to that address of the destination
+        (its migration interface), while libvirt still talks over `dest_uri`.
 
         A running VM keeps running (live migration); a stopped one is moved by definition
         only, which needs shared storage. With `copy_storage` the disks are copied to the
         same-named pool on the destination while the VM runs, then removed here.
         """
         raise NotImplementedError
+
+    def migration_files(self, uuid: str) -> dict[str, bytes]:
+        """Node-local files the VM needs on the destination that libvirt does not move:
+        UEFI variables and the VM's customization CD. Path -> content."""
+        return {}
+
+    def stage_migration_files(self, files: dict[str, bytes]) -> list[str]:
+        """Write files from `migration_files` here before a VM arrives. Refuses paths
+        that another VM on this node uses. Returns the paths written."""
+        return []
+
+    def remove_migration_files(self, paths: list[str]) -> list[str]:
+        """Delete staged or left-behind files that no VM on this node uses any more."""
+        return []
 
     def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
         """Put an ISO in the VM's CD drive, or empty it with None; works while it runs."""
@@ -560,6 +627,30 @@ class HypervisorDriver(abc.ABC):
 
         `restart`: a running UEFI VM that cannot be snapshotted live yet may be shut down
         and started again first."""
+        raise NotImplementedError
+
+    def move_disks(self, uuid: str, moves: dict[int, str]) -> VMInfo:
+        """Disks (by their order, 0 = the first) to other pools on this node: copied while
+        the VM runs (block copy, then a switch to the copy) or while it is off, then the
+        old volume is deleted."""
+        raise NotImplementedError
+
+    def disk_move_progress(self, uuid: str) -> dict:
+        """{"step", "percent"} of a move_disks running for this VM; {} when none is."""
+        return {}
+
+    def switch_to_virtio(self, uuid: str) -> VMInfo:
+        """Move a Windows VM's SATA disks to VirtIO once its guest tools are in: start it
+        once with a small VirtIO disk so Windows binds the driver, then switch the bus."""
+        raise NotImplementedError
+
+    def sysprep_vm(self, uuid: str) -> None:
+        """Start sysprep /generalize /oobe /shutdown in the running Windows VM, through its
+        guest agent: the VM shuts down, ready to become a template."""
+        raise NotImplementedError
+
+    def rename_vm(self, uuid: str, name: str) -> VMInfo:
+        """Give the stopped VM a new name (Thai allowed). Its disk files keep theirs."""
         raise NotImplementedError
 
     def revert_snapshot(self, uuid: str, name: str) -> VMInfo:
@@ -601,6 +692,10 @@ class HypervisorDriver(abc.ABC):
         """The folder a file-based pool (folder, thin XFS disk, NFS) keeps its files in,
         when this process can reach it; None for LVM pools and pools on other nodes."""
         return None
+
+    def containers(self):
+        """This node's LXC containers (containers.LxcContainers and alike)."""
+        raise NotImplementedError
 
     def host_system(self):
         """The node itself: its summary, network ports and settings (host.HostSystem)."""

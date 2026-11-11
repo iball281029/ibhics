@@ -1,0 +1,306 @@
+"""Manager API for containers (v1.0): the cluster's LXC containers beside its VMs."""
+
+from __future__ import annotations
+
+import threading
+import time
+import urllib.request
+
+from fastapi import status
+from pydantic import BaseModel, Field
+
+from ..cluster import NodeUnavailable
+from ..hypervisor import InvalidState
+from ..hypervisor.containers import (
+    IMAGE_INDEX,
+    ContainerNotFound,
+    ContainerSpec,
+    catalog,
+    parse_image_index,
+)
+
+
+class ContainerIn(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    template: str = "debian-13"
+    node: str = ""
+    vcpus: int = Field(default=1, ge=1, le=256)
+    memory_mb: int = Field(default=512, ge=64)
+    swap_mb: int = Field(default=512, ge=0)
+    disk_gb: int = Field(default=8, ge=1)
+    pool: str = "default"
+    network: str = "default"
+    ip: str = "dhcp"
+    gateway: str = ""
+    dns: str = ""
+    password: str = ""
+    ssh_key: str = ""
+    unprivileged: bool = True
+    nesting: bool = False
+    autostart: bool = False
+    description: str = ""
+
+
+class ContainerUpdate(BaseModel):
+    vcpus: int | None = Field(default=None, ge=1, le=256)
+    memory_mb: int | None = Field(default=None, ge=64)
+    disk_gb: int | None = Field(default=None, ge=1)
+    autostart: bool | None = None
+    description: str | None = None
+
+
+class ContainerAction(BaseModel):
+    action: str = Field(pattern="^(start|stop|kill|restart)$")
+
+
+class ContainerExec(BaseModel):
+    command: str = Field(min_length=1, max_length=4000)
+
+
+class ContainerMove(BaseModel):
+    pool: str = Field(min_length=1, max_length=64)
+
+
+class ContainerRename(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+class ContainerNicIn(BaseModel):
+    network: str = Field(min_length=1, max_length=64)
+    ip: str = Field(default="dhcp", max_length=43)
+    gateway: str = Field(default="", max_length=15)
+    mac: str = Field(default="", pattern=r"^$|^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+class ContainerNetworkIn(BaseModel):
+    nics: list[ContainerNicIn] = Field(min_length=1, max_length=8)
+    dns: str | None = Field(default=None, max_length=200)
+
+
+class ContainerSnapIn(BaseModel):
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+
+
+def install(api, cluster, backups) -> None:
+    def everywhere():
+        for member in cluster.compute_members():
+            try:
+                cts = member.driver.containers().list()
+            except (NodeUnavailable, NotImplementedError) as exc:
+                member.last_error = str(exc) or member.last_error
+                continue
+            for ct in cts:
+                yield member, ct
+
+    def find(name: str):
+        for member, ct in everywhere():
+            if ct.spec.name == name:
+                return member, ct
+        raise ContainerNotFound(name)
+
+    def out(member, ct) -> dict:
+        return {**ct.to_dict(), "node": member.name}
+
+    def cts(member):
+        return member.driver.containers()
+
+    def task(kind, detail, name, member, work):
+        return backups.run_task(kind, detail, name, member.name, f"ct:{name}", work)
+
+    images: dict = {"at": 0.0, "list": []}
+
+    @api.get("/containers/templates")
+    def ct_templates() -> list[dict]:
+        """Curated templates, then every image on images.linuxcontainers.org (read at most
+        every 6 hours; without internet, the curated list alone)."""
+        if time.monotonic() - images["at"] > 6 * 3600 or not images["at"]:
+            try:
+                with urllib.request.urlopen(IMAGE_INDEX, timeout=8) as resp:
+                    images["list"] = parse_image_index(resp.read().decode())
+                images["at"] = time.monotonic()
+            except (OSError, ValueError):
+                images["at"] = time.monotonic() - 5.5 * 3600  # try again in half an hour
+        return catalog(images["list"])
+
+    @api.get("/containers")
+    def ct_list() -> list[dict]:
+        return [out(m, c) for m, c in everywhere()]
+
+    @api.get("/containers/{name}")
+    def ct_get(name: str) -> dict:
+        return out(*find(name))
+
+    @api.post("/containers", status_code=status.HTTP_202_ACCEPTED)
+    def ct_create(body: ContainerIn) -> dict:
+        cluster.require_quorum()
+        spec = ContainerSpec(**body.model_dump(exclude={"node"}))
+        spec.validate()
+        names = {c.spec.name for _, c in everywhere()}
+        names |= {vm.spec.name for _, vm in cluster.all_vms()}
+        if spec.name in names:
+            raise InvalidState(f"a VM or container named {spec.name!r} already exists")
+        member = cluster.member(body.node) if body.node else cluster.pick_node(spec.memory_mb)
+        cluster.require_in_service(member)
+
+        def work():
+            try:
+                task(
+                    "container-create",
+                    spec.template,
+                    spec.name,
+                    member,
+                    lambda: cts(member).create(spec),
+                )
+            except Exception:  # noqa: S110 - the task in Tasks holds the error
+                pass
+
+        threading.Thread(target=work, name=f"ct-create-{spec.name}", daemon=True).start()
+        return {"name": spec.name, "node": member.name, "state": "creating"}
+
+    @api.post("/containers/{name}/action")
+    def ct_action(name: str, body: ContainerAction) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        if body.action in ("start", "restart"):
+            cluster.require_in_service(member)
+        return out(
+            member,
+            task(
+                f"container-{body.action}",
+                body.action,
+                name,
+                member,
+                lambda: cts(member).action(name, body.action),
+            ),
+        )
+
+    @api.patch("/containers/{name}")
+    def ct_update(name: str, body: ContainerUpdate) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        args = body.model_dump()
+        return out(
+            member,
+            task(
+                "container-resize",
+                "settings",
+                name,
+                member,
+                lambda: cts(member).update(name, **args),
+            ),
+        )
+
+    @api.put("/containers/{name}/network")
+    def ct_network(name: str, body: ContainerNetworkIn) -> dict:
+        """Network cards: network (VLAN), DHCP or fixed IP and gateway, DNS. A running
+        container restarts to take them."""
+        cluster.require_quorum()
+        member, _ = find(name)
+        cards = [n.model_dump() for n in body.nics]
+        return out(
+            member,
+            task(
+                "container-network",
+                f"{len(cards)} card(s)",
+                name,
+                member,
+                lambda: cts(member).set_network(name, cards, body.dns),
+            ),  # fmt: skip
+        )
+
+    @api.post("/containers/{name}/rename")
+    def ct_rename(name: str, body: ContainerRename) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        if body.name != name:
+            taken = {c.spec.name for _, c in everywhere()}
+            taken |= {vm.spec.name for _, vm in cluster.all_vms()}
+            if body.name in taken:
+                raise InvalidState(f"a VM or container named {body.name!r} already exists")
+        return out(
+            member,
+            task(
+                "rename",
+                f"{name} → {body.name}",
+                name,
+                member,
+                lambda: cts(member).rename(name, body.name),
+            ),  # fmt: skip
+        )
+
+    @api.delete("/containers/{name}", status_code=status.HTTP_204_NO_CONTENT)
+    def ct_delete(name: str) -> None:
+        cluster.require_quorum()
+        member, _ = find(name)
+        task("container-delete", name, name, member, lambda: cts(member).delete(name))
+
+    @api.post("/containers/{name}/exec")
+    def ct_exec(name: str, body: ContainerExec) -> dict:
+        member, _ = find(name)
+        code, output = member.driver.containers().exec(name, body.command)
+        return {"code": code, "output": output}
+
+    @api.post("/containers/{name}/jobs")
+    def ct_job_start(name: str, body: ContainerExec) -> dict:
+        """A console command that may run long; read its output with GET .../jobs/{job}."""
+        member, _ = find(name)
+        return {"job": cts(member).exec_start(name, body.command)}
+
+    @api.get("/containers/{name}/jobs/{job}")
+    def ct_job_read(name: str, job: str, offset: int = 0) -> dict:
+        member, _ = find(name)
+        return cts(member).exec_read(name, job, offset)
+
+    @api.delete("/containers/{name}/jobs/{job}", status_code=status.HTTP_204_NO_CONTENT)
+    def ct_job_stop(name: str, job: str) -> None:
+        member, _ = find(name)
+        cts(member).exec_stop(name, job)
+
+    @api.post("/containers/{name}/move")
+    def ct_move(name: str, body: ContainerMove) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        return out(
+            member,
+            task(
+                "ct-move", f"→ {body.pool}", name, member, lambda: cts(member).move(name, body.pool)
+            ),  # fmt: skip
+        )
+
+    @api.post("/containers/{name}/snapshots", status_code=status.HTTP_201_CREATED)
+    def ct_snapshot(name: str, body: ContainerSnapIn) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        return out(
+            member,
+            task(
+                "snapshot", body.name, name, member, lambda: cts(member).snapshot(name, body.name)
+            ),
+        )
+
+    @api.post("/containers/{name}/snapshots/{snap}/restore")
+    def ct_restore(name: str, snap: str) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        return out(
+            member,
+            task("snapshot-restore", snap, name, member, lambda: cts(member).restore(name, snap)),
+        )
+
+    @api.delete("/containers/{name}/snapshots/{snap}")
+    def ct_delete_snapshot(name: str, snap: str) -> dict:
+        cluster.require_quorum()
+        member, _ = find(name)
+        return out(
+            member,
+            task(
+                "snapshot-delete",
+                snap,
+                name,
+                member,
+                lambda: cts(member).delete_snapshot(name, snap),
+            ),
+        )
+
+
+__all__ = ["install"]

@@ -55,7 +55,44 @@ Still to do:
 - Shared disks between VMs (clusters), iSCSI target serving VM disks
 - Storage policy per VM disk (thin/thick, cache)
 
+## v1.3
+Beta 2 (1.3.0b2): Migrate… on every VM's menu: Change host (live migration; disabled with the reason on a one-node cluster) or Change storage: each disk to a pool of its node, running (block copy, then QEMU switches to the copy) or off (qemu-img), as a task with %, the old volume deleted after. dm-cache chunk size picked for big SSDs.
+
+Beta 1 (1.3.0b1): Hybrid pool (HDD + SSD cache). Add storage → Hybrid: HDDs or an md RAID hold the data, SSDs cache it (LVM dm-cache on a volume group of the pool's own, XFS on top, thin qcow2 disks). Writethrough (default, safe) or writeback (faster writes, needs a mirrored SSD), cache size; the pool's Summary shows hit ratio (reads/writes), cache use and dirty data, and adds or removes the cache (dirty blocks flushed first) or switches mode later. Disks holding data must be emptied first (move VMs off).
+Next: an SSD cache for LVM (thick) pools.
+
+## v1.2
+Beta 4 (1.2.0b4): test-install.sh opens the installed disk with virt-customize (on every node), so a host VG named ibhics never clashes; a failed VG rename stops the test instead of hanging at first boot
+
+Beta 3 (1.2.0b3): legacy\install-legacy.cmd on the guest tools CD for Windows before 10 (removes leftover Red Hat drivers, installs the guest agent, 0.1.189 drivers and the balloon service)
+
+Beta 2 (1.2.0b2): legacy Windows drivers from virtio-win 0.1.189 (0.1.229 is test-signed for 2012 R2: Code 52)
+
+Beta 1 (1.2.0b1):
+- VMs: USB tablet by default (the console mouse follows the cursor), display adapter choice in Edit (VirtIO GPU, Standard VGA, QXL, Cirrus), "Switch disks to VirtIO" for Windows on SATA after its guest tools are in
+- Windows Setup sees the disk without "Load driver" ($WinPEDriver$ on the guest tools CD, Server 2016+/10/11); Server 2012 R2 and older, 7 and 8.1 install on SATA + e1000e + VGA, with virtio-win 0.1.189 drivers and installer on the CD (legacy folder)
+- Containers: Pool column, pool and folder in Settings, move a stopped container to another pool; memory use read from cgroup v2; Docker host works unprivileged (overlay2, or fuse-overlayfs, never vfs); Nginx Proxy Manager template; console commands run up to an hour with live output and Stop (Ctrl+C)
+- test-install.sh writes the answers file with guestfish, so it runs on an ibHiCS node (VG ibhics on both)
+
+## v1.1
+Beta 3 (1.1.0b3): container network settings after create: network/VLAN per card, DHCP or fixed IP with gateway, DNS, up to 8 cards with fixed MACs, applied with a short restart
+Beta 2 (1.1.0b2): Restart applies saved CPU/memory/boot changes (power off and on, not a guest reboot)
+Beta 1 (1.1.0b1) ✅: rename a VM (Thai names too), even while it runs (shown name; the VM itself is renamed when off), snapshots and backup policies follow; rename containers; every image on images.linuxcontainers.org as a container template (search, grouped by distribution, offline falls back to the curated list); 18 app templates (Nginx, MariaDB, PostgreSQL, Redis, Docker, Zabbix, Grafana, WordPress, Nextcloud, …); on-screen keyboard on the VM console (Esc, Tab, F1–F12, sticky Ctrl/Alt/Shift/Win, Ctrl+Alt+Del)
+
+## v1.0 — Containers ⏳
+Beta 1 (1.0.0b1) ✅: LXC system containers beside VMs: one-click template catalog (Debian, Ubuntu, Rocky, Alma, Alpine) and app templates (Nginx, MariaDB, Docker host, Zabbix agent, WordPress), 3-step wizard (template → CPU/RAM/disk/network with IP at create → root password/SSH key), unprivileged by default, disk as an image file in any folder pool, live resize of CPU/memory/disk (grow), console (commands as root, admins), snapshots/restore, everything in Tasks
+
+Still to do:
+- Backup and restore of containers with the VM backup repositories and policies
+- Clone, convert to template, migrate to another node
+- OCI images from a registry (Docker Hub) as containers
+- Interactive console (full TTY), live CPU/memory charts, firewall per container, topology view
+
 ## v0.9 — Nodes ⏳
+Beta 2 (0.9.0b2) ✅: VM migration data over the migration interface, flow control per port, VMs listed on the node summary
+Beta 1 (0.9.0b1) ✅: maintenance mode (no VMs placed/started/moved here, evacuate first), interface roles (management, migration, storage, VM uplink), static routes, system disk health (SMART, wear, temperature)
+
+Still to do:
 - Add node wizard, node summary (accessible storage, VMs), maintenance mode
 - Communication interfaces: management, migration (overlay), storage, VM uplink
 - Aggregate interfaces (bonds), static routes, MTU/flow control, system disk health

@@ -1,0 +1,101 @@
+ibHiCS — 2026-11-10 development handoff
+Branch: codex/virtual-storage-arbiter (based on canonical 80fa856)
+Release: 1.3.0b2+vstore1
+Do not push remotely until Claude has reviewed and the owner requests the push.
+
+Owner-approved scope
+- Cluster topology: one cluster at top, networks below, retain per-node coverage/drift.
+- Template: choose storage on its node; existing templates can change storage.
+- Storage Rename: display labels independent from stable pool IDs.
+- Default labels requested: Local-node1 / Local-node2.
+- Arbiter is the witness brand. IP .105, storage service VIP .106 on 172.16.12.0/24.
+- Owner deploys Arbiter on VMware; provide ISO only. No VMware deployment authorized/needed.
+- Reuse hybrid01 for future replicated Virtual Storage. Keep only npm-vm on default;
+  owner explicitly authorized deleting all other VMs/template/data.
+
+CRITICAL live storage/VM changes completed today
+- Preserved npm-vm UUID 50d7cc51-7d23-4ff0-99f0-01ab5324c15e.
+- Live QEMU block-copy/pivot to /var/lib/ibhics/pools/default/npm-vm-disk0.qcow2.
+- Both active and inactive domain definitions reference default. Autostart retained.
+- npm-vm IP 172.16.12.194, admin HTTP :81 returned 200 before and after migration.
+- Original npm-vm disk retained in hybrid01 as an as-of-pivot backup, no longer live.
+- Intentionally deleted: EX-win2022, Zabbix_ibHiCS, บอล-เทส and win2022-template.
+  The ONLY remaining VM is npm-vm. Old handoffs saying 4 running VMs are obsolete.
+- Backups and migration proof: Node1 /root/ibhics-vstorage-backup-20261110/.
+- ops/migrate-npm-to-default.py is a one-off record; do not rerun against current state.
+- hybrid01 is still the existing mounted local cached LV, NOT distributed storage.
+  No block-level wipe/reformat/DRBD activation performed on either data node.
+- NEVER wipe OS disks: Node1 /dev/sdd; Node2 /dev/sdc.
+- Node2 old Ceph data devices sda/sdb (HDD) + sdd (SSD) remain unmodified.
+
+Implemented web/agent changes
+- Networks API includes configurations per node, topology one cluster at top.
+  Missing networks/config differences display coverage warnings; no network mutation.
+- TemplateRequest optional pool; validates stopped VM and active node-local pool,
+  moves disks as a task before setting template flag. Existing template Change storage.
+- Disk movement refuses source templates with dependent linked clones.
+- PoolInfo/PoolOut display_name, admin PATCH /nodes/{node}/pools/{pool}.
+  Label lives on the actual node in /var/lib/ibhics/pool-labels.json, shared by manager
+  and agent with flock/atomic replacement; references, volume paths and IDs unchanged.
+  Main table, pool pickers, template selector, ISO destination and detail use labels.
+- Virtual Storage readiness: actual DRBD module/tools/resources probe on agents,
+  including witness. Storage page clearly states setup/waiting; no fake healthy status.
+- Optional admin PUT /virtual-storage/plan validates two compute members, online
+  witness, distinct addresses/subnet and source-pool VM usage. Saves only a PLAN.
+  GET /virtual-storage/configuration downloads DRBD9 configuration, syntax checked
+  with Debian drbdadm using DRBD_DRIVER_VERSION_OVERRIDE=9.3.4; no changes applied.
+
+NOT COMPLETE: Virtual Storage data plane
+- No mirrored pool, NFS service, floating VIP, initial sync or failover is active.
+- API explicitly returns active=false, activation_supported=false for planning stage.
+- Arbiter ISO alone / adding a witness does NOT establish DRBD resources or VM HA.
+- Next after owner installs .105: join witness with its own agent pairing token;
+  install DRBD9 against correct running kernels on compute nodes (do not blindly reboot
+  Node1 with NPM running); validate/create disk backing/cache on Node2; release existing
+  hybrid01 local mount after confirming no references; configure DRBD diskful/diskless
+  quorum; fully sync; single-primary filesystem + stable NFS service/VIP .106; mount
+  shared pool on both hosts; test partitions/node loss and stale-node return.
+- Do not expose concurrent XFS mounts or claim automatic VM restart/fencing exists.
+- Proposed DRBD Reactor service promotion for storage HA still requires implementation
+  and testing. Current manager cluster metadata remains centralized on Node1.
+- Node2 DIMM P2-DIMMF1 recorded fault accepted by owner for test; keep status visible.
+
+Arbiter installer
+- installer/arbiter: reproducible remaster scripts, complete offline package closure,
+  dedicated one-disk picker (rejects zero/multiple/too-small disks), protected reinstall
+  guard for arbiter-01 VG, BIOS/UEFI boot replay, no auto-select erase timeout.
+- Minimal witness runtime, open-vm-tools, generated independent private pairing token,
+  console setup defaults arbiter-01 / 172.16.12.105/24 / GW .254.
+- Debian kernel 6.12.116+deb13-amd64, DRBD9.3.4 via DKMS, all sources retained.
+- Source SHA256 lock installer/arbiter/drbd-source.lock.json; GPL source in appliance.
+- Unsigned/custom module requires VMware Secure Boot off (or separately enroll MOK).
+- QEMU isolated offline 20 GB / 4 GB / 4 vCPU install succeeded, rebooted installed disk,
+  modprobe drbd -> 9.3.4; witness health passed. Host data disks never attached to VM.
+- Install test payload preceded final wheel/UI/default-IP updates; final media keeps
+  same tested installer/dependencies/module build and updates wheel/version/guard.
+- VMware ESXi install not performed; owner will do it.
+- Local delivery: /Users/ccthailand./Desktop/claude-work/ibhics-delivery/arbiter/.
+- Remote build workspace Node2 /root/arbiter-build; isolated test qcow2s not cluster VMs.
+
+Validation
+- Focused regression suite 99 passed including auth, remote templates, moves, network
+  coverage/drift, pool labels, witness planner and installer. JS time-grid suite 5 passed.
+- Broad suite before final installer fixture expansion: 572 passed, one failure;
+  test_home_metrics old fixture still expects obsolete client-side history and lacks
+  HistoryTime binding (pre-existing, home code unchanged here).
+- Known prior test_custom_folder_pool_added_to_apparmor excluded in broad run, already
+  reproduced on baseline previously. Do not silently report the whole suite green.
+- Ruff and JS syntax checks pass for changed code.
+- No GitHub push. No external email sent.
+
+Live deployment verified
+- Both .104 and .103 managers and agents upgraded to 1.3.0b2+vstore1.
+- Manager health checks passed; rollback venv copies:
+  Node1 /opt/ibhics/vstore1-backup-20261110-095648/venv
+  Node2 /opt/ibhics/vstore1-backup-20261110-095602/venv
+- Primary API PATCH renamed default labels to Local-node1 and Local-node2, returned200.
+  Remote Node2 agent reports Local-node2; Node2 file confirms same persistent label.
+- Final check npm-vm running, HTTP :81 200. No libvirt/network service restart performed.
+- Final ISO SHA256 verified after copying to Mac. BIOS boot menu screenshot confirmed
+  Arbiter branding and explicit install selection; El Torito BIOS and UEFI present.
+- Canonical worktree to fast-forward: /Users/ccthailand./Desktop/claude-work/ibhics-wt/home-metrics-node-name.

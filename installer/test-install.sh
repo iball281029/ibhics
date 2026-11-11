@@ -15,7 +15,9 @@ WORK=${WORK:-$PWD/install-test}
 INSTALL_MINUTES=${INSTALL_MINUTES:-60}
 STALL_MINUTES=${STALL_MINUTES:-12}
 ADMIN_PASSWORD=Admin-pw-123
-API=https://127.0.0.1:8888/api/v1
+# A free port for the VM's web console: on an ibHiCS node, 8888 is the host's own console.
+PORT=${PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}
+API=https://127.0.0.1:$PORT/api/v1
 
 rm -rf "$WORK" && mkdir -p "$WORK/shots"
 cd "$WORK"
@@ -53,11 +55,16 @@ run_vm() {  # run_vm NAME MINUTES QEMU-ARGS...: screenshot every minute until QE
         -drive file=raid.qcow2,if=none,id=raid -device virtio-blk-pci,drive=raid,serial=RAID0 \
         -drive file=disk.qcow2,if=none,id=boot -device "virtio-blk-pci,drive=boot,serial=BOOT$BOOT_DISK" \
         -monitor unix:mon.sock,server,nowait "$@" &
-    local pid=$! i=0 shot last="" same=0
+    local pid=$! i=0 shot last="" same=0 start=$SECONDS
     while kill -0 $pid 2>/dev/null; do
-        sleep 60
-        i=$((i + 1))
+        # Wait a minute with bash's own timer (an external sleep that returns at once
+        # would make every limit below pass in a moment), and count real time.
+        read -rt 60 <> <(:) || true
+        kill -0 $pid 2>/dev/null || break
+        i=$(( (SECONDS - start) / 60 ))
+        [ $i -ge 1 ] || continue
         shot=shots/$name-$(printf %03d $i).ppm
+        [ -e "$shot" ] && continue
         monitor "screendump $shot" 2>/dev/null || true
         # A screen that has not changed for STALL_MINUTES means the installer waits for input.
         if [ -s "$shot" ] && [ "$(md5sum <"$shot")" = "$last" ]; then
@@ -85,20 +92,116 @@ raid_used=$(qemu-img info --output=json raid.qcow2 | python3 -c 'import json,sys
     || { echo "!! the installer wrote to the big disk ($raid_used bytes): it must use the small one"; exit 1; }
 echo ">> The big disk is untouched; ibHiCS went on the small one"
 
+pause() { read -rt "$1" <> <(:) || true; }  # bash's own timer: no external sleep
 echo ">> 2/4 Writing an answers file so first boot runs without the console wizard"
+answers() {
+    cat <<EOF
+ROLE=manager
+HOSTNAME=node1
+ADDRESS=10.0.2.15/24
+GATEWAY=10.0.2.2
+DNS=10.0.2.3
+ROOT_PASSWORD=Root-pw-123
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+EOF
+}
+need() { echo "test -e $1 || { echo '!! $2 is missing'; exit 1; }"; }
+if command -v virt-customize >/dev/null; then
+# ibHiCS nodes have virt-customize (guestfs-tools), not always guestfish. libguestfs opens
+# the disk in its own small VM: the host's LVM never sees the test disk's volume group
+# (also called ibhics on an ibHiCS node), so nothing clashes and nothing is renamed.
+answers >answers.conf
+checks="$(need /opt/ibhics/venv/bin/ibhics-manager "ibHiCS in /opt/ibhics")
+$(need /usr/share/virtio-win/viostor/2k19/amd64/viostor.sys "virtio-win drivers (Windows imports)")
+$(need /var/lib/ibhics/tools/guest-tools.iso "the guest tools CD")
+$(need /usr/share/virt-tools/rhsrvany.exe "rhsrvany.exe (virt-v2v)")
+$(need /usr/share/virt-tools/pnp_wait.exe "pnp_wait.exe (virt-v2v)")
+$(need /usr/bin/virt-customize "virt-customize (guestfs-tools)")
+ls /usr/lib/*/nbdkit/plugins/nbdkit-ssh-plugin.so >/dev/null 2>&1 || { echo '!! nbdkit ssh plugin is missing'; exit 1; }
+ls /usr/lib/*/nbdkit/plugins/nbdkit-curl-plugin.so >/dev/null 2>&1 || { echo '!! nbdkit curl plugin is missing'; exit 1; }
+cat /etc/ibhics/version"
+LIBGUESTFS_BACKEND=direct virt-customize -a disk.qcow2 --no-network \
+    --run-command "$checks" \
+    --upload answers.conf:/etc/ibhics/answers.conf \
+    --chmod 0600:/etc/ibhics/answers.conf \
+    || { rm -f answers.conf; echo "!! the installed disk failed its checks (see above)"; exit 1; }
+rm -f answers.conf
+elif command -v guestfish >/dev/null; then
+# libguestfs opens the disk in its own small VM: the host's LVM never sees the test
+# disk's volume group (also called ibhics on an ibHiCS node), so nothing clashes.
+answers >answers.conf
+out=$(LIBGUESTFS_BACKEND=direct guestfish --rw -a disk.qcow2 -i <<'GF'
+is-file /opt/ibhics/venv/bin/ibhics-manager
+is-file /usr/share/virtio-win/viostor/2k19/amd64/viostor.sys
+is-file /var/lib/ibhics/tools/guest-tools.iso
+is-file /usr/share/virt-tools/rhsrvany.exe
+is-file /usr/share/virt-tools/pnp_wait.exe
+is-file /usr/bin/virt-customize
+glob-expand /usr/lib/*/nbdkit/plugins/nbdkit-ssh-plugin.so
+glob-expand /usr/lib/*/nbdkit/plugins/nbdkit-curl-plugin.so
+upload answers.conf /etc/ibhics/answers.conf
+chmod 0600 /etc/ibhics/answers.conf
+cat /etc/ibhics/version
+GF
+) || { echo "!! guestfish could not open the installed disk"; exit 1; }
+rm -f answers.conf
+mapfile -t found <<<"$out"
+missing=("ibHiCS in /opt/ibhics" "virtio-win drivers (Windows imports)" "the guest tools CD"
+         "rhsrvany.exe (virt-v2v)" "pnp_wait.exe (virt-v2v)" "virt-customize (guestfs-tools)")
+for i in "${!missing[@]}"; do
+    [ "${found[$i]}" = true ] || { echo "!! ${missing[$i]} is missing"; exit 1; }
+done
+for plugin in ssh curl; do
+    grep -q "nbdkit-$plugin-plugin.so" <<<"$out" \
+        || { echo "!! nbdkit $plugin plugin is missing: VMware imports would fail"; exit 1; }
+done
+grep -v -e '^true$' -e '^false$' -e nbdkit <<<"$out"  # the version file
+else
 sudo modprobe nbd max_part=16
 sudo qemu-nbd -c /dev/nbd0 disk.qcow2
-trap 'sudo umount -q mnt/var/lib/ibhics 2>/dev/null; sudo umount -q mnt 2>/dev/null; sudo vgchange -q -an ibhics >/dev/null 2>&1; sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true' EXIT
-sleep 2
-sudo vgscan -q >/dev/null
-sudo vgchange -q -ay ibhics
+# The test VM's volume group is called ibhics, like the host's when the test runs on an
+# ibHiCS node. LVM here sees only the test disk, and the VG gets a name of its own while
+# mounted (its device-mapper names would clash with the host's), then its own name back.
+TVG=ibhicstest
+lvm_nbd() { sudo "$@" --config 'devices { filter = [ "a|^/dev/nbd0|", "r|.*|" ] use_devicesfile = 0 }'; }
+put_back() {
+    # The VG must be inactive before it gets its name back: active, its device-mapper
+    # names (ibhics-root, ...) would clash with the host's, and the rename fails.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        lvm_nbd vgchange -q -an "$TVG" >/dev/null 2>&1 && break
+        pause 2
+    done
+    if lvm_nbd vgs "$TVG" >/dev/null 2>&1; then
+        # Without its own name back the test VM cannot find its root at first boot.
+        lvm_nbd vgrename -q "$TVG" ibhics \
+            || { echo "!! could not rename the test disk's VG $TVG back to ibhics"; RENAME_FAILED=1; }
+    fi
+}
+release_disk() {
+    local i
+    sync
+    sudo umount -q mnt/var/lib/ibhics 2>/dev/null || true
+    for i in 1 2 3 4 5; do
+        mountpoint -q mnt || break
+        sudo umount mnt 2>/dev/null && break
+        pause 2
+    done
+    mountpoint -q mnt && { sudo umount -l mnt 2>/dev/null; pause 3; }
+    put_back
+    sudo qemu-nbd -d /dev/nbd0 >/dev/null 2>&1 || true
+}
+trap release_disk EXIT
+pause 2
+lvm_nbd vgrename -q ibhics "$TVG" || { echo "!! no ibhics volume group on the installed disk"; exit 1; }
+lvm_nbd vgchange -q -ay "$TVG"
 mkdir -p mnt
-sudo mount /dev/ibhics/root mnt
+sudo mount "/dev/$TVG/root" mnt
 test -x mnt/opt/ibhics/venv/bin/ibhics-manager || { echo "!! ibHiCS is not installed in /opt/ibhics"; exit 1; }
 test -f mnt/usr/share/virtio-win/viostor/2k19/amd64/viostor.sys \
     || { echo "!! virtio-win drivers are missing: Windows imports would fail"; exit 1; }
 # /var/lib/ibhics is its own volume (data), not part of root.
-sudo mount /dev/ibhics/data mnt/var/lib/ibhics
+sudo mount "/dev/$TVG/data" mnt/var/lib/ibhics
 test -s mnt/var/lib/ibhics/tools/guest-tools.iso || { echo "!! the guest tools CD is missing"; exit 1; }
 sudo umount mnt/var/lib/ibhics
 for exe in rhsrvany.exe pnp_wait.exe; do
@@ -111,34 +214,28 @@ for plugin in ssh curl; do
     ls mnt/usr/lib/*/nbdkit/plugins/nbdkit-$plugin-plugin.so >/dev/null 2>&1 \
         || { echo "!! nbdkit $plugin plugin is missing: VMware imports would fail"; exit 1; }
 done
-sudo tee mnt/etc/ibhics/answers.conf >/dev/null <<EOF
-ROLE=manager
-HOSTNAME=node1
-ADDRESS=10.0.2.15/24
-GATEWAY=10.0.2.2
-DNS=10.0.2.3
-ROOT_PASSWORD=Root-pw-123
-ADMIN_PASSWORD=$ADMIN_PASSWORD
-EOF
+answers | sudo tee mnt/etc/ibhics/answers.conf >/dev/null
 sudo chmod 600 mnt/etc/ibhics/answers.conf
 cat mnt/etc/ibhics/version
-sudo umount mnt
-sudo vgchange -q -an ibhics
-sudo qemu-nbd -d /dev/nbd0
 trap - EXIT
+release_disk
+[ -z "${RENAME_FAILED:-}" ] || exit 1
+fi
 
 echo ">> 3/4 First boot"
 # SeaBIOS tries only the first hard disk (the big, empty one), as a server's firmware
 # boots only the drive set in its boot order: point it at the drive we installed to.
 BOOT_DISK=,bootindex=1
-run_vm firstboot 30 -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:8888-:8888 &
+run_vm firstboot 30 -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$PORT-:8888 &
 VM=$!
 trap 'monitor quit 2>/dev/null || true' EXIT
 for _ in $(seq 60); do
     if curl -skf "$API/health" -o health.json; then break; fi
-    sleep 10
+    # QEMU stops at once when it cannot forward the port (or fails otherwise).
+    kill -0 "$VM" 2>/dev/null || { echo "!! the VM stopped during first boot (port $PORT taken?)"; exit 1; }
+    pause 10
 done
-cat health.json 2>/dev/null || { echo "!! the web console did not answer on :8888"; exit 1; }
+cat health.json 2>/dev/null || { echo "!! the web console did not answer on port $PORT"; exit 1; }
 echo
 
 echo ">> 4/4 Checks"
@@ -159,7 +256,7 @@ def call(method, path, body=None, token=None):
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health
-assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 0.8", health
+assert health["release"] == "ibHiCS Hyper-Converged Infrastructure beta version 1.3", health
 print("ok  web console answers over HTTPS:", health["release"], health["version"])
 
 token = call("POST", "/auth/login", {"username": "admin", "password": password})["token"]
@@ -182,6 +279,10 @@ print("ok  the big disk is listed as free, ready to add as a pool")
 pools = call("GET", "/pools", token=token)
 assert any(p["name"] == "default" for p in pools), pools
 print("ok  default storage pool exists")
+
+assert call("GET", "/containers", token=token) == []
+assert any(t["id"] == "app:nginx" for t in call("GET", "/containers/templates", token=token))
+print("ok  LXC is installed and the containers API answers")
 
 vm = call("POST", "/vms", {"name": "smoke", "vcpus": 1, "memory_mb": 512,
                            "disks": [{"size_gb": 1}]}, token=token)

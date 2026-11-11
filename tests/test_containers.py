@@ -1,0 +1,251 @@
+"""v1.0 containers: templates, the LXC config and first-boot script, the API, the agent."""
+
+import json
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+
+from ibhics.hypervisor.containers import (
+    ContainerSpec,
+    LxcContainers,
+    catalog,
+    first_boot_script,
+    lxc_config,
+    parse_image_index,
+)
+from ibhics.hypervisor.fake import FakeDriver
+from ibhics.manager import create_app
+
+
+def test_catalog_has_os_and_app_templates():
+    ids = {t["id"] for t in catalog()}
+    apps = {"nginx", "mariadb", "postgresql", "redis", "docker", "zabbix", "grafana"}
+    apps |= {"wordpress", "nextcloud"}
+    assert {"debian-13", "ubuntu-24.04"} | {f"app:{a}" for a in apps} <= ids
+
+
+def test_image_server_list_joins_the_catalog():
+    index = "\n".join(
+        [
+            "debian;trixie;amd64;default;20261106_05:24;/images/debian/trixie/amd64/default/x",
+            "debian;trixie;arm64;default;20261106_05:24;/x",
+            "fedora;42;amd64;default;20261106_20:33;/x",
+            "fedora;42;amd64;cloud;20261106_20:33;/x",
+            "archlinux;current;amd64;default;20261106_04:18;/x",
+            "bad;../x;amd64;default;1;/x",
+        ]
+    )
+    images = parse_image_index(index)
+    ids = [t["id"] for t in images]
+    assert ids == ["lxc:archlinux:current", "lxc:debian:trixie", "lxc:fedora:42"]
+    ids = [t["id"] for t in catalog(images)]
+    assert "lxc:fedora:42" in ids and "lxc:debian:trixie" not in ids  # already curated
+    spec = ContainerSpec("f", template="lxc:fedora:42")
+    spec.validate()
+    assert spec.distro == ("fedora", "42")
+
+
+def test_rename_container():
+    from ibhics.hypervisor.fake import FakeDriver
+
+    client = TestClient(create_app(FakeDriver()))
+    client.post("/api/v1/containers", json={"name": "a1"})
+    wait_for(client, "a1")
+    r = client.post("/api/v1/containers/a1/rename", json={"name": "b1"})
+    assert r.status_code == 409  # running
+    client.post("/api/v1/containers/a1/action", json={"action": "stop"})
+    assert client.post("/api/v1/containers/a1/rename", json={"name": "b1"}).json()["name"] == "b1"
+    assert client.get("/api/v1/containers/a1").status_code == 404
+    assert client.post("/api/v1/containers/b1/rename", json={"name": "B 1"}).status_code == 422
+
+
+def test_lxc_rename_moves_folder_and_paths(tmp_path):
+    def run(cmd):
+        return (0, "State: STOPPED\n") if cmd[0] == "lxc-info" else (0, "")
+
+    lxc = LxcContainers(lambda p: str(tmp_path / p), lambda n: "br0", run, lambda: ["default"])
+    home = tmp_path / "default/containers/old"
+    (home / "snaps/s1").mkdir(parents=True)
+    spec = ContainerSpec("old")
+    (home / "ibhics.json").write_text(json.dumps(spec.public() | {"password": ""}))
+    (home / "config").write_text(lxc_config(spec, "br0", f"{home}/rootfs.img"))
+    (home / "snaps/s1/config").write_text(f"lxc.rootfs.path = loop:{home}/snaps/s1/rootfs\n")
+    assert lxc.rename("old", "new").spec.name == "new"
+    new = tmp_path / "default/containers/new"
+    cfg = (new / "config").read_text()
+    assert f"loop:{new}/rootfs.img" in cfg and "lxc.uts.name = new" in cfg
+    assert f"{new}/snaps/s1/rootfs" in (new / "snaps/s1/config").read_text()
+
+
+def test_spec_validation():
+    ContainerSpec("web-1", ip="10.0.0.5/24", gateway="10.0.0.1", dns="1.1.1.1").validate()
+    for bad in (
+        ContainerSpec("Web_1"),
+        ContainerSpec("web", template="windows"),
+        ContainerSpec("web", ip="10.0.0.5"),
+        ContainerSpec("web", ip="10.0.0.5/24", gateway="10.9.0.1"),
+        ContainerSpec("web", ssh_key="not a key"),
+    ):
+        with pytest.raises(ValueError):
+            bad.validate()
+    docker = ContainerSpec("d", template="app:docker")
+    docker.validate()
+    assert docker.nesting and docker.distro == ("debian", "trixie")
+
+
+def test_config_is_unprivileged_with_limits():
+    spec = ContainerSpec("web", vcpus=2, memory_mb=1024, ip="10.0.0.5/24", gateway="10.0.0.1")
+    cfg = lxc_config(spec, "br0", "/p/containers/web/rootfs.img")
+    assert "lxc.idmap = u 0 100000 65536" in cfg
+    assert "lxc.net.0.link = br0" in cfg and "lxc.cgroup2.memory.max = 1024M" in cfg
+    assert "lxc.cgroup2.cpu.max = 200000 100000" in cfg
+    assert "ipv4.address" not in cfg  # set inside the container (guest_network_script)
+    assert "rootfs.path = loop:/p/containers/web/rootfs.img" in cfg
+    assert "rootfs.path" not in lxc_config(spec, "br0")  # for lxc-create -B loop
+    script = first_boot_script(
+        ContainerSpec("web", template="app:nginx", password="p'w", ssh_key="ssh-ed25519 AAA x")
+    )
+    assert "chpasswd" in script and "'p'\"'\"'w'" in script and "install -y nginx" in script
+
+
+def test_lxc_create_runs_download_template(tmp_path):
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        if cmd[0] == "lxc-create":  # like lxc: the -f config has no rootfs, it makes rootdev
+            conf = (tmp_path / cmd[cmd.index("-f") + 1]).read_text()
+            assert "rootfs.path" not in conf
+            home = tmp_path / "default/containers/web"
+            home.mkdir()
+            (home / "rootdev").write_bytes(b"x")
+            (home / "config").write_text(
+                f"lxc.include = /usr/share/lxc/config/debian.common.conf\n"
+                f"lxc.rootfs.path = loop:{home}/rootdev\n"
+            )
+        if cmd[0] == "lxc-info":
+            return 0, "State: RUNNING\nIP: 10.0.0.9\nMemory use: 52428800\n"
+        return 0, ""
+
+    lxc = LxcContainers(lambda p: str(tmp_path / p), lambda n: "br0", run, lambda: ["default"])
+    info = lxc.create(ContainerSpec("web", password="secret", disk_gb=4))
+    create = next(c for c in calls if c[0] == "lxc-create")
+    assert create[create.index("--fssize") + 1] == "4G" and "trixie" in create
+    assert info.state == "running" and info.addresses == ["10.0.0.9"]
+    home = tmp_path / "default/containers/web"
+    assert (home / "rootfs.img").exists() and not (home / "rootdev").exists()
+    cfg = (home / "config").read_text()
+    assert f"lxc.rootfs.path = loop:{home}/rootfs.img" in cfg and "rootdev" not in cfg
+    assert "debian.common.conf" in cfg
+    assert not list((tmp_path / "default/containers").glob(".*create.conf"))
+    meta = json.loads((home / "ibhics.json").read_text())
+    assert meta["password"] == ""  # never stored
+    assert any(c[:1] == ["timeout"] and "chpasswd" in c[-1] for c in calls)
+    with pytest.raises(Exception, match="shrink"):
+        lxc.update("web", None, None, 2, None, None)
+
+
+def wait_for(client, name):
+    for _ in range(50):
+        r = client.get(f"/api/v1/containers/{name}")
+        if r.status_code == 200:
+            return r.json()
+        time.sleep(0.02)
+    raise AssertionError(f"{name} was not created")
+
+
+def test_container_api_lifecycle():
+    client = TestClient(create_app(FakeDriver()))
+    assert client.get("/api/v1/containers/templates").status_code == 200
+    r = client.post("/api/v1/containers", json={"name": "web", "template": "app:nginx"})
+    assert r.status_code == 202
+    ct = wait_for(client, "web")
+    assert ct["state"] == "running" and "password" not in ct and ct["node"]
+    assert client.post("/api/v1/containers", json={"name": "web"}).status_code == 409
+    r = client.post("/api/v1/containers/web/action", json={"action": "stop"})
+    assert r.json()["state"] == "stopped"
+    r = client.patch("/api/v1/containers/web", json={"memory_mb": 2048, "disk_gb": 20})
+    assert r.json()["memory_mb"] == 2048 and r.json()["disk_gb"] == 20
+    assert client.patch("/api/v1/containers/web", json={"disk_gb": 2}).status_code == 409
+    client.post("/api/v1/containers/web/action", json={"action": "start"})
+    r = client.post("/api/v1/containers/web/exec", json={"command": "uptime"})
+    assert r.json()["code"] == 0
+    snaps = client.post("/api/v1/containers/web/snapshots", json={"name": "s1"}).json()
+    assert snaps["snapshots"] == ["s1"]
+    assert client.post("/api/v1/containers/web/snapshots/s1/restore").status_code == 200
+    kinds = {j["kind"] for j in client.get("/api/v1/backup/jobs").json()}
+    assert {"container-create", "snapshot"} <= kinds
+    assert client.delete("/api/v1/containers/web").status_code == 204
+    assert client.get("/api/v1/containers/web").status_code == 404
+
+
+def test_containers_through_node_agents(tmp_path):
+    from test_migration import Env
+
+    env = Env(tmp_path)
+    client = TestClient(create_app(env.cluster))
+    r = client.post("/api/v1/containers", json={"name": "db", "node": "node2"})
+    assert r.status_code == 202 and r.json()["node"] == "node2"
+    assert wait_for(client, "db")["node"] == "node2"
+    r = client.post("/api/v1/containers/db/snapshots", json={"name": "before"})
+    assert r.json()["snapshots"] == ["before"]
+    assert client.delete("/api/v1/containers/db/snapshots/nope").status_code == 409
+    assert client.delete("/api/v1/containers/db").status_code == 204
+
+
+def test_network_cards_config_and_guest_script():
+    from ibhics.hypervisor.containers import guest_network_script
+
+    spec = ContainerSpec("web").with_interfaces(
+        [
+            {"network": "default", "ip": "dhcp"},
+            {"network": "vlan20", "ip": "10.20.0.5/24", "gateway": "10.20.0.1"},
+        ],
+        dns="1.1.1.1",
+    )
+    spec.validate()
+    a, b = spec.interfaces()
+    assert a["mac"].startswith("00:16:3e:") and a["mac"] != b["mac"]
+    cfg = lxc_config(spec, {"default": "br0", "vlan20": "br-v20"}.get)
+    assert "lxc.net.1.link = br-v20" in cfg and "lxc.net.1.name = eth1" in cfg
+    assert f"lxc.net.0.hwaddr = {a['mac']}" in cfg
+    script = guest_network_script(spec)
+    assert "DHCP=ipv4" in script and "Address=10.20.0.5/24" in script
+    assert "Gateway=10.20.0.1" in script and "netplan apply" in script
+    assert "iface eth1 inet static" in script
+    for bad in (
+        [{"network": "default", "ip": "10.0.0.5"}],
+        [{"network": "default", "ip": "10.0.0.5/24", "gateway": "10.9.0.1"}],
+        [{"network": "default", "ip": "dhcp", "gateway": "10.0.0.1"}],
+        [{"network": "default", "mac": "zz"}],
+        [{"network": "default"}] * 9,
+    ):
+        with pytest.raises(ValueError):
+            ContainerSpec("web").with_interfaces(bad).validate()
+
+
+def test_container_network_api():
+    client = TestClient(create_app(FakeDriver()))
+    client.post("/api/v1/networks", json={"name": "vlan20", "vlan": 20})
+    client.post("/api/v1/containers", json={"name": "web"})
+    ct = wait_for(client, "web")
+    mac = ct["mac"]
+    assert mac.startswith("00:16:3e:")
+    body = {
+        "nics": [
+            {"network": "default", "ip": "10.0.0.50/24", "gateway": "10.0.0.1", "mac": mac},
+            {"network": "vlan20", "ip": "dhcp"},
+        ],
+        "dns": "8.8.8.8",
+    }
+    r = client.put("/api/v1/containers/web/network", json=body)
+    assert r.status_code == 200, r.text
+    ct = r.json()
+    assert ct["ip"] == "10.0.0.50/24" and ct["mac"] == mac and ct["dns"] == "8.8.8.8"
+    assert ct["nics"][0]["network"] == "vlan20" and ct["addresses"][0] == "10.0.0.50"
+    body["nics"] = [{"network": "nowhere"}]
+    assert client.put("/api/v1/containers/web/network", json=body).status_code == 409
+    one = {"nics": [{"network": "default"}]}
+    assert client.put("/api/v1/containers/web/network", json=one).json()["nics"] == []
+    assert "container-network" in [j["kind"] for j in client.get("/api/v1/backup/jobs").json()]

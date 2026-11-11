@@ -1,0 +1,356 @@
+ibHiCS development handoff: Home metrics and Node display names
+Date: 2026-11-09 (Asia/Bangkok)
+Branch: codex/home-metrics-node-name
+Base: dev commit 47df0b4 (Migrate: change host and storage together)
+Build: 1.3.0b2+home2 (local development build, not a GitHub release)
+
+User requests and confirmed decisions
+- Home: show CPU, memory and disk allocation as percentages. Values over 100%
+  must remain visible (e.g. 125%) and turn red with a warning.
+- Improve actual-usage charts with a modern design, including light/dark themes.
+- Follow-up: user requested easier-to-understand charts and explicitly said the
+  ALLOCATION section must have NO charts. Allocation is now text-only.
+- User explicitly selected a display name separate from the stable Node ID.
+- User authorized development and server connections. The initial sandbox policy
+  blocked SSH. The user subsequently enabled Full access and deployment succeeded
+  over SSH on 2026-11-09 at approximately 15:54 Asia/Bangkok.
+
+Implementation
+- CPU/memory allocation counts non-stopped VMs. CPU denominator is hardware
+  threads, matching the existing dashboard. Percentages are not capped at 100.
+- Disk allocation counts all regular VMs AND templates, including stopped VMs;
+  stopped disks still reserve storage. The disk card explicitly labels this.
+- Overallocated cards show the full percentage, a red border/value, an alert
+  icon and the excess percentage. Unknown capacity displays a dash, never NaN.
+- Actual CPU, memory and storage have SVG area/line charts, a current-use bar,
+  used/available (CPU: idle) legend and resource-specific explanations. Decorative
+  rings have been removed. Allocated resources have no bars, rings or charts.
+  Values are sampled by the existing 10-second Home refresh, up to 60 samples /
+  10 minutes in browser memory. No historical backend data is invented. Reloading
+  starts a new history; missing measurements and gaps over 25 seconds break lines.
+  All three charts use identical fixed 0/25/50/75/100% vertical axes and the same
+  10-minute horizontal window (10 min ago / 5 min ago / Now). Hover timestamps
+  remain available. A first-reading message explains when history is collecting.
+- Memory measurements use reporting nodes' capacity, and partial reports are
+  labelled. Existing Home per-node fallback bars are otherwise unchanged.
+- PATCH /api/v1/cluster/nodes/{stable_name} accepts {"display_name": "..."}.
+  This route is ADMIN ONLY and uses the existing audit middleware.
+- Labels are trimmed, limited to 80 characters, reject Unicode control characters,
+  allow Thai, and can be reset with an empty string. HTML is escaped in the UI.
+- Cluster JSON has a new optional display_names mapping keyed by Node ID. Local,
+  remote and witness labels persist; legacy cluster JSON loads without migration.
+  Failed persistence restores the old label in memory.
+- No membership key, Linux hostname, agent identity, VM node reference, backup
+  reference or task reference is renamed. Same-label names may coexist; selectors
+  show the stable ID beside a differing label to distinguish them.
+- Edit labels in Nodes > Rename or Node > Settings > Node display name. Home,
+  Nodes, breadcrumbs, VM detail/node column, storage and common node pickers use
+  the label while keeping original IDs as values and URLs.
+
+Validation
+- Focused API/cluster/auth/host/dashboard checks: 79 passed before final chart
+  visual refinements. Chart refinements were checked again in Node and Playwright.
+- Broad suite: 508 passed, 1 pre-existing failure, 4 deselected socket tests.
+  Existing failure: tests/test_installer.py::test_custom_folder_pool_added_to_apparmor
+  reproduced independently on the untouched dev checkout. Not changed in this work.
+  Socket tests excluded because local listening sockets are disallowed here:
+  test_console_relays_local_vm; test_agent_console_needs_token;
+  test_demo_console_speaks_rfb; test_unreachable_vmware_host_fails_fast.
+- Ruff checks, node --check and git diff --check passed.
+- Playwright: separate isolated preview domain using a captured read-only API
+  snapshot. No browser test mutated the live server. Checked 3 charts/rings,
+  over-100 warnings, display-name save, stable Node ID/hostname/URL, dark theme,
+  and 390px mobile width without horizontal overflow. Charts use fixtures in
+  this test environment. Screenshots are previews, not a deployed server.
+- Wheel build and packaging tests succeeded offline using verified PyPI build
+  dependency wheels. The final build is in ../home-metrics-release/.
+
+Live server observations and scope
+- Server: https://172.16.12.104:8888. Upgraded from 1.3.0b2 to 1.3.0b2+home1;
+  standalone node ibhics-test, four running VMs and one stopped template.
+- Before installation, the frontend was slightly behind local dev: it lacked the combined host
+  and storage migration choice from 47df0b4. This work preserves local dev's
+  existing implementation. Installing the full wheel also includes that existing
+  dev work; it is not a server-only patch against the older installed frontend.
+- GitHub account reinstatement request is ticket #4975680. No push/PR/release
+  was attempted. All development and artifacts remain local.
+- Credentials and session cookies are deliberately absent from this handoff.
+
+Initial home1 deployment and live checks (completed)
+- SSH access succeeded after the user changed the session to Full access.
+- No active backup/import/migration/deploy jobs at preflight.
+- Compared all 56 installed Python source files with local base. Differences were
+  older migration/disk-metadata code, not server-only custom fixes.
+- Uploaded wheel SHA256:
+  a2a2d0d183c53eb4d5814724c48742b8a850b8c0db3330c0b15e2efc670964f8
+- Installed using the provided installer. Complete previous venv backup:
+  /opt/ibhics/home1-backup-20261109-155436/venv
+- Installer health check returned status ok, version 1.3.0b2+home1.
+- ibhics-manager active; no error-priority journal entries after installation.
+- All four running VM UUIDs and libvirt domain IDs remained unchanged (38,39,42,45).
+  Both default and hybrid01 storage pools remained active.
+- Signed in again and checked the REAL Home: three charts, allocation values
+  68.8% CPU, 22.2% memory, 18.2% virtual disk capacity including templates.
+- Live actual measurements rendered (approximately CPU 5%, memory 20.8%, storage 2.4%).
+- Tested a temporary display name via the admin API, confirmed cluster.json
+  persistence and live Node Settings display, stable Node ID and Linux hostname.
+  Restored the original display name immediately afterwards. Final label is
+  ibhics-test; the user can choose their own label later.
+- On this standalone server cluster.json did not exist before the label test;
+  the test created it with members=[], maintenance=[], display_names={} after reset.
+- No VM power operations, hypervisor service restarts or host reboots were issued.
+
+Latest revision: home2 (deployed 2026-11-09 16:04 Asia/Bangkok)
+- Trigger: user found the charts difficult to understand and explicitly requested
+  no graphs for allocated resources.
+- Removed allocation bars and all decorative rings. Allocation remains numeric
+  and retains the red over-100% warnings. Live usage has a labelled capacity bar,
+  used/idle/available legend, plain explanations and fixed 0-100% time-series axes.
+- Updated installer accepts home1 and installs home2; previous installer remains
+  available in Git history and the original home1 delivery artifacts.
+- 26 focused tests passed; JavaScript syntax, Ruff, bash syntax and diff checks passed.
+- Tested preview and actual server on desktop and 390px mobile: no horizontal
+  overflow, zero allocation charts, zero rings, three actual-use charts with
+  matching percentage/time labels, no page errors.
+- Wheel SHA256:
+  22880eeb8dda15a817b0c9c69b02366e2a83dc27b32ace3e795cc6a023ff63eb
+- Backup of home1: /opt/ibhics/home2-backup-20261109-160444/venv
+- Health is ok, installed version 1.3.0b2+home2. VM UUIDs and libvirt domain IDs
+  unchanged (38,39,42,45); no new manager errors in journal.
+- The display-name API and metadata format are unchanged by home2.
+
+Deployment procedure (home2 installer; retained for reference)
+1. Review the branch/diff and the preview images before installation.
+2. Copy the final wheel and installer/install-home-metrics.sh to the server.
+3. Run as root on the development server:
+   bash install-home-metrics.sh ./ibhics-1.3.0b2+home2-py3-none-any.whl
+   The installer checks installed version 1.3.0b2+home1, backs up the entire venv,
+   restarts only ibhics-manager, verifies /api/v1/health and restores the backup
+   automatically if installation or the health check fails. No VM power commands
+   are issued. Manager restart invalidates browser sessions.
+   Override IBHICS_DEPLOY_HEALTH_URL if the manager does not listen on localhost.
+4. Sign in again. Check Home, Node Settings, Nodes and VM/backup references.
+   The admin label test was performed and reset; no new permanent name was chosen.
+
+Rollback
+- The installer prints its full venv backup directory. Stop ibhics-manager, move
+  the new venv aside, move the saved venv back to its original location, and start
+  ibhics-manager. The additive display_names map is ignored by the old code.
+- Browser chart history resets on reload and is not persisted on the server.
+
+Next steps for Claude
+- Review this branch against 47df0b4; do not repeat the implementation on dev.
+- Confirm the current version before changing it; do not rerun an installer
+  against its target version (each installer deliberately requires its previous version).
+- Do not rename the underlying node or Linux hostname: the user chose labels.
+- The AppArmor test remains a separate existing issue.
+
+Latest revision: node1 (deployed 2026-11-09 16:23 Asia/Bangkok)
+- IPMI/BMC IPv4 appears on Nodes and Node Summary, using read-only local KCS
+  ipmitool -I open lan print, 4s timeout and 5min cache; no IPMI password stored.
+- Old agents without IPMI data remain compatible. Witnesses show Not applicable.
+- Installed ipmitool on .104; detected BMC 172.16.12.108. No VM operations.
+- 61 focused tests passed (IPMI, host, node and cluster tests); Ruff/JS/bash checks pass.
+- Installed version 1.3.0b2+node1, health ok, manager active, no error journal entries.
+  Four running VMs retain their names. Backup:
+  /opt/ibhics/node1-backup-20261109-162324/venv
+- Wheel SHA256: 9d5f1826b3439292d4db1df125ad5bb84c0e3a75a14b89bdb45c167bae9e6e66
+
+Second-server installation (in progress; do NOT assume completed)
+- User explicitly authorizes erasing old system on physical machine BMC .107.
+- BMC 172.16.12.107; chassis/board serial ZM174S017043, Nutanix SX-1065-G5.
+- Requested display name: ibhics-Node2 (exact case).
+- Linux hostname and stable node ID: ibhics-node2 (lowercase per setup validation).
+- Management IP 172.16.12.103/24; gateway 172.16.12.254; DNS 172.16.10.1,8.8.8.8.
+- Previous Proxmox console showed repeated failed Cephfs mount. .103 did not
+  respond and neighbour lookup failed before installation (not a full IP audit).
+- Temporary read-only SMB ISO share on .104, service ibhics-node2-media,
+  /srv/ibhics-node2-media/node2.iso, bound .104:445, hosts allow .107 only.
+  Standard samba/nmbd services disabled. Stop/remove temporary share after install.
+- ISO based on existing offline 0.6b3 Debian13 installer plus latest node1 wheel;
+  preseed installs on smallest internal >=32GiB disk. Bootstrap configures br0
+  on first physical NIC reporting carrier, SSH public-key only, pending join.
+  No cluster token or private SSH key embedded in media. Host key must be pinned
+  and hardware/BMC identity verified over SSH before final cluster configuration.
+- BMC reports ISO mounted, bootdev cdrom selected once, power reset sent .107.
+- Still pending: monitor installation, verify .103 identity/NIC/network, install
+  missing OS dependencies, configure compute agent with shared token securely,
+  join .104 manager and set display name ibhics-Node2; test actual cluster health.
+- Multi-node management is supported; no automatic VM failover, fencing, manager
+  failover or distributed-storage replication. No witness deployed or identified.
+
+Latest revision: node2 (hardware-health feature; package suffix is a revision,
+not the second host's name; deployed 2026-11-09 16:38 Asia/Bangkok)
+- Device health on Node Summary, grouped expandable sensor/device table with
+  normal/warning/fault/unknown counts. Missing readings remain unknown.
+- Dedicated GET /nodes/{name}/hardware and token-protected /agent/v1/host/hardware;
+  remote old agents return an explicit upgrade note for 404. Existing summary
+  payload stays compatible. Background collector, independent lock, 60s cache.
+- Sources: read-only IPMI SDR; Linux EDAC per-controller and per-DIMM ECC counters;
+  smartctl health/attributes for detected disks. No self-tests, resets or writes.
+- Recent SEL records are separate historical evidence, not current health. BMC
+  clock and hardware coverage caveats are visible; sampled time is shown.
+- Tests: 73 focused passed; Ruff/JS/bash/diff checks pass. Real server page:
+  75 observations: 61 normal, 1 warning, 13 unknown, 0 current faults.
+  /dev/sda has Reallocated_Sector_Ct=9 while SMART overall passes: warning shown.
+- Actual .104 Nodes and Node Summary IPMI link verified. Device health desktop
+  screenshot: ../node-health-release/live-device-health.png. No desktop overflow.
+- Wheel SHA256: 7107a679496b6244d36d2f7e1ca35cea054fb6b25a882b02130b5a5139b8812e
+- Backup: /opt/ibhics/node2-backup-20261109-163837/venv. Health check passed.
+  VM UUIDs unchanged: 50d7cc51-7d23-4ff0-99f0-01ab5324c15e,
+  29464a25-2c35-42a8-845a-af67edd45fb1,9ba33616-9d77-4e69-b994-52d4a89baf9a,
+  44c935c3-85a3-465f-b555-45a543b28d40. Manager error journal empty.
+- New .103 installer media contains node1 revision, upgrade to node2 after install.
+
+Second server updates (installation still in progress)
+- POST explicitly reported 'Failing DIMM: DIMM location (Uncorrectable memory
+  component found) P2-DIMMF1'. Boot proceeded into Debian installer.
+- User notified, asynchronous question about onsite RAM service still unanswered.
+  Do not put workloads on or rely on this host until hardware is investigated.
+- Current installer is executing the late preseed command, copying offline
+  package repository through BMC virtual media. ISO is 2GB and transfer is slow.
+- Root installer shell available on VT2 via HTML5 noVNC UI.rfb.sendKey: Alt_L
+  0xffe9 + F2 0xffbf; Return 0xff0d. Direct Playwright keyboard modifier combinations
+  were unreliable, use RFB sendKey explicitly. Viewer lives in a temporary context
+  accessible from browser.contexts(), title begins Resolution:.
+- Installer NICs: eno1 MAC ac:1f:6b:16:57:e6; eno2 ac:1f:6b:16:57:e7;
+  ens1f0 00:e0:ed:6a:16:20, ens1f1 00:e0:ed:6a:16:21.
+- Set all four physical NICs UP in installer so bootstrap can detect carrier.
+  Initially all physical NICs were DOWN (offline netcfg disabled).
+- User says they will connect a cable; clarified that the OS LAN is separate
+  from IPMI. Need confirm carrier before bootstrap runs, or fix via installer shell.
+- Temporary ISO share remains necessary and active. Original remote base ISO
+  removed to reclaim 2GB; original local Mac ISO retained. .104 root now ~7GB free.
+- Latest UI display name on .104 is ibhics-Node1; preserve it (stable ID ibhics-test).
+- Follow-up: all four NICs now administratively UP but NO-CARRIER as of 16:43.
+  User is going onsite to connect the cable. Bootstrap requires a NIC with carrier;
+  if installation reaches late-command bootstrap before cabling, recover from VT2
+  rather than reinstalling or changing the first server. No cluster join done.
+- noVNC direct sendKey for ASCII pipe produces backslash on this keyboard; avoid
+  shell pipelines in console commands. Semicolons and plain commands work.
+- Hardware-health mobile 390px checked: panel visible, no horizontal overflow.
+- Latest SMB media reader rchar ~1.73GB; preseed copy still active. Keep the media
+  service running until installation and boot are confirmed.
+
+Latest naming correction from user: display name of the new .103 server is
+ibhics-Node (exact case, no trailing 2), superseding ibhics-Node2 above.
+Stable node ID / Linux hostname remain ibhics-node2 as already provisioned;
+display names are separate from node identity. Apply the new label when joined.
+
+User clarified again: .103 is ibhics-Node2. This overrides the intermediate
+ibhics-Node correction. Use display name ibhics-Node2; stable ID ibhics-node2.
+User reports LAN cable connected. New host rebooted after installation, still
+shows POST uncorrectable memory error P2-DIMMF1 on this boot. Screenshot saved
+as ../node2-ram-post-error.png. Awaiting OS boot and checking networking.
+
+FINAL STATE 2026-11-09 17:19 Asia/Bangkok (supersedes earlier in-progress notes)
+- User clarified the architecture: install each server independently with its own
+  web console; create a cluster on the first server, then explicitly add others.
+- Node2 was installed successfully; OS and SSH at 172.16.12.103, BMC .107,
+  serial ZM174S017043 verified. eno1 is bridged through br0 with .103/24,
+  gateway .254, DNS 172.16.10.1 and 8.8.8.8. New OS disk SATADOM /dev/sdc.
+- Node2 is named ibhics-Node2 (display), ibhics-node2 (stable ID and hostname).
+- User explicitly accepts faulty P2-DIMMF1 RAM for test use. Do not treat it as a
+  newly discovered blocker. BIOS POST error is recorded transparently in
+  /etc/ibhics/hardware-issues.json and shown red in Node Summary and node lists.
+  Source is Verified BIOS POST (recorded), timestamp 2026-11-09T16:46:00+07:00.
+  Clear this finding only after verified repair. Runtime counters can be zero
+  even though BIOS disabled faulty memory; do not use temperature as a RAM test.
+- Tested a temporary VM on Node2 through the manager: create, start, force stop,
+  permanent delete all succeeded. UUID 23689ef9-f22f-44c6-a091-79e3c5a099d7
+  was a one-off installation check and no longer exists.
+- IMPORTANT: user then requested Node2 be removed. Removal completed and persists.
+  Latest explicit instruction: update Node2 identically, leave it standalone;
+  USER will click Add node themselves. DO NOT re-add Node2 automatically.
+- Node1 .104 now has ONLY local member ibhics-test (display ibhics-Node1), 4 VMs.
+  User clicked Create cluster on Node1; preserve their existing metadata:
+  name ibhics-cluster; ID eb3ddd52-df98-47dc-8acd-71ea7e0e30d3.
+- Node2 .103 has ONLY local member ibhics-node2, no Cluster ID, no VMs. Its own
+  HTTPS console is https://172.16.12.103:8888 with admin credentials matching the
+  previously supplied admin account. Seeded ONLY admin password hash/user record,
+  no sessions/audit history. Root SSH remains public-key-only.
+- Node2 has its own independently generated agent token, not Node1's token.
+  Tokens are protected in /etc/ibhics/ibhics.env. Never print/copy them to artifacts.
+  Both manager and agent enabled on Node2. Default libvirt bridge network and
+  default directory pool are active and autostart; root/data ~28GB/22GB.
+- Standalone installer now defaults to console + compute, starts manager + agent;
+  old agent-only compute mode remains an advanced/legacy option.
+- Temporary BMC ISO detached. SMB media service stopped, port 445 no longer
+  listening. Both temporary remote ISO copies removed; original Mac ISO retained.
+  Samba standard services remain disabled. Node1 root has ~9GB free.
+
+Final deployed package on BOTH servers: 1.3.0b2+history1
+- Wheel SHA256: b5bd450c297e4668c8a112c6158d3eb451108f9b74ffb1a1bbb38d4f52f63030
+- Backup on each server: /opt/ibhics/history1-backup-20261109-171542/venv
+- Manager health checks passed on .104 and .103; Node2 agent restarted on latest.
+- Intermediate backups: .104 node3-backup-20261109-165046 and
+  cluster1-backup-20261109-170041. Earlier home/node backups remain available.
+
+Cluster create / management / independent admission
+- Admin POST /api/v1/cluster/create persists UUID/name on a standalone local
+  node without renaming node IDs or changing VMs. Duplicate create rejected;
+  persistence failure rolls back in-memory creation.
+- Dedicated #cluster page shows name, ID, management node, online members, quorum,
+  hardware status and Add/Remove/maintenance/rename links/actions.
+- Home shows the cluster name and Manage cluster link. Sidebar and top-bar
+  cluster name also link directly to #cluster. Creation navigates to #cluster.
+- Node1 URL: https://172.16.12.104:8888/#cluster ; Node2 URL:
+  https://172.16.12.103:8888/#cluster . Both actual pages verified on desktop/mobile.
+- Standalone Cluster page: admin Copy pairing key, Node ID and agent URL displayed.
+  GET /api/v1/cluster/pairing is admin-only/no-store; created clusters cannot
+  disclose a pairing key via this route. No raw keys in normal cluster replies.
+- Add node accepts optional per-node agent_token (SecretStr request); primary
+  stores it in root-readable 0600 cluster.json and reloads it across restarts.
+  Legacy shared-key agents still work. Per-node admission was tested with
+  separate agent credentials in-process, including persistence and non-disclosure.
+- Actual Node2 pairing credential was checked against its agent health endpoint:
+  HTTP 200, name ibhics-node2, address http://172.16.12.103:8007. NOT enrolled.
+- User entry flow: on Node2 Cluster page copy pairing key, then on Node1 Add node
+  enter Node ID ibhics-node2, role compute, agent URL http://172.16.12.103:8007,
+  paste its pairing key. User can adjust its display label using Rename.
+- Single-node created cluster is labelled Single-node cluster. No automatic
+  VM failover, fencing, distributed storage or manager HA is implemented.
+  Cross-host migration transport/storage configuration has not been validated.
+
+Persistent Home resource history
+- File: /var/lib/ibhics/usage.sqlite3 per manager; override IBHICS_USAGE_FILE.
+- Background sampling every 10 seconds independent of browser sessions. CPU is
+  weighted by reporting hardware threads, memory/storage percentages by totals.
+  Missing readings are null/gaps and incomplete node counts retained.
+- 30-day retention enforced on startup and writes. SQLite WAL; per-operation
+  connections; no external database/dependencies. Allocation still has NO charts.
+- Read API /api/v1/usage/history?range=now|5m|30m|1d|7d|30d . Up to ~181 chart
+  points with averages for long periods; browser selection persists locally.
+- Shows collection start date and actual history disk use. Does not invent older
+  measurements: history starts at this update (~17:15:40 Asia/Bangkok).
+- Capacity benchmark: 259200 samples (30d at 10s), actual schema 20512768 bytes,
+  19.56 MiB excluding WAL. Practical estimate ~20MB plus temporary files;
+  allow ~25-30MB per manager for this data pattern.
+- Verified on BOTH real servers: 16+ history points retained across logout/login,
+  all six filters work, no Home/Cluster horizontal overflow at 390px, no allocation
+  charts, no JS page errors in fresh review contexts. UI screenshots in
+  ../history1-release/ (node1/node2 Home, Cluster desktop/mobile).
+- Tests: 117 passed, 1 pre-existing AppArmor test deselected. That known
+  test_custom_folder_pool_added_to_apparmor failure was already reproduced on
+  untouched dev earlier; this revision does not fix/change it. Ruff/JS/bash/diff pass.
+- Final VM UUIDs on Node1 unchanged:
+  50d7cc51-7d23-4ff0-99f0-01ab5324c15e
+  29464a25-2c35-42a8-845a-af67edd45fb1
+  9ba33616-9d77-4e69-b994-52d4a89baf9a
+  44c935c3-85a3-465f-b555-45a543b28d40
+- Last user instruction: finish existing work, then STOP. Do not start additional
+  features or enroll Node2 without a new request. GitHub remains blocked: no push.
+
+POST-DELIVERY UPDATE (latest; overrides earlier 'leave Node2 outside' state)
+- User manually added Node2 after receiving the delivery. Their screenshot shows
+  2 members, Online 2/2, Quorum OK, topology Incomplete (no witness).
+- Read-only SSH verification confirms Node1 persisted remote ibhics-node2 at
+  http://172.16.12.103:8007. No keys were printed. Node1's four VMs remain running.
+- Both servers remain 1.3.0b2+history1. Node2 manager/agent active, no VMs.
+- User has now requested STOP and a Claude handoff only. Clean current handoff:
+  docs/CLAUDE-HANDOFF.txt. Do not remove/re-add members or start new work.
+
+LATEST: history2 deployed to both nodes; see final section of CLAUDE-HANDOFF.txt.
+Clock-aligned resolution ticks and ib-logo expandable rail verified on both servers.
+Stop requested after finishing the active update. Virtual Storage and Arbiter ISO
+remain unimplemented pending storage/migration decision; no disks were altered.

@@ -6,7 +6,7 @@
 #   installer/build-iso.sh --repo DIR           # reuse a package repo from build-repo.sh
 #   installer/build-iso.sh --no-virtio-win      # leave out the Windows virtio drivers
 #
-# Needs: xorriso, python3 with pip, curl, and docker (for the package repository). The
+# Needs: xorriso, bsdtar (libarchive-tools), python3 with pip, curl, and docker (for the package repository). The
 # result keeps Debian's BIOS and UEFI boot setup and adds the ibHiCS boot menu, the
 # unattended-install answers, every Debian package a node needs (a local apt repository)
 # and ibHiCS with its Python dependencies as wheels, so installing needs no network.
@@ -17,6 +17,8 @@ REPO=$(dirname "$HERE")
 MIRROR=${DEBIAN_CD_MIRROR:-https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}
 TARGET_PYTHON=3.13  # Debian 13's python3: the wheels must match it
 VIRTIO_WIN_URL=${VIRTIO_WIN_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso}
+# Server 2012 R2, 8.1 and older: the last release whose drivers are signed for them.
+VIRTIO_WIN_LEGACY_URL=${VIRTIO_WIN_LEGACY_URL:-https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.189-1/virtio-win-0.1.189.iso}
 NO_VIRTIO_WIN=""
 SOURCE=""
 OUT=""
@@ -33,7 +35,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-for tool in xorriso python3 curl; do
+for tool in xorriso bsdtar python3 curl; do
     command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 1; }
 done
 
@@ -94,11 +96,20 @@ if [ -z "$NO_VIRTIO_WIN" ]; then
     xorriso -osirrox on -indev "$WORK/virtio-win.iso" -extract / "$WORK/virtio-all" >/dev/null 2>&1
     chmod -R u+w "$WORK/virtio-all"
     python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-all" "$PAYLOAD/virtio-win"
-    # The guest tools CD that "Install guest tools" puts in a VM's drive.
+    echo ">> Adding virtio-win 0.1.189 for Windows Server 2012 R2, 8.1 and older"
+    curl -fL --retry 3 -o "$WORK/virtio-legacy.iso" "$VIRTIO_WIN_LEGACY_URL"
+    mkdir -p "$WORK/virtio-legacy"
+    xorriso -osirrox on -indev "$WORK/virtio-legacy.iso" -extract / "$WORK/virtio-legacy" >/dev/null 2>&1
+    chmod -R u+w "$WORK/virtio-legacy"
+    python3 "$HERE/prune-virtio-win.py" "$WORK/virtio-legacy" "$PAYLOAD/virtio-win" --legacy
+    # The guest tools CD that "Install guest tools" puts in a VM's drive; Windows Setup
+    # loads its disk and network drivers from $WinPEDriver$ by itself.
     mkdir -p "$WORK/tools/linux"
     cp -r "$PAYLOAD/virtio-win/." "$WORK/tools/"
+    python3 "$HERE/prune-virtio-win.py" --winpe "$PAYLOAD/virtio-win" "$WORK/tools"
     cp "$HERE/guest-tools/install.sh" "$WORK/tools/linux/install.sh"
     cp "$HERE/guest-tools/README.txt" "$WORK/tools/README.txt"
+    cp "$HERE/guest-tools/install-legacy.cmd" "$WORK/tools/legacy/install-legacy.cmd"
     xorriso -as mkisofs -quiet -J -R -V IBHICS_TOOLS -o "$PAYLOAD/guest-tools.iso" "$WORK/tools"
 
     # virt-v2v sets up a converted Windows guest at its first boot with rhsrvany.exe and
