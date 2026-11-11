@@ -1,3 +1,7 @@
+CURRENT HANDOFF 2026-11-11: read docs/CLAUDE-HANDOFF-2026-11-11.txt FIRST.
+Live migration TEST-ib succeeded to Node2 with verified TLS on Nov10.
+vstore3.8 changes remain UNCOMMITTED; no GitHub push. Older entries below are historical.
+
 LATEST UI vstore3.7: Nodes consolidated into Cluster, scroll-safe action menus,
 Virtual Storage only shown above local/external storage. Multiple VS still pending.
 ACTIVE migration TLS setup follow-up: missing CA on both computes. Read latest

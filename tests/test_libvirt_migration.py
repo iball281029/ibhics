@@ -20,6 +20,7 @@ FLAGS = dict(
     VIR_MIGRATE_NON_SHARED_DISK=64,
     VIR_MIGRATE_OFFLINE=1024,
     VIR_MIGRATE_AUTO_CONVERGE=8192,
+    VIR_MIGRATE_TLS=65536,
 )
 
 
@@ -54,7 +55,8 @@ class Domain:
 @pytest.fixture
 def make(monkeypatch):
     fake = types.SimpleNamespace(
-        libvirtError=LibvirtError, VIR_MIGRATE_PARAM_BANDWIDTH="bandwidth", **FLAGS
+        libvirtError=LibvirtError, VIR_MIGRATE_PARAM_BANDWIDTH="bandwidth",
+        VIR_MIGRATE_PARAM_TLS_DESTINATION="tls.destination", **FLAGS
     )
     monkeypatch.setattr(lv, "libvirt", fake)
 
@@ -81,15 +83,17 @@ BASE = ("PEER2PEER", "PERSIST_DEST", "UNDEFINE_SOURCE")
 def test_live_on_shared_storage(make):
     driver, dom, deleted = make(active=True)
     driver.migrate_vm("u", "qemu+tls://node2/system")
-    assert dom.calls == [("qemu+tls://node2/system", {}, flags(*BASE, "LIVE", "AUTO_CONVERGE"))]
+    assert dom.calls == [("qemu+tls://node2/system", {"tls.destination": "node2"},
+                          flags(*BASE, "LIVE", "AUTO_CONVERGE", "TLS"))]
     assert deleted == []
 
 
 def test_live_with_storage_copy_removes_source_volumes(make):
     driver, dom, deleted = make(active=True)
     driver.migrate_vm("u", "qemu+tls://node2/system", copy_storage=True, bandwidth_mib=200)
-    expected = flags(*BASE, "LIVE", "AUTO_CONVERGE", "NON_SHARED_DISK")
-    assert dom.calls == [("qemu+tls://node2/system", {"bandwidth": 200}, expected)]
+    expected = flags(*BASE, "LIVE", "AUTO_CONVERGE", "NON_SHARED_DISK", "TLS")
+    assert dom.calls == [("qemu+tls://node2/system",
+                          {"bandwidth": 200, "tls.destination": "node2"}, expected)]
     assert deleted == ["db-disk0.qcow2"]  # disks only, not the ISO
 
 

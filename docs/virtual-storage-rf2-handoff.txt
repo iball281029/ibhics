@@ -1,3 +1,8 @@
+CURRENT 2026-11-11: docs/CLAUDE-HANDOFF-2026-11-11.txt supersedes older state below.
+TEST-ib migration job2 succeeded Nov10 21:59:33+07 to Node2, live, no disk copy.
+TLS installed both computes vstore3.8; UEFI/seed preparation manual for TEST-ib.
+Previous ACTIVE migration investigation text below is historical. No GitHub push.
+
 LATEST UI vstore3.7 — 2026-11-10
 Both computes now vstore3.7, Arbiter remains vstore3.3.
 Virtual Storage appears only in upper section with usage/free capacity/shared nodes,

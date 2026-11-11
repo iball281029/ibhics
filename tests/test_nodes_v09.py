@@ -138,11 +138,12 @@ def test_migration_data_goes_over_the_migration_interface(tmp_path):
         ]
     )
     member = SimpleNamespace(
+        local=False, address="http://172.16.12.103:8007",
         driver=SimpleNamespace(host_system=lambda: SimpleNamespace(network=lambda: net))
     )
     assert mm.migration_address(member) == "10.9.0.12"
     net.interfaces[1].roles = []
-    assert mm.migration_address(member) == ""
+    assert mm.migration_address(member) == "172.16.12.103"
 
 
 def test_host_info_counts_sockets_cores_threads():

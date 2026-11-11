@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import itertools
 import socket
 import threading
@@ -83,16 +84,20 @@ class MigrationManager:
         return TRANSPORTS[self._transport].format(host=host)
 
     def migration_address(self, member: Member) -> str:
-        """The node's address on an interface marked for VM migration, or "" (then the
-        data goes the same way as the libvirt connection)."""
+        """Prefer a migration interface; otherwise use the reachable management address."""
+        fallback = self._local_host if member.local else urlparse(member.address).hostname or ""
+        try:
+            fallback = str(ipaddress.IPv4Address(fallback))
+        except ValueError:
+            fallback = ""  # Existing DNS-based installations retain libvirt's own resolution.
         try:
             net = member.driver.host_system().network()
         except Exception:
-            return ""
+            return fallback
         for iface in net.interfaces:
             if "migration" in iface.roles and iface.method == "static" and iface.address:
                 return iface.address.split("/")[0]
-        return ""
+        return fallback
 
     # Planning
 

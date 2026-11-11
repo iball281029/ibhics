@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape, quoteattr
 from xml.sax.saxutils import escape as xml_escape
 
@@ -1421,6 +1422,8 @@ class LibvirtDriver(HypervisorDriver):
         )
         if dom.isActive():
             flags |= libvirt.VIR_MIGRATE_LIVE | libvirt.VIR_MIGRATE_AUTO_CONVERGE
+            if dest_uri.startswith("qemu+tls://"):
+                flags |= libvirt.VIR_MIGRATE_TLS
             if copy_storage:
                 # libvirt creates same-named volumes in the same-named pools on the other side.
                 flags |= libvirt.VIR_MIGRATE_NON_SHARED_DISK
@@ -1432,6 +1435,8 @@ class LibvirtDriver(HypervisorDriver):
         disks = root.findall("./devices/disk[@device='disk']")
         volumes = [self._volume(d) for d in disks] if copy_storage else []
         params = {}
+        if flags & getattr(libvirt, "VIR_MIGRATE_TLS", 0):
+            params[libvirt.VIR_MIGRATE_PARAM_TLS_DESTINATION] = urlparse(dest_uri).hostname
         if bandwidth_mib:
             params[libvirt.VIR_MIGRATE_PARAM_BANDWIDTH] = bandwidth_mib
         if data_address:
