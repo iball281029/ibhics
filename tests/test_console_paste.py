@@ -25,7 +25,7 @@ def test_paste_paces_every_event_and_releases_modifiers():
         "const held = new Set(); const kbd = { querySelectorAll: () => [] };\n"
         "const setStatus = () => {};\n"
         "Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { readText: async () => 'Ab$\\n' } } });\n"
-        "const document = { getElementById: el };\n"
+        "const document = { getElementById: el, querySelector: () => el('power') };\n"
         "let timers = 0; globalThis.setTimeout = (f) => { timers++; f(); };\n"
         + script()
         + "\nhandlers.paste().then(() => {\n"
@@ -44,3 +44,25 @@ def test_paste_paces_every_event_and_releases_modifiers():
 
 def test_release_keys_button_exists():
     assert re.search(r'id="release"[^>]*>Release keys<', PAGE.read_text())
+
+
+def test_power_menu_uses_existing_vm_endpoints():
+    from fastapi.testclient import TestClient
+
+    from ibhics.hypervisor.fake import FakeDriver
+    from ibhics.manager import create_app
+
+    page = PAGE.read_text()
+    for action in ("start", "stop", "restart", "reset", "poweroff"):
+        assert f'data-power="{action}"' in page
+    client = TestClient(create_app(FakeDriver(demo_console=False)))
+    body = {"name": "c1", "memory_mb": 512, "disks": [{"size_gb": 1}]}
+    uuid = client.post("/api/v1/vms", json=body).json()["uuid"]
+    for path, payload, state in [
+        ("start", {}, "running"),
+        ("restart", {"force": True}, "running"),
+        ("stop", {"force": True}, "stopped"),
+    ]:
+        resp = client.post(f"/api/v1/vms/{uuid}/{path}", json=payload)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["state"] == state

@@ -22,6 +22,12 @@
   #kbd button { min-width: 34px; padding: 6px 7px; }
   #kbd button.wide { min-width: 64px; } #kbd button.space { min-width: 220px; }
   #kbd button.on { background: #1f6feb; border-color: #1f6feb; }
+  details.power { position: relative; }
+  details.power summary { list-style: none; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: #232936; cursor: pointer; }
+  details.power summary::-webkit-details-marker { display: none; }
+  details.power div { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; display: flex; flex-direction: column; gap: 4px; min-width: 170px; padding: 6px; background: var(--bar); border: 1px solid var(--line); border-radius: 8px; }
+  details.power div button { text-align: left; }
+  details.power .danger { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -32,6 +38,13 @@
   <button id="kbd-btn" title="On-screen keyboard: Esc, Tab, F1–F12, Ctrl/Alt/Win and more">Keyboard</button>
   <button id="paste" disabled title="Type the clipboard text into the VM">Paste text</button>
   <button id="release" disabled title="Send key-up for Shift, Ctrl, Alt and Meta if the VM acts as if one is stuck">Release keys</button>
+  <details class="power"><summary title="Power on, shut down or restart this VM">Power ▾</summary><div>
+    <button data-power="start">Power on</button>
+    <button data-power="stop">Shut down</button>
+    <button data-power="restart">Restart</button>
+    <button data-power="reset" class="danger">Force reset</button>
+    <button data-power="poweroff" class="danger">Power off</button>
+  </div></details>
   <button id="full">Fullscreen</button>
   <button id="reconnect">Reconnect</button>
 </header>
@@ -191,6 +204,33 @@ document.getElementById("release").addEventListener("click", () => {
   held.clear();
   kbd.querySelectorAll("button.on").forEach((b) => b.classList.remove("on"));
   if (rfb) rfb.focus();
+});
+
+// Same actions as the VM menu in the main window; the server checks the user's role.
+const POWER = {
+  start: ["start", null, "Powering on…"],
+  stop: ["stop", { force: false }, "Asking the guest to shut down…"],
+  restart: ["restart", { force: false }, "Asking the guest to restart…"],
+  reset: ["restart", { force: true }, "Resetting…", "Force reset? Unsaved work in the VM is lost, like pressing the reset button."],
+  poweroff: ["stop", { force: true }, "Powering off…", "Power off now? Unsaved work in the VM is lost, like pulling the plug."],
+};
+document.querySelector("details.power").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-power]");
+  if (!b) return;
+  const [path, body, doing, warn] = POWER[b.dataset.power];
+  e.currentTarget.open = false;
+  if (warn && !confirm(warn)) return;
+  setStatus(doing, "wait");
+  try {
+    const r = await fetch(`/api/v1/vms/${encodeURIComponent(uuid)}/${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    setStatus(`${b.textContent} sent`, "ok");
+    if (path !== "stop") setTimeout(connect, 2500);  // the display restarts with the VM
+  } catch (err) {
+    setStatus(`${b.textContent} failed: ${err.message}`, "bad");
+  }
 });
 
 if (uuid) connect(); else setStatus("No VM given", "bad");
