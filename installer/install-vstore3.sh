@@ -32,7 +32,7 @@ systemctl stop "${services[@]}"
 "$venv/bin/python" -m pip install --no-index --no-deps --force-reinstall "$wheel"
 systemctl start "${services[@]}"
 "$venv/bin/python" - "$role" <<'PY'
-import json, ssl, sys, time, urllib.request
+import json, ssl, sys, time, urllib.error, urllib.request
 from pathlib import Path
 env = {line.split('=', 1)[0]: line.split('=', 1)[1].strip().strip('"\'')
        for line in Path('/etc/ibhics/ibhics.env').read_text().splitlines()
@@ -49,10 +49,15 @@ for _ in range(20):
             agent = json.load(response)
         assert agent['version'] == '1.3.0b2+vstore3.22'
         if sys.argv[1] == 'compute':
-            with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
-                                        context=context, timeout=3) as response:
-                manager = json.load(response)
-            assert manager['status'] == 'ok' and manager['version'] == agent['version']
+            try:
+                with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
+                                            context=context, timeout=3) as response:
+                    manager = json.load(response)
+                assert manager['status'] == 'ok' and manager['version'] == agent['version']
+            except urllib.error.HTTPError as exc:
+                # A standby manager answers 503 and names the active one.
+                assert exc.code == 503 and json.load(exc)['status'] == 'standby'
+                print('Manager is standby')
         print('Application health passed:', agent['name'], agent['role'], agent['version'])
         break
     except Exception:
