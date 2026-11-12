@@ -290,3 +290,14 @@ def manager_vip(address: str):
         out = subprocess.run(["ip", "-o", "-4", "addr"], capture_output=True, text=True).stdout
         device = next((ln.split()[1] for ln in out.splitlines() if f" {address}/" in ln), "")
     return ManagerVIP(cidr, device) if device else None
+
+
+if __name__ == "__main__":
+    # ExecStopPost of ibhics-manager: a stopped or crashed manager gives the console
+    # address back, so the standby can take it (uvicorn ends on the signal itself).
+    import sys
+
+    if sys.argv[1:] == ["release-vip"]:
+        vip = manager_vip(os.environ.get("IBHICS_MIGRATION_HOST", ""))
+        if vip is not None:
+            vip.release()
