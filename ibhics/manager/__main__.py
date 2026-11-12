@@ -100,6 +100,21 @@ def main() -> None:
     if bool(args.tls_cert) != bool(args.tls_key):
         parser.error("--tls-cert and --tls-key go together")
 
+    if args.tls_cert and args.driver == "libvirt":
+        from . import console_cert
+
+        vip = os.environ.get("IBHICS_MANAGER_VIP", "").split("/")[0]
+        try:
+            if console_cert.ensure(
+                Path(args.tls_cert),
+                Path(args.tls_key),
+                [args.node_name],
+                [args.migration_host or "", vip],
+            ):
+                print("Console certificate re-signed for this node and the manager VIP", flush=True)
+        except Exception as exc:  # the old certificate still works
+            print(f"Console certificate unchanged: {exc}", flush=True)
+
     leader = _lead(args)
 
     cluster = Cluster(
