@@ -108,3 +108,33 @@ def test_folder_is_made_on_first_use_but_not_without_the_share(tmp_path):
     assert Leadership(tmp_path / "share" / ".mgr", "n1", "x").available is False
     (tmp_path / "share").mkdir()
     assert Leadership(tmp_path / "share" / ".mgr", "n1", "x").available is True
+
+
+def test_vip_is_taken_only_when_free_and_released_on_step_down():
+    from types import SimpleNamespace as NS
+
+    from ibhics.manager.leader import ManagerVIP
+
+    state = {"held": False, "other_host": False}
+    calls = []
+
+    def run(args):
+        calls.append(args[:3])
+        if args[:2] == ["ip", "-o"]:
+            return NS(returncode=0, stdout=" inet 10.0.0.9/24 " if state["held"] else "")
+        if args[:2] == ["arping", "-D"]:
+            return NS(returncode=1 if state["other_host"] else 0, stdout="")
+        if args[:3] == ["ip", "addr", "add"]:
+            state["held"] = True
+        if args[:3] == ["ip", "addr", "del"]:
+            state["held"] = False
+        return NS(returncode=0, stdout="")
+
+    vip = ManagerVIP("10.0.0.9/24", "br0", run=run)
+    state["other_host"] = True
+    assert vip.claim() is False and not state["held"]  # someone else answers: leave it
+    state["other_host"] = False
+    assert vip.claim() is True and state["held"]
+    assert ["arping", "-U", "-q"] in calls  # neighbours learn the new owner
+    vip.release()
+    assert not state["held"]
