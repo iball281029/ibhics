@@ -185,7 +185,10 @@ def main() -> None:
 
         vip = manager_vip(args.migration_host or "")
         if vip is not None:
+            import atexit
+
             vip.claim()
+            atexit.register(vip.release)  # a stopped manager must not keep the address
         Replicator(leader, _state_files(args), vip=vip).start()
     uvicorn.run(
         app,
