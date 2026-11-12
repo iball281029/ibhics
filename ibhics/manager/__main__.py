@@ -181,9 +181,12 @@ def main() -> None:
         p2v_pin=_public_key_pin(args.tls_cert),
     )
     if leader is not None:
-        from .leader import Replicator
+        from .leader import Replicator, manager_vip
 
-        Replicator(leader, _state_files(args)).start()
+        vip = manager_vip(args.migration_host or "")
+        if vip is not None:
+            vip.claim()  # released by ExecStopPost (installer drop-in) when it stops
+        Replicator(leader, _state_files(args), vip=vip).start()
     uvicorn.run(
         app,
         host=args.host,
@@ -237,6 +240,11 @@ def _lead(args):
         return leader
 
     print(f"Standby manager; active is {previous or 'unknown'}", flush=True)
+    from .leader import manager_vip
+
+    vip = manager_vip(address)
+    if vip is not None:
+        vip.release()  # only the active manager answers on the console address
 
     def watch() -> None:
         while True:

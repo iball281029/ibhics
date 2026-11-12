@@ -156,10 +156,17 @@ class Replicator(threading.Thread):
         files: list[Path],
         every: float = 10.0,
         on_replaced: Callable[[], None] | None = None,
+        vip=None,
     ) -> None:
         super().__init__(daemon=True, name="manager-replicate")
-        self.leader, self.files, self.every = leader, files, every
-        self.on_replaced = on_replaced or (lambda: os._exit(75))  # systemd restarts us
+        self.leader, self.files, self.every, self.vip = leader, files, every, vip
+
+        def step_down() -> None:
+            if self.vip is not None:
+                self.vip.release()
+            os._exit(75)  # systemd restarts us as a standby
+
+        self.on_replaced = on_replaced or step_down
         self._seen: dict[str, tuple] = {}
         self.stop = threading.Event()
 
@@ -170,6 +177,8 @@ class Replicator(threading.Thread):
             self.on_replaced()
             return
         self.leader.announce()
+        if self.vip is not None:
+            self.vip.claim()  # put it back if something removed it
         replicate(self.files, self.leader.shared, self._seen)
 
     def run(self) -> None:
@@ -193,7 +202,13 @@ def standby_app(leader: Leadership):
             "status": "standby",
             "node": leader.node,
             "active_node": current.get("node"),
-            "active_url": f"https://{current['address']}:8888" if current.get("address") else None,
+            "active_url": (
+                f"https://{os.environ['IBHICS_MANAGER_VIP'].split('/')[0]}:8888"
+                if os.environ.get("IBHICS_MANAGER_VIP")
+                else f"https://{current['address']}:8888"
+                if current.get("address")
+                else None
+            ),
         }
 
     @app.get("/api/v1/health")
@@ -218,3 +233,71 @@ def standby_app(leader: Leadership):
         )
 
     return app
+
+
+class ManagerVIP:
+    """The console address that follows the active manager (`ip addr` + gratuitous ARP)."""
+
+    def __init__(self, cidr: str, device: str, run=None) -> None:
+        import ipaddress
+        import subprocess
+
+        self.iface = ipaddress.IPv4Interface(cidr)
+        self.device = device
+        self._run = run or (
+            lambda args: subprocess.run(args, capture_output=True, text=True, timeout=15)
+        )
+
+    @property
+    def ip(self) -> str:
+        return str(self.iface.ip)
+
+    def held(self) -> bool:
+        out = self._run(["ip", "-o", "-4", "addr", "show", "dev", self.device]).stdout or ""
+        return f" {self.ip}/" in out
+
+    def claim(self) -> bool:
+        if self.held():
+            return True
+        # Duplicate address detection: never take an address another host answers for.
+        if self._run(
+            ["arping", "-D", "-q", "-c", "2", "-w", "3", "-I", self.device, self.ip]
+        ).returncode:
+            print(f"Manager VIP {self.ip} is in use by another host; not taking it", flush=True)
+            return False
+        added = self._run(["ip", "addr", "add", str(self.iface), "dev", self.device])
+        if added.returncode:
+            return False
+        self._run(["arping", "-U", "-q", "-c", "3", "-I", self.device, self.ip])
+        print(f"Manager VIP {self.ip} on {self.device}", flush=True)
+        return True
+
+    def release(self) -> None:
+        if self.held():
+            self._run(["ip", "addr", "del", str(self.iface), "dev", self.device])
+
+
+def manager_vip(address: str):
+    """IBHICS_MANAGER_VIP=a.b.c.d/nn, on the interface that holds `address` unless
+    IBHICS_MANAGER_VIP_DEV says otherwise."""
+    import subprocess
+
+    cidr = os.environ.get("IBHICS_MANAGER_VIP")
+    if not cidr:
+        return None
+    device = os.environ.get("IBHICS_MANAGER_VIP_DEV", "")
+    if not device and address:
+        out = subprocess.run(["ip", "-o", "-4", "addr"], capture_output=True, text=True).stdout
+        device = next((ln.split()[1] for ln in out.splitlines() if f" {address}/" in ln), "")
+    return ManagerVIP(cidr, device) if device else None
+
+
+if __name__ == "__main__":
+    # ExecStopPost of ibhics-manager: a stopped or crashed manager gives the console
+    # address back, so the standby can take it (uvicorn ends on the signal itself).
+    import sys
+
+    if sys.argv[1:] == ["release-vip"]:
+        vip = manager_vip(os.environ.get("IBHICS_MIGRATION_HOST", ""))
+        if vip is not None:
+            vip.release()
