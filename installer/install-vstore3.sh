@@ -7,10 +7,10 @@ role=${2:?compute or witness required}
 venv=/opt/ibhics/venv
 current=$("$venv/bin/python" -c 'import ibhics; print(ibhics.__version__)')
 case "$current" in
-    1.3.0b2+vstore3.20|1.3.0b2+vstore3.19|1.3.0b2+vstore3.18|1.3.0b2+vstore3.17|1.3.0b2+vstore3.16|1.3.0b2+vstore3.15|1.3.0b2+vstore3.14|1.3.0b2+vstore3.13|1.3.0b2+vstore3.12|1.3.0b2+vstore3.11|1.3.0b2+vstore3.10|1.3.0b2+vstore3.9|1.3.0b2+vstore3.8|1.3.0b2+vstore3.7|1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
+    1.3.0b2+vstore3.21|1.3.0b2+vstore3.20|1.3.0b2+vstore3.19|1.3.0b2+vstore3.18|1.3.0b2+vstore3.17|1.3.0b2+vstore3.16|1.3.0b2+vstore3.15|1.3.0b2+vstore3.14|1.3.0b2+vstore3.13|1.3.0b2+vstore3.12|1.3.0b2+vstore3.11|1.3.0b2+vstore3.10|1.3.0b2+vstore3.9|1.3.0b2+vstore3.8|1.3.0b2+vstore3.7|1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
     *) echo "Unexpected installed release: $current"; exit 1;;
 esac
-backup=/opt/ibhics/vstore3.21-backup-$(date +%Y%m%d-%H%M%S)
+backup=/opt/ibhics/vstore3.22-backup-$(date +%Y%m%d-%H%M%S)
 mkdir -m 700 "$backup"
 cp -a "$venv" "$backup/venv"
 services=(ibhics-agent)
@@ -32,7 +32,7 @@ systemctl stop "${services[@]}"
 "$venv/bin/python" -m pip install --no-index --no-deps --force-reinstall "$wheel"
 systemctl start "${services[@]}"
 "$venv/bin/python" - "$role" <<'PY'
-import json, ssl, sys, time, urllib.request
+import json, ssl, sys, time, urllib.error, urllib.request
 from pathlib import Path
 env = {line.split('=', 1)[0]: line.split('=', 1)[1].strip().strip('"\'')
        for line in Path('/etc/ibhics/ibhics.env').read_text().splitlines()
@@ -47,12 +47,17 @@ for _ in range(20):
         req = urllib.request.Request(agent_url, headers={'X-Ibhics-Token': token})
         with urllib.request.urlopen(req, timeout=3) as response:
             agent = json.load(response)
-        assert agent['version'] == '1.3.0b2+vstore3.21'
+        assert agent['version'] == '1.3.0b2+vstore3.22'
         if sys.argv[1] == 'compute':
-            with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
-                                        context=context, timeout=3) as response:
-                manager = json.load(response)
-            assert manager['status'] == 'ok' and manager['version'] == agent['version']
+            try:
+                with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
+                                            context=context, timeout=3) as response:
+                    manager = json.load(response)
+                assert manager['status'] == 'ok' and manager['version'] == agent['version']
+            except urllib.error.HTTPError as exc:
+                # A standby manager answers 503 and names the active one.
+                assert exc.code == 503 and json.load(exc)['status'] == 'standby'
+                print('Manager is standby')
         print('Application health passed:', agent['name'], agent['role'], agent['version'])
         break
     except Exception:

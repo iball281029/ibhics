@@ -97,6 +97,10 @@ def main() -> None:
     parser.add_argument("--tls-key", default=os.environ.get("IBHICS_TLS_KEY"))
     parser.add_argument("--heartbeat", type=float, default=5.0, help="seconds between checks")
     args = parser.parse_args()
+    if bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("--tls-cert and --tls-key go together")
+
+    leader = _lead(args)
 
     cluster = Cluster(
         token=os.environ.get("IBHICS_CLUSTER_TOKEN", ""),
@@ -108,7 +112,12 @@ def main() -> None:
     node_backup.cleanup()  # detach backup targets a crash may have left attached
     restore_edge(driver)
     cluster.add_local(args.node_name, driver, node_backup)
+    if args.migration_host:
+        # Saved with the members, so a standby manager can reach this node's agent.
+        cluster.local_agent = f"http://{args.migration_host}:8007"
     cluster.load()
+    if cluster.local_agent and args.state_file.exists():
+        cluster.save()  # record this node's own agent for whichever manager comes next
 
     backups = BackupManager(cluster, state_path=args.backup_state_file)
     backups.load()
@@ -171,8 +180,10 @@ def main() -> None:
         p2v=P2VSessions(args.state_file.with_name("p2v.json")),
         p2v_pin=_public_key_pin(args.tls_cert),
     )
-    if bool(args.tls_cert) != bool(args.tls_key):
-        parser.error("--tls-cert and --tls-key go together")
+    if leader is not None:
+        from .leader import Replicator
+
+        Replicator(leader, _state_files(args)).start()
     uvicorn.run(
         app,
         host=args.host,
@@ -180,6 +191,76 @@ def main() -> None:
         ssl_certfile=args.tls_cert,
         ssl_keyfile=args.tls_key,
     )
+
+
+def _state_files(args) -> list[Path]:
+    """The manager's own state: what a standby needs to take over."""
+    state = args.state_file
+    return [
+        state,
+        args.backup_state_file,
+        args.users_file,
+        args.users_file.with_name("sessions.json"),
+        args.groups_file,
+        args.migrate_state_file,
+        state.with_name("pool-labels.json"),
+        state.with_name("ha.json"),
+        state.with_name("p2v.json"),
+        state.with_name("activity.sqlite3"),
+    ]
+
+
+def _lead(args):
+    """With IBHICS_SHARED_STATE set: become the active manager, or wait as standby
+    (this call then never returns: the process re-execs itself as active)."""
+    shared = os.environ.get("IBHICS_SHARED_STATE")
+    if not shared or args.driver != "libvirt":
+        return None
+    import sys
+    import threading
+
+    from .leader import Leadership, restore, standby_app
+
+    address = args.migration_host or args.host
+    leader = Leadership(Path(shared), args.node_name, address)
+    if not leader.available:
+        print(f"Shared state {shared} unavailable: running on this node's own state", flush=True)
+        return None
+    files = _state_files(args)
+
+    previous = leader.current().get("node")
+    if os.environ.get("IBHICS_LEADER_FD") or leader.try_acquire():
+        if previous and previous != args.node_name and not os.environ.get("IBHICS_LEADER_FD"):
+            names = restore(files, leader.shared, Path("/var/lib/ibhics"))
+            print(f"Taking over from {previous}: restored {', '.join(names)}", flush=True)
+        print(f"Active manager ({args.node_name})", flush=True)
+        return leader
+
+    print(f"Standby manager; active is {previous or 'unknown'}", flush=True)
+
+    def watch() -> None:
+        while True:
+            threading.Event().wait(5)
+            try:
+                before = leader.current().get("node")  # read before we announce ourselves
+                if leader.available and leader.try_acquire():
+                    if before and before != args.node_name:
+                        names = restore(files, leader.shared, Path("/var/lib/ibhics"))
+                        print(f"Taking over from {before}: restored {', '.join(names)}", flush=True)
+                    argv = [sys.executable, "-m", "ibhics.manager", *sys.argv[1:]]
+                    os.execve(sys.executable, argv, leader.inheritable())
+            except Exception as exc:
+                print(f"standby: {exc}", flush=True)
+
+    threading.Thread(target=watch, daemon=True).start()
+    uvicorn.run(
+        standby_app(leader),
+        host=args.host,
+        port=args.port,
+        ssl_certfile=args.tls_cert,
+        ssl_keyfile=args.tls_key,
+    )
+    raise SystemExit(0)
 
 
 def _public_key_pin(cert: str | None) -> str:
