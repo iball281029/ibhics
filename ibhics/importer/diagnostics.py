@@ -119,7 +119,23 @@ def _prism(source, timeout):
     return Prism(source, http=client)
 
 
+def _sangfor(source, timeout):
+    import httpx
+
+    from .sangfor import Sangfor
+
+    client = httpx.Client(
+        base_url=f"https://{source.host}", verify=source.verify_tls, timeout=timeout
+    )
+    s = Sangfor(source, http=client)
+    s.login()
+    return s
+
+
 def _login(source, timeout):
+    if source.type == SourceType.SANGFOR:
+        _sangfor(source, timeout)
+        return "Authenticated (read-only test)"
     if source.type == SourceType.NUTANIX:
         _prism(source, timeout)._call("POST", "/vms/list", json={"kind": "vm", "length": 1})
         return "Authenticated (read-only test)"
@@ -133,6 +149,8 @@ def _login(source, timeout):
 
 
 def _inventory(source, timeout):
+    if source.type == SourceType.SANGFOR:
+        return len(_sangfor(source, timeout).vms())
     if source.type == SourceType.NUTANIX:
         page = _prism(source, timeout)._call("POST", "/vms/list", json={"kind": "vm", "length": 1})
         return page.get("metadata", {}).get("total_matches", 0)
@@ -262,7 +280,12 @@ def test_source(
         checks.append(dict(step=step, ok=ok, detail=detail, hint=hint))
         return ok or advisory
 
-    if source.type not in (SourceType.VMWARE, SourceType.KVM, SourceType.NUTANIX):
+    if source.type not in (
+        SourceType.VMWARE,
+        SourceType.KVM,
+        SourceType.NUTANIX,
+        SourceType.SANGFOR,
+    ):
         check("Path", lambda t: path_check(source, t))
     else:
         try:

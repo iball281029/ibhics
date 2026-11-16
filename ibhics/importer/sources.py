@@ -40,6 +40,7 @@ class SourceType(StrEnum):
     DISK = "disk"
     UPLOAD = "upload"  # files uploaded through the web console, on the manager's node
     KVM = "kvm"  # a Proxmox VE or plain KVM/libvirt host, read over SSH
+    SANGFOR = "sangfor"  # Sangfor HCI through its web console API (OVA export)
     NUTANIX = "nutanix"  # Nutanix AHV through Prism (Element or Central) v3 API
     P2V = "p2v"  # physical machines whose disks the P2V agent sent to the manager's node
 
@@ -85,6 +86,11 @@ class Source:
                 raise ValueError("a Proxmox or KVM source needs the host's address")
             if not self.password:
                 raise ValueError("a Proxmox or KVM source needs the root password")
+        elif self.type == SourceType.SANGFOR:
+            if not self.host or not HOST_RE.match(self.host):
+                raise ValueError("a Sangfor source needs the HCI address")
+            if not self.username or not self.password:
+                raise ValueError("a Sangfor source needs a username and password")
         elif self.type == SourceType.NUTANIX:
             if not self.host or not HOST_RE.match(self.host):
                 raise ValueError("a Nutanix source needs the Prism address")
@@ -190,6 +196,10 @@ def list_vms(
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     fetch: Callable[[Source, str], str] | None = None,
 ) -> list[SourceVM]:
+    if source.type == SourceType.SANGFOR:
+        from .sangfor import list_sangfor_vms
+
+        return list_sangfor_vms(source)
     if source.type == SourceType.NUTANIX:
         from .nutanix import list_nutanix_vms
 
