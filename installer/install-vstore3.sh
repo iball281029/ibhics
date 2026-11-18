@@ -10,6 +10,11 @@ case "$current" in
     1.3.0b2+vstore3.26|1.3.0b2+vstore3.25|1.3.0b2+vstore3.24|1.3.0b2+vstore3.23|1.3.0b2+vstore3.22|1.3.0b2+vstore3.21|1.3.0b2+vstore3.20|1.3.0b2+vstore3.19|1.3.0b2+vstore3.18|1.3.0b2+vstore3.17|1.3.0b2+vstore3.16|1.3.0b2+vstore3.15|1.3.0b2+vstore3.14|1.3.0b2+vstore3.13|1.3.0b2+vstore3.12|1.3.0b2+vstore3.11|1.3.0b2+vstore3.10|1.3.0b2+vstore3.9|1.3.0b2+vstore3.8|1.3.0b2+vstore3.7|1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
     *) echo "Unexpected installed release: $current"; exit 1;;
 esac
+# Restarting the services stops a running VM import: wait until none runs.
+if pgrep -x virt-v2v >/dev/null && [[ ${IBHICS_UPGRADE_FORCE:-} != 1 ]]; then
+    echo "A VM import (virt-v2v) is running on this node; upgrade after it finishes" >&2
+    exit 3
+fi
 backup=/opt/ibhics/vstore3.26-backup-$(date +%Y%m%d-%H%M%S)
 mkdir -m 700 "$backup"
 cp -a "$venv" "$backup/venv"
