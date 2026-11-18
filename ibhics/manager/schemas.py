@@ -923,6 +923,7 @@ class ImportJobOut(BaseModel):
     error: str | None
     step: str = ""
     percent: int | None = None
+    via: str = ""  # the node that converted it for `node`
 
 
 class AgentImport(BaseModel):

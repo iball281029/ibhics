@@ -338,6 +338,7 @@ def create_app(
 
     p2v = p2v or P2VSessions()
     imports.p2v = p2v
+    imports.migrations = migrations
     app.state.imports = imports
     install_driver_errors(app)
     install_cluster_errors(app)

@@ -518,6 +518,11 @@ class FakeDriver(HypervisorDriver):
     def net_test(self, kind: str, target: str, network: str = "") -> tuple[bool, str]:
         from .edge import net_test
 
+        if kind == "tcp":  # tests set fake.unreachable to hosts this node cannot reach
+            host = target.rpartition(":")[0]
+            blocked = host in getattr(self, "unreachable", ())
+            return not blocked, f"{target} {'closed' if blocked else 'open'}"
+
         def run(cmd: list[str]) -> tuple[int, str]:
             return 0, f"(fake) {' '.join(cmd)}\n4 packets transmitted, 4 received, 0% packet loss"
 

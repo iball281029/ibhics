@@ -292,11 +292,27 @@ def _stop_dhcp(network: str, run: Runner, base: Path) -> None:
         pid.unlink(missing_ok=True)
 
 
+def tcp_probe(target: str, timeout: float = 5.0) -> tuple[bool, str]:
+    """Whether this node can open a TCP connection to "host:port"."""
+    import socket
+
+    host, _, port = target.rpartition(":")
+    if not host or not port.isdigit() or not TARGET_RE.match(host) or host.startswith("-"):
+        raise ValueError("test a TCP port as host:port")
+    try:
+        with socket.create_connection((host.strip("[]"), int(port)), timeout=timeout):
+            return True, f"{target} open"
+    except OSError as exc:
+        return False, f"{target} closed: {exc}"
+
+
 def net_test(
     kind: str, target: str, run: Callable[[list[str]], tuple[int, str]], source: str = ""
 ) -> tuple[bool, str]:
     """Ping or trace `target` from the node, out of a network's bridge when `source`
     names one. Returns whether it got through and the tool's output."""
+    if kind == "tcp":
+        return tcp_probe(target)
     if kind not in ("ping", "trace") or not TARGET_RE.match(target) or target.startswith("-"):
         raise ValueError("test ping or trace to a host name or an IP address")
     if kind == "ping":
