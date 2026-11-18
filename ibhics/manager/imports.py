@@ -6,6 +6,7 @@ import itertools
 import json
 import os
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
@@ -37,6 +38,16 @@ class ImportJob:
     step: str = ""  # what the conversion is doing now
     percent: int | None = None
     pool: str = "default"
+    via: str = ""  # the node that converted it, when the target could not reach the source
+
+
+def source_ports(source: Source) -> list[int]:
+    """The ports a node must reach on the source to convert from it; none for folders."""
+    if source.type == SourceType.VMWARE:
+        return [443] + ([22] if source.transport == "ssh" and not source.path else [])
+    return {SourceType.KVM: [22], SourceType.SANGFOR: [443], SourceType.NUTANIX: [9440]}.get(
+        source.type, []
+    )
 
 
 class NotEnoughSpace(ValueError):
@@ -107,6 +118,8 @@ class ImportManager:
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
         self.p2v = None  # P2VSessions, set by the app
+        self.migrations = None  # MigrationManager, set by the app: moves relayed imports
+        self._sleep = time.sleep
 
     # Sources
 
@@ -180,7 +193,7 @@ class ImportManager:
         if job.state == "queued":
             job.state, job.error, job.finished = "cancelled", "cancelled", self._now()
         elif job.state == "running":
-            member = self._cluster.member(job.node)
+            member = self._cluster.member(job.via or job.node)
             if not member.imports.cancel(job.name):
                 raise InvalidState("this step cannot be stopped yet; try again in a moment")
         else:
@@ -228,7 +241,14 @@ class ImportManager:
                     if node
                     else self._cluster.pick_node(memory_mb or vm.memory_mb)
                 )
-            check_space(member, pool, vm)
+            via = member
+            if source_ports(source):
+                reached, why = self._reaches(member, source)
+                if not reached:
+                    via = self._relay(member, source, pool, why)
+                    if not node:
+                        member = via  # no node was asked for: put it where it converts
+            check_space(via, pool, vm)
             job = ImportJob(
                 id=str(next(self._ids)),
                 source=source_name,
@@ -237,6 +257,7 @@ class ImportManager:
                 node=member.name,
                 created=self._now(),
                 pool=pool,
+                via=via.name if via is not member else "",
             )
             self._jobs.append(job)
 
@@ -246,11 +267,13 @@ class ImportManager:
             job.state = "running"
 
             def progress(step: str, percent: int | None) -> None:
+                if via is not member and step:
+                    step = f"{step} (on {via.name})"
                 job.step, job.percent = step, percent
 
             try:
                 extra = {"clear_hibernation": True} if clear_hibernation else {}
-                info = member.imports.run(
+                info = via.imports.run(
                     source,
                     vm,
                     name,
@@ -258,10 +281,15 @@ class ImportManager:
                     network,
                     vcpus,
                     memory_mb,
-                    start,
+                    start and via is member,
                     progress=progress,
                     **extra,
                 )
+                if via is not member:
+                    job.step, job.percent = f"Moving {name} to {member.name}", 99
+                    self._move(info.uuid, via, member)
+                    if start:
+                        member.driver.start_vm(info.uuid)
                 job.result, job.state, job.step, job.percent = info.uuid, "done", "", 100
                 if source.type == SourceType.P2V and self.p2v is not None:
                     self.p2v.delete(vm.ref)  # the VM has its converted copies now
@@ -274,11 +302,58 @@ class ImportManager:
         self._executor.submit(run)
         return job
 
+    # Relay: a node the target cannot reach the source from converts for it
+
+    def _reaches(self, member, source: Source) -> tuple[bool, str]:
+        host = (source.host or "").rpartition("@")[2]
+        for port in source_ports(source):
+            try:
+                ok, detail = member.driver.net_test("tcp", f"{host}:{port}")
+            except Exception:
+                return True, ""  # an older node cannot test: let the import try
+            if not ok:
+                return False, detail
+        return True, ""
+
+    def _relay(self, target, source: Source, pool: str, why: str):
+        """A node that reaches the source and sees the target's pool, to convert there."""
+        from .migrations import _shared
+
+        dst = next((p for p in target.driver.list_pools() if p.name == pool), None)
+        for member in self._cluster.compute_members():
+            if member.name == target.name or member.maintenance:
+                continue
+            try:
+                src = next((p for p in member.driver.list_pools() if p.name == pool), None)
+                if dst is None or src is None or not _shared(src, dst):
+                    continue
+                if self._reaches(member, source)[0]:
+                    return member
+            except Exception:
+                continue  # a node that does not answer cannot help
+        raise InvalidState(
+            f"{target.name} cannot reach the source {source.host} ({why}), and no other node "
+            f"that can reach it shares the storage pool {pool!r}. Open the firewall from "
+            f"{target.name} to {source.host}, or import onto shared storage."
+        )
+
+    def _move(self, uuid: str, via, target) -> None:
+        if self.migrations is None:
+            raise InvalidState(f"the VM was converted on {via.name}; move it to {target.name}")
+        move = self.migrations.start(uuid, node=target.name)
+        while move.state in ("queued", "running"):
+            self._sleep(2)
+        if move.state != "done":
+            raise InvalidState(
+                f"the VM was converted on {via.name} but could not move to {target.name}: "
+                f"{move.error}. It is on {via.name}; migrate it from there."
+            )
+
     def job_log(self, job_id: str) -> str:
         job = next((j for j in self._jobs if j.id == job_id), None)
         if job is None:
             raise SourceNotFound(f"no import job {job_id}")
-        return self._cluster.member(job.node).imports.log(job.name)
+        return self._cluster.member(job.via or job.node).imports.log(job.name)
 
     def job_log_summary(self, job_id: str) -> dict:
         text = self.job_log(job_id)
