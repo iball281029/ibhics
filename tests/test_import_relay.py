@@ -4,6 +4,8 @@ from concurrent.futures import Future
 
 import pytest
 from fastapi.testclient import TestClient
+from test_cluster import TOKEN, Agents, Clock, join
+from test_migration import NFS
 
 from ibhics.cluster import Cluster, NodeRole
 from ibhics.hypervisor.base import Firmware
@@ -12,7 +14,6 @@ from ibhics.importer import Source, SourceType, SourceVM
 from ibhics.manager.app import create_app
 from ibhics.manager.imports import ImportManager, source_ports
 from ibhics.manager.migrations import MigrationManager
-from tests.test_migration import NFS, TOKEN, Agents, Clock, join
 
 
 class Inline:
