@@ -147,3 +147,26 @@ def test_import_disk_refuses_running_vm(make_driver, tmp_path):
     driver = make_driver(active=True)
     with pytest.raises(InvalidState):
         driver.import_disk("u", 0, tmp_path / "in.raw")
+
+
+def test_backup_refuses_when_staging_is_too_small(make_driver, monkeypatch):
+    driver = make_driver(active=True)
+    usage = types.SimpleNamespace(total=20 * GIB, used=19 * GIB, free=1 * GIB)
+    monkeypatch.setattr(lv.shutil, "disk_usage", lambda _p: usage)
+    with pytest.raises(InvalidState, match="not enough room to stage the backup"):
+        with driver.export_disks("u"):
+            pass
+    assert driver._conn.dom.backup_xml is None  # the guest was never touched
+
+
+def test_backup_stages_beside_folder_pool_disks(make_driver, monkeypatch, tmp_path):
+    pools = tmp_path / "pool"
+
+    class FolderPool(Pool):
+        def XMLDesc(self, _flags):
+            return f"<pool type='netfs'><target><path>{pools}</path></target></pool>"
+
+    monkeypatch.setattr(Conn, "storagePoolLookupByName", lambda self, _n: FolderPool())
+    driver = make_driver(active=True)
+    with driver.export_disks("u") as images:
+        assert images[0].parent.parent == pools / ".ibhics-scratch"

@@ -1757,8 +1757,8 @@ class LibvirtDriver(HypervisorDriver):
     def export_disks(self, uuid: str) -> Iterator[list[Path]]:
         dom = self._lookup(uuid)
         disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
-        Path(self.scratch_dir).mkdir(parents=True, exist_ok=True)
-        scratch = Path(tempfile.mkdtemp(prefix=f"backup-{uuid}-", dir=self.scratch_dir))
+        base = self._backup_staging(disks)
+        scratch = Path(tempfile.mkdtemp(prefix=f"backup-{uuid}-", dir=base))
         _qemu_may_write(scratch)
         try:
             images = [scratch / f"disk{i}.raw" for i in range(len(disks))]
@@ -1773,6 +1773,38 @@ class LibvirtDriver(HypervisorDriver):
             yield images
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    def _backup_staging(self, disks) -> Path:
+        """Where the backup copies of these disks can wait: beside them on their own pool
+        when it is a folder, else the node's scratch folder; never somewhere too small.
+        A copy that runs out of room makes QEMU pause the running guest."""
+        need = sum(self._volume(d).info()[2] for d in disks)  # data actually allocated
+        need = int(need * 1.1) + (1 << 30)
+        places = []
+        for disk in disks:
+            source = disk.find("source")
+            try:
+                root = ET.fromstring(self._pool(source.get("pool")).XMLDesc(0))
+            except Exception:  # not a pool volume, or a pool that cannot tell
+                continue
+            if root.get("type") in ("dir", "netfs", "fs"):
+                places.append(Path(root.findtext("target/path")) / ".ibhics-scratch")
+        places.append(Path(self.scratch_dir))
+        free = []
+        for place in dict.fromkeys(places):
+            try:
+                place.mkdir(parents=True, exist_ok=True)
+                room = shutil.disk_usage(place).free
+            except OSError:
+                continue
+            if room >= need:
+                return place
+            free.append(f"{place} has {room / GIB:.0f} GB free")
+        raise InvalidState(
+            f"not enough room to stage the backup ({need / GIB:.0f} GB needed; "
+            + "; ".join(free)
+            + "). Free space there first."
+        )
 
     def import_disk(self, uuid: str, index: int, raw_image: Path) -> None:
         dom = self._lookup(uuid)
