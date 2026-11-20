@@ -53,3 +53,69 @@
 @media(max-width:700px){.spatial-workspace .vmp{grid-template-columns:1fr!important}.spatial-workspace .vm-cards{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){.vx-card,.vx-arc{transition:none}.vx-card .vx-state.running i{animation:none}}
 .vx-foot .spacer{flex:1}
+
+/* Status pill shared by cards and list. */
+.vx-state{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;letter-spacing:.3px;text-transform:capitalize;color:#c9d3f0;background:#ffffff0d;border:1px solid #ffffff1a;white-space:nowrap}
+.vx-state i{width:7px;height:7px;border-radius:50%;background:#6c7590}
+.vx-state.running{color:#9ff5c2;border-color:#7cf0a844;background:#7cf0a812}
+.vx-state.running i{background:#7cf0a8;animation:vx-pulse 2s infinite}
+.vx-state.paused{color:#ffe0a2;border-color:#ffcb6644;background:#ffcb6612}.vx-state.paused i{background:#ffcb66}
+
+/* Toolbar: one glass bar. */
+.spatial-workspace .vmp-bar{padding:8px;border:1px solid #9aa7ff24;border-radius:16px;background:linear-gradient(90deg,#171b40cc,#1f1840cc);box-shadow:inset 0 1px #ffffff10;margin:0 0 12px}
+.spatial-workspace #vm-view{padding:3px;border-radius:12px;background:#0b0f2c99;border:1px solid #ffffff12}
+.spatial-workspace #vm-view button{border:0;border-radius:9px;background:none;color:#9fb0d6;padding:7px 16px}
+.spatial-workspace #vm-view button.on{color:#fff;background:linear-gradient(135deg,#7d6bff,#d58ce8);box-shadow:0 0 18px #a98bff66}
+.spatial-workspace #vm-filter{border-radius:10px;background:#0b0f2c99;border-color:#ffffff1f}
+.spatial-workspace .vm-batch button,.spatial-workspace .vm-batch summary,.spatial-workspace #vm-refresh{border-radius:10px;background:#ffffff08;border-color:#ffffff1a}
+.spatial-workspace .vm-batch button:not(:disabled):hover,.spatial-workspace #vm-refresh:hover{border-color:#7de5ff66;box-shadow:0 0 14px #7de5ff33}
+.spatial-workspace .vm-picked{color:#7de5ff;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* Metric tabs: neon segments. */
+.spatial-workspace .vm-metrics{display:flex;gap:4px;width:max-content;max-width:100%;overflow-x:auto;padding:4px;margin:0 0 12px;border:1px solid #9aa7ff24;border-radius:14px;background:#0b0f2c80}
+.spatial-workspace .vm-metrics button{border:0;border-radius:10px;background:none;color:#9fb0d6;padding:7px 14px;font-size:12px;letter-spacing:.3px}
+.spatial-workspace .vm-metrics button:hover{color:#e6ecff;background:#ffffff0a}
+.spatial-workspace .vm-metrics button.active{color:#eafcff;background:linear-gradient(135deg,#54e8f033,#bb83ff33);box-shadow:inset 0 0 0 1px #7de5ff55,0 0 16px #54e8f022}
+
+/* List: floating glass rows with a glowing state edge. */
+.spatial-workspace #vm-list{border:0;background:none;box-shadow:none;overflow:visible}
+.spatial-workspace .vm-table{border-collapse:separate;border-spacing:0 8px;margin-top:-8px}
+.spatial-workspace .vm-table thead th{border:0;background:none;padding:6px 12px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.6px;color:#7f8bb0;text-transform:uppercase}
+.spatial-workspace .vm-table thead th[data-sort]:hover{color:#7de5ff;cursor:pointer}
+.spatial-workspace .vm-table tbody td{border-top:1px solid #9aa7ff22;border-bottom:1px solid #9aa7ff22;background:linear-gradient(90deg,#1b2049e0,#1d173fe0);padding:12px;vertical-align:middle;transition:background .18s,border-color .18s}
+.spatial-workspace .vm-table tbody td:first-child{border-left:1px solid #9aa7ff22;border-radius:14px 0 0 14px;box-shadow:inset 3px 0 0 var(--state,#6c7590)}
+.spatial-workspace .vm-table tbody td:last-child{border-right:1px solid #9aa7ff22;border-radius:0 14px 14px 0}
+.vx-row.running{--state:#7cf0a8}.vx-row.paused,.vx-row.alerting{--state:#ffcb66}
+.spatial-workspace .vm-table tbody tr.vx-row:hover td{background:linear-gradient(90deg,#232a5ce8,#261d4ee8);border-color:#7de5ff44}
+.spatial-workspace .vm-table tbody tr.vx-row.picked td{border-color:#a98bff;background:linear-gradient(90deg,#2a2563e8,#2b1d55e8)}
+.spatial-workspace .vm-table .name-cell{display:flex;align-items:center;gap:11px}
+.spatial-workspace .vm-table .name-cell .vx-os{width:34px;height:34px;border-radius:10px}
+.spatial-workspace .vm-table .name-cell .vx-os svg{width:18px;height:18px}
+.spatial-workspace .vm-table .vm-name{font-weight:600;color:#f1f4ff}
+.spatial-workspace .vm-table .mono{color:#cfe0ff}
+.spatial-workspace .vm-table .u-cell{min-width:96px}
+.spatial-workspace .vm-table .u-cell>span{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3ff}
+.spatial-workspace .vm-table .bar,.spatial-workspace .vx-card .bar{height:5px;border-radius:99px;background:#ffffff12;overflow:hidden;margin-top:5px}
+.spatial-workspace .vm-table .bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#54e8f0,#bb83ff);box-shadow:0 0 10px #7de5ff88}
+.spatial-workspace .vm-table .bar.warn i{background:linear-gradient(90deg,#ffcb66,#ff907a)}
+.spatial-workspace .vm-table .bar.bad i{background:linear-gradient(90deg,#ff907a,#ff6b7a)}
+.spatial-workspace .vm-table .actions{justify-content:flex-end}
+
+/* Groups. */
+.spatial-workspace .vgroups{border-radius:18px;border:1px solid #9aa7ff24;background:linear-gradient(180deg,#191d45d9,#1a1538d9);box-shadow:inset 0 1px #ffffff10}
+.spatial-workspace .vg-head span{font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:#7de5ff}
+.spatial-workspace .vg-row{border-radius:11px;transition:background .15s}
+.spatial-workspace .vg-row:hover{background:#ffffff0a}
+.spatial-workspace .vg-row.active{background:linear-gradient(90deg,#54e8f022,#bb83ff22);box-shadow:inset 0 0 0 1px #7de5ff44,0 0 18px #54e8f01a;color:#fff}
+.spatial-workspace .vg-row.drop{box-shadow:inset 0 0 0 1px #7cf0a8,0 0 18px #7cf0a833}
+.spatial-workspace .vg-bin:hover{color:#ff9fae}
+/* Override the older table skin (header band, per-cell boxes). */
+.spatial-workspace .vm-table thead,.spatial-workspace .vm-table thead tr,.spatial-workspace .vm-table thead th{background:none!important;box-shadow:none!important;border:0!important}
+.spatial-workspace .vm-table tbody td{box-shadow:none;border-left:0!important;border-right:0!important;border-radius:0!important;background-clip:padding-box}
+.spatial-workspace .vm-table tbody td:first-child{border-left:1px solid #9aa7ff22!important;border-radius:14px 0 0 14px!important;box-shadow:inset 3px 0 0 var(--state,#6c7590)}
+.spatial-workspace .vm-table tbody td:last-child{border-right:1px solid #9aa7ff22!important;border-radius:0 14px 14px 0!important}
+.spatial-workspace .vm-table tbody tr,.spatial-workspace .vm-table tbody tr:hover{background:none!important;box-shadow:none!important}
+.spatial-workspace .vm-metrics button.active{color:#eafcff!important;background:linear-gradient(135deg,#54e8f033,#bb83ff33)!important;border:0!important}
+.spatial-workspace .vm-table tbody td{background:#1c1d47!important}
+.spatial-workspace .vm-table tbody tr.vx-row:hover td{background:#242a5c!important}
+.spatial-workspace .vm-table tbody tr.vx-row.picked td{background:#2a2461!important}

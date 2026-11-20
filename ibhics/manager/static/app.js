@@ -1251,10 +1251,10 @@ function renderVMs() {
   const span = cols.length + 3 + (op ? 1 : 0);
   $("#vms").innerHTML = vms.length ? vms.map((vm) => {
     const alerts = vmAlerts(vm);
-    return `<tr data-uuid="${vm.uuid}" class="${vmp.picked.has(vm.uuid) ? "picked" : ""}" ${op ? 'draggable="true"' : ""}>
+    return `<tr data-uuid="${vm.uuid}" class="vx-row ${esc(vm.state)}${alerts.length ? " alerting" : ""}${vmp.picked.has(vm.uuid) ? " picked" : ""}" ${op ? 'draggable="true"' : ""}>
       ${op ? `<td class="pick"><input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}></td>` : ""}
-      <td><span class="badge ${esc(vm.state)}">${esc(vm.state)}</span></td>
-      <td><div class="name-cell">${avatar(osIcon(vm))}<div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a>
+      <td><span class="vx-state ${esc(vm.state)}"><i></i>${esc(vm.state)}</span></td>
+      <td><div class="name-cell"><span class="vx-os ${esc(vm.state)}"><svg><use href="#${osIcon(vm)}"/></svg></span><div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a>
         ${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts.join(" · "))}</span>` : `<span class="vm-sub clip">${esc(vmp.group === "all" && groupOf(vm) ? groupPath(groupOf(vm)) : vm.description || "")}</span>`}</div></div></td>
       ${cols.map((c) => `<td>${c[2](vm)}</td>`).join("")}
       <td><div class="actions">${vmMenu(vm, { summary: true, compact: true })}</div></td>
