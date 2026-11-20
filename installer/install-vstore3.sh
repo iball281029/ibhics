@@ -7,7 +7,7 @@ role=${2:?compute or witness required}
 venv=/opt/ibhics/venv
 current=$("$venv/bin/python" -c 'import ibhics; print(ibhics.__version__)')
 case "$current" in
-    1.3.0b2+vstore3.27|1.3.0b2+vstore3.26|1.3.0b2+vstore3.25|1.3.0b2+vstore3.24|1.3.0b2+vstore3.23|1.3.0b2+vstore3.22|1.3.0b2+vstore3.21|1.3.0b2+vstore3.20|1.3.0b2+vstore3.19|1.3.0b2+vstore3.18|1.3.0b2+vstore3.17|1.3.0b2+vstore3.16|1.3.0b2+vstore3.15|1.3.0b2+vstore3.14|1.3.0b2+vstore3.13|1.3.0b2+vstore3.12|1.3.0b2+vstore3.11|1.3.0b2+vstore3.10|1.3.0b2+vstore3.9|1.3.0b2+vstore3.8|1.3.0b2+vstore3.7|1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
+    1.3.0b2+vstore3.28|1.3.0b2+vstore3.27|1.3.0b2+vstore3.26|1.3.0b2+vstore3.25|1.3.0b2+vstore3.24|1.3.0b2+vstore3.23|1.3.0b2+vstore3.22|1.3.0b2+vstore3.21|1.3.0b2+vstore3.20|1.3.0b2+vstore3.19|1.3.0b2+vstore3.18|1.3.0b2+vstore3.17|1.3.0b2+vstore3.16|1.3.0b2+vstore3.15|1.3.0b2+vstore3.14|1.3.0b2+vstore3.13|1.3.0b2+vstore3.12|1.3.0b2+vstore3.11|1.3.0b2+vstore3.10|1.3.0b2+vstore3.9|1.3.0b2+vstore3.8|1.3.0b2+vstore3.7|1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
     *) echo "Unexpected installed release: $current"; exit 1;;
 esac
 # Restarting the services stops a running VM import: wait until none runs.
@@ -59,7 +59,7 @@ for _ in range(20):
         req = urllib.request.Request(agent_url, headers={'X-Ibhics-Token': token})
         with urllib.request.urlopen(req, timeout=3) as response:
             agent = json.load(response)
-        assert agent['version'] == '1.3.0b2+vstore3.28'
+        assert agent['version'] == '1.3.0b2+vstore3.29'
         if sys.argv[1] == 'compute':
             try:
                 with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
