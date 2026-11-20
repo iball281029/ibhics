@@ -146,6 +146,9 @@
 .f3-label:not(.f3-zone) span{display:none}
 .f3-label:hover span,.f3-label.f3-zone span{display:block}
 .f3-label:hover{z-index:5;background:#0a2638f2}
+.f3-details{display:none;position:absolute;top:100%;left:0;min-width:100%;padding:6px 8px;background:#0a2638f2;border:1px solid var(--lc,#3ef0ff66)}
+.f3-label:hover .f3-details{display:grid;gap:2px}
+.f3-label:hover{clip-path:none}
 /* Overview at rest: the 3D system picture replaces the stack (when WebGL is there). */
 .nexus-visual.has-3d .nexus-parallax{opacity:0!important}
 .nexus-visual.has-3d .nexus-alt-home{opacity:1;transform:none}

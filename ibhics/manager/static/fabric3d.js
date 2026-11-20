@@ -67,7 +67,19 @@ function platform(radius, color) { // a projector pad: disc, rings, ticks and a 
 function label(html, cls = "", onClick = null) {
   const el = document.createElement("div");
   el.className = `f3-label ${cls}`; el.innerHTML = html;
-  if (onClick) { el.classList.add("f3-click"); el.addEventListener("click", onClick); }
+  const details = [...el.querySelectorAll(":scope > span")];
+  if (details.length && el.querySelector("b")) {
+    const box = document.createElement("div"); box.className = "f3-details";
+    box.append(...details); el.append(box);
+  }
+  if (onClick) {
+    el.classList.add("f3-click");
+    el.addEventListener("pointerdown", (event) => event.stopPropagation());
+    el.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+  }
   return new CSS2DObject(el);
 }
 
@@ -261,7 +273,7 @@ function beam(a, b, color, height = 3) {
 // ---------- a stage: renderer, bloom, labels, controls, loop ----------
 
 class Stage {
-  constructor(container, { controls = true, distance = 40, fov = 45, bloom = 0.75 } = {}) {
+  constructor(container, { controls = true, distance = 40, fov = 45, bloom = 0.75, frameRadius = 0 } = {}) {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
@@ -291,7 +303,17 @@ class Stage {
       const w = Math.max(1, container.clientWidth), h = Math.max(1, container.clientHeight);
       this.renderer.setSize(w, h); this.labels.setSize(w, h);
       if (this.composer) { this.composer.setSize(w, h); this.bloom.resolution.set(w / 2, h / 2); }
-      this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
+      this.camera.aspect = w / h;
+      if (frameRadius) {
+        // Fit the entire ring in the narrower field of view, including in a
+        // portrait-shaped centre column between the two dashboard panels.
+        const halfAngle = Math.atan(Math.tan(THREE.MathUtils.degToRad(fov / 2)) * Math.min(1, w / h));
+        const fitDistance = frameRadius / Math.sin(halfAngle);
+        this.camera.position.multiplyScalar(fitDistance / (this.fitDistance || this.camera.position.length()));
+        this.fitDistance = fitDistance;
+        if (this.controls) this.controls.maxDistance = Math.max(70, fitDistance * 2);
+      }
+      this.camera.updateProjectionMatrix();
     };
     this.observer = new ResizeObserver(this.resize); this.observer.observe(container); this.resize();
     const loop = () => {
@@ -372,7 +394,7 @@ function rise(o, delay) { o.userData.rise = { delay, from: -7, to: o.position.y 
 
 
 function inside(container) {
-  const stage = new Stage(container, { distance: 44, fov: 42, bloom: 0.6 });
+  const stage = new Stage(container, { distance: 44, fov: 42, bloom: 0.6, frameRadius: 34 });
   backdrop(stage.scene);
   let signature = "", pads = [], hovered = null;
   const beams = [], R = 20, ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
@@ -386,6 +408,11 @@ function inside(container) {
   });
   stage.labels.domElement.addEventListener("click", () => { if (hovered?.href) location.hash = hovered.href; });
   stage.onTick = (dt) => { // the pointed-at zone lifts; the turning pauses while one is pointed at
+    // Keep labels under the pointer while they are being read or clicked.
+    if (stage.labels.domElement.querySelector(".f3-label:hover")) {
+      stage.controls.autoRotate = false;
+      return;
+    }
     for (const p of pads) {
       if (p.group.userData.rise) continue;
       const want = p === hovered ? 1.2 : 0, cur = p.group.userData.lift || 0, next = cur + (want - cur) * Math.min(1, dt * 6);
