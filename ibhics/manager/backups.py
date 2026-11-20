@@ -10,13 +10,14 @@ import threading
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from contextlib import ExitStack, contextmanager
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from ..backup import BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
 from ..backup.repository import parse_id
+from ..backup.targets import repository_identity
 from ..cluster import Cluster, Member, NodeUnavailable
 from ..hypervisor import VMExists
 
@@ -41,8 +42,45 @@ class Policy:
     keep_last: int = 7
     enabled: bool = True
     last_run: str | None = None
+    mode: str = "incremental"
+    full_weekday: int | None = None
+    synthetic_weekday: int | None = None
+    keep_weekly: int = 0
+    keep_monthly: int = 0
+    keep_yearly: int = 0
+    copy_target: str | None = None
+    copy_keep_last: int = 14
+    archive_target: str | None = None
+    archive_weekday: int = 6
+    archive_keep_weekly: int = 4
+    archive_keep_monthly: int = 12
+    archive_keep_yearly: int = 3
 
     def validate(self) -> None:
+        if self.mode not in ("incremental", "active_full"):
+            raise ValueError("Unknown backup mode")
+        for day in (self.full_weekday, self.synthetic_weekday, self.archive_weekday):
+            if day is not None and (not isinstance(day, int) or not 0 <= day <= 6):
+                raise ValueError("Weekdays must be 0 (Monday) through 6 (Sunday)")
+        if (
+            any(
+                n < 0
+                for n in (
+                    self.keep_weekly,
+                    self.keep_monthly,
+                    self.keep_yearly,
+                    self.archive_keep_weekly,
+                    self.archive_keep_monthly,
+                    self.archive_keep_yearly,
+                )
+            )
+            or self.copy_keep_last < 1
+        ):
+            raise ValueError("Invalid GFS/copy retention")
+        if len({n for n in (self.target, self.copy_target, self.archive_target) if n}) != sum(
+            bool(n) for n in (self.target, self.copy_target, self.archive_target)
+        ):
+            raise ValueError("Primary, copy and archive repositories must differ")
         if (self.at is None) == (self.every_hours is None):
             raise ValueError("a policy runs either daily 'at' a time or 'every_hours'")
         if self.at is not None and not AT_RE.match(self.at):
@@ -81,6 +119,7 @@ class Job:
     error: str | None = None
     step: str = ""  # long tasks: what runs now, and how far (move-disks)
     percent: float | None = None
+    report: dict = field(default_factory=dict)
 
 
 class BackupManager:
@@ -100,6 +139,7 @@ class BackupManager:
         self._jobs: deque[Job] = deque(maxlen=200)
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
+        self._maintenance: dict[str, str] = {}
         # One backup or snapshot task at a time per VM: QEMU takes one state change at a time.
         self._vm_locks: dict[str, threading.Lock] = {}
         # A SAN LUN or USB disk holds an ordinary filesystem that only one node may mount
@@ -132,7 +172,11 @@ class BackupManager:
         """Forget the target. Backups already on it stay where they are."""
         with self._lock:
             self.target(name)
-            users = [p.name for p in self._policies.values() if p.target == name]
+            users = [
+                p.name
+                for p in self._policies.values()
+                if name in (p.target, p.copy_target, p.archive_target)
+            ]
             if users:
                 raise ValueError(f"backup policies {users} still use target {name!r}")
             del self._targets[name]
@@ -147,12 +191,44 @@ class BackupManager:
     def add_policy(self, policy: Policy) -> Policy:
         policy.validate()
         with self._lock:
-            self.target(policy.target)
+            self._validate_policy_targets(policy)
             if policy.name in self._policies:
                 raise VMExists(f"a backup policy named {policy.name!r} already exists")
             self._policies[policy.name] = policy
             self._save()
         return policy
+
+    def _validate_policy_targets(self, policy: Policy) -> None:
+        self.target(policy.target)
+        for name in (policy.copy_target, policy.archive_target):
+            if name:
+                self.target(name)
+        identities = [
+            repository_identity(self.target(n))
+            for n in (policy.target, policy.copy_target, policy.archive_target)
+            if n
+        ]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Primary, copy and archive cannot alias the same repository")
+
+    def update_policy(self, name: str, policy: Policy) -> Policy:
+        """Replace future-run settings while retaining schedule identity and history."""
+        with self._lock:
+            current = self._policies.get(name)
+            if current is None:
+                raise PolicyNotFound(name)
+            if policy.name != name:
+                raise ValueError("The schedule name cannot be changed")
+            policy.validate()
+            self._validate_policy_targets(policy)
+            updated = replace(policy, last_run=current.last_run)
+            self._policies[name] = updated
+            try:
+                self._save()
+            except Exception:
+                self._policies[name] = current
+                raise
+            return updated
 
     def rename_vm(self, old: str, new: str) -> None:
         """Policies that name the VM follow its new name."""
@@ -174,6 +250,8 @@ class BackupManager:
 
     def tick(self) -> list[Job]:
         """Start the jobs of every policy that is due. The manager calls this every minute."""
+        if os.path.exists("/opt/ibhics/.backup-upgrade-in-progress"):
+            return []
         now = self._clock()
         jobs = []
         for policy in self.policies():
@@ -195,7 +273,13 @@ class BackupManager:
             if not policy.vms or vm.spec.name in policy.vms:
                 jobs.append(
                     self._backup_job(
-                        member, vm.uuid, vm.spec.name, policy.target, policy.keep_last, policy.name
+                        member,
+                        vm.uuid,
+                        vm.spec.name,
+                        policy.target,
+                        policy.keep_last,
+                        policy.name,
+                        settings=policy,
                     )
                 )
         return jobs
@@ -219,10 +303,12 @@ class BackupManager:
         with self._lock:
             return list(reversed(self._jobs))
 
-    def start_backup(self, uuid: str, target_name: str, keep_last: int | None = None) -> Job:
+    def start_backup(
+        self, uuid: str, target_name: str, keep_last: int | None = None, mode="incremental"
+    ) -> Job:
         self.target(target_name)
         member, vm = self._cluster.find_vm(uuid)
-        return self._backup_job(member, uuid, vm.spec.name, target_name, keep_last, None)
+        return self._backup_job(member, uuid, vm.spec.name, target_name, keep_last, None, mode)
 
     def _backup_job(
         self,
@@ -232,16 +318,136 @@ class BackupManager:
         target_name: str,
         keep_last: int | None,
         policy: str | None,
+        mode="incremental",
+        settings: Policy | None = None,
     ) -> Job:
         job = self._new_job("backup", target_name, vm_name, member.name, policy)
 
         def work() -> str:
             target = self.target(target_name)
-            with self._using(target, wait=True), self.vm_busy(uuid):
-                info = member.backups.backup(uuid, target)
+            p = settings
+            now = self._clock()
+            date = now.date().isoformat()
+
+            def due(kind, day):
+                return (
+                    day == now.weekday()
+                    and self._maintenance.get(f"{policy}/{uuid}/{kind}") != date
+                )
+
+            full = bool(p and due("full", p.full_weekday))
+            targets = (
+                [target] + [self.target(n) for n in (p.copy_target, p.archive_target) if n]
+                if p
+                else [target]
+            )
+            with ExitStack() as stack:
+                for t in sorted(targets, key=lambda t: t.name):
+                    stack.enter_context(self._using(t, wait=True))
+                stack.enter_context(self.vm_busy(uuid))
+                job.step = (
+                    "Reading changed blocks"
+                    if (p.mode if p else mode) == "incremental"
+                    else "Active full backup"
+                )
+                selected = "active_full" if full else p.mode if p else mode
+                info = member.backups.backup(uuid, target, selected)
+                job.report = asdict(info)
+                if full:
+                    self._maintenance[f"{policy}/{uuid}/full"] = date
+                if p and due("synthetic", p.synthetic_weekday):
+                    job.step = "Building independent synthetic full"
+                    synthetic = self._new_job(
+                        "synthetic_full", target.name, vm_name, member.name, policy
+                    )
+                    synthetic.state = "running"
+                    try:
+                        info = member.backups.synthetic_full(target, info.id)
+                        synthetic.report = asdict(info)
+                        synthetic.result, synthetic.state, synthetic.percent = info.id, "done", 100
+                        job.report["synthetic_full_id"] = info.id
+                    except Exception as exc:
+                        synthetic.state, synthetic.error = "failed", str(exc)
+                        raise
+                    finally:
+                        synthetic.finished = self._clock().isoformat()
+                    self._maintenance[f"{policy}/{uuid}/synthetic"] = date
+                if p and p.copy_target:
+                    job.step = "Copying restore point to secondary repository"
+                    destination = self.target(p.copy_target)
+                    self._followup(job, "backup_copy", member, target, destination, info)
+                    member.backups.prune(destination, vm_name, p.copy_keep_last)
+                if p and p.archive_target and due("archive", p.archive_weekday):
+                    job.step = "Archiving independent full restore point"
+                    destination = self.target(p.archive_target)
+                    self._followup(job, "archive", member, target, destination, info)
+                    member.backups.prune(
+                        destination,
+                        vm_name,
+                        1,
+                        p.archive_keep_weekly,
+                        p.archive_keep_monthly,
+                        p.archive_keep_yearly,
+                    )
+                    self._maintenance[f"{policy}/{uuid}/archive"] = date
                 if keep_last:
-                    member.backups.prune(target, vm_name, keep_last)
+                    member.backups.prune(
+                        target,
+                        vm_name,
+                        keep_last,
+                        p.keep_weekly if p else 0,
+                        p.keep_monthly if p else 0,
+                        p.keep_yearly if p else 0,
+                    )
+                job.step, job.percent = "Complete", 100
+                with self._lock:
+                    self._save()
             return info.id
+
+        self._submit(job, work)
+        return job
+
+    def _followup(self, parent, kind, member, source, destination, info):
+        child = self._new_job(kind, destination.name, info.vm_name, member.name, parent.policy)
+        child.state = "running"
+        try:
+            copied = member.backups.copy(source, destination, info.id, kind == "archive")
+            child.state, child.result, child.percent = "done", copied.id, 100
+            child.report = asdict(copied)
+            return copied
+        except Exception as exc:
+            child.state, child.error = "failed", str(exc)
+            raise
+        finally:
+            child.finished = self._clock().isoformat()
+
+    def start_repository_job(
+        self, target_name, backup_id, node=None, destination=None, archive=False
+    ):
+        target = self.target(target_name)
+        dest = self.target(destination) if destination else None
+        if dest and dest.name == target.name:
+            raise ValueError("Choose a different destination repository")
+        if not target.shared and not node:
+            raise ValueError("Specify the node holding this local backup")
+        member = self._cluster.member(node) if node else self._cluster.pick_node(0)
+        vm_name, _ = parse_id(backup_id)
+        kind = "archive" if archive else "backup_copy" if dest else "synthetic_full"
+        job = self._new_job(kind, destination or target_name, vm_name, member.name, None)
+
+        def work():
+            with ExitStack() as stack:
+                for t in sorted([target, dest] if dest else [target], key=lambda t: t.name):
+                    stack.enter_context(self._using(t, wait=True))
+                job.step = "Verifying backup chunks"
+                info = (
+                    member.backups.copy(target, dest, backup_id, archive)
+                    if dest
+                    else (member.backups.synthetic_full(target, backup_id))
+                )
+                job.step, job.percent = "Complete", 100
+                job.report = asdict(info)
+                return info.id
 
         self._submit(job, work)
         return job
@@ -339,6 +545,8 @@ class BackupManager:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.state = "failed"
             job.finished = self._clock().isoformat()
+            with self._lock:
+                self._save()
 
         self._executor.submit(run)
 
@@ -389,6 +597,15 @@ class BackupManager:
             return
         data = json.loads(self._state_path.read_text())
         with self._lock:
+            self._maintenance = data.get("maintenance", {})
+            self._jobs.clear()
+            for entry in data.get("jobs", []):
+                job = Job(**entry)
+                if job.state in ("running", "queued"):
+                    job.state = "failed"
+                    job.error = "Manager restarted; verify the node before retrying this job"
+                self._jobs.append(job)
+            self._ids = itertools.count(1 + max((int(j.id) for j in self._jobs), default=0))
             for entry in data.get("targets", []):
                 target = BackupTarget.from_dict(entry)
                 self._targets[target.name] = target
@@ -402,6 +619,8 @@ class BackupManager:
         data = {
             "targets": [t.to_dict() for t in self._targets.values()],
             "policies": [asdict(p) for p in self._policies.values()],
+            "maintenance": self._maintenance,
+            "jobs": [asdict(j) for j in self._jobs],
         }
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state_path.with_suffix(".tmp")

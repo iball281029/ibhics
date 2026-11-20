@@ -622,6 +622,8 @@ class BackupTargetIn(BaseModel):
     access_key: str | None = None
     secret_key: str | None = None
     prefix: str = "ibhics"
+    storage_class: Literal["STANDARD", "STANDARD_IA", "ONEZONE_IA", "GLACIER_IR"] = "STANDARD"
+    compression: Literal["fast", "balanced", "maximum"] = "balanced"
     pool: str | None = Field(
         default=None, pattern=NAME_PATTERN, description="local: keep backups in this storage pool"
     )
@@ -638,7 +640,15 @@ TARGET_FIELDS = {
     TargetType.USB: ("device", "prefix"),
     TargetType.ISCSI: ("host", "port", "iqn", "lun", "confirm_wipe", "prefix"),
     TargetType.FC: ("device", "confirm_wipe", "prefix"),
-    TargetType.S3: ("endpoint", "bucket", "region", "access_key", "secret_key", "prefix"),
+    TargetType.S3: (
+        "endpoint",
+        "bucket",
+        "region",
+        "access_key",
+        "secret_key",
+        "prefix",
+        "storage_class",
+    ),
 }
 
 
@@ -652,7 +662,7 @@ class BackupTargetOut(BaseModel):
 
     @classmethod
     def from_target(cls, target: BackupTarget) -> BackupTargetOut:
-        fields = TARGET_FIELDS[target.type]
+        fields = (*TARGET_FIELDS[target.type], "compression")
         settings = {k: v for k, v in target.public_dict().items() if k in fields and v}
         return cls(
             name=target.name,
@@ -672,6 +682,13 @@ class BackupOut(BaseModel):
     size_bytes: int
     stored_bytes: int
     disks: int
+    kind: str = "full"
+    source_id: str | None = None
+    read_bytes: int = 0
+    note: str = ""
+    new_data_bytes: int = 0
+    dedup_saved_bytes: int = 0
+    compression: str = "legacy-zlib"
     node: str | None = None  # set for local targets: the node that holds the backup
 
     @classmethod
@@ -682,6 +699,13 @@ class BackupOut(BaseModel):
 class BackupRequest(BaseModel):
     target: str
     keep_last: int | None = Field(default=None, ge=1, description="prune older backups after")
+    mode: Literal["incremental", "active_full"] = "incremental"
+
+
+class BackupOperation(BaseModel):
+    node: str | None = None
+    destination: str | None = None
+    archive: bool = False
 
 
 class RestoreRequest(BaseModel):
@@ -699,6 +723,19 @@ class PolicyIn(BaseModel):
     every_hours: int | None = Field(default=None, ge=1, le=168)
     keep_last: int = Field(default=7, ge=1, le=1000)
     enabled: bool = True
+    mode: Literal["incremental", "active_full"] = "incremental"
+    full_weekday: int | None = Field(default=None, ge=0, le=6)
+    synthetic_weekday: int | None = Field(default=None, ge=0, le=6)
+    keep_weekly: int = Field(default=0, ge=0, le=520)
+    keep_monthly: int = Field(default=0, ge=0, le=120)
+    keep_yearly: int = Field(default=0, ge=0, le=100)
+    copy_target: str | None = None
+    copy_keep_last: int = Field(default=14, ge=1, le=1000)
+    archive_target: str | None = None
+    archive_weekday: int = Field(default=6, ge=0, le=6)
+    archive_keep_weekly: int = Field(default=4, ge=0, le=520)
+    archive_keep_monthly: int = Field(default=12, ge=0, le=120)
+    archive_keep_yearly: int = Field(default=3, ge=0, le=100)
 
 
 class PolicyOut(PolicyIn):
@@ -719,6 +756,7 @@ class JobOut(BaseModel):
     error: str | None
     step: str = ""
     percent: float | None = None
+    report: dict = Field(default_factory=dict)
 
 
 # Agent-only request bodies: the manager sends the whole target, credentials included.
@@ -727,6 +765,14 @@ class JobOut(BaseModel):
 class AgentBackupRun(BaseModel):
     uuid: str
     target: dict
+    mode: Literal["incremental", "active_full"] = "incremental"
+
+
+class AgentBackupOperation(BaseModel):
+    target: dict
+    backup_id: str
+    destination: dict | None = None
+    archive: bool = False
 
 
 class AgentBackupList(BaseModel):
@@ -750,6 +796,9 @@ class AgentPrune(BaseModel):
     target: dict
     vm_name: str
     keep_last: int = Field(ge=1)
+    weekly: int = Field(default=0, ge=0)
+    monthly: int = Field(default=0, ge=0)
+    yearly: int = Field(default=0, ge=0)
 
 
 # Sign-in and users

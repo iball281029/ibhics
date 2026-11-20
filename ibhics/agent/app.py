@@ -23,6 +23,7 @@ from ..manager.poollabels import PoolLabels
 from ..manager.schemas import (
     AgentBackupDelete,
     AgentBackupList,
+    AgentBackupOperation,
     AgentBackupRun,
     AgentImport,
     AgentMigrate,
@@ -451,7 +452,21 @@ def create_agent_app(
 
         @api.post("/backups/run", response_model=BackupOut)
         def run_backup(body: AgentBackupRun) -> BackupOut:
-            return BackupOut.from_info(backups.backup(body.uuid, target(body.target)))
+            return BackupOut.from_info(backups.backup(body.uuid, target(body.target), body.mode))
+
+        @api.post("/backups/synthetic", response_model=BackupOut)
+        def synthetic_backup(body: AgentBackupOperation) -> BackupOut:
+            return BackupOut.from_info(backups.synthetic_full(target(body.target), body.backup_id))
+
+        @api.post("/backups/copy", response_model=BackupOut)
+        def copy_backup(body: AgentBackupOperation) -> BackupOut:
+            if body.destination is None:
+                raise ValueError("Destination repository is required")
+            return BackupOut.from_info(
+                backups.copy(
+                    target(body.target), target(body.destination), body.backup_id, body.archive
+                )
+            )
 
         @api.post("/backups/list", response_model=list[BackupOut])
         def list_backups(body: AgentBackupList) -> list[BackupOut]:
@@ -468,7 +483,16 @@ def create_agent_app(
 
         @api.post("/backups/prune")
         def prune(body: AgentPrune) -> dict:
-            return {"removed": backups.prune(target(body.target), body.vm_name, body.keep_last)}
+            return {
+                "removed": backups.prune(
+                    target(body.target),
+                    body.vm_name,
+                    body.keep_last,
+                    body.weekly,
+                    body.monthly,
+                    body.yearly,
+                )
+            }
 
         imports = imports or NodeImport(driver)
 

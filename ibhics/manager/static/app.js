@@ -71,7 +71,7 @@ const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", fai
 const CANCEL_PATH = { Import: (id) => `/migrate/jobs/${enc(id)}/cancel`, "Live migration": (id) => `/migrations/${enc(id)}/cancel`, Move: (id) => `/migrations/${enc(id)}/cancel` };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
+const JOB_KINDS = { synthetic_full: "Synthetic full", backup_copy: "Backup copy", archive: "Archive", backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
@@ -89,7 +89,15 @@ function applyTheme(theme) {
   const dark = theme ? theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   $$("[data-theme-set]").forEach((b) => b.classList.toggle("on", (b.dataset.themeSet === "dark") === dark));
 }
-try { applyTheme(localStorage.getItem("ibhics-theme")); } catch { applyTheme(null); }
+try {
+  // Start the selected command design in its intended palette once; later choices persist.
+  if (localStorage.getItem("ibhics-command-design") !== "1") {
+    localStorage.setItem("ibhics-theme", "dark");
+    localStorage.setItem("ibhics-rail-expanded", "false");
+    localStorage.setItem("ibhics-command-design", "1");
+  }
+  applyTheme(localStorage.getItem("ibhics-theme") || "dark");
+} catch { applyTheme("dark"); }
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-theme-set]");
   if (t) {
@@ -175,31 +183,47 @@ async function loadMe() {
 }
 
 
-// Expand the icon rail without navigating away from the current page.
+// Dedicated orbital navigation button below the home logo.
 const railToggle = document.getElementById("rail-toggle");
-for (const link of document.querySelectorAll(".rail nav a[data-label]")) {
-  const label = document.createElement("span");
-  label.className = "rail-label";
-  label.textContent = link.dataset.label;
-  link.append(label);
-  link.setAttribute("aria-label", link.dataset.label);
-}
+const spatialMenu = document.getElementById("menu"), spatialScrim = document.getElementById("spatial-scrim");
 function setRailExpanded(expanded) {
-  document.body.classList.toggle("rail-expanded", expanded);
+  document.body.classList.remove("rail-expanded");
+  spatialMenu.hidden = !expanded; spatialScrim.hidden = !expanded;
+  if (!expanded) setOrbitExtra(false);
   railToggle.setAttribute("aria-expanded", String(expanded));
-  railToggle.setAttribute("aria-label", expanded ? "Collapse navigation" : "Expand navigation");
+  railToggle.setAttribute("aria-label", expanded ? "Close navigation" : "Open navigation");
+  const scale = Math.min(1, (innerHeight - 130) / 560, (innerWidth - (innerWidth < 700 ? 60 : 95)) / 400);
+  spatialMenu.style.setProperty("--orbit-scale", String(Math.max(.45, scale)));
 }
-try { setRailExpanded(localStorage.getItem("ibhics-rail-expanded") === "true"); } catch { setRailExpanded(false); }
-railToggle.addEventListener("click", () => {
-  const expanded = !document.body.classList.contains("rail-expanded");
-  setRailExpanded(expanded);
-  try { localStorage.setItem("ibhics-rail-expanded", String(expanded)); } catch { /* private mode */ }
+// The bouncing arrow swaps the two menu sets: pointing at it is enough with a mouse,
+// a tap or a key press does it elsewhere. It sits below the first set (pointing down)
+// and above the second (pointing up), so it moves away from the pointer once used.
+const orbitMore = document.getElementById("orbit-more");
+let orbitSwapped = 0;
+function setOrbitExtra(extra) {
+  spatialMenu.classList.toggle("show-extra", extra);
+  orbitMore.setAttribute("aria-label", extra ? "Back to the main navigation" : "More: Containers, Templates, Activity, Terminal");
+  orbitMore.title = extra ? "Main navigation" : "Containers · Templates · Activity · Terminal";
+}
+orbitMore.addEventListener("pointerenter", (event) => {
+  if (event.pointerType !== "mouse") return;
+  orbitSwapped = Date.now();
+  setOrbitExtra(!spatialMenu.classList.contains("show-extra"));
 });
-railToggle.addEventListener("keydown", (event) => { if (event.key === "Escape") setRailExpanded(false); });
+orbitMore.addEventListener("click", () => {
+  if (Date.now() - orbitSwapped < 600) return; // the pointer already swapped it
+  setOrbitExtra(!spatialMenu.classList.contains("show-extra"));
+});
+setRailExpanded(false);
+railToggle.addEventListener("click", () => setRailExpanded(spatialMenu.hidden));
+spatialScrim.addEventListener("click", () => { setRailExpanded(false); railToggle.focus(); });
+spatialMenu.addEventListener("click", (event) => { if (event.target.closest("a")) setRailExpanded(false); });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !spatialMenu.hidden) { setRailExpanded(false); railToggle.focus(); } });
+addEventListener("resize", () => { if (!spatialMenu.hidden) setRailExpanded(true); });
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
+const PAGES = ["home", "fabric", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash === "nodes") return "cluster"; // Preserve old node inventory bookmarks.
@@ -210,6 +234,7 @@ const currentPage = () => {
 const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 
 function show() {
+  setRailExpanded(false);
   const page = currentPage();
   if (location.hash === "#nodes") history.replaceState(null, "", "#cluster");
   if (page !== "network" && ntopo.edit) {
@@ -217,7 +242,10 @@ function show() {
     topoEndEdit(); // Leaving Network discards only the local draft.
   }
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
-  const section = { vm: "compute", node: "cluster", recycle: "compute" }[page] || page;
+  document.body.dataset.section = page;
+  const sectionTitle = {fabric:"Infrastructure map",home:"Overview",compute:"Virtual machines",containers:"Containers",templates:"Templates",storage:"Storage",network:"Network",cluster:"Cluster",backup:"Data protection",migrate:"Migration",activity:"Activity",system:"Settings",tasks:"Jobs",recycle:"Recycle bin",terminal:"Terminal",vm:"Virtual machine",node:"Cluster node"};
+  $("#workspace-section").textContent = sectionTitle[page] || page;
+  const section = { vm: "compute", node: "cluster", recycle: "compute", fabric: "home" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
@@ -740,6 +768,7 @@ async function refresh(page, auto = false) {
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
+  if (page === "fabric") { await load("vms", "pools", "networks", "stats", "summaries"); window.FabricMap?.render(); }
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); if (!auto || !document.querySelector("details.more[open]")) { renderVMs(); renderMoves(); } }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
@@ -815,47 +844,49 @@ function allocationMeter(label, used, capacity, detail) {
     ${value == null ? '<span class="allocation-detail">Capacity unavailable</span>' : ""}</div>`;
 }
 
-function usageChart(key, label, value, detail) {
+function resourceActivity(t) {
   const history = homeMetrics?.resolution === homeRange ? homeMetrics : null;
-  const samples = history?.points || [], last = history?.end || Date.now();
-  const start = history?.start || last - HISTORY_RANGES[homeRange].windowMs, duration = last - start;
-  const step = history?.step_ms || 10000;
-  const timeLabel = (at) => ["1d", "7d"].includes(homeRange) ? new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-  const tickMs = history?.tick_ms || HISTORY_RANGES[homeRange].tickMs;
-  const timeTicks = HistoryTime.ticks(start, last, tickMs, history?.utc_offset ?? -new Date().getTimezoneOffset());
-  const groups = [];
-  for (const sample of samples) {
-    if (sample[key] == null) { groups.push([]); continue; }
-    let group = groups.at(-1);
-    if (!group || (group.length && sample.at - group.at(-1).at > step * 2.5)) { group = []; groups.push(group); }
-    group.push(sample);
-  }
-  const x = (sample) => 38 + (sample.at - start) / duration * 312;
-  const y = (sample) => 132 - Math.min(100, Math.max(0, sample[key])) / 100 * 120;
-  const path = (group) => group.map((sample, i) => `${i ? "L" : "M"}${x(sample).toFixed(1)},${y(sample).toFixed(1)}`).join(" ");
-  const status = value == null ? "unavailable" : value >= 90 ? "bad" : value >= 75 ? "warn" : "";
-  const icon = { cpu: "i-cpu", memory: "i-mem", storage: "i-storage" }[key];
-  const used = Math.min(100, Math.max(0, value || 0));
-  const remaining = key === "cpu" ? "Idle" : "Available";
-  const explanation = { cpu: "Processing power currently in use", memory: "RAM used by the server and VMs", storage: "Physical storage occupied by files" }[key];
-  const known = samples.filter((s) => s[key] != null);
-  return `<article class="usage-chart chart-${key} ${status}">
-    <div class="chart-top"><span class="chart-label"><span class="chart-icon"><svg aria-hidden="true"><use href="#${icon}"/></svg></span>${esc(label)}</span><span class="chart-live"><i></i>${value == null ? "No data" : "Live"}</span></div>
-    <p class="chart-explanation">${explanation}</p>
-    <div class="chart-reading"><div><strong>${percentText(value)}</strong><span>${detail}</span></div><span class="chart-current-label">in use now</span></div>
-    <div class="actual-capacity-bar" role="img" aria-label="${esc(label)}: ${percentText(value)} used"><i style="width:${value == null ? 0 : used}%"></i></div>
-    <div class="capacity-legend"><span><i></i>Used</span><span>${remaining}: <b>${value == null ? "–" : percentText(100 - used)}</b></span></div>
-    <div class="chart-history-heading"><b>${esc(HISTORY_RANGES[homeRange].label)} · ${esc(HISTORY_RANGES[homeRange].windowLabel)}</b><span>Usage (%)${step > 10000 ? " · average" : ""}</span></div>
-    <svg class="resource-chart" viewBox="0 0 360 164" role="img" aria-label="${esc(label)} over time. Vertical axis: 0 to 100 percent. Horizontal axis: selected ${esc(HISTORY_RANGES[homeRange].label)} window.">
-      <defs><linearGradient id="home-area-${key}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".24"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
-      <defs><linearGradient id="home-line-${key}" gradientUnits="userSpaceOnUse" x1="38" y1="0" x2="350" y2="0"><stop stop-color="var(--chart-color)"/><stop offset="1" stop-color="var(--chart-end)"/></linearGradient></defs>
-      ${[0, 25, 50, 75, 100].map((p) => `<path class="chart-grid" d="M38 ${132 - p * 1.2} H350"/><text class="chart-axis" x="30" y="${136 - p * 1.2}" text-anchor="end">${p}%</text>`).join("")}
-      ${groups.filter((g) => g.length > 1).map((g) => `<path d="${path(g)} L${x(g.at(-1)).toFixed(1)},132 L${x(g[0]).toFixed(1)},132 Z" fill="url(#home-area-${key})"/><path class="chart-line" style="stroke:url(#home-line-${key})" d="${path(g)}"/>`).join("")}
-      ${groups.filter((g) => g.length).map((g) => `<circle cx="${x(g.at(-1)).toFixed(1)}" cy="${y(g.at(-1)).toFixed(1)}" r="3.5" fill="currentColor"/>`).join("")}
-      ${samples.filter((s) => s[key] != null).map((s) => `<circle class="chart-hit" cx="${x(s).toFixed(1)}" cy="${y(s).toFixed(1)}" r="6"><title>${esc(new Date(s.first_sample ?? s.at).toLocaleString())}${s.samples > 1 ? ` – ${esc(new Date(s.last_sample).toLocaleTimeString())} · average` : ""}: ${percentText(s[key])}</title></circle>`).join("")}
-      ${known.length < 2 ? `<text class="chart-empty" x="194" y="74" text-anchor="middle">${homeHistoryError ? "History unavailable" : known.length ? "First recorded reading" : "No recorded data in this period"}</text>` : ""}
-      ${timeTicks.map((at) => `<path class="chart-grid" d="M${x({at}).toFixed(1)} 12 V132"/><text class="chart-axis time-tick" data-at="${at}" x="${x({at}).toFixed(1)}" y="154" text-anchor="middle">${esc(timeLabel(at))}</text>`).join("")}
-    </svg><div class="chart-caption">Saved on server · 30-day retention<span>${step > 10000 ? `Average every ${homeRange === "1d" ? "day" : homeRange === "7d" ? "7 days" : `${Math.round(step / 60000)} min`}` : "Sample every 10 sec"}</span></div></article>`;
+  const end = history?.end || Date.now();
+  const start = history?.start || end - HISTORY_RANGES[homeRange].windowMs;
+  const duration = Math.max(1, end - start), step = history?.step_ms || 10000;
+  const samples = (history?.points || []).filter(s => Number.isFinite(s.at) && s.at >= start && s.at <= end).slice().sort((a,b) => a.at - b.at);
+  const ticks = HistoryTime.ticks(start, end, history?.tick_ms || HISTORY_RANGES[homeRange].tickMs, history?.utc_offset ?? -new Date().getTimezoneOffset());
+  const timeLabel = at => ["1d", "7d"].includes(homeRange)
+    ? new Date(at).toLocaleDateString(undefined, {month:"short",day:"numeric"})
+    : new Date(at).toLocaleTimeString(undefined, {hour:"2-digit",minute:"2-digit",hour12:false});
+  const x = at => (at - start) / duration * 1000;
+  const y = value => 240 - Math.min(100, Math.max(0, value)) * 2.4;
+  const series = [
+    {key:"cpu",label:"Compute",value:t.measured ? t.cpuPct : null},
+    {key:"memory",label:"Memory",value:allocationPct(t.memUsed,t.memMeasured)},
+  ];
+  const paths = series.map(({key,label}) => {
+    const groups = []; let group = null;
+    for (const sample of samples) {
+      if (!Number.isFinite(sample[key])) { group = null; continue; }
+      if (!group || sample.at - group.at(-1).at > step * 2.5) { group = []; groups.push(group); }
+      group.push(sample);
+    }
+    const line = g => g.map((s,i) => `${i ? "L" : "M"}${x(s.at).toFixed(2)},${y(s[key]).toFixed(2)}`).join(" ");
+    return `<g class="activity-series activity-${key}">${groups.map(g => {
+      const last = g.at(-1);
+      return (g.length > 1 ? `<path class="activity-area" d="${line(g)} L${x(last.at).toFixed(2)},240 L${x(g[0].at).toFixed(2)},240 Z" fill="url(#activity-fill-${key})"/><path class="activity-line" d="${line(g)}"/>` : "") + `<circle class="activity-end" cx="${x(last.at).toFixed(2)}" cy="${y(last[key]).toFixed(2)}" r="3.5"/>`;
+    }).join("")}${samples.filter(s => Number.isFinite(s[key])).map(s => `<circle class="activity-hit" cx="${x(s.at).toFixed(2)}" cy="${y(s[key]).toFixed(2)}" r="7"><title>${esc(label)} · ${esc(new Date(s.first_sample ?? s.at).toLocaleString())}${s.samples > 1 ? ` – ${esc(new Date(s.last_sample ?? s.at).toLocaleTimeString())} · average` : ""}: ${percentText(s[key])}</title></circle>`).join("")}</g>`;
+  }).join("");
+  const count = samples.filter(s => Number.isFinite(s.cpu) || Number.isFinite(s.memory)).length;
+  return `<article class="resource-activity" aria-labelledby="resource-activity-title">
+    <header class="activity-heading"><h3 id="resource-activity-title">Resource activity</h3><span>${esc(HISTORY_RANGES[homeRange].windowLabel)}</span></header>
+    <div class="activity-legend">${series.map(s => `<span class="activity-${s.key}"><i aria-hidden="true"></i>${s.label}<b>${percentText(s.value)}</b><small>${samples.some(p => Number.isFinite(p[s.key])) ? "" : "No history"}</small></span>`).join("")}<span class="activity-unit">Usage (%)${step > 10000 ? " · average" : ""}</span></div>
+    <div class="activity-chart-wrap"><div class="activity-y-axis" aria-hidden="true">${[100,75,50,25,0].map(p => `<span style="top:${100-p}%">${p}%</span>`).join("")}</div>
+      <div class="activity-plot"><svg viewBox="0 0 1000 240" preserveAspectRatio="none" role="img" aria-label="Compute and memory usage from 0 to 100 percent over ${esc(HISTORY_RANGES[homeRange].windowLabel)}. Gaps indicate missing measurements.">
+        <defs>${series.map(s => `<linearGradient id="activity-fill-${s.key}" x1="0" y1="0" x2="0" y2="1"><stop stop-color="${s.key === "cpu" ? "#54e8f0" : "#ed99da"}" stop-opacity="${s.key === "cpu" ? ".19" : ".07"}"/><stop offset="1" stop-color="${s.key === "cpu" ? "#54e8f0" : "#ed99da"}" stop-opacity="0"/></linearGradient>`).join("")}</defs>
+        <g class="activity-grid">${[0,25,50,75,100].map(p => `<path d="M0 ${y(p)}H1000"/>`).join("")}${ticks.map(at => `<path d="M${x(at).toFixed(2)} 0V240"/>`).join("")}</g>${paths}
+      </svg>${count < 2 ? `<div class="activity-empty">${homeHistoryError ? "History unavailable" : count ? "First recorded reading" : "No recorded data in this period"}</div>` : ""}
+      <div class="activity-times" aria-hidden="true">${ticks.map(at => `<span style="--tick:${(x(at)/10).toFixed(3)}%" data-at="${at}">${esc(timeLabel(at))}</span>`).join("")}</div>
+      </div>
+    </div>
+    <footer class="activity-footer"><span>Saved on server · 30-day retention · ${step > 10000 ? `Averaged samples` : "Sample every 10 sec"}</span><a href="#storage">Storage <b>${percentText(allocationPct(t.used,t.cap))}</b> <span>${t.cap ? `${num(t.used)} / ${num(t.cap)} GB` : "Capacity unavailable"}</span></a></footer>
+  </article>`;
 }
 
 function activities() {
@@ -890,6 +921,14 @@ function renderHome() {
   if (!c.quorum) mood = ["bad", "Cluster Has ", "Lost Quorum"];
   else if (offline.length) mood = ["warn", `${offline.length} Node${offline.length > 1 ? "s" : ""} `, "Offline"];
   else if (storagePct >= 85 || failed.length) mood = ["warn", "Needs ", "Attention"];
+  $("#command-health").innerHTML = `<span class="dot ${mood[0]}"></span>${esc(mood[1] + mood[2])}`;
+  const metric = (label, value, unit, note, href) => `<a class="command-kpi" href="#${href}"><span>${esc(label)}</span><strong>${esc(value)}<small>${esc(unit)}</small></strong><em>${esc(note)}</em></a>`;
+  $("#command-kpis").innerHTML = [
+    metric("Virtual machines", state.vms.length, "VMs", `${running} running · ${state.vms.length - running} stopped`, "compute"),
+    metric("CPU usage", t.measured ? num(t.cpuPct) : "—", "%", t.measured ? `${t.measured} hardware threads measured` : "Waiting for node metrics", "cluster"),
+    metric("Memory usage", t.memMeasured ? num(allocationPct(t.memUsed, t.memMeasured)) : "—", "%", t.memMeasured ? `${gbText(t.memUsed)} / ${gbText(t.memMeasured)}` : "Waiting for node metrics", "cluster"),
+    metric("Storage usage", t.cap ? num(storagePct) : "—", "%", t.cap ? `${num(t.used)} / ${num(t.cap)} GB` : "No storage capacity reported", "storage"),
+  ].join("");
   if ($("#health")) $("#health").innerHTML = `${esc(mood[1])}<em class="${mood[0]}">${esc(mood[2])}</em>`;
 
   $("#home-cluster-name").textContent = c.name || "Standalone server";
@@ -923,11 +962,7 @@ function renderHome() {
     allocationMeter("vCPU", t.vcpus, t.cpus, `${t.vcpus} vCPU / ${t.cpus} hardware threads`),
     allocationMeter("Memory", t.vmem, t.mem, `${gbText(t.vmem)} / ${gbText(t.mem)}`),
     allocationMeter("VM disks", t.vdisk, t.cap, `${num(t.vdisk)} / ${num(t.cap)} GB · all VMs &amp; templates, thin provisioned`),
-  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4><div class="history-controls"><label for="home-history-range">Resolution</label><select id="home-history-range">${Object.entries(HISTORY_RANGES).map(([key, {label}]) => `<option value="${key}" ${homeRange === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select><span class="hint">${esc(HISTORY_RANGES[homeRange].windowLabel)} · Time grid: every ${homeRange === "now" || homeRange === "5m" ? "5 min" : homeRange === "30m" ? "30 min" : homeRange === "1d" ? "day" : "7 days"} · Kept for 30 days${homeMetrics?.storage_bytes ? ` · ${homeMetrics.storage_bytes < 1048576 ? `${(homeMetrics.storage_bytes / 1024).toFixed(0)} KB` : `${(homeMetrics.storage_bytes / 1048576).toFixed(1)} MB`} stored` : ""}${homeMetrics?.recording_since ? ` · Recording since ${esc(new Date(homeMetrics.recording_since).toLocaleString())}` : ""}${homeHistoryError ? ` · ${esc(homeHistoryError)}` : ""}</span></div>${[
-    usageChart("cpu", "CPU usage", t.cpuPct, `${t.measured} hardware threads in total`),
-    usageChart("memory", "Memory usage", allocationPct(t.memUsed, t.memMeasured), t.memMeasured ? `${gbText(t.memUsed)} used / ${gbText(t.memMeasured)} total` : "Waiting for node metrics"),
-    usageChart("storage", "Storage usage", allocationPct(t.used, t.cap), t.cap ? `${num(t.used)} GB used / ${num(t.cap)} GB total` : "Waiting for storage metrics"),
-  ].join("")}</div>`;
+  ].join("")}</div><div class="usage-row actual-usage"><h4>Actual use now <span>Physical resources in use${partial ? " · Some node metrics unavailable" : ""}</span></h4><div class="history-controls"><label for="home-history-range">Resolution</label><select id="home-history-range">${Object.entries(HISTORY_RANGES).map(([key, {label}]) => `<option value="${key}" ${homeRange === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select><span class="hint">${esc(HISTORY_RANGES[homeRange].windowLabel)} · Time grid: every ${homeRange === "now" || homeRange === "5m" ? "5 min" : homeRange === "30m" ? "30 min" : homeRange === "1d" ? "day" : "7 days"} · Kept for 30 days${homeMetrics?.storage_bytes ? ` · ${homeMetrics.storage_bytes < 1048576 ? `${(homeMetrics.storage_bytes / 1024).toFixed(0)} KB` : `${(homeMetrics.storage_bytes / 1048576).toFixed(1)} MB`} stored` : ""}${homeMetrics?.recording_since ? ` · Recording since ${esc(new Date(homeMetrics.recording_since).toLocaleString())}` : ""}${homeHistoryError ? ` · ${esc(homeHistoryError)}` : ""}</span></div>${resourceActivity(t)}</div>`;
 
   $("#home-nodes").innerHTML = members.map((m) => {
     const h = state.hosts[m.name];
@@ -1881,7 +1916,7 @@ async function backupNow(id, name) {
 }
 
 handlers["backup-dialog"] = async (f, ctx) => {
-  const body = { target: f.get("target") };
+  const body = { target: f.get("target"), mode: f.get("mode") || "incremental" };
   if (f.get("keep_last")) body.keep_last = Number(f.get("keep_last"));
   await post(`/vms/${ctx.id}/backup`, body);
   toast(`Backing up ${ctx.name} to ${body.target}. Progress is under Backup → Jobs.`);
@@ -3834,7 +3869,7 @@ async function renderVMBackups(vm) {
   const op = canOperate();
   tbody.innerHTML = points.length ? points.map((b) => `<tr>
     <td>${esc(when(b.created))}</td><td>${esc(b.target)}</td><td>${esc(b.node || "shared")}</td>
-    <td>${size(b.size_bytes)}</td><td>${size(b.stored_bytes)}</td>
+    <td>${size(b.size_bytes)}</td><td title="${esc(`Read from VM: ${size(b.read_bytes || 0)}; duplicate bytes avoided: ${size(b.dedup_saved_bytes || 0)}; codec: ${b.compression || 'legacy'}`)}">${size(b.stored_bytes)}${b.new_data_bytes && b.stored_bytes ? `<span class="backup-kind">${(b.new_data_bytes / b.stored_bytes).toFixed(2)}× compression of new data</span>` : '<span class="backup-kind">No new compressed data</span>'}</td>
     <td><div class="actions">${op ? `<button class="small" data-restore="${esc(b.id)}" data-target="${esc(b.target)}" data-node="${esc(b.node || "")}">Restore</button>` : ""}</div></td>
   </tr>`).join("") : empty(6, "No restore points for this VM yet");
 }
@@ -4095,13 +4130,14 @@ async function renderBackups() {
   try {
     const backups = await api(`/backup/targets/${enc(target)}/backups`);
     tbody.innerHTML = backups.length ? backups.slice().reverse().map((b) => `<tr>
-      <td class="vm-name">${esc(b.vm_name)}</td>
+      <td class="vm-name">${esc(b.vm_name)}<span class="backup-kind" title="${esc(b.note || "")}">${esc(({full:"Full",incremental:"Incremental (CBT)",synthetic_full:"Synthetic full",copy:"Backup copy",archive:"Archive"})[b.kind] || "Full")}</span></td>
       <td>${esc(when(b.created))}</td>
       <td>${esc(b.node || "shared")}</td>
       <td>${size(b.size_bytes)}</td>
       <td>${size(b.stored_bytes)}</td>
       <td><div class="actions">
         ${op ? `<button class="small" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button>` : ""}
+        ${op ? `<button class="small" data-backup-op="${esc(b.id)}" data-node="${esc(b.node || "")}">Synthetic / Copy</button>` : ""}
         ${admin ? `<button class="small danger" data-backup-del="${esc(b.id)}" data-node="${esc(b.node || "")}">Delete</button>` : ""}
       </div></td>
     </tr>`).join("") : empty(6, "No restore points on this target yet");
@@ -4113,7 +4149,7 @@ async function renderBackups() {
 function renderPolicies() {
   const admin = isAdmin(), op = canOperate();
   $("#policies").innerHTML = state.policies.length ? state.policies.map((p) => `<tr>
-    <td class="vm-name">${esc(p.name)}</td>
+    <td class="vm-name">${esc(p.name)}${p.enabled ? "" : ' <span class="badge plain">Disabled</span>'}</td>
     <td>${esc(p.target)}</td>
     <td>${p.at ? `Daily at ${esc(p.at)}` : `Every ${p.every_hours} h`}</td>
     <td>${p.vms.length ? esc(p.vms.join(", ")) : "All VMs"}</td>
@@ -4121,7 +4157,7 @@ function renderPolicies() {
     <td>${esc(when(p.last_run))}</td>
     <td><div class="actions">
       ${op ? `<button class="small" data-policy-run="${esc(p.name)}">Run now</button>` : ""}
-      ${admin ? `<button class="small danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}
+      ${admin ? `<button class="small" data-policy-edit="${esc(p.name)}">Edit</button><button class="small danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}
     </div></td>
   </tr>`).join("") : empty(7, "No schedules yet");
 }
@@ -4135,7 +4171,7 @@ function renderJobs() {
     <td>${esc(j.node || "")}</td>
     <td>${esc(when(j.created))}</td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${esc(j.error || j.result || "")}</td>
+    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.error || j.result || "")}</td>
   </tr>`).join("") : empty(7, "No jobs yet");
 }
 
@@ -4143,7 +4179,7 @@ $("#browse-target").addEventListener("change", () => renderBackups());
 $("#refresh-backups").addEventListener("click", () => renderBackups());
 
 $("#page-backup").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-target], button[data-policy-run], button[data-policy-del], button[data-restore], button[data-backup-del]");
+  const btn = e.target.closest("button[data-target], button[data-policy-run], button[data-policy-edit], button[data-policy-del], button[data-restore], button[data-backup-del], button[data-backup-op]");
   if (!btn) return;
   const d = btn.dataset;
   const target = $("#browse-target").value;
@@ -4151,6 +4187,11 @@ $("#page-backup").addEventListener("click", async (e) => {
     if (d.target) {
       if (!confirm(`Remove target ${d.target}? Backup files on it stay.`)) return;
       await del(`/backup/targets/${enc(d.target)}`);
+    } else if (d.policyEdit) {
+      await load("vms", "targets", "policies");
+      if (!state.policies.some(p => p.name === d.policyEdit)) throw new Error("This schedule no longer exists. Refresh the list.");
+      openDialog("policy-dialog", {policyName:d.policyEdit});
+      return;
     } else if (d.policyRun) {
       const jobs = await post(`/backup/policies/${enc(d.policyRun)}/run`);
       toast(`Started ${jobs.length} backup job${jobs.length === 1 ? "" : "s"}`);
@@ -4159,6 +4200,11 @@ $("#page-backup").addEventListener("click", async (e) => {
       await del(`/backup/policies/${enc(d.policyDel)}`);
     } else if (d.restore) {
       openDialog("restore-dialog", { target, id: d.restore, sourceNode: d.node }, { name: `${d.vm}-restore` });
+      return;
+    } else if (d.backupOp) {
+      const select = $("#backup-operation-form select[name=destination]");
+      select.innerHTML = '<option value="">Choose a repository</option>' + state.targets.filter(t => t.name !== target).map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+      openDialog("backup-operation-dialog", { target, id: d.backupOp, node: d.node });
       return;
     } else if (d.backupDel) {
       if (!confirm(`Delete restore point ${d.backupDel}?`)) return;
@@ -4172,9 +4218,9 @@ $("#page-backup").addEventListener("click", async (e) => {
 handlers["target-dialog"] = async (f, ctx) => {
   const FIELDS = {
     pool: [], local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
-    usb: ["device"], iscsi: ["host", "iqn"], fc: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key"],
+    usb: ["device"], iscsi: ["host", "iqn"], fc: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key", "storage_class"],
   };
-  const body = { name: f.get("name"), type: f.get("type") };
+  const body = { name: f.get("name"), type: f.get("type"), compression: f.get("compression") || "balanced" };
   for (const key of FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
   if (body.type === "pool") Object.assign(body, { type: "local", pool: f.get("pool"), quota_gb: Number(f.get("quota_gb")) });
   if (body.type === "iscsi") body.lun = Number(f.get("lun"));
@@ -4195,7 +4241,7 @@ handlers["target-dialog"] = async (f, ctx) => {
 };
 
 // New backup schedule: which VMs, when and how many to keep, where to, then a name.
-const polWiz = { picked: new Set(), nameTouched: false };
+const polWiz = { picked: new Set(), nameTouched: false, editing: null, target: null };
 const polForm = $("#policy-form");
 function polScope() { return polForm.elements.scope.value; }
 function polRender() {
@@ -4218,9 +4264,9 @@ function polSchedule() {
   $(".pol-every", polForm).hidden = f.mode.value !== "every";
   const keep = Number(f.keep_last.value) || 0;
   const hours = f.mode.value === "at" ? 24 : Number(f.every_hours.value) || 0;
-  const span = keep * hours;
+  const span = Math.max(0, keep - 1) * hours;
   $(".pol-keep", polForm).textContent = keep && hours
-    ? `You can go back about ${span >= 48 ? `${Math.round(span / 24)} days` : `${span} hours`}. Older backups are deleted automatically.` : "";
+    ? `Recent points span about ${span >= 48 ? `${Math.round(span / 24)} days` : `${span} hours`}. Older points are removed unless retained by GFS.` : "";
 }
 function polText() {
   const f = polForm.elements;
@@ -4229,13 +4275,34 @@ function polText() {
 const policyWiz = wizard("policy-dialog", {
   steps: 4,
   reset() {
-    polWiz.picked = new Set();
-    polWiz.nameTouched = false;
+    const policy = state.policies.find(p => p.name === dialogContext?.policyName);
+    const f = polForm.elements;
+    polWiz.editing = policy?.name || null;
+    polWiz.target = policy?.target || null;
+    polWiz.picked = new Set(policy?.vms || []);
+    polWiz.nameTouched = Boolean(policy);
+    f.name.readOnly = Boolean(policy);
+    $("#policy-dialog header h3").textContent = policy ? "Edit backup schedule" : "New backup schedule";
+    $(".wiz-ok", polForm).textContent = policy ? "Save changes" : "Create schedule";
+    $(".pol-edit-note", polForm).hidden = !policy;
     $(".pol-search", polForm).value = "";
+    $(".pol-targets", polForm).innerHTML = "";
+    $$('.secondary-repos', polForm).forEach(select => {
+      select.innerHTML = '<option value="">Disabled</option>' + state.targets.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+    });
+    if (policy) {
+      f.scope.value = policy.vms.length ? "pick" : "all";
+      f.mode.value = policy.at != null ? "at" : "every";
+      f.backup_mode.value = policy.mode;
+      for (const key of ["name", "at", "every_hours", "keep_last", "full_weekday", "synthetic_weekday", "keep_weekly", "keep_monthly", "keep_yearly", "copy_target", "copy_keep_last", "archive_target", "archive_weekday", "archive_keep_weekly", "archive_keep_monthly", "archive_keep_yearly"]) {
+        if (policy[key] != null) f[key].value = policy[key];
+      }
+      f.enabled.checked = policy.enabled;
+    }
     syncPresets(polForm);
     polSchedule();
     polRender();
-    load("vms", "targets", "policies").then(polRender).catch(() => {});
+    if (!policy) load("vms", "targets", "policies").then(polRender).catch(fail);
   },
   check(step) {
     const f = polForm.elements;
@@ -4245,16 +4312,25 @@ const policyWiz = wizard("policy-dialog", {
       if (f.mode.value === "every" && !(Number(f.every_hours.value) >= 1 && Number(f.every_hours.value) <= 168)) throw new Error("Hours must be 1 to 168.");
       if (!(Number(f.keep_last.value) >= 1)) throw new Error("Keep at least 1 backup.");
     }
+    if (step === 3) {
+      const names = [$('input[name="target"]:checked', polForm)?.value, f.copy_target.value, f.archive_target.value].filter(Boolean);
+      if (new Set(names).size !== names.length) throw new Error("Choose different primary, copy and archive repositories.");
+    }
     if (step === 3 && !$('input[name="target"]:checked', polForm)) throw new Error(state.targets.length ? "Pick where the backups go." : "Add a backup repository first (Backup → Repositories).");
     if (step === 4 && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the schedule with letters, digits, '-', '_' or '.'.");
-    if (step === 4 && state.policies.some((p) => p.name === f.name.value)) throw new Error(`A schedule named ${f.name.value} already exists.`);
+    if (step === 4 && state.policies.some((p) => p.name === f.name.value && p.name !== polWiz.editing)) throw new Error(`A schedule named ${f.name.value} already exists.`);
   },
   show(step) {
     const f = polForm.elements;
     if (step === 1) polRender();
     if (step === 2) polSchedule();
     if (step === 3) {
-      const was = $('input[name="target"]:checked', polForm)?.value;
+      $$('.secondary-repos', polForm).forEach(select => {
+        const selected = select.value;
+        select.innerHTML = '<option value="">Disabled</option>' + state.targets.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+        select.value = selected;
+      });
+      const was = $('input[name="target"]:checked', polForm)?.value || polWiz.target;
       $(".pol-targets", polForm).innerHTML = state.targets.map((t, i) => `<label class="type-card small"><input type="radio" name="target" value="${esc(t.name)}" ${(was ? t.name === was : i === 0) ? "checked" : ""}>
         <svg><use href="#i-backup"/></svg><span><b>${esc(t.name)}</b><em>${esc(TARGET_TYPES[t.type] || t.type)} · ${esc(t.source)}</em></span></label>`).join("")
         || `<p class="hint" style="padding:0">No backup target yet.</p>`;
@@ -4268,8 +4344,12 @@ const policyWiz = wizard("policy-dialog", {
         f.name.value = name;
       }
       const vms = polScope() === "all" ? "Every VM, including new ones" : esc([...polWiz.picked].join(", "));
-      const rows = [["VMs", vms], ["When", esc(polText())], ["Keep", `${esc(f.keep_last.value)} latest of each VM`],
-        ["Target", esc($('input[name="target"]:checked', polForm)?.value || "")]];
+      const rows = [["VMs", vms], ["Status", f.enabled.checked ? "Enabled" : "Disabled"], ["When", esc(polText())], ["Keep", `${esc(f.keep_last.value)} latest of each VM`],
+        ["Target", esc($('input[name="target"]:checked', polForm)?.value || "")],
+        ["Method", f.backup_mode.value === "active_full" ? "Active full" : "Incremental with safe full fallback"],
+        ["Synthetic full", f.synthetic_weekday.selectedOptions[0].textContent],
+        ["Long-term", `${esc(f.keep_weekly.value)} weekly / ${esc(f.keep_monthly.value)} monthly / ${esc(f.keep_yearly.value)} yearly`],
+        ["Secondary copy", esc(f.copy_target.value || "Disabled")], ["Archive", esc(f.archive_target.value || "Disabled")]];
       $(".wiz-summary", polForm).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
     }
   },
@@ -4281,6 +4361,7 @@ const policyWiz = wizard("policy-dialog", {
   $(".chips.presets", polForm).addEventListener("click", () => setTimeout(polSchedule));
   $(".pol-search", polForm).addEventListener("input", polRender);
   polForm.elements.name.addEventListener("input", () => { polWiz.nameTouched = true; });
+  polForm.elements.enabled.addEventListener("change", () => { if (policyWiz.step === 4) policyWiz.go(4); });
   $(".pol-rows", polForm).addEventListener("click", (e) => {
     const tr = e.target.closest("tr[data-vm]");
     if (!tr) return;
@@ -4289,17 +4370,27 @@ const policyWiz = wizard("policy-dialog", {
   });
 }
 
-handlers["policy-dialog"] = async (f) => {
+handlers["policy-dialog"] = async (f, ctx) => {
   [1, 2, 3, 4].forEach((n) => policyWiz.check(n));
   const body = {
     name: f.get("name"),
     target: f.get("target"),
+    enabled: f.get("enabled") === "on",
     vms: polScope() === "all" ? [] : [...polWiz.picked],
     keep_last: Number(f.get("keep_last")),
   };
+  body.mode = f.get("backup_mode");
+  for (const key of ["full_weekday", "synthetic_weekday"]) body[key] = f.get(key) === "" ? null : Number(f.get(key));
+  for (const key of ["keep_weekly", "keep_monthly", "keep_yearly", "copy_keep_last", "archive_weekday", "archive_keep_weekly", "archive_keep_monthly", "archive_keep_yearly"]) body[key] = Number(f.get(key));
+  body.copy_target = f.get("copy_target") || null;
+  body.archive_target = f.get("archive_target") || null;
   if (f.get("mode") === "at") body.at = f.get("at"); else body.every_hours = Number(f.get("every_hours"));
-  await post("/backup/policies", body);
-  toast(`Schedule ${body.name} created: ${polText()}`);
+  if (ctx?.policyName) {
+    await api(`/backup/policies/${enc(ctx.policyName)}`, {method:"PUT", body:JSON.stringify(body)});
+  } else {
+    await post("/backup/policies", body);
+  }
+  toast(`Schedule ${body.name} ${ctx?.policyName ? "updated" : "created"}: ${polText()}`);
   await refresh("backup");
 };
 
@@ -5209,3 +5300,39 @@ let ctJob = null;
 const ctStop = () => { if (ctJob) del(`/containers/${enc(ctJob.name)}/jobs/${ctJob.job}`).catch(() => {}); };
 $("#ct-stop").addEventListener("click", ctStop);
 $("#ct-console-dialog").addEventListener("keydown", (e) => { if (e.ctrlKey && e.key === "c" && ctJob) { e.preventDefault(); ctStop(); } });
+
+handlers["backup-operation-dialog"] = async (f, ctx) => {
+  const operation = f.get("operation"), body = { node: ctx.node || null };
+  if (operation !== "synthetic") {
+    if (!f.get("destination")) throw new Error("Choose a destination repository.");
+    body.destination = f.get("destination");
+    body.archive = operation === "archive";
+  }
+  await post(`/backup/targets/${enc(ctx.target)}/backups/${enc(ctx.id)}/${operation === "synthetic" ? "synthetic" : "copy"}`, body);
+  toast("Repository job started. Follow it under Backup → Jobs.");
+  await refresh("backup");
+};
+
+$("#jobs").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-backup-report]");
+  if (!button) return;
+  try {
+    const report = await api(`/backup/jobs/${enc(button.dataset.backupReport)}/report`);
+    const ratios = v => v == null ? "Not applicable" : `${Number(v).toFixed(2)}×`;
+    $("#backup-report-details").innerHTML = [
+      ["VM", report.vm], ["Method", report.backup_method], ["Repository", report.repository],
+      ["Duration", `${Number(report.duration_seconds).toFixed(1)} seconds`],
+      ["Logical disks", size(report.logical_size_bytes)], ["Read from VM", size(report.source_read_bytes)],
+      ["Duplicate data avoided", size(report.dedup_saved_bytes)],
+      ["Deduplication", report.all_data_reused ? "All processed data reused" : ratios(report.dedup_ratio)],
+      ["New unique data", size(report.new_data_bytes)], ["New stored payload", size(report.stored_bytes)],
+      ["Compression", ratios(report.compression_ratio)], ["Codec", report.compression_codec],
+      ["Combined data reduction", ratios(report.combined_ratio)], ["Notes", report.note || "—"],
+    ].map(([k,v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+    $("#backup-report-basis").textContent = report.metric_basis;
+    $("#backup-report-csv").href = `/api/v1/backup/jobs/${enc(report.job_id)}/report?format=csv`;
+    $("#backup-report-json").href = `/api/v1/backup/jobs/${enc(report.job_id)}/report?format=json`;
+    $("#backup-report-json").download = `backup-job-${report.job_id}.json`;
+    $("#backup-report-dialog").showModal();
+  } catch (err) { fail(err); }
+});

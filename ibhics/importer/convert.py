@@ -617,7 +617,9 @@ class V2VConverter:
 
 def read_output(out_dir: Path, name: str) -> Converted:
     """virt-v2v -o local writes NAME-sda, NAME-sdb, ... and NAME.xml."""
-    images = sorted(p for p in out_dir.glob(f"{name}-sd*") if p.suffix == "")
+    # A dot in the VM name is not a disk extension (e.g. V8.12-sda).
+    disk_name = re.compile(rf"{re.escape(name)}-sd[a-z]+")
+    images = sorted(p for p in out_dir.iterdir() if disk_name.fullmatch(p.name) and p.is_file())
     if not images:
         raise ConversionFailed("virt-v2v produced no disks")
     firmware, macs = Firmware.BIOS, []

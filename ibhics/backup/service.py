@@ -7,13 +7,14 @@ import shutil
 import tempfile
 import threading
 from collections import defaultdict
+from contextlib import ExitStack
 from pathlib import Path
 
 from ..hypervisor import HypervisorDriver, InvalidState, VMInfo
 from ..hypervisor.serialize import spec_from_json, spec_to_json
 from .repository import CHUNK_SIZE, BackupInfo, Repository, RepositoryBusy
 from .store import Mounter, S3Store, open_store
-from .targets import BackupTarget
+from .targets import BackupTarget, repository_identity
 
 
 class NodeBackup:
@@ -42,13 +43,62 @@ class NodeBackup:
         target.validate()
         return open_store(target, self._mounter, self._s3_factory)
 
-    def backup(self, uuid: str, target: BackupTarget) -> BackupInfo:
+    def backup(
+        self, uuid: str, target: BackupTarget, mode="incremental", progress=None
+    ) -> BackupInfo:
+        if mode not in ("incremental", "active_full"):
+            raise ValueError("Backup mode must be incremental or active_full")
         vm = self._driver.get_vm(uuid)
         check_quota(target)
         with self._locks[target.name], self._open(target) as store:
-            with self._driver.export_disks(uuid) as images:
-                repo = Repository(store, self._chunk_size)
-                return repo.backup(vm, images, spec_to_json(vm.spec))
+            from ..hypervisor.backup_cbt import CBTUnavailable
+
+            repo = Repository(store, self._chunk_size, compression=target.compression)
+            with repo.reading():
+                parent = repo.latest(uuid) if mode == "incremental" else None
+                reason = "CBT is not supported by this driver; full backup used"
+                if hasattr(self._driver, "export_backup"):
+                    try:
+                        with self._driver.export_backup(uuid, parent) as (readers, capture):
+                            return repo.backup_readers(
+                                vm, readers, spec_to_json(vm.spec), capture, parent, progress
+                            )
+                    except CBTUnavailable as exc:
+                        reason = f"Full fallback: {exc}"
+                with self._driver.export_disks(uuid) as images:
+                    return repo.backup(vm, images, spec_to_json(vm.spec), note=reason)
+
+    def synthetic_full(self, target, backup_id, progress=None):
+        check_quota(target)
+        with self._locks[target.name], self._open(target) as store:
+            return Repository(
+                store, self._chunk_size, compression=target.compression
+            ).synthetic_full(backup_id, progress)
+
+    def copy(self, source, destination, backup_id, archive=False, progress=None):
+        if repository_identity(source) == repository_identity(destination):
+            raise ValueError("Choose a different destination repository")
+        check_quota(destination)
+        with ExitStack() as stack:
+            for name in sorted({source.name, destination.name}):
+                stack.enter_context(self._locks[name])
+            src = Repository(
+                stack.enter_context(self._open(source)),
+                self._chunk_size,
+                compression=source.compression,
+            )
+            dst = Repository(
+                stack.enter_context(self._open(destination)),
+                self._chunk_size,
+                compression=destination.compression,
+            )
+            return src.transfer(
+                backup_id,
+                dst,
+                "archive" if archive else "copy",
+                independent=archive,
+                progress=progress,
+            )
 
     def list(self, target: BackupTarget, vm_name: str | None = None) -> list[BackupInfo]:
         with self._open(target) as store:
@@ -61,7 +111,7 @@ class NodeBackup:
         name: str | None = None,
         pool: str | None = None,
     ) -> VMInfo:
-        with self._open(target) as store:
+        with self._locks[target.name], self._open(target) as store, Repository(store).reading():
             repo = Repository(store)
             manifest = repo.manifest(backup_id)
             spec = spec_from_json(manifest["spec"])
@@ -95,10 +145,12 @@ class NodeBackup:
             repo.delete(backup_id)
             return _gc(repo)
 
-    def prune(self, target: BackupTarget, vm_name: str, keep_last: int) -> list[str]:
+    def prune(
+        self, target: BackupTarget, vm_name: str, keep_last: int, weekly=0, monthly=0, yearly=0
+    ) -> list[str]:
         with self._locks[target.name], self._open(target) as store:
             repo = Repository(store)
-            removed = repo.prune(vm_name, keep_last)
+            removed = repo.prune(vm_name, keep_last, weekly, monthly, yearly)
             if removed:
                 _gc(repo)
             return removed

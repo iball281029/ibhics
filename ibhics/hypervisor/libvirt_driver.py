@@ -531,7 +531,9 @@ class LibvirtDriver(HypervisorDriver):
                 self._conn.storagePoolLookupByName(pool).storageVolLookupByName(volume).delete(0)
         # Internal snapshots live in the images just deleted; drop libvirt's record of them.
         dom.undefineFlags(
-            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM
+            | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_CHECKPOINTS_METADATA", 0)
         )
 
     # Snapshots: internal qcow2 snapshots, with the memory of a running VM.
@@ -576,6 +578,7 @@ class LibvirtDriver(HypervisorDriver):
         if description:
             xml += f"<description>{escape(description)}</description>"
         xml += "</domainsnapshot>"
+        _drop_checkpoints(dom)
         return _snapshot_info(dom.snapshotCreateXML(xml, 0))
 
     def _power_off(self, dom, timeout: float = 300, poll: float = 2) -> None:
@@ -953,12 +956,16 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
             raise InvalidState("a template's snapshots cannot be reverted to")
-        dom.revertToSnapshot(self._snapshot(dom, name), 0)
+        snapshot = self._snapshot(dom, name)
+        _drop_checkpoints(dom)
+        dom.revertToSnapshot(snapshot, 0)
         return self._info(dom)
 
     def delete_snapshot(self, uuid: str, name: str) -> None:
         dom = self._lookup(uuid)
-        self._snapshot(dom, name).delete(0)
+        snapshot = self._snapshot(dom, name)
+        _drop_checkpoints(dom)
+        snapshot.delete(0)
 
     @staticmethod
     def _snapshot(dom, name: str):
@@ -1579,6 +1586,7 @@ class LibvirtDriver(HypervisorDriver):
             libvirt.VIR_DOMAIN_UNDEFINE_NVRAM
             | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
             | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE", 0)
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_CHECKPOINTS_METADATA", 0)
         )
         self.remove_migration_files(files)
 
@@ -1757,8 +1765,8 @@ class LibvirtDriver(HypervisorDriver):
     def export_disks(self, uuid: str) -> Iterator[list[Path]]:
         dom = self._lookup(uuid)
         disks = ET.fromstring(dom.XMLDesc(0)).findall("./devices/disk[@device='disk']")
-        Path(self.scratch_dir).mkdir(parents=True, exist_ok=True)
-        scratch = Path(tempfile.mkdtemp(prefix=f"backup-{uuid}-", dir=self.scratch_dir))
+        base = self._backup_staging(disks)
+        scratch = Path(tempfile.mkdtemp(prefix=f"backup-{uuid}-", dir=base))
         _qemu_may_write(scratch)
         try:
             images = [scratch / f"disk{i}.raw" for i in range(len(disks))]
@@ -1773,6 +1781,43 @@ class LibvirtDriver(HypervisorDriver):
             yield images
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    def export_backup(self, uuid, parent=None):
+        from .backup_cbt import capture
+
+        return capture(self, uuid, parent)
+
+    def _backup_staging(self, disks) -> Path:
+        """Where the backup copies of these disks can wait: beside them on their own pool
+        when it is a folder, else the node's scratch folder; never somewhere too small.
+        A copy that runs out of room makes QEMU pause the running guest."""
+        need = sum(self._volume(d).info()[2] for d in disks)  # data actually allocated
+        need = int(need * 1.1) + (1 << 30)
+        places = []
+        for disk in disks:
+            source = disk.find("source")
+            try:
+                root = ET.fromstring(self._pool(source.get("pool")).XMLDesc(0))
+            except Exception:  # not a pool volume, or a pool that cannot tell
+                continue
+            if root.get("type") in ("dir", "netfs", "fs"):
+                places.append(Path(root.findtext("target/path")) / ".ibhics-scratch")
+        places.append(Path(self.scratch_dir))
+        free = []
+        for place in dict.fromkeys(places):
+            try:
+                place.mkdir(parents=True, exist_ok=True)
+                room = shutil.disk_usage(place).free
+            except OSError:
+                continue
+            if room >= need:
+                return place
+            free.append(f"{place} has {room / GIB:.0f} GB free")
+        raise InvalidState(
+            f"not enough room to stage the backup ({need / GIB:.0f} GB needed; "
+            + "; ".join(free)
+            + "). Free space there first."
+        )
 
     def import_disk(self, uuid: str, index: int, raw_image: Path) -> None:
         dom = self._lookup(uuid)
@@ -2007,6 +2052,20 @@ def _restart_key(root) -> tuple:
         [b.get("dev") for b in root.findall("os/boot")],
         _video_of(root),
     )
+
+
+def _drop_checkpoints(dom) -> None:
+    """libvirt refuses internal snapshots while backup checkpoints (CBT) exist. Drop
+    them: the next backup of the VM is then a full one instead of an incremental."""
+    try:
+        checkpoints = dom.listAllCheckpoints(0)
+    except Exception:  # an older libvirt without checkpoints, or a stand-in in tests
+        return
+    for checkpoint in checkpoints:
+        try:
+            checkpoint.delete(0)
+        except Exception:
+            checkpoint.delete(getattr(libvirt, "VIR_DOMAIN_CHECKPOINT_DELETE_METADATA_ONLY", 0))
 
 
 def _undefine(pool) -> None:

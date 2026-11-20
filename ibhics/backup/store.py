@@ -10,6 +10,7 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 from .targets import LOCAL_ROOT, BackupTarget, TargetType
 
@@ -20,8 +21,34 @@ class TargetUnavailable(RuntimeError):
     """The NAS, USB disk or bucket could not be reached or mounted."""
 
 
+class RepositoryBusy(RuntimeError):
+    pass
+
+
 class Store(abc.ABC):
     """Flat keys such as 'chunks/ab/abcd...' map to bytes."""
+
+    @contextmanager
+    def exclusive(self):
+        """Serialize destructive operations and writers across nodes, without timed expiry."""
+        with self._lease_mutex:
+            if getattr(self._lease_state, "depth", 0):
+                self._lease_state.depth += 1
+                try:
+                    yield
+                finally:
+                    self._lease_state.depth -= 1
+                return
+            token = uuid4().hex.encode()
+            self._acquire_lease(token)
+            self._lease_state.depth = 1
+            try:
+                yield
+            finally:
+                self._lease_state.depth = 0
+                # An operator must never clear an active lease. Do not delete a replacement.
+                if self.get(".repository-lease") == token:
+                    self.delete(".repository-lease")
 
     @abc.abstractmethod
     def put(self, key: str, data: bytes) -> None: ...
@@ -41,7 +68,21 @@ class Store(abc.ABC):
 
 class DirStore(Store):
     def __init__(self, root: Path) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
+        self._lease_mutex = threading.RLock()
+        self._lease_state = threading.local()
+
+    def _acquire_lease(self, token):
+        path = self._path(".repository-lease")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            raise RepositoryBusy("Repository is busy or has an uncleared lease") from None
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(token)
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def _path(self, key: str) -> Path:
         path = (self.root / key).resolve()
@@ -87,10 +128,29 @@ class DirStore(Store):
 
 
 class S3Store(Store):
-    def __init__(self, client, bucket: str, prefix: str = "") -> None:
+    def __init__(self, client, bucket: str, prefix: str = "", storage_class="STANDARD") -> None:
         self._s3 = client
         self._bucket = bucket
         self._prefix = f"{prefix.strip('/')}/" if prefix.strip("/") else ""
+        self._storage_class = storage_class
+        self._lease_mutex = threading.RLock()
+        self._lease_state = threading.local()
+
+    def _acquire_lease(self, token):
+        try:
+            self._s3.put_object(
+                Bucket=self._bucket,
+                Key=self._prefix + ".repository-lease",
+                Body=token,
+                IfNoneMatch="*",
+            )
+        except Exception as exc:
+            status = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if status in (409, 412):
+                raise RepositoryBusy("Repository is busy or has an uncleared lease") from exc
+            raise TargetUnavailable(
+                "Repository locking requires conditional S3 PutObject: " + str(exc)
+            ) from exc
 
     @classmethod
     def from_target(cls, target: BackupTarget) -> S3Store:
@@ -105,10 +165,16 @@ class S3Store(Store):
             aws_access_key_id=target.access_key,
             aws_secret_access_key=target.secret_key,
         )
-        return cls(client, target.bucket, target.prefix)
+        return cls(client, target.bucket, target.prefix, target.storage_class)
 
     def put(self, key: str, data: bytes) -> None:
-        self._s3.put_object(Bucket=self._bucket, Key=self._prefix + key, Body=data)
+        # Keep manifests/locks hot. Only chunk payloads use the archive storage class.
+        options = (
+            {"StorageClass": self._storage_class}
+            if (self._storage_class != "STANDARD" and key.startswith(("chunks/", "fulls/")))
+            else {}
+        )
+        self._s3.put_object(Bucket=self._bucket, Key=self._prefix + key, Body=data, **options)
 
     def get(self, key: str) -> bytes:
         try:

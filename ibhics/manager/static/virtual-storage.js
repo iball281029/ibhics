@@ -240,6 +240,7 @@ window.VirtualStorageUI = (() => {
           const text = !n.healthy ? "Offline" : resource ? n.role === "witness" ? "Voting · no VM data" : replicated ? "Up to date" : "Synchronizing / check replication" : n.software_ready ? "Ready to create" : "Preparation required";
           return `<tr><td>${esc(n.display_name || n.name)}</td><td>${n.role === "witness" ? "Arbiter" : "Data node"}</td><td>${esc(text)}${!n.software_ready && n.healthy ? `<details><summary>Details</summary><span class="hint">${esc((n.missing_components || [n.error || "Storage components are unavailable"]).join("; "))}</span></details>` : ""}</td></tr>`;
         }).join("")}</tbody></table></div>`;
+      window.SpatialUI?.storage(data);
       if (currentPage() === "storage") timer = setTimeout(() => render().catch(fail), running ? 2500 : 10000);
     } catch (err) { box.textContent = `Could not check Virtual Storage: ${err.message}`; }
     finally { rendering = false; }

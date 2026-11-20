@@ -251,8 +251,12 @@ def call(method, path, body=None, token=None):
     req.add_header("Content-Type", "application/json")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
-        return json.loads(resp.read() or b"null")
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=60) as resp:
+            return json.loads(resp.read() or b"null")
+    except urllib.error.HTTPError as exc:
+        print(f"!! {method} {path} -> {exc.code}: {exc.read()[:500]!r}", flush=True)
+        raise urllib.error.HTTPError(exc.url, exc.code, exc.msg, exc.hdrs, None) from None
 
 health = call("GET", "/health")
 assert health["status"] == "ok" and health["auth"], health

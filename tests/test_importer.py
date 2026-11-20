@@ -25,6 +25,7 @@ from ibhics.importer import (
     V2VConverter,
     list_vms,
 )
+from ibhics.importer.convert import read_output
 from ibhics.importer.sources import parse_ovf, parse_vmware_xml
 from ibhics.manager import create_app
 from ibhics.manager.imports import ImportManager
@@ -194,6 +195,17 @@ def test_list_disk_images(tmp_path):
 
 
 # Conversion
+
+
+@pytest.mark.parametrize("name", ["PNetLab-27H1-V8.12", "vm[1].2", "plain-vm"])
+def test_read_output_matches_literal_vm_name_and_disk_files(tmp_path, name):
+    expected = [tmp_path / f"{name}-sda", tmp_path / f"{name}-sdb"]
+    for disk in expected:
+        disk.write_bytes(b"disk")
+    for extra in [f"{name}-sda.log", f"{name}-sda.backup", f"{name}-sd", "other-sda"]:
+        (tmp_path / extra).write_bytes(b"not a disk")
+    (tmp_path / f"{name}-sdc").mkdir()
+    assert read_output(tmp_path, name).images == expected
 
 
 class FakeV2V:

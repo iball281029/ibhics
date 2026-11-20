@@ -30,8 +30,23 @@
   [hidden] { display: none !important; }
   footer { margin-top: 18px; color: var(--muted); font-size: 12px; text-align: center; }
 </style>
+<link rel="stylesheet" href="future.css">
+<link rel="stylesheet" href="command.css">
 </head>
-<body>
+<body class="login-page">
+<section class="login-hero" aria-label="ibHiCS infrastructure platform">
+  <div class="hero-eyebrow"><span></span> ibHiCS · HYPER-CONVERGED</div>
+  <h1>Your infrastructure.<br><span>Beyond boundaries.</span></h1>
+  <p>Compute, storage and network.<br>Connected in one clear view.</p>
+  <div class="holo-scene" aria-hidden="true">
+    <div class="holo-grid"></div><div class="holo-orbit orbit-one"></div><div class="holo-orbit orbit-two"></div><div class="holo-orbit orbit-three"></div>
+    <div class="holo-core"><img src="logo-mark.svg" alt=""></div>
+    <div class="holo-label holo-compute"><i></i>COMPUTE<span>Virtual infrastructure</span></div>
+    <div class="holo-label holo-storage"><i></i>STORAGE<span>Connected data</span></div>
+    <div class="holo-label holo-network"><i></i>NETWORK<span>One unified fabric</span></div>
+  </div>
+  <div class="hero-foot">BUILT FOR WHAT COMES NEXT <span>01 / CONNECTED INFRASTRUCTURE</span></div>
+</section>
 <main class="card">
   <div class="brand">
     <svg viewBox="0 0 64 64" aria-hidden="true">
@@ -49,6 +64,7 @@
   </div>
   <p class="sub">Hyper-Converged Infrastructure</p>
 
+  <h2 class="login-welcome">Welcome back.</h2><p class="login-intro">Sign in to your infrastructure workspace.</p>
   <form id="login">
     <label>Username <input name="username" autocomplete="username" required autofocus></label>
     <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
