@@ -96,9 +96,13 @@ def capture(driver, uuid, parent=None):
         except Exception:
             checkpoint = None
     new = "ibhics-" + uuid4().hex
-    Path(driver.scratch_dir).mkdir(parents=True, exist_ok=True)
+    # The scratch files hold what the guest overwrites during the backup; where they
+    # run out of room QEMU pauses the guest, so they go where the disks have room.
+    staging = getattr(driver, "_backup_staging", None)
+    base = staging(disks) if staging else Path(driver.scratch_dir)
+    base.mkdir(parents=True, exist_ok=True)
     handles, started = [], False
-    with TemporaryDirectory(prefix="cbt-", dir=driver.scratch_dir) as directory:
+    with TemporaryDirectory(prefix="cbt-", dir=base) as directory:
         from .libvirt_driver import _qemu_may_write
 
         _qemu_may_write(Path(directory))
