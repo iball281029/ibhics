@@ -630,6 +630,12 @@ class HostSystem:
     def nics(self) -> list[HostNic]:
         raise NotImplementedError
 
+    def lldp(self) -> list[dict]:
+        """The switch port behind each network port, as LLDP announced it."""
+        from .lldp import neighbors
+
+        return neighbors()
+
     def timezones(self) -> list[str]:
         raise NotImplementedError
 
@@ -1097,6 +1103,18 @@ class FakeHost(HostSystem):
                 "root_free_gb": 160.2,
             },
         )
+
+    def lldp(self) -> list[dict]:
+        return [
+            {
+                "interface": "ens2f0",
+                "system_name": "core-sw1",
+                "system_desc": "Cisco IOS Software, C2960X",
+                "port_id": "Gi1/0/19",
+                "port_desc": "GigabitEthernet1/0/19",
+                "management": "10.0.0.254",
+            },
+        ]
 
     def nics(self) -> list[HostNic]:
         net = self.network()

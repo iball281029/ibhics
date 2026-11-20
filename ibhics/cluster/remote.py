@@ -575,6 +575,12 @@ class RemoteHost:
     def nics(self) -> list[host.HostNic]:
         return [host.HostNic(**n) for n in self._call("GET", "/nics")]
 
+    def lldp(self) -> list[dict]:
+        try:
+            return list(self._call("GET", "/lldp"))
+        except Exception:
+            return []  # an older agent, or the node is away
+
     def network(self) -> host.HostNetwork:
         data = self._call("GET", "/network")
         return host.HostNetwork([host.IfaceConfig(**i) for i in data["interfaces"]])
