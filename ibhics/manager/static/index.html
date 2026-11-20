@@ -311,7 +311,14 @@
         <div class="fabric-hud" id="fabric-hud" role="status"></div>
         <canvas id="fabric-canvas" aria-label="3D map of nodes, virtual machines, storage and networks with live traffic. Drag to turn, scroll to zoom, click a node or VM to open it."></canvas>
         <div class="fabric-tip" id="fabric-tip" hidden></div>
-        <p class="fabric-hint">Drag to turn · scroll to zoom · click a node or VM · traffic from VM statistics, refreshed every 3 s</p>
+        <div class="fabric-timeline" role="group" aria-label="Time: replay the last 15 minutes of traffic">
+          <span class="fabric-axis">4D · TIME</span>
+          <button type="button" class="btn small" id="fabric-play" aria-pressed="false">▶ Replay</button>
+          <input type="range" id="fabric-time" min="0" max="0" value="0" step="1" aria-label="Moment to show">
+          <button type="button" class="btn small" id="fabric-live" aria-pressed="true">● Live</button>
+          <span class="fabric-time-label" id="fabric-time-label" aria-live="polite">LIVE</span>
+        </div>
+        <p class="fabric-hint">Drag to turn · scroll to zoom · double-click a node to fly to it · click a node or VM to open it · traffic from VM statistics every 3 s, kept 15 min while this page is open</p>
       </div>
     </section>
 
