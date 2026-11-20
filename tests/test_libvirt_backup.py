@@ -170,3 +170,18 @@ def test_backup_stages_beside_folder_pool_disks(make_driver, monkeypatch, tmp_pa
     driver = make_driver(active=True)
     with driver.export_disks("u") as images:
         assert images[0].parent.parent == pools / ".ibhics-scratch"
+
+
+def test_snapshot_ops_drop_backup_checkpoints():
+    class Checkpoint:
+        def __init__(self):
+            self.deleted = False
+
+        def delete(self, _flags):
+            self.deleted = True
+
+    cps = [Checkpoint(), Checkpoint()]
+    dom = types.SimpleNamespace(listAllCheckpoints=lambda _f: cps)
+    lv._drop_checkpoints(dom)
+    assert all(c.deleted for c in cps)
+    lv._drop_checkpoints(types.SimpleNamespace())  # no checkpoint API: nothing to do

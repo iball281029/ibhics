@@ -531,7 +531,9 @@ class LibvirtDriver(HypervisorDriver):
                 self._conn.storagePoolLookupByName(pool).storageVolLookupByName(volume).delete(0)
         # Internal snapshots live in the images just deleted; drop libvirt's record of them.
         dom.undefineFlags(
-            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+            libvirt.VIR_DOMAIN_UNDEFINE_NVRAM
+            | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_CHECKPOINTS_METADATA", 0)
         )
 
     # Snapshots: internal qcow2 snapshots, with the memory of a running VM.
@@ -576,6 +578,7 @@ class LibvirtDriver(HypervisorDriver):
         if description:
             xml += f"<description>{escape(description)}</description>"
         xml += "</domainsnapshot>"
+        _drop_checkpoints(dom)
         return _snapshot_info(dom.snapshotCreateXML(xml, 0))
 
     def _power_off(self, dom, timeout: float = 300, poll: float = 2) -> None:
@@ -953,12 +956,16 @@ class LibvirtDriver(HypervisorDriver):
         dom = self._lookup(uuid)
         if template_facts(ET.fromstring(dom.XMLDesc(0)))[0]:
             raise InvalidState("a template's snapshots cannot be reverted to")
-        dom.revertToSnapshot(self._snapshot(dom, name), 0)
+        snapshot = self._snapshot(dom, name)
+        _drop_checkpoints(dom)
+        dom.revertToSnapshot(snapshot, 0)
         return self._info(dom)
 
     def delete_snapshot(self, uuid: str, name: str) -> None:
         dom = self._lookup(uuid)
-        self._snapshot(dom, name).delete(0)
+        snapshot = self._snapshot(dom, name)
+        _drop_checkpoints(dom)
+        snapshot.delete(0)
 
     @staticmethod
     def _snapshot(dom, name: str):
@@ -1579,6 +1586,7 @@ class LibvirtDriver(HypervisorDriver):
             libvirt.VIR_DOMAIN_UNDEFINE_NVRAM
             | libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA
             | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE", 0)
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_CHECKPOINTS_METADATA", 0)
         )
         self.remove_migration_files(files)
 
@@ -2044,6 +2052,20 @@ def _restart_key(root) -> tuple:
         [b.get("dev") for b in root.findall("os/boot")],
         _video_of(root),
     )
+
+
+def _drop_checkpoints(dom) -> None:
+    """libvirt refuses internal snapshots while backup checkpoints (CBT) exist. Drop
+    them: the next backup of the VM is then a full one instead of an incremental."""
+    try:
+        checkpoints = dom.listAllCheckpoints(0)
+    except Exception:  # an older libvirt without checkpoints, or a stand-in in tests
+        return
+    for checkpoint in checkpoints:
+        try:
+            checkpoint.delete(0)
+        except Exception:
+            checkpoint.delete(getattr(libvirt, "VIR_DOMAIN_CHECKPOINT_DELETE_METADATA_ONLY", 0))
 
 
 def _undefine(pool) -> None:
