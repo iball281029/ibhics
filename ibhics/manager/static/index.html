@@ -1708,15 +1708,15 @@
     </section>
     <section class="wiz-page body" data-page="2" hidden>
       <div class="form-grid">
-        <label>Node <select name="node" id="import-node" required></select></label>
-        <label>Storage pool <select name="pool" id="import-pool" required></select></label>
+        <label>Default node <select name="node" id="import-node" required></select></label>
+        <label>Default storage pool <select name="pool" id="import-pool" required></select></label>
         <div id="import-capacity" class="wide" role="status"></div>
         <div id="import-names" class="wide"></div>
-        <label class="check"><input name="start" type="checkbox"> Power on when done</label>
+        <div id="import-disk-targets" class="wide"></div>
       </div>
       <div class="edit-note win-note" id="import-win" hidden>
         <p>Windows: run <code>powercfg /h off</code> at the source, then shut down fully. Fast Startup can lock the disk and prevent driver installation.</p>
-        <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Clear hibernation on copied Windows disks (SSH VMware / KVM only; unsaved sessions on the copy are discarded).</label>
+        <p id="import-hib">Clear hibernation is available per VM for SSH VMware / KVM only; unsaved sessions on the copy are discarded.</p>
       </div>
     </section>
     <section class="wiz-page body" data-page="3" hidden><div id="import-nets"></div></section>

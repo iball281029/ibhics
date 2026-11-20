@@ -8,8 +8,9 @@ import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 
-from ..hypervisor import DiskSpec, HypervisorDriver, NicSpec, VMInfo, VMSpec
+from ..hypervisor import DiskSpec, HypervisorDriver, NicSpec, PoolNotFound, VMInfo, VMSpec
 from .convert import FakeConverter, V2VConverter
+from .resize import ResizeError, resize_image
 from .sources import GIB, Source, SourceVM
 
 log = logging.getLogger(__name__)
@@ -38,14 +39,32 @@ class NodeImport:
         start: bool = False,
         progress=None,
         clear_hibernation: bool = False,
+        disks: list[dict] | None = None,
     ) -> VMInfo:
         """Convert first, then create the VM, so nothing half-made exists during the copy.
         The converted images wait on the target pool, not on the system disk."""
+        if disks is not None:
+            if len(disks) != len(vm.disks_gb):
+                raise ValueError("disks must have one entry per source disk")
+            available = {p.name for p in self._driver.list_pools() if p.active}
+            for d in disks:
+                if (d.get("pool") or pool) not in available:
+                    raise PoolNotFound(d.get("pool") or pool)
         if self._scratch:
             Path(self._scratch).mkdir(parents=True, exist_ok=True)
             scratch = nullcontext(Path(self._scratch))
         else:
-            scratch = self._driver.scratch_space(pool, sum(vm.disks_gb))
+            scratch_gb = sum(vm.disks_gb)
+            if disks is not None:
+                scratch_gb = sum(
+                    max(d.get("size_gb") or g, g) for d, g in zip(disks, vm.disks_gb, strict=True)
+                )
+                if any(
+                    d.get("size_gb") and d["size_gb"] < g
+                    for d, g in zip(disks, vm.disks_gb, strict=True)
+                ):
+                    scratch_gb *= 3
+            scratch = self._driver.scratch_space(pool, scratch_gb)
         report = progress or (lambda step, pct: None)
         self.progress[name] = ("Preparing", 0)
 
@@ -66,6 +85,7 @@ class NodeImport:
                     base,
                     track,
                     clear_hibernation,
+                    disks,
                 )
         finally:
             self.progress.pop(name, None)
@@ -101,11 +121,24 @@ class NodeImport:
         base: Path,
         track,
         clear_hibernation: bool = False,
+        disks: list[dict] | None = None,
     ) -> VMInfo:
         work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=base))
         try:
             extra = {"clear_hibernation": True} if clear_hibernation else {}
             converted = self._converter.convert(source, vm, name, work, track, **extra)
+            if disks is not None:
+                if len(disks) != len(converted.images):
+                    raise ValueError("converted disk count differs from disk targets")
+                for image, target in zip(converted.images, disks, strict=True):
+                    if target.get("size_gb") is not None:
+                        track("Resizing converted disks", 94)
+                        try:
+                            resize_image(image, target["size_gb"])
+                        except ResizeError:
+                            raise
+                        except Exception:
+                            raise ResizeError("Unexpected disk resize failure") from None
             track("Creating the VM", 96)
             spec = VMSpec(
                 name=name,
@@ -113,8 +146,12 @@ class NodeImport:
                 memory_mb=memory_mb or vm.memory_mb,
                 firmware=converted.firmware,
                 disks=[
-                    DiskSpec(size_gb=max(1, -(-image.stat().st_size // GIB)), pool=pool)
-                    for image in converted.images
+                    DiskSpec(
+                        size_gb=(disks[i].get("size_gb") if disks else None)
+                        or max(1, -(-image.stat().st_size // GIB)),
+                        pool=(disks[i].get("pool") or pool) if disks else pool,
+                    )
+                    for i, image in enumerate(converted.images)
                 ],
                 nics=[
                     NicSpec(network=_network_for(network, i), mac=mac)
@@ -143,6 +180,7 @@ class NodeImport:
                 self._driver.delete_vm(created.uuid)
                 raise
         finally:
+            # The source VM is untouched, so a failed resize can simply be retried.
             shutil.rmtree(work, ignore_errors=True)
         return created
 

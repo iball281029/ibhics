@@ -1681,6 +1681,7 @@ def create_app(
             body.memory_mb,
             body.start,
             clear_hibernation=body.clear_hibernation,
+            disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
         )
         return ImportJobOut(**job.__dict__)
 

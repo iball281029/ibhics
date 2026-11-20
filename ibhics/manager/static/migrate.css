@@ -445,3 +445,10 @@ dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:t
 #page-migrate #source-physical-machines progress {display:block;min-width:100px;width:100%;margin-top:8px}
 @media(max-width:1299px){#page-migrate #source-physical-machines{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:799px){#page-migrate #source-physical-machines{grid-template-columns:1fr}}
+
+/* Destination cards in the migration wizard. */
+.mg-dialog .mg-vm-target { margin: 14px 0; padding: 14px; border: 1px solid rgba(80,210,230,.25); border-radius: 12px; background: rgba(25,100,130,.06); }
+.mg-dialog .mg-vm-target h4 { margin: 0 0 10px; }
+.mg-dialog .mg-vm-target table { width: 100%; }
+.mg-dialog .mg-vm-target input[type="number"] { width: 100px; }
+.mg-dialog .mg-resize-badge { font-size: .75rem; letter-spacing: .06em; color: var(--accent); }
