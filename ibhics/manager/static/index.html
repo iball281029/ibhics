@@ -304,32 +304,35 @@
     </section>
 
     <section class="page" id="page-fabric">
-      <div class="fabric-page">
-        <header class="fabric-head">
-          <div><span class="fabric-eyebrow">INFRASTRUCTURE / LIVE MAP</span><h1>Everything, connected.</h1></div>
-          <div class="fabric-actions"><button type="button" class="btn small" id="fabric-spin" aria-pressed="false">Pause rotation</button><button type="button" class="btn small" id="fabric-reset">Reset view</button><a class="btn small" href="#home">Back to overview</a></div>
+      <div class="fx">
+        <header class="fx-head">
+          <div class="fx-title"><span>IBHICS · HOLOGRAPHIC CONTROL</span><h1>Realtime Infrastructure Monitor</h1><time id="fx-clock"></time></div>
+          <div class="fx-actions"><button type="button" class="fx-btn" id="fabric-spin" aria-pressed="false">Pause rotation</button><button type="button" class="fx-btn" id="fabric-reset">Reset view</button><a class="fx-btn" href="#home">Back to overview</a></div>
         </header>
-        <div class="fabric-hud" id="fabric-hud" role="status"></div>
-        <canvas id="fabric-canvas" aria-label="3D map of nodes, virtual machines, storage and networks with live traffic. Drag to turn, scroll to zoom, click a node or VM to open it."></canvas>
-        <div class="fabric-tip" id="fabric-tip" hidden></div>
-        <aside class="fabric-nodes" id="fabric-nodes" aria-label="Nodes"></aside>
-        <div class="fabric-legend" aria-label="What the map shows">
-          <span><i class="lg-node"></i>Node (middle layer)</span>
-          <span><i class="lg-vm"></i>VM running</span>
-          <span><i class="lg-off"></i>VM off</span>
-          <span><i class="lg-core"></i>Virtual Storage (bottom layer)</span>
-          <span><i class="lg-net"></i>Network (top layer)</span>
-          <span><i class="lg-io"></i>Disk traffic</span>
-          <span class="lg-tip">Point at a node for its traffic figures</span>
+        <aside class="fx-side fx-left">
+          <section class="fx-panel" id="fabric-hud" role="status" aria-label="Cluster totals"></section>
+          <section class="fx-panel"><h3>Virtual machines</h3><div id="fx-donut"></div></section>
+          <section class="fx-panel"><h3>Network traffic · last minutes</h3><div id="fx-trend"></div></section>
+        </aside>
+        <div class="fx-stage">
+          <canvas id="fabric-canvas" aria-label="Holographic globe of the cluster: nodes on the surface, their VMs around them, networks as orbits and Virtual Storage at the core. Drag to turn, scroll to zoom, click a node or VM to open it."></canvas>
+          <div class="fabric-tip" id="fabric-tip" hidden></div>
         </div>
-        <div class="fabric-timeline" role="group" aria-label="Time: replay the last 15 minutes of traffic">
-          <span class="fabric-axis">4D · TIME</span>
-          <button type="button" class="btn small" id="fabric-play" aria-pressed="false">▶ Replay</button>
-          <input type="range" id="fabric-time" min="0" max="0" value="0" step="1" aria-label="Moment to show">
-          <button type="button" class="btn small" id="fabric-live" aria-pressed="true">● Live</button>
-          <span class="fabric-time-label" id="fabric-time-label" aria-live="polite">LIVE</span>
-        </div>
-        <p class="fabric-hint">Drag to turn · scroll to zoom · double-click a node to fly to it · click a node or VM to open it · traffic from VM statistics every 3 s, kept 15 min while this page is open</p>
+        <aside class="fx-side fx-right">
+          <section class="fx-panel"><h3>Nodes · CPU / memory</h3><div id="fabric-nodes"></div></section>
+          <section class="fx-panel"><h3>Networks · traffic</h3><div id="fx-nets"></div></section>
+          <section class="fx-panel"><h3>Virtual Storage · pools</h3><div id="fx-pools"></div></section>
+        </aside>
+        <footer class="fx-foot">
+          <div class="fx-gauges" id="fx-gauges"></div>
+          <div class="fabric-timeline" role="group" aria-label="Time: replay the last 15 minutes">
+            <span class="fabric-axis">TIME</span>
+            <button type="button" class="fx-btn" id="fabric-play" aria-pressed="false">▶ Replay</button>
+            <input type="range" id="fabric-time" min="0" max="0" value="0" step="1" aria-label="Moment to show">
+            <button type="button" class="fx-btn" id="fabric-live" aria-pressed="true">● Live</button>
+            <span class="fabric-time-label" id="fabric-time-label" aria-live="polite">LIVE</span>
+          </div>
+        </footer>
       </div>
     </section>
 

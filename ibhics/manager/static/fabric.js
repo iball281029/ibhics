@@ -1,72 +1,69 @@
-/* Infrastructure map: the cluster in three dimensions plus time.
+/* Infrastructure map as a holographic command centre.
 
-   Space: nodes are holographic towers with their VMs on top, Virtual Storage is a
-   spinning core of data rings under a light column, every network is a ring with
-   orbiting satellites, and curved links carry packets with light trails. Time: each
-   reading (VM statistics, every 3 s) is kept for 15 minutes; every node wears a
-   ribbon of its own traffic history, and the time bar replays any moment.
+   Centre: a wireframe globe. Each compute node is a beacon on its surface, its VMs
+   orbit it as small lights, every network is an orbit ring around the globe, and
+   Virtual Storage glows at the core. Arcs carry live traffic (VM statistics every
+   3 s) as moving light. Panels around it give the same facts as numbers, bars and
+   gauges; the time bar replays the last 15 minutes kept while the page is open.
 
-   Canvas 2D only, no libraries: additive blending gives the glow. Drag to turn
-   (with inertia), scroll to zoom, double-click a node to fly to it, click a node or
-   a VM to open it. */
+   Canvas 2D only, no libraries. Drag to turn, scroll to zoom, click a node or a VM
+   to open it. */
 window.FabricMap = (() => {
-  const page = document.getElementById("page-fabric");
-  const canvas = document.getElementById("fabric-canvas");
-  const tip = document.getElementById("fabric-tip");
-  const hud = document.getElementById("fabric-hud");
-  const timeBar = document.getElementById("fabric-time");
-  const timeLabel = document.getElementById("fabric-time-label");
-  const liveBtn = document.getElementById("fabric-live");
-  const playBtn = document.getElementById("fabric-play");
-  const nodePanel = document.getElementById("fabric-nodes");
+  const $id = (id) => document.getElementById(id);
+  const page = $id("page-fabric"), canvas = $id("fabric-canvas"), tip = $id("fabric-tip");
+  const timeBar = $id("fabric-time"), timeLabel = $id("fabric-time-label");
+  const liveBtn = $id("fabric-live"), playBtn = $id("fabric-play");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
-  const HOME = { yaw: -0.18, pitch: 1.12, zoom: 1, cx: 0, cy: 0 };
-  const view = { ...HOME, spin: true, vyaw: 0, target: null };
-  const NET_COLORS = ["#54e8f0", "#ed99da", "#9d8cff", "#7cf0a8", "#ffcb66", "#ff907a"];
+  const H1 = "#3ef0ff", H2 = "#7fb8ff", PINK = "#ff8fd8", GREEN = "#6dffb3", RED = "#ff6b7a", AMBER = "#ffcb66";
+  const NET_COLORS = [H1, PINK, "#b49bff", GREEN, AMBER, "#ff9f7a"];
+  const HOME = { yaw: 0.6, tilt: 0.38, zoom: 1 };
+  const view = { ...HOME, spin: true, vyaw: 0 };
   const HISTORY = 300; // 15 minutes of 3-second readings
-  const shown = new Map();
-  const history = []; // [{at, nodes:{name:{rx,tx,read,write,cpu}}, nets:{name:{rx,tx}}, links:{key:{up,down}}}]
-  const stars = Array.from({ length: 420 }, () => {
-    const r = 200 + Math.random() * 1100, a = Math.random() * Math.PI * 2;
-    return { x: Math.cos(a) * r, y: Math.sin(a) * r, z: -60 + Math.random() * 760, s: Math.random(), tw: Math.random() * 6 };
+  const history = [];
+  // Points evenly spread over the sphere: the holographic dot texture.
+  const DOTS = Array.from({ length: 900 }, (_, i) => {
+    const y = 1 - (2 * (i + 0.5)) / 900, r = Math.sqrt(1 - y * y), a = i * 2.399963;
+    return [Math.cos(a) * r, y, Math.sin(a) * r];
   });
-  const NODE_GAP = 300, SLAB_Z = 36, NODE_Z = 150, RAIL_Z = 470, RAIL_Y = 110, SLAB_D = 150;
-  let scene = { nodes: [], vms: [], nets: [], pools: [], links: [], span: 380 };
-  let hits = [], placed = [], hover = null, frame = 0, poll = 0, drag = null, last = 0, nextStep = 0;
-  let cursor = -1, playing = false; // cursor -1: live, else an index into history
+  let scene = { nodes: [], vms: [], nets: [], pools: [] };
+  let hits = [], hover = null, frame = 0, poll = 0, drag = null, last = 0, nextStep = 0;
+  let cursor = -1, playing = false, W = 0, H = 0;
 
   const rate = (bytes) => {
     let n = Math.max(0, bytes || 0) * 8, i = 0;
-    const units = ["b/s", "Kb/s", "Mb/s", "Gb/s"];
-    while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
-    return `${n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)} ${units[i]}`;
+    const u = ["b/s", "Kb/s", "Mb/s", "Gb/s"];
+    while (n >= 1000 && i < 3) { n /= 1000; i++; }
+    return `${n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)} ${u[i]}`;
   };
   const bytesRate = (b) => {
     let n = Math.max(0, b || 0), i = 0;
-    const units = ["B/s", "KB/s", "MB/s", "GB/s"];
-    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-    return `${n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)} ${units[i]}`;
+    const u = ["B/s", "KB/s", "MB/s", "GB/s"];
+    while (n >= 1024 && i < 3) { n /= 1024; i++; }
+    return `${n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)} ${u[i]}`;
   };
   const hexA = (hex, a) => {
     const n = parseInt(hex.slice(1), 16);
     return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${Math.max(0, Math.min(1, a))})`;
   };
-  const level = (bytes) => Math.min(1, Math.log10(1 + Math.max(0, bytes || 0)) / 8); // 0..1, log scale
+  const level = (bytes) => Math.min(1, Math.log10(1 + Math.max(0, bytes || 0)) / 8);
+  const pct = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null);
 
-  // ---------- scene from the app's state ----------
+  // ---------- data ----------
 
   function build() {
     const members = (state.cluster?.members || []).filter((m) => m.role === "compute");
     const nets = (state.networks.length ? state.networks : [{ name: "default" }]).map((n, i) => ({
-      name: n.name, color: NET_COLORS[i % NET_COLORS.length], height: RAIL_Z + i * 58, rx: 0, tx: 0, index: i,
+      name: n.name, color: NET_COLORS[i % NET_COLORS.length], index: i, rx: 0, tx: 0,
+      incl: 0.35 + i * 0.32, radius: 1.2 + i * 0.1,
     }));
     const byNet = Object.fromEntries(nets.map((n) => [n.name, n]));
-    // Three layers, read top to bottom: networks, nodes with their VMs, Virtual Storage.
     const nodes = members.map((m, i) => {
       const s = state.summaries?.[m.name] || {};
+      const lon = (i / Math.max(1, members.length)) * Math.PI * 2, lat = 0.32 * (i % 2 ? -1 : 1);
       return {
-        name: m.name, healthy: m.healthy !== false, x: (i - (members.length - 1) / 2) * NODE_GAP, y: 0, angle: -Math.PI / 2,
+        name: m.name, healthy: m.healthy !== false, lon, lat,
+        pos: [Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)],
         cpu: Number.isFinite(s.cpu_percent) ? s.cpu_percent : null,
         mem: s.memory_mb ? (s.memory_used_mb / s.memory_mb) * 100 : null,
         read: 0, write: 0, rx: 0, tx: 0, nets: {},
@@ -78,10 +75,8 @@ window.FabricMap = (() => {
       const node = byNode[vm.node];
       if (!node) continue;
       const st = state.stats?.[vm.uuid] || {};
-      node.read += st.disk_read_bps || 0;
-      node.write += st.disk_write_bps || 0;
-      node.rx += st.net_rx_bps || 0;
-      node.tx += st.net_tx_bps || 0;
+      node.read += st.disk_read_bps || 0; node.write += st.disk_write_bps || 0;
+      node.rx += st.net_rx_bps || 0; node.tx += st.net_tx_bps || 0;
       const nics = (vm.nics || []).filter((n) => byNet[n.network]);
       for (const nic of nics) {
         const share = 1 / nics.length, link = (node.nets[nic.network] ||= { rx: 0, tx: 0 });
@@ -93,34 +88,20 @@ window.FabricMap = (() => {
     const pools = [];
     for (const p of state.pools || []) {
       if (pools.some((x) => x.key === p.name)) continue;
-      pools.push({ key: p.name, name: p.display_name || p.name, used: p.capacity_gb ? (p.allocation_gb / p.capacity_gb) * 100 : 0, cap: p.capacity_gb || 0 });
+      pools.push({ key: p.name, name: p.display_name || p.name, used: p.capacity_gb ? (p.allocation_gb / p.capacity_gb) * 100 : 0, cap: p.capacity_gb || 0, alloc: p.allocation_gb || 0 });
     }
-    pools.sort((a, b) => b.cap - a.cap).splice(4);
-    const span = Math.max(380, (nodes.length * NODE_GAP) / 2 + 170); // half the width of the layers
-    const links = [];
-    for (const node of nodes) {
-      links.push({ key: `io:${node.name}`, kind: "io", node, color: "#bb83ff",
-        a: [node.x, node.y, NODE_Z], b: [node.x, node.y, SLAB_Z], up: node.write, down: node.read });
-      for (const [name, t] of Object.entries(node.nets)) {
-        const net = byNet[name];
-        links.push({ key: `net:${node.name}:${name}`, kind: "net", node, net, color: net.color,
-          a: [node.x, node.y, towerTop(node, vms)], b: [node.x + (net.index - (nets.length - 1) / 2) * 34, RAIL_Y, net.height],
-          up: t.tx, down: t.rx });
-      }
-    }
-    scene = { nodes, vms, nets, pools, links, span };
+    pools.sort((a, b) => b.cap - a.cap);
+    scene = { nodes, vms, nets, pools };
     record();
-    renderHud();
+    panels();
   }
-  const towerTop = (node, vms) => NODE_Z + 112 + Math.ceil(vms.filter((v) => v.node === node).length / 9) * 22;
 
-  // ---------- the fourth dimension: time ----------
+  // ---------- time ----------
 
   function record() {
-    const snap = { at: Date.now(), nodes: {}, nets: {}, links: {} };
-    for (const n of scene.nodes) snap.nodes[n.name] = { rx: n.rx, tx: n.tx, read: n.read, write: n.write, cpu: n.cpu };
+    const snap = { at: Date.now(), nodes: {}, nets: {} };
+    for (const n of scene.nodes) snap.nodes[n.name] = { rx: n.rx, tx: n.tx, read: n.read, write: n.write, cpu: n.cpu, mem: n.mem, nets: n.nets };
     for (const n of scene.nets) snap.nets[n.name] = { rx: n.rx, tx: n.tx };
-    for (const l of scene.links) snap.links[l.key] = { up: l.up, down: l.down };
     const prev = history.at(-1);
     if (prev && snap.at - prev.at < 1500) history[history.length - 1] = snap; else history.push(snap);
     if (history.length > HISTORY) { history.shift(); if (cursor > 0) cursor--; }
@@ -128,454 +109,335 @@ window.FabricMap = (() => {
     if (cursor < 0) timeBar.value = timeBar.max;
     showTime();
   }
-  const moment = () => (cursor < 0 ? history.at(-1) : history[cursor]) || { nodes: {}, nets: {}, links: {} };
+  const moment = () => (cursor < 0 ? history.at(-1) : history[cursor]) || { nodes: {}, nets: {} };
   function showTime() {
     const snap = moment(), live = cursor < 0;
     page.classList.toggle("fabric-replay", !live);
     liveBtn.setAttribute("aria-pressed", String(live));
-    timeLabel.textContent = live
-      ? `LIVE · ${history.length} readings kept`
-      : `REPLAY · T−${Math.max(0, Math.round((Date.now() - snap.at) / 1000))} s · ${new Date(snap.at).toLocaleTimeString()}`;
+    timeLabel.textContent = live ? `LIVE · ${history.length} readings` : `REPLAY · T−${Math.max(0, Math.round((Date.now() - snap.at) / 1000))} s`;
   }
   function setPlaying(on) { playing = on; playBtn.textContent = on ? "❚❚ Pause" : "▶ Replay"; playBtn.setAttribute("aria-pressed", String(on)); }
   timeBar.addEventListener("input", () => {
     const i = Number(timeBar.value);
     cursor = i >= history.length - 1 ? -1 : i;
-    setPlaying(false); showTime(); renderHud();
+    setPlaying(false); showTime(); panels();
   });
-  liveBtn.addEventListener("click", () => { cursor = -1; setPlaying(false); timeBar.value = timeBar.max; showTime(); renderHud(); });
+  liveBtn.addEventListener("click", () => { cursor = -1; setPlaying(false); timeBar.value = timeBar.max; showTime(); panels(); });
   playBtn.addEventListener("click", () => {
     if (!playing && (cursor < 0 || cursor >= history.length - 1)) cursor = 0;
-    setPlaying(!playing); timeBar.value = String(cursor < 0 ? timeBar.max : cursor); showTime(); renderHud();
+    setPlaying(!playing); timeBar.value = String(cursor < 0 ? timeBar.max : cursor); showTime(); panels();
   });
   function step() {
     cursor = cursor < 0 ? 0 : cursor + 1;
     if (cursor >= history.length - 1) { cursor = -1; setPlaying(false); }
     timeBar.value = String(cursor < 0 ? timeBar.max : cursor);
-    showTime(); renderHud();
+    showTime(); panels();
   }
 
-  function renderNodes() {
-    const snap = moment();
-    const bar = (p, cls) => `<div class="fn-bar ${cls}"><i style="width:${Math.max(0, Math.min(100, p || 0))}%"></i></div>`;
-    nodePanel.innerHTML = `<h4>NODES</h4>` + scene.nodes.map((n) => {
-      const live = snap.nodes[n.name] || {}, vms = scene.vms.filter((v) => v.node === n), cpu = live.cpu ?? n.cpu;
-      return `<a class="fn-node${n.healthy ? "" : " off"}" href="#node/${encodeURIComponent(n.name)}">
-        <div class="fn-top"><b>${esc(n.name)}</b><span>${n.healthy ? "Online" : "Offline"}</span></div>
-        <div class="fn-row"><span>CPU</span>${bar(cpu, "cpu")}<em>${cpu == null ? "—" : cpu.toFixed(0) + "%"}</em></div>
-        <div class="fn-row"><span>MEM</span>${bar(n.mem, "mem")}<em>${n.mem == null ? "—" : n.mem.toFixed(0) + "%"}</em></div>
-        <div class="fn-io"><span title="Network received / sent by its VMs">⇅ ${rate(live.rx)} / ${rate(live.tx)}</span><span title="Disk read / write by its VMs">⛁ ${bytesRate(live.read)} / ${bytesRate(live.write)}</span></div>
-        <div class="fn-vms">${vms.length ? vms.map((v) => `<i class="${v.running ? "on" : ""}" title="${esc(v.vm.name)}"></i>`).join("") : "<small>No VMs</small>"} <small>${vms.filter((v) => v.running).length}/${vms.length} VMs running</small></div>
-      </a>`;
+  // ---------- panels around the globe ----------
+
+  const icon = (d, c) => `<svg viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="15" fill="none" stroke="${c}" stroke-opacity=".5"/><path d="${d}" fill="none" stroke="${c}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  function ring(value, color, size = 118) {
+    const r = size / 2 - 12, c = 2 * Math.PI * r, p = pct(value) ?? 0, cx = size / 2;
+    const ticks = Array.from({ length: 48 }, (_, i) => {
+      const a = (i / 48) * Math.PI * 2, r1 = r + 6, r2 = r + (i % 4 ? 8 : 10);
+      return `<line x1="${(cx + Math.cos(a) * r1).toFixed(1)}" y1="${(cx + Math.sin(a) * r1).toFixed(1)}" x2="${(cx + Math.cos(a) * r2).toFixed(1)}" y2="${(cx + Math.sin(a) * r2).toFixed(1)}"/>`;
     }).join("");
+    return `<svg viewBox="0 0 ${size} ${size}" aria-hidden="true"><g stroke="${color}" stroke-opacity=".35">${ticks}</g>
+      <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${color}" stroke-opacity=".12" stroke-width="7"/>
+      <circle cx="${cx}" cy="${cx}" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-dasharray="${((p / 100) * c).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${cx} ${cx})" style="filter:drop-shadow(0 0 6px ${color})"/>
+      <circle cx="${cx}" cy="${cx}" r="${r - 12}" fill="none" stroke="${color}" stroke-opacity=".25" stroke-dasharray="2 4"/></svg>`;
+  }
+  function panels() {
+    const snap = moment(), nodes = scene.nodes, vms = scene.vms;
+    const live = (n) => snap.nodes[n.name] || {};
+    const rx = Object.values(snap.nets).reduce((s, n) => s + n.rx, 0), tx = Object.values(snap.nets).reduce((s, n) => s + n.tx, 0);
+    const io = nodes.reduce((s, n) => s + (live(n).read || 0) + (live(n).write || 0), 0);
+    const kpi = (label, value, d, c) => `<div class="fx-kpi">${icon(d, c)}<span>${label}</span><b>${value}</b></div>`;
+    $id("fabric-hud").innerHTML = `<h3>Cluster</h3>`
+      + kpi("Nodes online", `${nodes.filter((n) => n.healthy).length}<small> / ${nodes.length}</small>`, "M10 12h14v10H10zM13 22v3m8-3v3M10 25h14", H1)
+      + kpi("Network in", rate(rx), "M17 9v16m-5-5 5 5 5-5", H1)
+      + kpi("Network out", rate(tx), "M17 25V9m-5 5 5-5 5 5", PINK)
+      + kpi("Storage I/O", bytesRate(io), "M10 11c0-2 14-2 14 0v12c0 2-14 2-14 0zM10 11c0 2 14 2 14 0M10 17c0 2 14 2 14 0", "#b49bff");
+
+    const running = vms.filter((v) => v.running).length, off = vms.length - running;
+    const total = Math.max(1, vms.length), r = 42, c = 2 * Math.PI * r, on = (running / total) * c;
+    $id("fx-donut").innerHTML = `<div class="fx-donut"><svg viewBox="0 0 110 110" aria-hidden="true">
+        <circle cx="55" cy="55" r="${r}" fill="none" stroke="#3ef0ff1f" stroke-width="12"/>
+        <circle cx="55" cy="55" r="${r}" fill="none" stroke="${GREEN}" stroke-width="12" stroke-dasharray="${on.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 55 55)" style="filter:drop-shadow(0 0 6px ${GREEN})"/>
+        <circle cx="55" cy="55" r="${r}" fill="none" stroke="#5d6f88" stroke-width="12" stroke-dasharray="${((off / total) * c).toFixed(1)} ${c.toFixed(1)}" stroke-dashoffset="${(-on).toFixed(1)}" transform="rotate(-90 55 55)"/>
+        <text x="55" y="58" text-anchor="middle" fill="#e8fbff" font-size="20" font-family="ui-monospace,monospace">${vms.length}</text>
+        <text x="55" y="74" text-anchor="middle" fill="#6b8fb4" font-size="8" letter-spacing="1.5" font-family="ui-monospace,monospace">VMS</text></svg>
+      <div class="fx-legend"><div style="--c:${GREEN}"><i></i>Running<b>${running}</b></div><div style="--c:#5d6f88"><i></i>Stopped<b>${off}</b></div>
+      ${nodes.map((n) => `<div style="--c:${n.healthy ? H2 : RED}"><i></i>${esc(n.name)}<b>${vms.filter((v) => v.node === n).length}</b></div>`).join("")}</div></div>`;
+
+    const span = history.slice(-40), sum = (h) => Object.values(h.nets).reduce((s, n) => s + n.rx + n.tx, 0);
+    const mx = Math.max(1, ...span.map(sum)), bw = 240 / Math.max(1, span.length);
+    $id("fx-trend").innerHTML = span.length < 2 ? `<p style="font-size:11px;color:#6b8fb4;margin:0">Collecting readings…</p>` : `<svg viewBox="0 0 260 110" aria-hidden="true">
+      ${[0, 1, 2, 3].map((k) => `<line x1="20" x2="260" y1="${10 + k * 30}" y2="${10 + k * 30}" stroke="#3ef0ff" stroke-opacity=".08"/>`).join("")}
+      ${span.map((h, i) => { const hh = (sum(h) / mx) * 90, now = cursor >= 0 && history[cursor] === h;
+        return `<rect x="${(20 + i * bw + 1).toFixed(1)}" y="${(100 - hh).toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${hh.toFixed(1)}" fill="${now ? "#ffffff" : H1}" fill-opacity="${now ? 1 : (0.35 + 0.65 * (i / span.length)).toFixed(2)}"/>`; }).join("")}
+      <text x="0" y="14" fill="#6b8fb4" font-size="8" font-family="ui-monospace,monospace">${rate(mx)}</text>
+      <text x="0" y="104" fill="#6b8fb4" font-size="8" font-family="ui-monospace,monospace">0</text></svg>`;
+
+    $id("fabric-nodes").innerHTML = `<div class="fx-bars">${nodes.map((n) => {
+      const L = live(n), cpu = pct(L.cpu ?? n.cpu), mem = pct(L.mem ?? n.mem);
+      return `<a class="fx-bar${n.healthy ? "" : " off"}" href="#node/${encodeURIComponent(n.name)}" style="--c:${H1}"><span>${esc(n.name)}${n.healthy ? "" : " · offline"}</span><b>CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"} · MEM ${mem == null ? "—" : mem.toFixed(0) + "%"}</b><u><i style="width:${cpu ?? 0}%"></i><i class="m" style="width:${mem ?? 0}%"></i></u></a>`;
+    }).join("") || `<span style="font-size:11px;color:#6b8fb4">No compute nodes</span>`}</div>`;
+    const netMax = Math.max(1, ...scene.nets.map((n) => (snap.nets[n.name]?.rx || 0) + (snap.nets[n.name]?.tx || 0)));
+    $id("fx-nets").innerHTML = `<div class="fx-bars">${scene.nets.map((n) => {
+      const t = snap.nets[n.name] || { rx: 0, tx: 0 };
+      return `<div class="fx-bar" style="--c:${n.color}"><span>${esc(n.name)}</span><b>↓${rate(t.rx)} ↑${rate(t.tx)}</b><u><i style="width:${(((t.rx + t.tx) / netMax) * 100).toFixed(1)}%"></i></u></div>`;
+    }).join("")}</div>`;
+    $id("fx-pools").innerHTML = `<div class="fx-bars">${scene.pools.slice(0, 5).map((p) => `<div class="fx-bar" style="--c:#b49bff"><span>${esc(p.name)}</span><b>${p.used.toFixed(0)}% · ${Math.round(p.cap)} GB</b><u><i style="width:${pct(p.used) ?? 0}%"></i></u></div>`).join("") || `<span style="font-size:11px;color:#6b8fb4">No storage pools</span>`}</div>`;
+
+    const avg = (k) => { const v = nodes.map((n) => pct(live(n)[k] ?? n[k])).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    const cap = scene.pools.reduce((s, p) => s + p.cap, 0), store = cap ? (scene.pools.reduce((s, p) => s + p.alloc, 0) / cap) * 100 : null;
+    const gauge = (label, value, color, text) => `<div class="fx-gauge" style="--c:${color}">${ring(value, color)}<b>${text ?? (value == null ? "—" : `${Math.round(value)}<small>%</small>`)}</b><span>${label}</span></div>`;
+    const net = rate(rx + tx).split(" ");
+    $id("fx-gauges").innerHTML = gauge("Cluster CPU", avg("cpu"), H1) + gauge("Cluster memory", avg("mem"), PINK)
+      + gauge("Storage used", store, "#b49bff") + gauge("VMs running", vms.length ? (running / vms.length) * 100 : null, GREEN)
+      + gauge("Network load", level(rx + tx) * 100, AMBER, `${net[0]}<small>${net[1]}</small>`);
   }
 
-  function renderHud() {
-    renderNodes();
-    const snap = moment();
-    const nets = Object.values(snap.nets), nodes = Object.values(snap.nodes);
-    const rx = nets.reduce((s, n) => s + n.rx, 0), tx = nets.reduce((s, n) => s + n.tx, 0);
-    const io = nodes.reduce((s, n) => s + n.read + n.write, 0);
-    const cell = (label, value, cls = "") => `<div class="fabric-stat ${cls}"><span>${label}</span><b>${value}</b></div>`;
-    hud.innerHTML = cell("NODES", `${scene.nodes.filter((n) => n.healthy).length}<small>/${scene.nodes.length}</small>`)
-      + cell("VMS RUNNING", `${scene.vms.filter((v) => v.running).length}<small>/${scene.vms.length}</small>`)
-      + cell("NETWORK IN", rate(rx), "c-cyan") + cell("NETWORK OUT", rate(tx), "c-pink")
-      + cell("STORAGE I/O", bytesRate(io), "c-violet");
+  // ---------- the globe ----------
+
+  function project(p) {
+    // Turn about the vertical axis, tilt towards the viewer, then perspective.
+    const cy = Math.cos(view.yaw), sy = Math.sin(view.yaw), ct = Math.cos(view.tilt), st = Math.sin(view.tilt);
+    const x1 = p[0] * cy - p[2] * sy, z1 = p[0] * sy + p[2] * cy;
+    const y2 = p[1] * ct - z1 * st, z2 = p[1] * st + z1 * ct;
+    const R = Math.min(W, H) * 0.33 * view.zoom, persp = 3.2 / (3.2 - z2);
+    return [W / 2 + x1 * R * persp, H / 2 - y2 * R * persp, z2, persp];
   }
-
-  // ---------- projection ----------
-
-  let W = 0, H = 0;
-  function project(x, y, z) {
-    x -= view.cx; y -= view.cy;
-    const c = Math.cos(view.yaw), s = Math.sin(view.yaw);
-    const x1 = x * c - y * s, y1 = x * s + y * c;
-    const cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
-    const depth = y1 * sp - (z - 280) * cp, up = y1 * cp + (z - 280) * sp;
-    const fit = Math.min(W / (2 * scene.span + 420), H / 860) * view.zoom, k = 2400 / Math.max(300, 2400 + depth);
-    return [W / 2 + x1 * k * fit, H * 0.44 - up * k * fit, depth, k * fit];
+  const lerp3 = (a, b, f) => a.map((v, i) => v + (b[i] - v) * f);
+  const norm = (v) => { const l = Math.hypot(...v) || 1; return v.map((x) => x / l); };
+  function arcPoint(a, b, f, lift) { // along the sphere between a and b, raised above it
+    const p = norm(lerp3(a, b, f)), h = 1 + lift * Math.sin(Math.PI * f);
+    return p.map((x) => x * h);
   }
-  const P = (p) => project(p[0], p[1], p[2]);
-
-  // ---------- primitives ----------
-
-  function path(points, close) {
+  function line(points, color, width, alpha = 1) {
     ctx.beginPath();
     points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-    if (close) ctx.closePath();
-  }
-  // Glow without shadowBlur (slow on canvas): a wide faint stroke under the line, added
-  // together by the "lighter" blend.
-  function glowLine(points, color, width, glow, close = false) {
-    path(points, close);
-    ctx.strokeStyle = color;
-    if (glow > 0) {
-      ctx.globalAlpha = 0.16; ctx.lineWidth = width + glow * 0.7; ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-    ctx.lineWidth = width; ctx.stroke();
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha * 0.18; ctx.lineWidth = width + 5; ctx.stroke();
+    ctx.globalAlpha = alpha; ctx.lineWidth = width; ctx.stroke(); ctx.globalAlpha = 1;
   }
   const sprites = new Map();
-  function sprite(color) { // a soft round light, drawn once per colour
-    if (sprites.has(color)) return sprites.get(color);
-    const c = document.createElement("canvas");
-    c.width = c.height = 64;
-    const g = c.getContext("2d"), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-    r.addColorStop(0, "#ffffff"); r.addColorStop(0.18, color); r.addColorStop(0.45, hexA(color, 0.35)); r.addColorStop(1, hexA(color, 0));
-    g.fillStyle = r; g.fillRect(0, 0, 64, 64);
-    sprites.set(color, c);
-    return c;
-  }
-  function circle3d(cx, cy, r, z, steps = 96, from = 0, to = Math.PI * 2) {
-    const pts = [];
-    for (let i = 0; i <= steps; i++) {
-      const a = from + ((to - from) * i) / steps;
-      pts.push(project(cx + Math.cos(a) * r, cy + Math.sin(a) * r, z));
+  function glow(x, y, r, color, a = 1) { // a soft light, drawn once per colour
+    if (!sprites.has(color)) {
+      const c = document.createElement("canvas"); c.width = c.height = 64;
+      const g = c.getContext("2d"), grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.2, color); grad.addColorStop(0.5, hexA(color, 0.3)); grad.addColorStop(1, hexA(color, 0));
+      g.fillStyle = grad; g.fillRect(0, 0, 64, 64); sprites.set(color, c);
     }
-    return pts;
+    ctx.globalAlpha = a; ctx.drawImage(sprites.get(color), x - r, y - r, r * 2, r * 2); ctx.globalAlpha = 1;
   }
-  function dot(p, r, color, blur = 14) {
-    const size = Math.max(2, r * (blur > 6 ? 5 : 3));
-    ctx.drawImage(sprite(color), p[0] - size / 2, p[1] - size / 2, size, size);
+  function tag(x, y, lines, color) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 20, h = lines.length * 15 + 8;
+    const bx = x + 26, by = y - h - 18;
+    ctx.strokeStyle = hexA(color, 0.8); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x + 10, y - 10); ctx.lineTo(bx, by + h); ctx.lineTo(bx + w, by + h); ctx.stroke();
+    ctx.fillStyle = "rgba(4,18,31,.84)"; ctx.fillRect(bx, by, w, h);
+    ctx.fillStyle = color; ctx.fillRect(bx, by, 3, h);
+    ctx.textAlign = "left";
+    lines.forEach((l, i) => {
+      ctx.font = `${i ? "" : "600 "}11px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.fillStyle = i ? hexA(color, 0.95) : "#e8fbff"; ctx.fillText(l, bx + 10, by + 16 + i * 15);
+    });
+    ctx.globalCompositeOperation = "lighter";
   }
-  function label(x, y, lines, color, opts = {}) {
-    ctx.font = `${opts.bold ? "600 " : ""}${opts.size || 11}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 18, h = lines.length * 15 + 10;
-    const bx = x - w / 2;
-    let by = y - h - (opts.lift ?? 12);
-    for (let tries = 0; tries < 6; tries++) { // never cover a label already drawn
-      const hit = placed.find((r) => bx < r.x + r.w + 4 && bx + w + 4 > r.x && by < r.y + r.h + 3 && by + h + 3 > r.y);
-      if (!hit) break;
-      by = hit.y - h - 4;
-    }
-    placed.push({ x: bx, y: by, w, h });
-    const g = ctx.createLinearGradient(bx, by, bx + w, by + h);
-    g.addColorStop(0, "rgba(14,18,46,.86)"); g.addColorStop(1, "rgba(30,16,52,.82)");
-    ctx.fillStyle = g; ctx.strokeStyle = hexA(color, 0.75); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect(bx, by, w, h, 6); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = hexA(color, 0.95); ctx.fillRect(bx + 6, by, Math.min(26, w - 12), 2); // HUD notch
-    ctx.textAlign = "center";
-    lines.forEach((l, i) => { ctx.fillStyle = i === 0 && opts.title ? "#f3f6ff" : color; ctx.fillText(l, x, by + 18 + i * 15); });
-  }
-  function tween(key, value) {
-    const v = shown.get(key) ?? 0;
-    const next = still.matches ? value : v + (value - v) * 0.09;
-    shown.set(key, Math.abs(next - value) < 0.5 ? value : next);
-    return shown.get(key);
-  }
-
-  // ---------- frame ----------
 
   function draw(t) {
     W = canvas.clientWidth; H = canvas.clientHeight;
     const dpr = devicePixelRatio || 1;
-    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
-      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-    }
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
-    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = "source-over"; ctx.clearRect(0, 0, W, H);
     const dt = Math.min(64, t - last || 16); last = t;
-    camera(dt, t);
-    if (playing && t >= nextStep) { nextStep = t + 450; step(); }
-    hits = []; placed = [];
-    const snap = moment();
-    const { nodes, vms, nets, pools, links, span } = scene;
-
-    ctx.globalCompositeOperation = "lighter";
-    drawStars(t);
-    drawFloor(t, span);
-    drawCore(pools, t, snap, span);
-    nets.forEach((net) => drawNetRing(net, span, t, snap));
-    const items = [];
-    nodes.forEach((node) => items.push({ d: project(node.x, node.y, 0)[2], draw: () => drawNode(node, vms.filter((v) => v.node === node), t, snap) }));
-    items.sort((a, b) => b.d - a.d).forEach((i) => i.draw());
-    links.forEach((link) => drawLink(link, t, snap));
-    ctx.globalCompositeOperation = "source-over";
-    nets.forEach((net) => netLabel(net, span, snap));
-    labels(snap);
-    drawScan(t);
-  }
-
-  function camera(dt, t) {
-    if (view.target) {
-      const k = 1 - Math.pow(0.9, dt / 16);
-      for (const key of ["cx", "cy", "zoom", "pitch"]) view[key] += (view.target[key] - view[key]) * k;
-      if (Math.abs(view.target.zoom - view.zoom) < 0.002 && Math.abs(view.target.cx - view.cx) < 0.5) view.target = null;
-    }
     if (!drag) {
       view.yaw += view.vyaw * dt; view.vyaw *= Math.pow(0.94, dt / 16);
-      if (view.spin && !still.matches) view.yaw += Math.cos(t / 7000) * 0.00004 * dt; // a slow sway
+      if (view.spin && !still.matches) view.yaw += dt * 0.00012;
     }
-  }
+    if (playing && t >= nextStep) { nextStep = t + 450; step(); }
+    hits = [];
+    const snap = moment(), cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.33 * view.zoom;
+    ctx.globalCompositeOperation = "lighter";
 
-  function drawStars(t) {
-    for (const s of stars) {
-      const p = project(s.x, s.y, s.z);
-      if (p[0] < -5 || p[0] > W + 5 || p[1] < -5 || p[1] > H + 5) continue;
-      const tw = still.matches ? 0.6 : 0.45 + 0.4 * Math.sin(t / 900 + s.tw);
-      ctx.fillStyle = s.s > 0.82 ? `rgba(237,153,218,${tw * 0.7})` : `rgba(140,200,255,${tw * 0.55})`;
-      const r = Math.max(0.4, p[3] * (0.8 + s.s * 1.6));
-      ctx.fillRect(p[0] - r / 2, p[1] - r / 2, r, r);
+    // HUD rings around the globe, turning slowly, with four brackets.
+    const turn = still.matches ? 0 : t / 9000;
+    for (const [r, dash, a, dir] of [[R * 1.22, [2, 6], 0.35, 1], [R * 1.3, [30, 10, 4, 10], 0.25, -1], [R * 1.42, [1, 3], 0.18, 1]]) {
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(turn * dir);
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.setLineDash(dash);
+      ctx.strokeStyle = hexA(H1, a); ctx.lineWidth = 1.2; ctx.stroke(); ctx.setLineDash([]); ctx.restore();
     }
-  }
-
-  function drawFloor(t, L) {
-    const X = L + 120, Y = 280;
-    for (let x = -X; x <= X; x += 80) glowLine([project(x, -Y, 0), project(x, Y, 0)], "rgba(125,160,255,.07)", 1, 0);
-    for (let y = -Y; y <= Y; y += 80) glowLine([project(-X, y, 0), project(X, y, 0)], "rgba(125,160,255,.07)", 1, 0);
-    if (still.matches) return;
-    const x = ((t / 9) % (2 * X)) - X; // a scan line sweeping across
-    glowLine([project(x, -Y, 0), project(x, Y, 0)], "rgba(84,232,240,.35)", 2, 14);
-  }
-
-  // The network layer: a glowing rail per network, dashes running with its traffic.
-  function drawNetRing(net, L, t, snap) {
-    const live = snap.nets[net.name] || { rx: 0, tx: 0 }, lvl = level(live.rx + live.tx);
-    const z = net.height, a = project(-L, RAIL_Y, z), b = project(L, RAIL_Y, z);
-    glowLine([a, b], hexA(net.color, 0.18 + lvl * 0.2), 9, 0);
-    glowLine([a, b], hexA(net.color, 0.9), 1.6, 10);
-    const shift = still.matches ? 0 : ((t * (0.04 + lvl * 0.2)) % 60) * (net.index % 2 ? -1 : 1);
-    for (let x = -L + shift; x < L; x += 60) {
-      const x0 = Math.max(-L, x), x1 = Math.min(L, x + 22);
-      if (x1 > x0) glowLine([project(x0, RAIL_Y, z + 7), project(x1, RAIL_Y, z + 7)], hexA(net.color, 0.7), 2, 8);
+    for (let k = 0; k < 4; k++) {
+      const a = (k * Math.PI) / 2 + Math.PI / 4 + turn * 0.5;
+      ctx.beginPath(); ctx.arc(cx, cy, R * 1.36, a - 0.12, a + 0.12);
+      ctx.strokeStyle = hexA(H1, 0.8); ctx.lineWidth = 3; ctx.stroke();
     }
-    for (let k = 0; k < 3; k++) { // packets riding the rail
-      const f = still.matches ? k / 3 : (t * (0.00008 + lvl * 0.0003) + k / 3) % 1;
-      dot(project(-L + f * 2 * L, RAIL_Y, z), 3.4, net.color, 18);
-    }
-  }
 
-  function netLabel(net, L, snap) {
-    const live = snap.nets[net.name] || { rx: 0, tx: 0 };
-    const [x, y] = project(L + 10, RAIL_Y, net.height);
-    label(x + 90, y + 14, [`NETWORK · ${net.name}`, `↓ ${rate(tween(`n:${net.name}:rx`, live.rx))}  ↑ ${rate(tween(`n:${net.name}:tx`, live.tx))}`], net.color, { title: true, lift: 0 });
-  }
-
-  // The storage layer: one glowing slab under every node, a bar per pool on its face.
-  function drawCore(pools, t, snap, L) {
-    const levels = pools.length ? pools : [{ name: "No storage pool", used: 0 }];
-    const io = Object.values(snap.nodes).reduce((s, n) => s + n.read + n.write, 0), lvl = level(io);
-    slab(-L, L, -SLAB_D, SLAB_D, 0, SLAB_Z, "#bb83ff", 0.14 + lvl * 0.1);
-    const face = -SLAB_D - 1, w = (2 * L - 40) / levels.length;
-    levels.forEach((pool, i) => {
-      const x0 = -L + 20 + i * w, x1 = x0 + w - 16, used = x0 + ((x1 - x0) * pool.used) / 100;
-      glowLine([project(x0, face, SLAB_Z / 2), project(x1, face, SLAB_Z / 2)], "rgba(255,255,255,.12)", 6, 0);
-      glowLine([project(x0, face, SLAB_Z / 2), project(used, face, SLAB_Z / 2)], "#ed99da", 6, 12);
-    });
-    if (!still.matches) { // data streaming along the slab
-      for (let k = 0; k < 8; k++) {
-        const f = (t / (2600 - lvl * 1400) + k / 8) % 1;
-        dot(project(-L + f * 2 * L, (k % 2 ? 1 : -1) * SLAB_D * 0.5, SLAB_Z + 1), 2.6, k % 2 ? "#54e8f0" : "#bb83ff", 16);
+    // The globe: atmosphere, meridians and parallels, the dot texture, a scan band.
+    const atm = ctx.createRadialGradient(cx, cy, R * 0.6, cx, cy, R * 1.15);
+    atm.addColorStop(0, "rgba(20,120,160,.10)"); atm.addColorStop(0.85, "rgba(62,240,255,.12)"); atm.addColorStop(1, "rgba(62,240,255,0)");
+    ctx.fillStyle = atm; ctx.beginPath(); ctx.arc(cx, cy, R * 1.15, 0, Math.PI * 2); ctx.fill();
+    const grid = (pts) => {
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]);
+        ctx.strokeStyle = hexA(H1, (a[2] + b[2]) / 2 > 0 ? 0.22 : 0.06); ctx.lineWidth = 1; ctx.stroke();
       }
+    };
+    for (let lat = -60; lat <= 60; lat += 30) {
+      const r = Math.cos((lat * Math.PI) / 180), y = Math.sin((lat * Math.PI) / 180);
+      grid(Array.from({ length: 73 }, (_, i) => project([Math.cos((i / 72) * Math.PI * 2) * r, y, Math.sin((i / 72) * Math.PI * 2) * r])));
     }
-  }
-  function slab(x0, x1, y0, y1, z0, z1, color, alpha) {
-    const c = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
-    const bottom = c.map(([x, y]) => project(x, y, z0)), top = c.map(([x, y]) => project(x, y, z1));
-    for (let i = 0; i < 4; i++) {
-      const j = (i + 1) % 4;
-      path([bottom[i], bottom[j], top[j], top[i]], true); ctx.fillStyle = hexA(color, alpha * 0.6); ctx.fill();
+    for (let lon = 0; lon < 180; lon += 30) {
+      const a = (lon * Math.PI) / 180;
+      grid(Array.from({ length: 73 }, (_, i) => { const b = (i / 72) * Math.PI * 2; return project([Math.cos(b) * Math.cos(a), Math.sin(b), Math.cos(b) * Math.sin(a)]); }));
     }
-    path(top, true); ctx.fillStyle = hexA(color, alpha); ctx.fill();
-    glowLine(top, hexA(color, 0.9), 1.4, 10, true);
-    glowLine(bottom, hexA(color, 0.4), 1, 4, true);
-    for (let i = 0; i < 4; i++) glowLine([bottom[i], top[i]], hexA(color, 0.6), 1, 6);
-  }
-
-  function prism(cx, cy, z0, z1, half, color, alpha, edges = 0.8) {
-    const c = [[-half, -half], [half, -half], [half, half], [-half, half]];
-    const bottom = c.map(([dx, dy]) => project(cx + dx, cy + dy, z0));
-    const top = c.map(([dx, dy]) => project(cx + dx, cy + dy, z1));
-    const sides = [0, 1, 2, 3].map((i) => ({ i, d: (bottom[i][2] + bottom[(i + 1) % 4][2]) / 2 })).sort((a, b) => b.d - a.d);
-    for (const { i } of sides) {
-      const j = (i + 1) % 4, g = ctx.createLinearGradient(bottom[i][0], bottom[i][1], top[i][0], top[i][1]);
-      g.addColorStop(0, hexA(color, alpha * 0.4)); g.addColorStop(1, hexA(color, alpha));
-      path([bottom[i], bottom[j], top[j], top[i]], true); ctx.fillStyle = g; ctx.fill();
+    for (const d of DOTS) {
+      const p = project(d);
+      if (p[2] < -0.1) continue;
+      ctx.fillStyle = hexA(H1, 0.12 + p[2] * 0.45);
+      ctx.fillRect(p[0] - 0.8, p[1] - 0.8, 1.6, 1.6);
     }
-    path(top, true); ctx.fillStyle = hexA(color, alpha * 1.3); ctx.fill();
-    glowLine(top, hexA("#ffffff", edges * 0.6), 1, 6, true);
-    for (let i = 0; i < 4; i++) glowLine([bottom[i], top[i]], hexA(color, edges), 1, 8);
-    glowLine(bottom, hexA(color, edges * 0.6), 1, 4, true);
-    return top;
-  }
-
-  function drawNode(node, vms, t, snap) {
-    const color = node.healthy ? "#4fafff" : "#ff6b7a";
-    const live = snap.nodes[node.name] || {};
-    const spin = still.matches ? 0 : t / 4000;
-    const Z = NODE_Z;
-    glowLine(circle3d(node.x, node.y, 74, Z, 6, spin, spin + Math.PI * 2), hexA(color, 0.5), 1.4, 10, true); // hex pad
-    glowLine(circle3d(node.x, node.y, 86, Z, 48, -spin, -spin + Math.PI * 1.3), hexA("#54e8f0", 0.35), 1, 6);
-    const top = prism(node.x, node.y, Z, Z + 100, 48, color, 0.16);
-    const cpu = live.cpu ?? node.cpu;
-    if (cpu != null) prism(node.x, node.y, Z + 2, Z + 2 + 94 * Math.min(1, cpu / 100), 40, "#54e8f0", 0.12, 0.3);
-    if (!still.matches) { // scan line climbing the glass
-      const z = Z + ((t / 22) % 100);
-      glowLine(circle3d(node.x, node.y, 48 * Math.SQRT2, z, 4, Math.PI / 4, Math.PI / 4 + Math.PI * 2), "rgba(220,250,255,.55)", 1.4, 14, true);
+    if (!still.matches) {
+      const y = Math.sin(t / 2200), r = Math.sqrt(Math.max(0, 1 - y * y));
+      line(Array.from({ length: 49 }, (_, i) => project([Math.cos((i / 48) * Math.PI * 2) * r, y, Math.sin((i / 48) * Math.PI * 2) * r])), H1, 1.4, 0.5);
     }
-    hits.push({ kind: "node", node, pts: top });
-    ribbon(node, color);
-    vms.forEach((v, i) => {
-      const layer = Math.floor(i / 9), slot = i % 9, gx = (slot % 3) - 1, gy = Math.floor(slot / 3) - 1;
-      const cx = node.x + gx * 28, cy = node.y + gy * 28, z0 = NODE_Z + 103 + layer * 22;
-      const pulse = v.running && !still.matches ? 0.12 * Math.sin(t / 380 + i) : 0;
-      const col = v.running ? (hover?.v === v ? "#ffffff" : "#7cf0a8") : "#6c7590";
-      const pts = prism(cx, cy, z0, z0 + 15, 10, col, (v.running ? 0.32 : 0.12) + pulse, v.running ? 0.9 : 0.4);
-      hits.push({ kind: "vm", v, pts });
-    });
-  }
 
-  function ribbon(node, color) {
-    // The node's traffic over time as a curved wall behind the tower: the 4th dimension.
-    if (history.length < 2) return;
-    const span = Math.min(history.length, 120), from = history.length - span;
-    const r = 72, arc = Math.PI * 1.2, start = node.angle + Math.PI - arc / 2;
-    const vals = history.slice(from).map((h) => { const n = h.nodes[node.name]; return n ? level(n.rx + n.tx + n.read + n.write) : 0; });
-    const pts = vals.map((v, i) => {
-      const a = start + (i / (span - 1)) * arc, x = node.x + Math.cos(a) * r, y = node.y + Math.sin(a) * r;
-      return [project(x, y, NODE_Z + 6), project(x, y, NODE_Z + 6 + v * 160)];
-    });
-    ctx.beginPath();
-    pts.forEach(([, hi], i) => (i ? ctx.lineTo(hi[0], hi[1]) : ctx.moveTo(hi[0], hi[1])));
-    for (let i = pts.length - 1; i >= 0; i--) ctx.lineTo(pts[i][0][0], pts[i][0][1]);
-    ctx.closePath(); ctx.fillStyle = hexA(color, 0.1); ctx.fill();
-    glowLine(pts.map(([, hi]) => hi), hexA("#54e8f0", 0.8), 1.4, 10);
-    if (cursor >= from) { const [lo, hi] = pts[cursor - from]; glowLine([lo, hi], "#ffffff", 1.6, 12); }
-  }
+    // Virtual Storage at the core: pulsing, brighter with disk traffic.
+    const io = Object.values(snap.nodes).reduce((s, n) => s + n.read + n.write, 0), lvl = level(io);
+    const pulse = still.matches ? 1 : 1 + 0.12 * Math.sin(t / 420);
+    glow(cx, cy, R * (0.22 + lvl * 0.12) * pulse, "#b49bff", 0.9);
+    glow(cx, cy, R * 0.08, "#ffffff", 0.9);
+    hits.push({ kind: "core", x: cx, y: cy, r: R * 0.18 });
 
-  function drawLink(link, t, snap) {
-    const live = snap.links[link.key] || { up: 0, down: 0 };
-    const total = live.up + live.down, lvl = level(total), hot = hover?.node === link.node || hover?.v?.node === link.node;
-    const mid = link.a.map((v, k) => (v + link.b[k]) / 2);
-    if (link.kind === "net") mid[1] += 30; // a slight bow towards the rail
-    const at = (f) => { const u = 1 - f; return link.a.map((v, k) => u * u * v + 2 * u * f * mid[k] + f * f * link.b[k]); };
-    const pts = Array.from({ length: 33 }, (_, i) => P(at(i / 32)));
-    glowLine(pts, hexA(link.color, total > 0 ? 0.25 + lvl * 0.5 + (hot ? 0.25 : 0) : 0.12), total > 0 ? 1.4 + lvl * 2.5 : 1, total > 0 ? 12 : 0);
-    if (total > 0 && !still.matches) {
-      const count = 2 + Math.round(lvl * 9), speed = 0.00012 + lvl * 0.0007;
-      for (const [dir, amount, col] of [[1, live.down, link.color], [-1, live.up, "#ffffff"]]) {
-        if (amount <= 0) continue;
-        for (let i = 0; i < count; i++) {
-          const f0 = (t * speed + i / count) % 1;
-          for (let tail = 0; tail < 6; tail++) { // comet trail
-            const f = f0 - tail * 0.012;
-            if (f < 0) continue;
-            ctx.globalAlpha = 1 - tail / 6;
-            dot(P(at(dir > 0 ? 1 - f : f)), (2.4 + lvl * 2) * (1 - tail / 8), col, tail ? 4 : 16);
-          }
-          ctx.globalAlpha = 1;
+    // Network orbits with lights running along them.
+    for (const net of scene.nets) {
+      const t1 = snap.nets[net.name] || { rx: 0, tx: 0 }, nl = level(t1.rx + t1.tx);
+      const orbit = (f) => { const a = f * Math.PI * 2; return [Math.cos(a) * net.radius, Math.sin(a) * net.radius * Math.sin(net.incl), Math.sin(a) * net.radius * Math.cos(net.incl)]; };
+      const pts = Array.from({ length: 97 }, (_, i) => project(orbit(i / 96)));
+      for (let i = 1; i < pts.length; i++) {
+        const front = pts[i][2] > -0.2;
+        ctx.beginPath(); ctx.moveTo(pts[i - 1][0], pts[i - 1][1]); ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.strokeStyle = hexA(net.color, front ? 0.55 + nl * 0.3 : 0.15); ctx.lineWidth = front ? 1.6 : 1; ctx.stroke();
+      }
+      for (let k = 0; k < 4; k++) {
+        const f = still.matches ? k / 4 : (((t * (0.00004 + nl * 0.0002) * (net.index % 2 ? -1 : 1) + k / 4) % 1) + 1) % 1;
+        const p = project(orbit(f)); glow(p[0], p[1], 9, net.color, p[2] > -0.2 ? 1 : 0.3);
+      }
+      net.anchor = orbit;
+    }
+
+    // Arcs: node to each network orbit (network traffic), node to the core (disk traffic).
+    for (const node of scene.nodes) {
+      const L = snap.nodes[node.name] || { nets: {}, read: 0, write: 0 };
+      for (const net of scene.nets) {
+        const tr = (L.nets || {})[net.name];
+        if (!tr || !net.anchor) continue;
+        const target = net.anchor(node.lon / (Math.PI * 2) + 0.06), total = tr.rx + tr.tx, al = level(total);
+        line(Array.from({ length: 25 }, (_, i) => project(arcPoint(node.pos, target, i / 24, 0.35))), net.color, 1 + al * 2, 0.35 + al * 0.6);
+        if (total > 0 && !still.matches) for (let k = 0; k < 3; k++) {
+          const f = (t * (0.0002 + al * 0.0008) + k / 3) % 1, p = project(arcPoint(node.pos, target, f, 0.35));
+          glow(p[0], p[1], 7 + al * 6, net.color);
         }
       }
+      const total = (L.read || 0) + (L.write || 0), al = level(total);
+      line(Array.from({ length: 13 }, (_, i) => project(lerp3(node.pos, [0, 0, 0], i / 12))), "#b49bff", 1 + al * 2, 0.25 + al * 0.6);
+      if (total > 0 && !still.matches) {
+        const p = project(lerp3(node.pos, [0, 0, 0], (t * (0.0003 + al * 0.0008)) % 1));
+        glow(p[0], p[1], 8, "#b49bff");
+      }
     }
-    link.labelAt = P(at(link.kind === "io" ? 0.5 : 0.55));
-  }
 
-  function labels(snap) {
-    const pools = scene.pools.length ? scene.pools : [{ name: "No storage pool", used: 0 }];
-    const [sx, sy] = project(-scene.span + 150, -SLAB_D, SLAB_Z);
-    label(sx, sy - 6, ["STORAGE · Virtual Storage", ...pools.map((p) => `${p.name}  ${p.used.toFixed(0)}% used`)], "#bb83ff", { title: true, bold: true, lift: 0 });
+    // Nodes: beacons on the surface, their VMs circling them as small lights.
     for (const node of scene.nodes) {
-      const live = snap.nodes[node.name] || {}, vms = scene.vms.filter((v) => v.node === node), cpu = live.cpu ?? node.cpu;
-      const anchor = project(node.x, node.y, towerTop(node, scene.vms) + 8);
-      const [x, y] = project(node.x, node.y, towerTop(node, scene.vms) + 40);
-      const color = node.healthy ? "#4fafff" : "#ff6b7a";
-      label(x, y, [node.name, `${vms.filter((v) => v.running).length}/${vms.length} VMs · CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"}`], color, { title: true, bold: true });
-      const box = placed.at(-1);
-      ctx.beginPath(); ctx.moveTo(anchor[0], anchor[1]); ctx.lineTo(x, box.y + box.h);
-      ctx.strokeStyle = hexA(color, 0.6); ctx.lineWidth = 1; ctx.stroke();
+      const p = project(node.pos), front = p[2] > -0.15, color = node.healthy ? H1 : RED;
+      const beat = still.matches ? 0 : 0.3 * Math.sin(t / 300 + node.lon * 3);
+      glow(p[0], p[1], 22 + beat * 10, color, front ? 1 : 0.35);
+      ctx.beginPath(); ctx.arc(p[0], p[1], 14, 0, Math.PI * 2); ctx.strokeStyle = hexA(color, front ? 0.9 : 0.3); ctx.lineWidth = 1.4; ctx.stroke();
+      hits.push({ kind: "node", node, x: p[0], y: p[1], r: 18 });
+      const mine = scene.vms.filter((v) => v.node === node);
+      mine.forEach((v, i) => {
+        const a = (i / Math.max(1, mine.length)) * Math.PI * 2 + (still.matches ? 0 : t / 2600);
+        const off = norm(node.pos.map((x, k) => x + [Math.cos(a), Math.sin(a), -Math.cos(a)][k] * 0.16));
+        const q = project(off.map((x) => x * 1.06));
+        glow(q[0], q[1], hover?.v === v ? 12 : 8, v.running ? GREEN : "#6c7a92", q[2] > -0.15 ? 1 : 0.3);
+        hits.push({ kind: "vm", v, x: q[0], y: q[1], r: 7 });
+      });
+      if (front) {
+        const L = snap.nodes[node.name] || {}, cpu = L.cpu ?? node.cpu;
+        tag(p[0], p[1], [node.name, `${mine.filter((v) => v.running).length}/${mine.length} VMs · CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"}`], color);
+      }
     }
-    const focus = hover?.node || hover?.v?.node; // figures on links only for the node pointed at
-    for (const link of scene.links) {
-      if (!link.labelAt || link.node !== focus) continue;
-      const live = snap.links[link.key] || { up: 0, down: 0 };
-      const up = tween(`${link.key}:up`, live.up), down = tween(`${link.key}:down`, live.down);
-      label(link.labelAt[0], link.labelAt[1], [link.kind === "io" ? `R ${bytesRate(down)} · W ${bytesRate(up)}` : `↓ ${rate(down)} ↑ ${rate(up)}`], link.color, { size: 10, lift: 4 });
-    }
-  }
-
-  function drawScan(t) {
-    if (still.matches) return;
-    const y = ((t / 9) % (H + 200)) - 100; // a faint holographic scan down the view
-    const g = ctx.createLinearGradient(0, y - 40, 0, y + 2);
-    g.addColorStop(0, "rgba(125,229,255,0)"); g.addColorStop(1, "rgba(125,229,255,.07)");
-    ctx.fillStyle = g; ctx.fillRect(0, y - 40, W, 42);
+    ctx.globalCompositeOperation = "source-over";
   }
 
   // ---------- interaction ----------
 
-  function inside(pts, x, y) {
-    let c = false;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      const [xi, yi] = pts[i], [xj, yj] = pts[j];
-      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
-    }
-    return c;
-  }
-  function pick(event) {
-    const r = canvas.getBoundingClientRect(), x = event.clientX - r.left, y = event.clientY - r.top;
-    return [...hits].reverse().find((h) => inside(h.pts, x, y)) || null;
-  }
+  const pick = (e) => {
+    const r = canvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    return [...hits].reverse().find((h) => h.kind !== "core" && Math.hypot(h.x - x, h.y - y) <= h.r + 3)
+      || hits.find((h) => h.kind === "core" && Math.hypot(h.x - x, h.y - y) <= h.r) || null;
+  };
   canvas.addEventListener("pointerdown", (e) => {
-    drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, pitch: view.pitch, moved: false, lastX: e.clientX, lastT: performance.now() };
-    view.vyaw = 0;
-    canvas.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, yaw: view.yaw, tilt: view.tilt, moved: false, lastX: e.clientX, lastT: performance.now() };
+    view.vyaw = 0; canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", (e) => {
     if (drag) {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y, now = performance.now();
       if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-      view.yaw = drag.yaw + dx * 0.006;
-      view.pitch = Math.max(0.3, Math.min(1.4, drag.pitch + dy * 0.004));
-      view.vyaw = ((e.clientX - drag.lastX) * 0.006) / Math.max(1, now - drag.lastT);
+      view.yaw = drag.yaw + dx * 0.007;
+      view.tilt = Math.max(-0.2, Math.min(1.2, drag.tilt + dy * 0.004));
+      view.vyaw = ((e.clientX - drag.lastX) * 0.007) / Math.max(1, now - drag.lastT);
       drag.lastX = e.clientX; drag.lastT = now;
       return;
     }
     hover = pick(e);
     canvas.style.cursor = hover ? "pointer" : "grab";
     if (!hover) { tip.hidden = true; return; }
-    const r = page.getBoundingClientRect();
+    const r = canvas.parentElement.getBoundingClientRect();
     tip.hidden = false;
     tip.style.left = `${e.clientX - r.left + 16}px`; tip.style.top = `${e.clientY - r.top + 16}px`;
     if (hover.kind === "vm") {
       const v = hover.v;
       tip.innerHTML = `<b>${esc(v.vm.name)}</b><span>${esc(v.vm.state)} · ${v.vm.vcpus} vCPU · ${gbText(v.vm.memory_mb)}</span><span>CPU ${Number.isFinite(v.cpu) ? v.cpu.toFixed(0) + "%" : "—"} · ↓ ${rate(v.rx)} ↑ ${rate(v.tx)}</span><em>Click to open</em>`;
-    } else {
+    } else if (hover.kind === "node") {
       const n = hover.node;
-      tip.innerHTML = `<b>${esc(n.name)}</b><span>${n.healthy ? "Online" : "Offline"} · CPU ${n.cpu == null ? "—" : n.cpu.toFixed(0) + "%"}</span><span>Network ↓ ${rate(n.rx)} ↑ ${rate(n.tx)}</span><span>Disk R ${bytesRate(n.read)} · W ${bytesRate(n.write)}</span><em>Click to open · double-click to fly there</em>`;
+      tip.innerHTML = `<b>${esc(n.name)}</b><span>${n.healthy ? "Online" : "Offline"} · CPU ${n.cpu == null ? "—" : n.cpu.toFixed(0) + "%"}</span><span>Network ↓ ${rate(n.rx)} ↑ ${rate(n.tx)}</span><span>Disk R ${bytesRate(n.read)} · W ${bytesRate(n.write)}</span><em>Click to open</em>`;
+    } else {
+      tip.innerHTML = `<b>Virtual Storage</b>${scene.pools.slice(0, 4).map((p) => `<span>${esc(p.name)} · ${p.used.toFixed(0)}% of ${Math.round(p.cap)} GB</span>`).join("")}<em>Click to open Storage</em>`;
     }
   });
   canvas.addEventListener("pointerup", (e) => {
-    const moved = drag?.moved;
-    drag = null;
+    const moved = drag?.moved; drag = null;
     if (moved) return;
     const hit = pick(e);
-    clearTimeout(canvas.clickTimer);
-    canvas.clickTimer = setTimeout(() => { // a double-click flies instead
-      if (hit?.kind === "vm") location.hash = `vm/${encodeURIComponent(hit.v.vm.uuid)}`;
-      else if (hit?.kind === "node") location.hash = `node/${encodeURIComponent(hit.node.name)}`;
-    }, 280);
-  });
-  canvas.addEventListener("dblclick", (e) => {
-    clearTimeout(canvas.clickTimer);
-    const hit = pick(e), node = hit?.node || hit?.v?.node;
-    view.target = node ? { cx: node.x, cy: node.y, zoom: 1.8, pitch: 1.05 } : { ...HOME };
+    if (hit?.kind === "vm") location.hash = `vm/${encodeURIComponent(hit.v.vm.uuid)}`;
+    else if (hit?.kind === "node") location.hash = `node/${encodeURIComponent(hit.node.name)}`;
+    else if (hit?.kind === "core") location.hash = "storage";
   });
   canvas.addEventListener("pointerleave", () => { tip.hidden = true; hover = null; });
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault(); view.target = null;
-    view.zoom = Math.max(0.45, Math.min(3, view.zoom * (e.deltaY > 0 ? 0.92 : 1.08)));
-  }, { passive: false });
-  document.getElementById("fabric-spin").addEventListener("click", (e) => {
+  canvas.addEventListener("wheel", (e) => { e.preventDefault(); view.zoom = Math.max(0.6, Math.min(2.2, view.zoom * (e.deltaY > 0 ? 0.93 : 1.07))); }, { passive: false });
+  $id("fabric-spin").addEventListener("click", (e) => {
     view.spin = !view.spin;
     e.currentTarget.textContent = view.spin ? "Pause rotation" : "Rotate";
     e.currentTarget.setAttribute("aria-pressed", String(!view.spin));
   });
-  document.getElementById("fabric-reset").addEventListener("click", () => { view.target = { ...HOME }; });
+  $id("fabric-reset").addEventListener("click", () => Object.assign(view, HOME, { vyaw: 0 }));
 
+  function clock() {
+    $id("fx-clock").textContent = new Date().toLocaleString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  let ticked = 0;
   function loop(t) {
     if (!page.classList.contains("active")) { frame = 0; return; }
-    try { draw(t); } catch (err) { console.error("fabric draw failed", err?.stack || err); }
+    try { draw(t); } catch (err) { console.error("fabric draw failed", err); }
+    if (t - ticked > 1000) { ticked = t; clock(); }
     frame = requestAnimationFrame(loop);
   }
   function start() {
