@@ -578,7 +578,38 @@ def create_app(
             f"curl -fsS {fetch} {server}/p2v-agent.sh | sudo bash -s -- --server {server} "
             f"--session {session.id} --token '{token}'{pin}"
         )
-        return {"session": session.public(), "command": command}
+        return {
+            "session": session.public(),
+            "command": command,
+            "agent_token": token,
+            "windows_agent_url": f"{API}/p2v/sessions/{session.id}/agent.exe",
+        }
+
+    @api.get("/p2v/sessions/{sid}/agent.exe")
+    def p2v_windows_agent(sid: str, request: Request, x_p2v_token: str = Header(default="")):
+        from .p2v import WINDOWS_AGENT
+
+        session = p2v_session(sid, x_p2v_token)
+        if not WINDOWS_AGENT.is_file():
+            raise HTTPException(
+                status_code=404, detail="Windows agent is not included in this build"
+            )
+        config = {
+            "server": f"{request.url.scheme}://{request.url.netloc}",
+            "session": session.id,
+            "token": x_p2v_token,
+            "pin": p2v_pin,
+        }
+        trailer = b"\n#IBHICS-P2V#" + json.dumps(config).encode() + b"#END#"
+        return Response(
+            WINDOWS_AGENT.read_bytes() + trailer,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="ibhics-p2v-{session.id}.exe"',
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @api.delete("/p2v/sessions/{sid}", status_code=status.HTTP_204_NO_CONTENT)
     def p2v_close(sid: str) -> None:

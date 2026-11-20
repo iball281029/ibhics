@@ -220,3 +220,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Windows P2V agent is built by CI
+ibhics/manager/static/p2v-agent.exe

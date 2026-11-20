@@ -665,12 +665,39 @@ async function renderP2V() {
       <td class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></td></tr>`;
   }).join("") : empty(7, "No physical machines yet. Create an agent command to start.");
 }
+let p2vDownload = null;
 $("#p2v-open").addEventListener("click", async () => {
   try {
     const r = await post("/p2v/sessions", { pool: $("#p2v-pool").value });
+    p2vDownload = { url: r.windows_agent_url, token: r.agent_token, sid: r.session.id };
     $("#p2v-code").textContent = r.command;
     $("#p2v-command").hidden = false;
     await renderP2V();
+  } catch (err) { fail(err); }
+});
+for (const platform of ["linux", "windows"]) {
+  $(`#p2v-${platform}-tab`).addEventListener("click", () => {
+    for (const name of ["linux", "windows"]) {
+      $(`#p2v-${name}`).hidden = name !== platform;
+      $(`#p2v-${name}-tab`).setAttribute("aria-selected", String(name === platform));
+    }
+  });
+}
+$("#p2v-download").addEventListener("click", async () => {
+  if (!p2vDownload) return;
+  const download = p2vDownload;
+  try {
+    const r = await fetch(download.url, { headers: { "X-P2V-Token": download.token } });
+    if (r.status === 401) return toLogin();
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ibhics-p2v-${download.sid}.exe`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   } catch (err) { fail(err); }
 });
 $("#p2v-copy").addEventListener("click", () => navigator.clipboard.writeText($("#p2v-code").textContent).then(() => toast("Command copied")).catch(fail));
