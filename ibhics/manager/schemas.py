@@ -941,7 +941,13 @@ class SourceVMOut(BaseModel):
     notes: str = ""
 
 
+class DiskTarget(BaseModel):
+    pool: str | None = Field(default=None, min_length=1, max_length=128)
+    size_gb: int | None = Field(default=None, ge=1)
+
+
 class ImportRequest(BaseModel):
+    disks: list[DiskTarget] | None = None
     source: str
     vm: str = Field(description="the ref from GET /migrate/sources/{name}/vms")
     name: str | None = Field(default=None, pattern=VM_NAME_PATTERN)
@@ -960,6 +966,7 @@ class ImportRequest(BaseModel):
 
 
 class ImportJobOut(BaseModel):
+    disks: list[DiskTarget] | None = None
     pool: str = "default"
     id: str
     source: str
@@ -977,6 +984,7 @@ class ImportJobOut(BaseModel):
 
 
 class AgentImport(BaseModel):
+    disks: list[DiskTarget] | None = None
     source: dict
     vm: dict
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")

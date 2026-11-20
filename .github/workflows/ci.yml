@@ -6,6 +6,28 @@ on:
   pull_request:
 
 jobs:
+  p2v-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache-dependency-path: agents/p2v-windows/go.sum
+      - name: Test portable agent code
+        working-directory: agents/p2v-windows
+        run: |
+          go test ./...
+          go vet ./...
+          GOOS=windows GOARCH=amd64 go vet ./...
+      - name: Build Windows agent
+        working-directory: agents/p2v-windows
+        run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o ../../ibhics/manager/static/p2v-agent.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p2v-agent-exe
+          path: ibhics/manager/static/p2v-agent.exe
+
   test:
     runs-on: ubuntu-latest
     strategy:

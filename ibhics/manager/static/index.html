@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="spatial.css">
 <link rel="stylesheet" href="fabric.css">
 <link rel="stylesheet" href="vmspace.css">
+<link rel="stylesheet" href="migrate.css">
 </head>
 <body class="command-workspace spatial-workspace">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -559,9 +560,9 @@
     </section>
 
     <section class="page" id="page-migrate">
-      <div class="sheet">
+      <div class="sheet mg-command">
         <div class="page-head">
-          <h1>Migrate</h1><span class="sub">Bring VMs over from VMware ESXi / vCenter, Proxmox / KVM, OVA exports, disk images (VMDK, VHDX, QCOW2) and physical Linux servers</span>
+          <div><div class="mg-eyebrow">MIGRATION · INBOUND WORKLOADS</div><h1>Migrate</h1></div>
         </div>
         <div class="tabs" id="migrate-tabs">
           <button data-tab="import" class="active">Import VMs</button>
@@ -570,55 +571,115 @@
           <button data-tab="p2v">Physical machines</button>
         </div>
         <div class="subpage active" id="tab-import">
-          <div class="steps">
-            <div class="step"><b>1</b><span>Add a source (ESXi, vCenter, a folder of exports) or upload OVA / disk files from any platform</span></div>
-            <div class="step"><b>2</b><span>Pick a VM and power it off at the source</span></div>
-            <div class="step"><b>3</b><span>Import: disks are converted, drivers fixed, the VM is created</span></div>
-          </div>
+<div class="mg-flow">
+    <div class="mg-stage src"><h3>① SOURCE</h3>
+      <div class="art"><svg width="190" height="110" viewBox="0 0 190 110">
+        <defs><linearGradient id="mg-source-hologram" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffcb66" stop-opacity=".5"/><stop offset="1" stop-color="#ffcb66" stop-opacity=".05"/></linearGradient></defs>
+        <ellipse cx="95" cy="98" rx="70" ry="9" fill="none" stroke="#ffcb66" stroke-opacity=".6"/>
+        <g fill="url(#mg-source-hologram)" stroke="#ffd994">
+          <path d="M45 30l50-18 50 18-50 18z"/><path d="M45 30v16l50 18V48z" fill="#ffcb6620"/><path d="M145 30v16L95 64V48z" fill="#ffcb6612"/>
+          <path d="M45 54v16l50 18V72z" fill="#ffcb6620"/><path d="M145 54v16L95 88V72z" fill="#ffcb6612"/></g>
+        <g fill="#7cf0a8"><circle cx="60" cy="46" r="2"/><circle cx="67" cy="49" r="2"/><circle cx="60" cy="70" r="2"/></g>
+      </svg></div>
+      <div class="meta"><span><span id="mg-source-meta">Select a source</span></span><b><span id="mg-vm-count">— VMs</span></b></div></div>
+    <div class="mg-beam"><i style="left:30%"></i><i style="left:70%;opacity:.6"></i><span>CONVERT · virt-v2v</span></div>
+    <div class="mg-stage"><h3>② CONVERT</h3>
+      <div class="art"><svg width="150" height="110" viewBox="0 0 150 110">
+        <circle cx="75" cy="55" r="40" fill="none" stroke="#3ef0ff" stroke-dasharray="4 6"/>
+        <circle cx="75" cy="55" r="28" fill="none" stroke="#b49bff" stroke-width="3" stroke-dasharray="120 60"/>
+        <circle cx="75" cy="55" r="12" fill="#3ef0ff33" stroke="#bff6ff"/>
+        <path d="M40 55h-30M140 55h-30" stroke="#3ef0ff"/></svg></div>
+      <div class="meta"><span>drivers · virtio</span><b><span id="mg-running">0 running</span></b></div></div>
+    <div class="mg-beam"><i style="left:50%"></i><span id="mg-write">WRITE · storage</span></div>
+    <div class="mg-stage dst"><h3>③ IBHICS CLUSTER</h3>
+      <div class="art"><svg width="190" height="110" viewBox="0 0 190 110">
+        <ellipse cx="95" cy="98" rx="74" ry="9" fill="none" stroke="#6dffb3" stroke-opacity=".6"/>
+        <g stroke="#bff6ff" fill="#3ef0ff18"><rect x="55" y="20" width="32" height="70"/><rect x="100" y="28" width="32" height="62"/></g>
+        <g stroke="#3ef0ff" stroke-opacity=".7"><path d="M59 30h24M59 40h24M59 50h24M59 60h24M104 38h24M104 48h24M104 58h24"/></g>
+        <g fill="#6dffb3"><circle cx="80" cy="76" r="2.4"/><circle cx="125" cy="76" r="2.4"/></g></svg></div>
+      <div class="meta"><span><span id="mg-nodes">Loading nodes…</span></span><b><span id="mg-node-count">— nodes</span></b></div></div>
+  </div>
+          <div class="mg-panel"><h3>SELECT VMS FROM SOURCE</h3><div id="source-chips" class="mg-chips" aria-label="Migration sources"></div>
           <div class="toolbar">
-            <label style="display:flex;align-items:center;gap:8px">Source <select id="browse-source" class="source-list" style="width:auto"></select></label>
+            <select id="browse-source" class="source-list" aria-label="Source" hidden></select><label><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"> Select all VMs</label>
             <span class="spacer"></span>
+            <div class="mg-view-switch" role="group" aria-label="VM view">
+              <button type="button" data-migrate-view="cards" aria-label="Card view" aria-pressed="true" title="Cards"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+              <button type="button" data-migrate-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+            </div>
             <label class="btn operator-only" title="OVA, VMDK, VHD/VHDX (Hyper-V), QCOW2 or raw: exports from any platform">Upload files<input type="file" id="upload-files" multiple accept=".ova,.vmdk,.vhdx,.vhd,.qcow2,.img,.raw" hidden></label>
             <button id="refresh-source">Refresh</button>
           </div>
           <div id="uploads-progress"></div>
           <div id="source-error" class="migrate-error" role="alert" hidden></div>
-          <button type="button" id="migrate-selected" class="primary operator-only" disabled>Migrate selected</button>
-          <div class="table-wrap"><table>
-            <thead><tr><th><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"></th><th>VM</th><th>Power</th><th>vCPU</th><th>Memory</th><th>Disks</th><th>Firmware</th><th>Guest OS</th><th></th></tr></thead>
-            <tbody id="source-vms"></tbody>
-          </table></div>
+          <div id="source-vms" class="mg-vms"></div>
+          <div class="mg-go"><button type="button" id="migrate-selected" class="primary operator-only" disabled>MIGRATE 0 SELECTED</button><div id="mg-destination" class="hint">Choose destination in the import wizard</div></div>
+          </div>
         </div>
         <div class="subpage" id="tab-p2v">
-          <div class="steps">
-            <div class="step"><b>1</b><span>Pick the storage that receives the disks and create a one-time agent command</span></div>
-            <div class="step"><b>2</b><span>Paste it as root on the physical Linux server: it sends CPU, memory, NICs and every disk</span></div>
-            <div class="step"><b>3</b><span>When it shows Ready, import it from Import VMs with source <b>physical</b></span></div>
-          </div>
+          <div class="mg-panel"><h3>① OPERATING SYSTEM</h3>
+          <div class="mg-os-tabs" role="tablist" aria-label="Physical machine operating system">
+            <button type="button" role="tab" id="p2v-linux-tab" data-p2v-os="apt" aria-controls="p2v-linux" aria-selected="true">Ubuntu / Debian <small>apt</small></button>
+            <button type="button" role="tab" id="p2v-rhel-tab" data-p2v-os="rhel" aria-controls="p2v-linux" aria-selected="false">RHEL / CentOS / Rocky / Alma <small>dnf · yum</small></button>
+            <button type="button" role="tab" id="p2v-suse-tab" data-p2v-os="suse" aria-controls="p2v-linux" aria-selected="false">SUSE / openSUSE <small>zypper</small></button>
+            <button type="button" role="tab" id="p2v-other-tab" data-p2v-os="other" aria-controls="p2v-linux" aria-selected="false">Other Linux <small>wget</small></button>
+            <button type="button" role="tab" id="p2v-windows-tab" data-p2v-os="windows" aria-controls="p2v-windows" aria-selected="false">Windows <small>.exe</small></button>
+            <button type="button" role="tab" aria-selected="false" disabled>Boot ISO <small>Coming soon</small></button>
+          </div><h3 id="p2v-step2">② AGENT COMMAND</h3>
           <div class="toolbar operator-only">
             <label style="display:flex;align-items:center;gap:8px">Storage <select id="p2v-pool" style="width:auto"></select></label>
             <button type="button" class="primary" id="p2v-open">Create agent command</button>
             <span class="spacer"></span><button type="button" id="p2v-refresh">Refresh</button>
           </div>
           <div id="p2v-command" hidden>
-            <p class="hint">Run on the physical server (Linux, as root). The command works for 24 hours and for one machine. Stop databases and busy services first, or boot the server from a live USB, for a clean copy.</p>
-            <pre class="code" id="p2v-code"></pre>
-            <button type="button" class="small" id="p2v-copy">Copy command</button>
+            <div id="p2v-linux" role="tabpanel" aria-labelledby="p2v-linux-tab" tabindex="0">
+              <p class="hint">Run as root · valid for 24 hours · one machine.</p>
+              <p class="hint" id="p2v-os-hint"></p><pre class="code" id="p2v-code"></pre>
+              <button type="button" class="small" id="p2v-copy">COPY COMMAND</button><span class="hint" id="p2v-command-meta"></span>
+            </div>
+            <div id="p2v-windows" role="tabpanel" aria-labelledby="p2v-windows-tab" hidden>
+              <button type="button" class="primary" id="p2v-download">Download agent (.exe)</button>
+              <ol><li>Download the agent to the physical Windows server.</li><li>Right-click and choose Run as administrator.</li><li>Stop databases and busy services, then type y to copy.</li></ol>
+              <p class="hint">Requires 64-bit Windows 10 / Server 2016 or later. This file has no code signing; Windows SmartScreen may warn you. Live copy without VSS: data may change during copying. Keep this file private: it contains a session token valid for 24 hours.</p>
+            </div>
           </div>
+          <div class="mg-requirements"><div><b>Before you run</b>Stop databases and busy services for a clean copy.</div><div><b>Network</b>The physical server must reach this manager on port :8888.</div><div><b>Consistent copy</b>Use a live USB for an offline copy. Boot ISO support is coming soon.</div></div>
+          </div><div class="mg-panel"><h3>③ PHYSICAL MACHINES</h3>
           <div class="table-wrap"><table>
-            <thead><tr><th>Machine</th><th>Status</th><th>CPU / Memory</th><th>Disks</th><th>Storage</th><th>Created</th><th></th></tr></thead>
+            <thead><tr><th>Machine</th><th>Status</th><th>CPU / Memory</th><th>Disks</th><th>Storage</th><th>Created</th><th>Progress / Actions</th></tr></thead>
             <tbody id="p2v-rows"></tbody>
           </table></div>
-          <p class="hint">Windows servers are not supported by this agent yet.</p>
         </div>
-        <div class="subpage" id="tab-sources">
-          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="source-dialog">+ Add source</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Name</th><th>Type</th><th>Location</th><th>User</th><th></th></tr></thead>
-            <tbody id="sources"></tbody>
-          </table></div>
+          </div>
+        <div class="subpage" id="tab-sources"><h3 class="mg-section-title">SOURCES</h3>
+          <div class="mg-os-tabs" role="tablist" aria-label="Source category">
+            <button type="button" role="tab" id="source-connections-tab" data-source-section="connections" aria-controls="source-connections" aria-selected="true">CONNECTIONS</button>
+            <button type="button" role="tab" id="source-physical-tab" data-source-section="physical" aria-controls="source-physical" aria-selected="false">PHYSICAL (AGENT)</button>
+          </div>
+          <div id="source-connections" role="tabpanel" aria-labelledby="source-connections-tab">
+          <div class="toolbar mg-source-view-tools"><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="VM view">
+              <button type="button" data-source-view="connections" data-view="cards" aria-label="Panel view" aria-pressed="true" title="Panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+              <button type="button" data-source-view="connections" data-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+            </div></div>
+          <div class="mg-source-command mg-panel">
+            <div id="source-summary" class="mg-source-summary" role="status" aria-live="polite"></div>
+            <div class="mg-source-tools"><button type="button" id="test-all-sources">Test all</button><button type="button" class="primary admin-only" data-open="source-dialog">+ ADD SOURCE</button></div>
+          </div>
+          <div id="sources" aria-label="Source connections"></div>
+          <div class="mg-builtins" aria-label="Built-in sources">
+            <div class="mg-panel"><span class="mg-builtin-label">BUILT-IN / UPLOADS</span><p>Import your OVA files and disk images.</p><button type="button" data-source-browse="uploads">Upload files →</button></div>
+            <div class="mg-panel"><span class="mg-builtin-label">BUILT-IN / PHYSICAL</span><p>Bring physical machines into your cluster.</p><button type="button" data-source-tab="p2v">Physical machines →</button></div>
+          </div>
+          </div>
+          <div id="source-physical" role="tabpanel" aria-labelledby="source-physical-tab" hidden>
+            <div class="toolbar mg-source-view-tools"><span class="hint">Machines with agent inventory</span><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="VM view">
+              <button type="button" data-source-view="physical" data-view="cards" aria-label="Panel view" aria-pressed="true" title="Panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+              <button type="button" data-source-view="physical" data-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+            </div></div>
+            <div id="source-physical-machines" aria-live="polite"></div>
+          </div>
         </div>
-        <div class="subpage" id="tab-imports">
+        <div class="subpage" id="tab-imports"><h3 class="mg-section-title">IMPORT JOBS</h3>
           <div class="table-wrap" style="margin-top:8px"><table>
             <thead><tr><th>VM</th><th>Source</th><th>New name</th><th>Node</th><th>Started</th><th>Status</th><th>Details</th></tr></thead>
             <tbody id="imports"></tbody>
@@ -1577,9 +1638,9 @@
   </form>
 </dialog>
 
-<dialog id="source-dialog">
+<dialog id="source-dialog" class="mg-dialog">
   <form method="dialog" id="source-form">
-    <header><h3>Add migrate source</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Add migrate source</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <div class="body form-grid">
       <label>Name <input name="name" required placeholder="esx01"></label>
       <label>Type
@@ -1599,13 +1660,13 @@
       <label data-for="ova disk">Folder on the nodes <input name="path" placeholder="/mnt/exports"></label>
       <label data-for="vmware" class="wide">Transfer
         <select name="transport">
-          <option value="ssh">SSH: works with every ESXi version (ibHiCS turns SSH on and sets up a key)</option>
-          <option value="https">HTTPS: no SSH needed, but many ESXi versions refuse it</option>
+          <option value="ssh" title="ibHiCS turns SSH on and sets up a key">SSH · all ESXi versions (enables SSH + key)</option>
+          <option value="https" title="No SSH needed, but many ESXi versions refuse it">HTTPS · limited ESXi support</option>
         </select>
       </label>
       <label class="check" data-for="vmware nutanix sangfor"><input name="verify_tls" type="checkbox"> Verify the host's TLS certificate</label>
     </div>
-    <p class="hint" style="padding:0 18px">Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Nutanix: give the Prism Element or Prism Central address and a user that can read VMs and create images; each disk is copied through a temporary image that is deleted afterwards. Sangfor HCI: the VM is exported as OVA by Sangfor itself, downloaded and converted; shut it down first. Files from Hyper-V or Xen: export them and use Upload files.</p>
+    <details class="mg-help"><summary>Connection requirements</summary><p>Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Nutanix: give the Prism Element or Prism Central address and a user that can read VMs and create images; each disk is copied through a temporary image that is deleted afterwards. Sangfor HCI: the VM is exported as OVA by Sangfor itself, downloaded and converted; shut it down first. Files from Hyper-V or Xen: export them and use Upload files.</p></details>
     <div id="source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
     <footer><button type="button" id="test-source-form">Test connection</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
   </form>
@@ -1613,7 +1674,7 @@
 
 <dialog id="log-dialog">
   <form method="dialog">
-    <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <div id="import-log-body">
       <div id="log-summary" aria-live="polite"></div>
       <details id="log-raw"><summary>Raw log</summary>
@@ -1626,36 +1687,36 @@
   </form>
 </dialog>
 
-<dialog id="source-test-dialog">
+<dialog id="source-test-dialog" class="mg-dialog">
   <form method="dialog">
-    <header><h3>Source connection test</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Source connection test</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <div id="saved-source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
     <footer><button value="cancel">Close</button></footer>
   </form>
 </dialog>
 
-<dialog id="import-dialog" class="wizard migrate-wizard">
+<dialog id="import-dialog" class="wizard migrate-wizard mg-dialog">
   <form method="dialog" id="import-form">
-    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <ol class="wiz-steps">
       <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
       <li data-step="3"><b>3</b>Network mapping</li><li data-step="4"><b>4</b>Summary</li>
     </ol>
     <section class="wiz-page body" data-page="1">
-      <p class="hint">Power off selected VMs at the source before migration. Running VMs cannot proceed.</p>
+      <p class="hint">Power off selected VMs at the source to continue.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
     </section>
     <section class="wiz-page body" data-page="2" hidden>
       <div class="form-grid">
-        <label>Node <select name="node" id="import-node" required></select></label>
-        <label>Storage pool <select name="pool" id="import-pool" required></select></label>
+        <label>Default node <select name="node" id="import-node" required></select></label>
+        <label>Default storage pool <select name="pool" id="import-pool" required></select></label>
         <div id="import-capacity" class="wide" role="status"></div>
         <div id="import-names" class="wide"></div>
-        <label class="check"><input name="start" type="checkbox"> Power on when done</label>
+        <div id="import-disk-targets" class="wide"></div>
       </div>
       <div class="edit-note win-note" id="import-win" hidden>
         <p>Windows: run <code>powercfg /h off</code> at the source, then shut down fully. Fast Startup can lock the disk and prevent driver installation.</p>
-        <label class="check" id="import-hib"><input name="clear_hibernation" type="checkbox"> Clear hibernation on copied Windows disks (SSH VMware / KVM only; unsaved sessions on the copy are discarded).</label>
+        <p id="import-hib">Clear hibernation is available per VM for SSH VMware / KVM only; unsaved sessions on the copy are discarded.</p>
       </div>
     </section>
     <section class="wiz-page body" data-page="3" hidden><div id="import-nets"></div></section>

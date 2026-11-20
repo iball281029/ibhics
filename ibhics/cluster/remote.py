@@ -517,6 +517,7 @@ class RemoteImport:
         start: bool = False,
         progress=None,
         clear_hibernation: bool = False,
+        disks: list[dict] | None = None,
     ) -> VMInfo:
         body = {
             "source": source.to_dict(),
@@ -529,6 +530,20 @@ class RemoteImport:
             "start": start,
             "clear_hibernation": clear_hibernation,
         }
+        if disks is not None:
+            nondefault = len(disks) != len(vm.disks_gb) or any(
+                (d.get("pool") or pool) != pool
+                or (d.get("size_gb") is not None and d["size_gb"] != size)
+                for d, size in zip(disks, vm.disks_gb, strict=False)
+            )
+            if nondefault:
+                capabilities = self._client.request("GET", "/imports/capabilities")
+                if capabilities.status_code != 200 or not capabilities.json().get("disk_targets"):
+                    raise InvalidState(
+                        f"{self._client.address}: this node agent does not support disk targets; "
+                        "upgrade the node agent and retry"
+                    )
+                body["disks"] = disks
         done = threading.Event()
         if progress:
             # The conversion is one long request; ask the node how far along it is meanwhile.

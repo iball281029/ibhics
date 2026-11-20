@@ -1,0 +1,454 @@
+/* Migration command center; scoped to keep the other workspaces independent. */
+#page-migrate{--mg-cyan:#3ef0ff;--mg-text:#cfefff;--mg-dim:#89aaca;color:var(--mg-text)}
+#page-migrate .mg-command{position:relative;isolation:isolate;padding:24px;border:1px solid #3ef0ff33;border-radius:22px;background:radial-gradient(ellipse at 50% 0,#0b3a52,#071a2c 48%,#040b17);box-shadow:inset 0 0 100px #00e5ff14;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;display:grid;grid-template-columns:auto 1fr;gap:0 20px;overflow:hidden}
+#page-migrate .mg-command:before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:repeating-linear-gradient(0deg,#3ef0ff06 0 1px,transparent 1px 3px)}
+#page-migrate .page-head{margin:0;padding:0 0 18px;border:0;min-width:0}
+#page-migrate h1{margin:6px 0 0;color:#e8fbff;font:700 28px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-shadow:0 0 18px #3ef0ff88}
+#page-migrate .mg-eyebrow{font-size:10px;letter-spacing:3px;color:var(--mg-dim)}
+#page-migrate #migrate-tabs{align-self:end;justify-self:end;display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0 0 18px;border:0;background:none}
+#page-migrate #migrate-tabs button{text-transform:uppercase;font-size:11px;letter-spacing:1.3px}
+#page-migrate button:focus-visible,#page-migrate .btn:focus-within{outline:2px solid #fff;outline-offset:-4px}
+#page-migrate button:disabled{opacity:.45;cursor:not-allowed}
+#page-migrate .subpage{grid-column:1/-1;min-width:0;border-top:1px solid #3ef0ff33;padding-top:20px}
+#page-migrate .mg-flow{display:grid;grid-template-columns:minmax(0,1fr) 90px minmax(0,1fr) 90px minmax(0,1fr);align-items:center;margin:0 0 18px}
+#page-migrate .mg-panel,#page-migrate .mg-stage,#page-migrate .mg-vm{position:relative;border:1px solid #3ef0ff2e;background:linear-gradient(180deg,#0a2a40cc,#06182acc);clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);box-shadow:inset 0 0 30px #3ef0ff0d;padding:16px;min-width:0}
+#page-migrate .mg-panel:before{content:"";position:absolute;left:0;top:0;width:44px;height:2px;background:var(--mg-cyan);box-shadow:0 0 10px var(--mg-cyan)}
+#page-migrate .mg-panel+.mg-panel{margin-top:16px}
+#page-migrate h3{margin:0 0 14px;font:600 11px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:var(--mg-cyan)}
+#page-migrate .mg-stage{height:210px;display:grid;grid-template-rows:auto 1fr auto;padding:14px}
+#page-migrate .mg-stage.src h3{color:#ffcb66}#page-migrate .mg-stage.dst h3{color:#6dffb3}
+#page-migrate .mg-stage .art{display:grid;place-items:center;filter:drop-shadow(0 0 12px #3ef0ff33)}
+#page-migrate .mg-stage svg{max-width:100%}
+#page-migrate .mg-stage .meta{display:flex;justify-content:space-between;align-items:end;gap:8px;font-size:11px;color:var(--mg-dim);min-width:0}
+#page-migrate .mg-stage .meta span{overflow-wrap:anywhere}#page-migrate .mg-stage .meta b{flex-shrink:0;color:#e8fbff}
+#page-migrate .mg-beam{height:4px;position:relative;background:linear-gradient(90deg,#3ef0ff22,#3ef0ff99,#3ef0ff22);box-shadow:0 0 14px #3ef0ff88}
+#page-migrate .mg-beam i{position:absolute;top:-3px;width:10px;height:10px;border-radius:50%;background:#fff;box-shadow:0 0 14px var(--mg-cyan);animation:mg-stream 2.5s linear infinite}
+#page-migrate .mg-beam i+i{animation-delay:-1.25s}
+#page-migrate .mg-beam span{position:absolute;top:14px;left:2px;right:2px;text-align:center;font-size:9px;letter-spacing:.7px;color:var(--mg-cyan);overflow-wrap:anywhere}
+@keyframes mg-stream{from{left:0;opacity:0}25%{opacity:1}to{left:90%;opacity:0}}
+#page-migrate .mg-chips,#page-migrate .mg-os-tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+#page-migrate .mg-chip{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--mg-text)}
+#page-migrate .mg-chip small{color:var(--mg-dim);font-size:9px}
+#page-migrate .mg-chip i{flex-shrink:0;width:8px;height:8px;border-radius:50%;background:#89aaca}
+#page-migrate .mg-chip.ok i{background:#6dffb3;box-shadow:0 0 8px #6dffb3}
+#page-migrate .mg-chip.bad i{background:#ff6b7a;box-shadow:0 0 8px #ff6b7a}
+#page-migrate .mg-chip[aria-pressed="true"]{border-color:#ffcb6699;background:#ffcb6614;color:#fff}
+#page-migrate .mg-vms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
+#page-migrate .mg-vm{display:flex;flex-direction:column;gap:9px;padding:14px;background:#04121f99}
+#page-migrate .mg-vm.selected{border-color:var(--mg-cyan);box-shadow:inset 0 0 0 1px var(--mg-cyan);background:#0a2638cc}
+#page-migrate .mg-vm-select{display:flex;align-items:center;gap:10px;cursor:pointer}
+#page-migrate .mg-vm-name{flex:1;min-width:0}#page-migrate .mg-vm-name b{font-size:12px;color:#fff;overflow-wrap:anywhere}
+#page-migrate .mg-vm small{font-size:10px;color:var(--mg-dim);overflow-wrap:anywhere}
+#page-migrate .mg-vm-name small{display:block;margin-top:4px}
+#page-migrate .vx-os{display:grid;place-items:center;flex:0 0 38px;width:38px;height:38px;border-radius:10px;background:#2f7dff25;border:1px solid #7fd6ff66}
+#page-migrate .vx-os svg{width:28px;height:28px}#page-migrate .os-linux{background:#ffc23d25;border-color:#ffc23d66}
+#page-migrate input[type="checkbox"]{accent-color:#a98bff;width:16px;height:16px;flex-shrink:0}
+#page-migrate .mg-spec{font-size:11px;color:#9fdcf0;line-height:1.7}
+#page-migrate .mg-vm>.badge{align-self:start}#page-migrate .mg-vm .actions{margin-top:auto}
+#page-migrate .mg-go{margin-top:18px;display:grid;justify-items:start;gap:8px}
+#page-migrate .hint,#page-migrate .vm-sub{color:var(--mg-dim)}
+#page-migrate .mg-empty{grid-column:1/-1;padding:26px;text-align:center;border:1px dashed #3ef0ff33;color:var(--mg-dim)}
+#page-migrate #source-error{padding:20px;background:#ff6b7a0b;border:1px solid #ff6b7a66;border-radius:0;overflow-wrap:anywhere}
+#page-migrate .mg-os-tabs small{color:var(--mg-dim);margin-left:6px}
+#page-migrate #p2v-code{padding:18px;background:#020a14;border:1px solid #3ef0ff44;color:#bff6ff;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}
+#page-migrate #p2v-command-meta{display:inline-block;margin:8px 12px}
+#page-migrate .mg-requirements{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px}
+#page-migrate .mg-requirements>div{padding:12px;border:1px dashed #3ef0ff33;font-size:11px;line-height:1.7}
+#page-migrate .mg-requirements b{display:block;color:#fff;margin-bottom:4px}
+#page-migrate .toolbar{flex-wrap:wrap}#page-migrate select{max-width:100%}
+#page-migrate .table-wrap{border:0;background:transparent;overflow-x:auto}
+#page-migrate table{background:transparent;color:var(--mg-text)}
+#page-migrate th{color:var(--mg-dim);font-size:10px;letter-spacing:1px;background:#04121f66}
+#page-migrate td{font-size:11px;border-bottom:1px dashed #3ef0ff22}
+#page-migrate progress{display:block;width:100%;min-width:100px;height:6px;accent-color:var(--mg-cyan);border:0;background:#3ef0ff14;margin:10px 0}
+#page-migrate progress::-webkit-progress-bar{background:#3ef0ff14}
+#page-migrate progress::-webkit-progress-value{background:repeating-linear-gradient(90deg,transparent 0 10px,#ffffff33 10px 14px),linear-gradient(90deg,#1f8fff,#3ef0ff);box-shadow:0 0 10px #3ef0ff}
+#page-migrate progress::-moz-progress-bar{background:linear-gradient(90deg,#1f8fff,#3ef0ff)}
+#page-migrate #tab-imports table{border-collapse:separate;border-spacing:0 10px}
+#page-migrate #imports tr{background:#0a2a4099}
+#page-migrate #imports td{padding:14px;border-top:1px solid #3ef0ff22;border-bottom:1px solid #3ef0ff22}
+@media(max-width:1300px){#page-migrate .mg-command{grid-template-columns:1fr}#page-migrate #migrate-tabs{justify-self:start}#page-migrate .mg-flow{grid-template-columns:minmax(0,1fr) 64px minmax(0,1fr) 64px minmax(0,1fr)}#page-migrate .mg-chip{flex-wrap:wrap}}
+@media(max-width:1100px){#page-migrate .mg-vms{grid-template-columns:repeat(2,minmax(0,1fr))}#page-migrate .mg-command{padding:16px}#page-migrate .mg-stage .meta{flex-direction:column;align-items:start}}
+@media(max-width:720px){#page-migrate .mg-flow{grid-template-columns:1fr;gap:28px}#page-migrate .mg-beam{width:45%;justify-self:center}#page-migrate .mg-beam span{top:7px}#page-migrate .mg-vms,#page-migrate .mg-requirements{grid-template-columns:1fr}#page-migrate .mg-eyebrow{letter-spacing:1px}#page-migrate .mg-chip small{width:100%;text-align:left}}
+@media(prefers-reduced-motion:reduce){#page-migrate *,#page-migrate *:before,#page-migrate *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+#page-migrate .mg-panel>.toolbar{background:transparent;border:0;padding:4px 0 12px}
+#page-migrate .toolbar>label{display:flex;align-items:center;gap:8px;font-size:11px}
+
+#page-migrate .mg-ref{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Source command center */
+#page-migrate .mg-source-command{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:18px}
+#page-migrate .mg-source-summary{display:flex;flex-wrap:wrap;gap:22px;font-size:9px;letter-spacing:1px;color:#8e9ba9}
+#page-migrate .mg-source-summary span{display:grid;gap:5px}
+#page-migrate .mg-source-summary b{font-size:27px;line-height:1;color:inherit;text-shadow:0 0 15px currentColor}
+#page-migrate .mg-source-summary span:first-child{color:#3ef0ff}
+#page-migrate .mg-source-summary .ok{color:#6dffb3}#page-migrate .mg-source-summary .bad{color:#ff6b7a}
+#page-migrate .mg-source-tools{display:flex;gap:8px;flex-wrap:wrap}
+#page-migrate #sources{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+#page-migrate .mg-source-card{--source-status:#7c8b9b;display:flex;flex-direction:column;gap:16px;padding:22px 18px 18px;margin:0!important}
+#page-migrate .mg-source-card.ok{--source-status:#6dffb3}#page-migrate .mg-source-card.bad{--source-status:#ff6b7a}
+#page-migrate .mg-source-card>header{display:flex;align-items:center;gap:16px;background:none;padding:0;border:0}
+#page-migrate .kind-vmware{color:#60caff}#page-migrate .kind-kvm{color:#ffab65}#page-migrate .kind-sangfor{color:#65ffd1}#page-migrate .kind-nutanix{color:#c7ff60}#page-migrate .kind-ova,#page-migrate .kind-disk{color:#bc9bff}
+#page-migrate .mg-source-badge{display:grid;place-items:center;width:62px;height:62px;flex-shrink:0;border:1px solid var(--source-status);border-radius:50%;background:#020e1c;box-shadow:0 0 12px color-mix(in srgb,var(--source-status) 35%,transparent),inset 0 0 14px #3ef0ff0a;position:relative}
+#page-migrate .mg-source-badge:after{content:"";position:absolute;inset:5px;border:1px dashed var(--source-status);border-radius:50%;opacity:.5}
+#page-migrate .mg-source-badge svg{width:34px;height:34px;filter:drop-shadow(0 0 5px currentColor)}
+#page-migrate .testing .mg-source-badge{animation:mg-source-pulse 1.6s ease-in-out infinite}
+@keyframes mg-source-pulse{50%{box-shadow:0 0 24px #3ef0ff77;border-color:#3ef0ff}}
+#page-migrate .mg-source-name{min-width:0}#page-migrate .mg-source-name h4{font-size:20px;color:#ebfbff;margin:0 0 6px;overflow-wrap:anywhere;letter-spacing:.5px}
+#page-migrate .mg-source-name span{font-size:10px;color:var(--mg-dim)}
+#page-migrate .mg-source-state{font-size:10px;color:var(--source-status);letter-spacing:.4px}
+#page-migrate .mg-source-data{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 14px;margin:0;padding:16px 0;border-top:1px solid #3ef0ff22;border-bottom:1px solid #3ef0ff22}
+#page-migrate .mg-source-data div{min-width:0}#page-migrate .mg-source-data dt{font-size:9px;letter-spacing:1.3px;color:var(--mg-dim);margin-bottom:7px}
+#page-migrate .mg-source-data dd{margin:0;font-size:11px;color:#d7efff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#page-migrate .mg-source-data .mg-source-path{direction:rtl;text-align:left;unicode-bidi:isolate}
+#page-migrate .mg-source-data div:last-child dd{white-space:normal;overflow-wrap:anywhere;line-height:1.5}
+#page-migrate .mg-source-failure{border-left:2px solid #ff6b7a;background:#ff6b7a10;padding:9px;font-size:10px;color:#ff99a5;overflow-wrap:anywhere}
+#page-migrate .mg-source-card>footer{display:flex;flex-wrap:wrap;gap:7px;margin-top:auto;padding:0;border:0;background:none}
+#page-migrate .mg-source-card>footer button{font-size:10px;padding:9px}
+#page-migrate .mg-builtins{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:24px}
+#page-migrate .mg-builtins .mg-panel{margin:0;padding:16px 20px}
+#page-migrate .mg-builtin-label{font-size:10px;letter-spacing:1.5px;color:var(--mg-dim)}
+#page-migrate .mg-builtins p{font-size:11px;color:var(--mg-dim);margin:8px 0}
+#page-migrate .mg-source-empty{grid-column:1/-1;text-align:center;padding:38px 20px;background:radial-gradient(ellipse at top,#3ef0ff15,transparent 70%)}
+#page-migrate .mg-source-empty h4{font-size:27px;color:#e8fbff;margin:16px 0;text-shadow:0 0 20px #3ef0ff55}
+#page-migrate .mg-source-empty p{font-size:12px;color:var(--mg-dim);line-height:1.7}
+#page-migrate .mg-source-supported{display:flex;justify-content:center;flex-wrap:wrap;gap:24px;margin-top:30px}
+#page-migrate .mg-source-supported span{display:grid;justify-items:center;gap:8px;max-width:100px}
+#page-migrate .mg-source-supported svg{width:32px;height:32px}#page-migrate .mg-source-supported small{font-size:9px}
+@media(max-width:1299px){#page-migrate #sources{grid-template-columns:repeat(2,minmax(0,1fr))}#page-migrate .mg-source-command{flex-wrap:wrap}}
+@media(max-width:799px){#page-migrate #sources,#page-migrate .mg-builtins{grid-template-columns:1fr}#page-migrate .mg-source-summary{gap:16px}#page-migrate .mg-source-summary b{font-size:22px}}
+@media(prefers-reduced-motion:reduce){#page-migrate .testing .mg-source-badge{animation:none}}
+
+/* Shared controls: workspace and its dialogs use the same tokens and variants. */
+:is(#page-migrate, dialog.mg-dialog) {
+  --mg-cyan:#3ef0ff;
+  --mg-text:#cfefff;
+  --mg-dim:#89aaca;
+  --mg-cut:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);
+  --text:var(--mg-text);
+  --muted:var(--mg-dim);
+  --line:#3ef0ff22;
+  --hover:#3ef0ff0a;
+  --panel:#041321;
+  --brand:var(--mg-cyan);
+  --ok:#6dffb3;
+  --bad:#ff6b7a;
+  --warn:#ffcb66;
+  color:var(--mg-text);
+  color-scheme:dark;
+  min-width:0;
+}
+:is(#page-migrate, dialog.mg-dialog) :is(button, .btn, a.button) {
+  position:relative;
+  isolation:isolate;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:36px;
+  max-width:100%;
+  padding:8px 12px;
+  border:1px solid #3ef0ff55;
+  border-radius:0;
+  clip-path:var(--mg-cut);
+  background:#3ef0ff08;
+  color:var(--mg-cyan);
+  box-shadow:inset 0 0 0 1px #3ef0ff08;
+  font:600 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+  text-transform:uppercase;
+  letter-spacing:1px;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  text-align:center;
+  text-decoration:none;
+  cursor:pointer;
+  transition:background .18s,border-color .18s,box-shadow .18s;
+}
+:is(#page-migrate, dialog.mg-dialog) :is(button, .btn, a.button):hover:not(:disabled) {
+  background:#3ef0ff18;
+  border-color:#3ef0ffbb;
+  box-shadow:inset 0 0 16px #3ef0ff22;
+}
+:is(#page-migrate, dialog.mg-dialog) button.primary {
+  background:linear-gradient(115deg,#3ef0ff30,#b49bff38);
+  border-color:#3ef0ff99;
+  color:#edfcff;
+  box-shadow:inset 0 0 16px #3ef0ff18,inset 0 1px #d5faff66;
+  text-shadow:0 0 12px #3ef0ff55;
+}
+:is(#page-migrate, dialog.mg-dialog) button.primary::after {
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background:linear-gradient(110deg,transparent 25%,#e5fcff33 50%,transparent 75%);
+  transform:translateX(-150%);
+}
+:is(#page-migrate, dialog.mg-dialog) button.primary:hover:not(:disabled) {
+  background:linear-gradient(115deg,#3ef0ff44,#b49bff55);
+  box-shadow:inset 0 0 24px #3ef0ff33,inset 0 1px #eaffffaa;
+}
+:is(#page-migrate, dialog.mg-dialog) button.primary:hover:not(:disabled)::after {animation:mg-shimmer .75s ease-out}
+@keyframes mg-shimmer {to {transform:translateX(150%)}}
+:is(#page-migrate, dialog.mg-dialog) button.danger {
+  color:#ff6b7a;
+  border-color:#ff6b7a77;
+  background:#ff6b7a08;
+}
+:is(#page-migrate, dialog.mg-dialog) button.danger:hover:not(:disabled) {
+  background:#ff6b7a18;
+  border-color:#ff6b7a;
+  box-shadow:inset 0 0 20px #ff6b7a33;
+}
+:is(#page-migrate, dialog.mg-dialog) :is(button.icon, header>button[value="cancel"]) {
+  width:36px;
+  height:36px;
+  flex-shrink:0;
+  padding:4px;
+  font-size:20px;
+  letter-spacing:0;
+}
+:is(#page-migrate, dialog.mg-dialog) button:disabled {
+  opacity:.35;
+  cursor:not-allowed;
+  box-shadow:none;
+  text-shadow:none;
+  filter:none;
+}
+:is(#page-migrate, dialog.mg-dialog) button:disabled::after {display:none}
+:is(#page-migrate, dialog.mg-dialog) :is(button, .btn, a.button):focus-visible,
+:is(#page-migrate, dialog.mg-dialog) .btn:focus-within {outline:2px solid #d7fbff;outline-offset:-4px}
+
+/* Segments retain an underline so selection remains clear without animation. */
+#page-migrate :is(#migrate-tabs, .mg-os-tabs) {gap:8px;padding:4px 0 16px}
+#page-migrate :is(#migrate-tabs, .mg-os-tabs) button {color:var(--mg-dim);background:#020a1466}
+#page-migrate :is(#migrate-tabs .active, .mg-os-tabs [aria-selected="true"]) {
+  color:#eaffff;
+  border-color:#3ef0ff88;
+  background:linear-gradient(135deg,#3ef0ff22,#b49bff1a);
+  box-shadow:inset 0 -2px #3ef0ff,inset 0 0 20px #3ef0ff15;
+}
+#page-migrate .mg-chip {font-weight:400;letter-spacing:.3px;text-transform:none;justify-content:start;color:var(--mg-text)}
+#page-migrate .mg-chip[aria-pressed="true"] {border-color:#3ef0ffbb;background:#3ef0ff18;box-shadow:inset 0 -2px #3ef0ff}
+#page-migrate .mg-chip small {padding:2px 8px;border-radius:20px;background:#89aaca14}
+#page-migrate .mg-chip.ok small {color:#6dffb3;background:#6dffb312}
+#page-migrate .mg-chip.bad small {color:#ff6b7a;background:#ff6b7a12}
+
+/* Native controls, including dynamically generated wizard fields. */
+:is(#page-migrate, dialog.mg-dialog) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  min-width:0;
+  max-width:100%;
+  border:1px solid #3ef0ff44;
+  border-radius:4px;
+  background:#020a14cc;
+  color:var(--mg-text);
+  padding:8px 12px;
+  font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+:is(#page-migrate, dialog.mg-dialog) select {
+  appearance:none;
+  padding-right:36px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%233ef0ff' stroke-width='1.5'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;
+  background-position:right 12px center;
+}
+:is(#page-migrate, dialog.mg-dialog) select option {background:#020a14;color:#cfefff}
+:is(#page-migrate, dialog.mg-dialog) textarea {width:100%;resize:vertical}
+:is(#page-migrate, dialog.mg-dialog) :is(input, select, textarea):focus-visible {
+  outline:2px solid #3ef0ff66;
+  outline-offset:2px;
+  border-color:#3ef0ff;
+  box-shadow:0 0 12px #3ef0ff22;
+}
+:is(#page-migrate, dialog.mg-dialog) input[type="checkbox"] {
+  appearance:none;
+  flex:none;
+  display:inline-grid;
+  place-items:center;
+  width:18px;
+  height:18px;
+  min-width:18px;
+  padding:0;
+  margin:0;
+  vertical-align:middle;
+  border:1px solid #3ef0ff66;
+  border-radius:4px;
+  background:#020a14cc;
+  cursor:pointer;
+}
+:is(#page-migrate, dialog.mg-dialog) input[type="checkbox"]:hover {border-color:#3ef0ff;box-shadow:0 0 10px #3ef0ff44}
+:is(#page-migrate, dialog.mg-dialog) input[type="checkbox"]:is(:checked, :indeterminate) {
+  border-color:#b49bff;
+  background:linear-gradient(135deg,#3ef0ff44,#b49bff88);
+  box-shadow:0 0 12px #b49bff44;
+}
+:is(#page-migrate, dialog.mg-dialog) input[type="checkbox"]:checked::after {
+  content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg);
+}
+:is(#page-migrate, dialog.mg-dialog) input[type="checkbox"]:indeterminate::after {content:"";width:8px;height:2px;background:#fff;transform:none;border:0}
+:is(#page-migrate, dialog.mg-dialog) input:disabled {opacity:.4;cursor:not-allowed;box-shadow:none}
+
+/* Cut-corner hologram dialogs. Log receives this class only from Migrate. */
+dialog.mg-dialog {
+  max-width:calc(100vw - 24px);
+  max-height:calc(100dvh - 24px);
+  border:1px solid #3ef0ff66;
+  border-radius:0;
+  clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px);
+  background:repeating-linear-gradient(0deg,#3ef0ff04 0 1px,transparent 1px 4px),linear-gradient(145deg,#0b3a52,#040b17 65%);
+  box-shadow:inset 0 0 64px #3ef0ff0d;
+  overflow:auto;
+}
+dialog.mg-dialog::backdrop {background:#020714bb;backdrop-filter:blur(8px)}
+dialog.mg-dialog :is(header, footer) {padding:16px 24px;gap:12px;border-color:#3ef0ff22;border-radius:0;background:#020a1444}
+dialog.mg-dialog header h3 {font:600 16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-transform:uppercase;color:#dffbff;text-shadow:0 0 16px #3ef0ff77;overflow-wrap:anywhere}
+dialog.mg-dialog footer {flex-wrap:wrap}
+dialog.mg-dialog .body {padding:24px}
+dialog.mg-dialog .form-grid {grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+dialog.mg-dialog :is(label, .form-grid>*) {min-width:0}
+dialog.mg-dialog :is(.hint, .mg-help) {font-size:12px;line-height:1.6;color:var(--mg-dim)}
+dialog.mg-dialog .body>.hint {padding:0;margin:0 0 16px}
+dialog.mg-dialog .mg-help {margin:0 24px 16px}
+dialog.mg-dialog .mg-help summary {cursor:pointer;color:#9bdde9}
+dialog.mg-dialog .mg-help p {margin:12px 0}
+dialog.mg-dialog :is(.edit-note, .import-log-mini, .import-log-warnings, .import-log-errors) {background:#020a1466;border-color:#3ef0ff33;color:var(--mg-text)}
+dialog.mg-dialog .check-ok strong {color:#6dffb3}
+dialog.mg-dialog .check-failed strong {color:#ff6b7a}
+dialog.mg-dialog :is(table, tbody, tr, td) {background:transparent;color:var(--mg-text)}
+dialog.mg-dialog table {width:100%;border-collapse:collapse}
+dialog.mg-dialog :is(th, td) {padding:12px;border-bottom:1px solid #3ef0ff22}
+dialog.mg-dialog th {background:#020a1444;color:var(--mg-dim);font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1px;text-transform:uppercase}
+dialog.mg-dialog tr:hover td {background:#3ef0ff08}
+dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:transparent}
+#import-dialog .wiz-steps {gap:8px;padding:16px 24px;background:#020a1444;border-color:#3ef0ff22}
+#import-dialog .wiz-steps li {font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mg-dim);gap:8px}
+#import-dialog .wiz-steps b {width:32px;height:32px;border:1px solid #3ef0ff44;background:#020a14;color:var(--mg-dim)}
+#import-dialog .wiz-steps li::after {background:linear-gradient(90deg,#3ef0ff66,#b49bff33);box-shadow:0 0 8px #3ef0ff33}
+#import-dialog .wiz-steps :is(.on, .done) b {border-color:#3ef0ff;background:#3ef0ff18;color:#eaffff;box-shadow:0 0 12px #3ef0ff44,inset 0 0 8px #3ef0ff22}
+#import-dialog .wiz-steps li.on {color:#eaffff}
+#log-dialog.mg-dialog :is(pre, .code) {background:#020a14cc;color:#bff6ff;border:1px solid #3ef0ff33;white-space:pre-wrap;overflow-wrap:anywhere}
+#log-dialog.mg-dialog :is(.kv, .import-log-kpis) {min-width:0;gap:12px}
+#log-dialog.mg-dialog :is(dt, dd) {min-width:0;overflow-wrap:anywhere}
+
+/* Quiet, consistent spacing and compact status pills. */
+#page-migrate :is(h3, .mg-builtin-label) {font:600 11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.5px;margin-bottom:16px}
+#page-migrate .mg-source-summary {gap:24px}
+#page-migrate .mg-source-summary b {font-size:24px}
+#page-migrate .mg-source-card {padding:16px;gap:16px}
+#page-migrate .mg-source-name h4 {font-size:16px}
+#page-migrate .mg-source-badge {width:48px;height:48px}
+#page-migrate .mg-source-badge svg {width:28px;height:28px}
+#page-migrate .mg-source-state {align-self:start;border:1px solid currentColor;border-radius:24px;padding:4px 12px;background:#89aaca0c;color:#a4b7cb}
+#page-migrate .ok .mg-source-state {color:#6dffb3;background:#6dffb30c}
+#page-migrate .bad .mg-source-state {color:#ff6b7a;background:#ff6b7a0c}
+#page-migrate .testing .mg-source-state {color:#3ef0ff}
+#page-migrate .mg-source-failure {display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.6}
+#page-migrate .mg-go {margin-top:16px;gap:8px}
+#page-migrate #migrate-selected {margin-bottom:0}
+#page-migrate :is(.toolbar, .mg-source-tools, .mg-source-card>footer) {gap:8px}
+:is(#page-migrate, dialog.mg-dialog) :is(#uploads-progress, #source-test-results, #saved-source-test-results, #log-fetch-error, #import-capacity, #import-submit-status, #p2v-os-hint):empty {display:none}
+:is(#page-migrate, dialog.mg-dialog) .badge {border:1px solid currentColor;padding:4px 8px;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:#89aaca0c;color:#a4b7cb}
+:is(#page-migrate, dialog.mg-dialog) .badge:is(.running, .done, .online, .ready) {color:#6dffb3;background:#6dffb312}
+:is(#page-migrate, dialog.mg-dialog) .badge:is(.queued, .waiting, .uploading) {color:#ffcb66;background:#ffcb6612}
+:is(#page-migrate, dialog.mg-dialog) .badge:is(.failed, .offline, .cancelled) {color:#ff6b7a;background:#ff6b7a12}
+#page-migrate .table-wrap {max-width:100%;min-width:0}
+#page-migrate table {width:100%}
+#page-migrate td {max-width:280px;overflow-wrap:anywhere}
+#page-migrate progress {width:100%;max-width:100%;min-width:80px}
+
+@media(max-width:720px) {
+  #page-migrate .mg-command {padding:12px;gap:0;border-radius:12px}
+  #page-migrate #migrate-tabs {width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  #page-migrate #migrate-tabs button {padding:8px;font-size:10px;letter-spacing:.5px}
+  #page-migrate .mg-os-tabs {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  #page-migrate .mg-os-tabs button {flex-wrap:wrap;padding:8px;letter-spacing:.3px}
+  #page-migrate .mg-os-tabs small {margin:0}
+  #page-migrate .mg-panel {padding:12px}
+  #page-migrate .toolbar {min-width:0;gap:12px}
+  #page-migrate .toolbar>label {max-width:100%;min-width:0;flex-wrap:wrap}
+  #page-migrate .toolbar .spacer {display:none}
+  #page-migrate .mg-source-command {gap:16px}
+  #page-migrate .mg-source-summary {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;gap:8px;font-size:8px;letter-spacing:0}
+  #page-migrate .mg-source-summary b {font-size:20px}
+  #page-migrate .mg-source-tools {width:100%}
+  #page-migrate .mg-source-tools button {flex:1}
+  #page-migrate .mg-chip {width:100%;overflow-wrap:anywhere;min-width:0}
+  #page-migrate .mg-chip small {width:auto;text-align:left}
+  #page-migrate #p2v-command-meta {margin:8px 0;overflow-wrap:anywhere}
+  #page-migrate #p2v-code {padding:12px}
+  #page-migrate .mg-go>.primary {width:100%}
+  dialog.mg-dialog :is(header, footer, .body) {padding:16px}
+  dialog.mg-dialog .form-grid {grid-template-columns:minmax(0,1fr);gap:16px}
+  dialog.mg-dialog .mg-help {margin:0 16px 16px}
+  dialog.mg-dialog footer button {flex:1}
+  dialog.mg-dialog :is(input:not([type="checkbox"]), select, textarea) {font-size:16px}
+  #import-dialog .wiz-steps {padding:16px;gap:8px}
+  #import-dialog .wiz-steps li {flex-direction:column;position:relative;text-align:center;white-space:normal;font-size:9px;line-height:1.5}
+  #import-dialog .wiz-steps li::after {position:absolute;top:16px;left:calc(50% + 20px);width:calc(100% - 32px);min-width:0}
+  #log-dialog.mg-dialog .kv {grid-template-columns:minmax(0,1fr)}
+}
+@media(prefers-reduced-motion:reduce) {
+  :is(#page-migrate, dialog.mg-dialog),
+  :is(#page-migrate, dialog.mg-dialog) *,
+  :is(#page-migrate, dialog.mg-dialog) *::before,
+  :is(#page-migrate, dialog.mg-dialog) *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+/* Keep the workload picker above the fold on narrow screens. */
+@media(max-width:720px) {
+  #page-migrate .mg-flow {grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:16px}
+  #page-migrate .mg-beam {display:none}
+  #page-migrate .mg-stage {height:auto;min-height:144px;padding:8px;gap:8px}
+  #page-migrate .mg-stage h3 {font-size:9px;letter-spacing:.3px;margin:0}
+  #page-migrate .mg-stage .art svg {height:48px}
+  #page-migrate .mg-stage .meta {font-size:9px;line-height:1.5;gap:4px}
+}
+
+/* Source workload view: one selection shared by cards and the hologram table. */
+#page-migrate .mg-view-switch {display:inline-flex;flex:none;gap:0;border:1px solid #3ef0ff55;clip-path:var(--mg-cut);background:#020a1466}
+#page-migrate .mg-view-switch button {width:38px;min-height:36px;padding:8px;border:0;clip-path:none;background:transparent;color:var(--mg-dim);letter-spacing:0}
+#page-migrate .mg-view-switch button+button {border-left:1px solid #3ef0ff33}
+#page-migrate .mg-view-switch button[aria-pressed="true"] {color:#eaffff;background:#3ef0ff22;box-shadow:inset 0 -2px var(--mg-cyan),inset 0 0 16px #3ef0ff18}
+#page-migrate .mg-view-switch svg {width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round}
+#page-migrate #source-vms.mg-list {display:block;max-width:100%;min-width:0;overflow-x:auto;border:1px solid #3ef0ff22;background:#020a1422}
+#page-migrate .mg-vm-table {border-collapse:collapse;width:100%;background:transparent;font-size:12px}
+#page-migrate .mg-vm-table :is(thead,tbody,tr,th,td) {background:transparent}
+#page-migrate .mg-vm-table :is(th,td) {padding:12px 10px;border:0;border-bottom:1px solid #3ef0ff1a;text-align:left;vertical-align:middle}
+#page-migrate .mg-vm-table th {color:var(--mg-dim);font:600 10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:1px;white-space:nowrap}
+#page-migrate .mg-vm-table th button {min-height:28px;padding:4px 0;border:0;clip-path:none;background:transparent;box-shadow:none;color:inherit;font:inherit;letter-spacing:inherit;white-space:nowrap}
+#page-migrate .mg-vm-table th button:focus-visible {outline-offset:0}
+#page-migrate .mg-vm-table td {color:var(--mg-text)}
+#page-migrate .mg-vm-table td:not(:nth-child(2)) {white-space:nowrap}
+#page-migrate .mg-vm-table tr:last-child td {border-bottom:0}
+#page-migrate .mg-vm-row {cursor:pointer}
+#page-migrate .mg-vm-row:hover td {background:#3ef0ff08}
+#page-migrate .mg-vm-row.selected td {background:#3ef0ff12}
+#page-migrate .mg-vm-row.selected td:first-child {box-shadow:inset 2px 0 var(--mg-cyan)}
+#page-migrate .mg-vm-identity {display:flex;align-items:center;gap:10px;min-width:170px}
+#page-migrate .mg-vm-table small {display:block;margin-top:4px;font-size:10px;color:var(--mg-dim);white-space:normal}
+#page-migrate .mg-vm-table .badge {display:inline-flex;border-radius:24px}
+#page-migrate .mg-vm-table .actions {display:flex;gap:8px;flex-wrap:wrap}
+@media(max-width:799px) {
+  #page-migrate .mg-vm-table {min-width:860px}
+}
+
+/* Sources reuse the workload view switch, hologram panels and list table. */
+#page-migrate .mg-source-view-tools {justify-content:flex-end;margin-bottom:14px}
+#page-migrate #source-physical-machines {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+#page-migrate :is(#sources,#source-physical-machines).mg-source-list {display:block;min-width:0;max-width:100%;overflow-x:auto;border:1px solid #3ef0ff22;background:#020a1422}
+#page-migrate .mg-source-list-icon {display:inline-flex;width:30px;height:30px}
+#page-migrate .mg-source-list-icon svg {width:100%;height:100%}
+#page-migrate .mg-source-list-path {display:block;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#page-migrate #source-physical-machines .badge {display:inline-flex;border-radius:24px}
+#page-migrate .badge.mg-imported {color:#c5a4ff;border-color:#c5a4ff66;background:#c5a4ff18}
+#page-migrate .mg-agent-hologram {display:grid;place-items:center;width:90px;height:90px;margin:24px auto;border:1px solid #3ef0ff66;clip-path:var(--mg-cut);background:#3ef0ff0d;filter:drop-shadow(0 0 12px #3ef0ff55);color:var(--mg-cyan)}
+#page-migrate .mg-agent-hologram svg {width:54px;height:54px}
+#page-migrate #source-physical-machines progress {display:block;min-width:100px;width:100%;margin-top:8px}
+@media(max-width:1299px){#page-migrate #source-physical-machines{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:799px){#page-migrate #source-physical-machines{grid-template-columns:1fr}}
+
+/* Destination cards in the migration wizard. */
+.mg-dialog .mg-vm-target { margin: 14px 0; padding: 14px; border: 1px solid rgba(80,210,230,.25); border-radius: 12px; background: rgba(25,100,130,.06); }
+.mg-dialog .mg-vm-target h4 { margin: 0 0 10px; }
+.mg-dialog .mg-vm-target table { width: 100%; }
+.mg-dialog .mg-vm-target input[type="number"] { width: 100px; }
+.mg-dialog .mg-resize-badge { font-size: .75rem; letter-spacing: .06em; color: var(--accent); }

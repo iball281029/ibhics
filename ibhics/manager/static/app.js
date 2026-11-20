@@ -648,38 +648,81 @@ async function renderOps() {
 }
 
 const P2V_STATE = { waiting: "Waiting for the agent", uploading: "Copying disks", ready: "Ready to import", imported: "Imported", failed: "Failed" };
+let p2vSessions = [], p2vCheckedAt = null;
 async function renderP2V() {
   const local = (state.cluster?.members || []).find((m) => m.local);
   const select = $("#p2v-pool");
   const keep = select.value;
   select.innerHTML = state.pools.filter((p) => p.active && (!local || p.node === local.name) && !["lvm", "iscsi"].includes(p.type))
     .map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))}</option>`).join("");
-  if (keep) select.value = keep;
+  if ([...select.options].some((o) => o.value === keep)) select.value = keep;
   const sessions = await api("/p2v/sessions");
+  p2vSessions = sessions;
+  p2vCheckedAt = Date.now();
+  renderPhysicalSources();
   $("#p2v-rows").innerHTML = sessions.length ? sessions.map((s) => {
     const m = s.machine || {};
     const disks = (m.disks || []).map((d) => `${esc(d.name)} ${Math.ceil(d.size_bytes / 2 ** 30)} GiB`).join(", ");
     return `<tr><td class="vm-name">${esc(m.hostname || "—")}<div class="vm-sub">${esc(m.os || `session ${s.id}`)}</div></td>
       <td><span class="badge ${s.state === "ready" ? "done" : s.state === "failed" ? "failed" : "running"}">${esc(P2V_STATE[s.state] || s.state)}</span>${s.state === "uploading" ? ` ${s.percent}%` : ""}</td>
       <td>${m.cpus ? `${m.cpus} vCPU · ${Math.round(m.memory_mb / 1024)} GB` : "—"}</td><td>${disks || "—"}</td><td>${esc(s.pool)}</td><td>${esc(when(s.created))}</td>
-      <td class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></td></tr>`;
+      <td>${s.state === "uploading" || s.state === "ready" ? `<progress max="100" value="${s.state === "ready" ? 100 : Math.max(0, Math.min(100, Number(s.percent) || 0))}" aria-label="Disk copy progress"></progress>` : ""}<span class="operator-only"><button type="button" class="small danger" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></span></td></tr>`;
   }).join("") : empty(7, "No physical machines yet. Create an agent command to start.");
 }
+let p2vDownload = null;
+let p2vBaseCommand = "", p2vOs = "apt";
+function renderP2VCommand() {
+  const prefixes = { apt: "sudo apt-get install -y curl gzip && ", rhel: "sudo dnf install -y curl gzip || sudo yum install -y curl gzip; ", suse: "sudo zypper -n install curl gzip && " };
+  let command = p2vBaseCommand;
+  // Preserve all API-issued agent arguments, including its certificate pin.
+  if (p2vOs === "other") command = command.replace(/^curl -fsS (?:--pinnedpubkey '[^']+' )?-k (\S+) \|/, "wget --no-check-certificate -qO- $1 |");
+  $("#p2v-code").textContent = command ? (prefixes[p2vOs] || "") + command : "";
+  $("#p2v-os-hint").textContent = p2vOs === "other" ? "wget downloads the script without certificate verification. The agent still requires curl, gzip, bash, dd and lsblk to upload disks; install curl first if missing. The API-issued pin remains on agent uploads." : "Installs curl and gzip before starting the API-issued agent command.";
+  const windows = p2vOs === "windows";
+  // Windows gets a program to download, Linux a command to paste: say which.
+  $("#p2v-open").textContent = windows ? "Create Windows agent" : "Create agent command";
+  $("#p2v-step2").textContent = windows ? "② WINDOWS AGENT (.EXE)" : "② AGENT COMMAND";
+  $("#p2v-linux").hidden = windows;
+  $("#p2v-windows").hidden = !windows;
+  $("#p2v-linux").setAttribute("aria-labelledby", $(`[data-p2v-os="${p2vOs}"]`).id);
+  $$("[data-p2v-os]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.p2vOs === p2vOs)));
+}
+$$("[data-p2v-os]").forEach((tab) => tab.addEventListener("click", () => { p2vOs = tab.dataset.p2vOs; renderP2VCommand(); }));
 $("#p2v-open").addEventListener("click", async () => {
   try {
     const r = await post("/p2v/sessions", { pool: $("#p2v-pool").value });
-    $("#p2v-code").textContent = r.command;
+    p2vDownload = { url: r.windows_agent_url, token: r.agent_token, sid: r.session.id };
+    p2vBaseCommand = r.command;
+    $("#p2v-command-meta").textContent = `valid 24 h · one machine · storage: ${r.session.pool || $("#p2v-pool").value}`;
+    renderP2VCommand();
     $("#p2v-command").hidden = false;
     await renderP2V();
   } catch (err) { fail(err); }
 });
+$("#p2v-download").addEventListener("click", async () => {
+  if (!p2vDownload) return;
+  const download = p2vDownload;
+  try {
+    const r = await fetch(download.url, { headers: { "X-P2V-Token": download.token } });
+    if (r.status === 401) return toLogin();
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ibhics-p2v-${download.sid}.exe`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (err) { fail(err); }
+});
 $("#p2v-copy").addEventListener("click", () => navigator.clipboard.writeText($("#p2v-code").textContent).then(() => toast("Command copied")).catch(fail));
 $("#p2v-refresh").addEventListener("click", () => renderP2V().catch(fail));
-$("#p2v-rows").addEventListener("click", (e) => {
+[$("#p2v-rows"), $("#source-physical-machines")].forEach((container) => container.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p2v-delete]");
   if (!b || !confirm("Remove this session and any disk data it received?")) return;
   del(`/p2v/sessions/${enc(b.dataset.p2vDelete)}`).then(renderP2V).catch(fail);
-});
+}));
 
 function logTime(seconds) {
   const n = Math.max(0, Math.floor(seconds || 0));
@@ -706,7 +749,7 @@ function importLogSummary(data) {
   const j = data.job;
   const rows = [["VM", `${j.vm} → ${j.name}`], ["Source", j.source], ["Node / pool", `${j.node} / ${j.pool}`],
     ["Status", JOB_STATE[j.state] || j.state], ["Started", when(j.created)], ["Elapsed", logTime(data.duration)],
-    ["Finished", j.finished ? when(j.finished) : "—"], ["Detected OS", data.os || "—"], ["Disks", data.disks || "—"]];
+    ["Finished", j.finished ? when(j.finished) : "—"], ["Detected OS", data.os || "—"], ["Disks", data.disks || "—"], ["Disk targets", j.disks?.map((d, i) => `Disk ${i + 1}: ${d.pool || j.pool} / ${d.size_gb || "Original"} GiB`).join(", ") || "Original"]];
   const messages = (key, title) => data[key]?.length ? `<section class="import-${key}"><h4>${title}</h4><ul>${data[key].map((v) => `<li>${esc(v)}</li>`).join("")}</ul></section>` : "";
   return `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
     <h4>Timeline</h4>${importTimeline(data)}${messages("warnings", "Warnings")}${messages("errors", "Errors")}${messages("notes", "Notes")}`;
@@ -717,6 +760,7 @@ async function showLog(id, title) {
   clearTimeout(logTimer);
   $("#log-title").textContent = `Import log: ${title}`;
   const dlg = $("#log-dialog"), body = $("#import-log-body"), pre = $("#log-text");
+  dlg.classList.toggle("mg-dialog", currentPage() === "migrate");
   $("#log-summary").textContent = "Loading…";
   $("#log-fetch-error").textContent = "";
   $("#log-raw").open = false;
@@ -4563,29 +4607,192 @@ handlers["restore-dialog"] = async (f) => {
 
 // ---------- migrate ----------
 
-function renderSources() {
-  const admin = isAdmin();
-  $("#sources").innerHTML = state.sources.length ? state.sources.map((s) => {
-    const st = s.settings;
-    const where = ["vmware", "kvm", "nutanix", "sangfor"].includes(s.type) ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
-      : s.type === "upload" ? "Files uploaded with Import VMs → Upload files" : st.path;
-    return `<tr>
-      <td><div class="name-cell">${avatar("i-migrate")}<span class="vm-name">${esc(s.name)}</span></div></td>
-      <td><span class="badge info plain">${esc(SOURCE_TYPES[s.type] || s.type)}</span></td>
-      <td class="vm-sub" style="display:table-cell">${esc(where)}</td>
-      <td>${esc(st.username || "–")}</td>
-      <td><div class="actions">${canOperate() ? `<button class="small" data-source-test="${esc(s.name)}">Test</button>` : ""}${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
-    </tr>`;
-  }).join("") : empty(5, "No sources yet. Add an ESXi host, a vCenter or a folder of exports.");
+// Status is based only on an observed inventory read or connection test this visit.
+const migrateSourceStatus = new Map();
+// Keep the destination line under the Migrate button in step with the wizard.
+$("#import-form").addEventListener("change", () => renderMigrateSummary());
+$("#import-dialog").addEventListener("close", () => renderMigrateSummary());
+function renderMigrateSummary() {
+  const name = $("#browse-source").value;
+  const source = state.sources.find((s) => s.name === name);
+  $("#source-chips").innerHTML = state.sources.map((s) => {
+    const status = migrateSourceStatus.get(s.name);
+    return `<button type="button" class="mg-chip ${status?.ok === true ? "ok" : status?.ok === false ? "bad" : "unknown"}" data-browse-source="${esc(s.name)}" aria-pressed="${s.name === name}" title="${esc(status?.label || "Not tested this visit")}"><i aria-hidden="true"></i>${esc(s.name)} · ${esc(SOURCE_TYPES[s.type] || s.type)}<small>${esc(status?.label || "Not tested")}</small></button>`;
+  }).join("") || '<p class="hint">Add a source in the Sources tab to begin.</p>';
+  $("#mg-source-meta").textContent = source ? `${source.name} · ${SOURCE_TYPES[source.type] || source.type}` : "Select a source";
+  $("#mg-vm-count").textContent = sourceVMsFor === name ? `${sourceVMs.length} VMs` : "— VMs";
+  $("#mg-running").textContent = `${state.imports.filter((j) => ["queued", "running"].includes(j.state)).length} active`;
+  const members = state.cluster?.members || [];
+  $("#mg-nodes").textContent = members.map((m) => m.name).join(" · ") || "No cluster nodes available";
+  $("#mg-node-count").textContent = `${members.length} nodes`;
+  const f = $("#import-form").elements;
+  const pool = state.pools.find((p) => p.active && computeMembers().some((m) => m.healthy && m.name === p.node));
+  $("#mg-write").textContent = `WRITE · ${f.pool.value || pool?.name || "select storage"}`;
+  $("#mg-destination").textContent = f.node.value && f.pool.value
+    ? `to ${f.node.value} · ${f.pool.value} · network ${[...importBatch.networks.values()].join(", ") || "default"}`
+    : pool ? `Suggested: ${pool.node} · ${pool.name} · network default — confirm in wizard` : "Choose destination in the import wizard";
 }
+$("#source-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-browse-source]");
+  if (!chip) return;
+  $("#browse-source").value = chip.dataset.browseSource;
+  $("#browse-source").dispatchEvent(new Event("change"));
+});
+
+// Original platform silhouettes, not vendor logos.
+const migrateSourceKinds = {
+  vmware: { label: "VMware ESXi / vCenter", art: '<rect x="4" y="5" width="20" height="13" rx="2"/><rect x="12" y="22" width="20" height="9" rx="2"/><path d="M14 18v8H8m16-15h7v11"/>' },
+  kvm: { label: "Proxmox / KVM", art: '<path d="m18 4 13 7-13 7L5 11Zm-13 14 13 7 13-7M5 25l13 7 13-7"/>' },
+  sangfor: { label: "Sangfor HCI", art: '<path d="m18 3 12 6v10c0 7-12 14-12 14S6 26 6 19V9Z"/><path d="M11 17h14m-14 6h14m-7-12v17"/>' },
+  nutanix: { label: "Nutanix AHV / Prism", art: '<path d="m18 3 14 8v14l-14 8-14-8V11Zm0 0v15m14-7-14 7-14-7m14 7v15"/><circle cx="18" cy="18" r="4"/>' },
+  ova: { label: "OVA folder", art: '<path d="M3 11V6h12l4 5h14v20H3Zm0 6h30M12 23l6-3 6 3-6 4Zm0 0v5l6 3 6-3v-5m-6 4v4"/>' },
+  disk: { label: "Disk image folder", art: '<rect x="5" y="4" width="26" height="28" rx="3"/><circle cx="18" cy="16" r="8"/><circle cx="18" cy="16" r="2"/><path d="m20 18 6 9M9 28h5"/>' },
+};
+function migrateSourceIcon(type) {
+  return `<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">${(migrateSourceKinds[type] || migrateSourceKinds.ova).art}</svg>`;
+}
+function userMigrateSources() {
+  return state.sources.filter((s) => !["uploads", "physical"].includes(s.name) && !["upload", "p2v"].includes(s.type));
+}
+// Source categories share the workload view controls and table styles.
+let sourceSection = "connections";
+const sourceViews = { connections: "cards", physical: "cards" };
+try {
+  if (localStorage.getItem("ibhics.migrate.sources.section") === "physical") sourceSection = "physical";
+  for (const section of Object.keys(sourceViews)) {
+    if (localStorage.getItem(`ibhics.migrate.sources.${section}.view`) === "list") sourceViews[section] = "list";
+  }
+} catch { /* private mode */ }
+function syncSourceSections() {
+  $$("[data-source-section]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.sourceSection === sourceSection)));
+  for (const section of Object.keys(sourceViews)) $("#source-" + section).hidden = section !== sourceSection;
+  $$("[data-source-view]").forEach((button) => button.setAttribute("aria-pressed", String(sourceViews[button.dataset.sourceView] === button.dataset.view)));
+}
+syncSourceSections();
+function renderSourceList(sources, admin, op) {
+  return `<table class="mg-vm-table" aria-label="Source connections"><thead><tr>${["Type", "Name", "Host / path", "User", "VMs", "Status", "Last test", "Actions"].map((label) => `<th scope="col">${label}</th>`).join("")}</tr></thead><tbody>${sources.map((s) => {
+    const st = s.settings || {}, status = migrateSourceStatus.get(s.name);
+    const where = [st.host, st.path].filter(Boolean).join(" / ");
+    const label = status?.testing ? "Testing…" : status?.ok === true ? "Connected" : status?.ok === false ? "Failed" : "Not tested";
+    return `<tr aria-busy="${!!status?.testing}"><td><span class="mg-source-list-icon kind-${esc(s.type)}" title="${esc(migrateSourceKinds[s.type]?.label || s.type)}">${migrateSourceIcon(s.type)}</span></td><td>${esc(s.name)}</td><td><span class="mg-source-list-path" title="${esc(where)}">${esc(where || "Not provided")}</span></td><td>${esc(st.username || (s.type === "kvm" ? "root (SSH)" : "Not required"))}</td><td>${status?.vmCount ?? "Not loaded"}</td><td><span class="badge ${status?.ok === true ? "done" : status?.ok === false ? "failed" : "plain"}" title="${esc(status?.failure || status?.label || label)}">${label}</span></td><td>${status?.testedAt ? `${esc(new Date(status.testedAt).toLocaleString())} · ${status.testOK ? "Passed" : "Failed"}` : "Not tested"}</td><td><div class="actions"><button type="button" data-source-browse="${esc(s.name)}">Browse</button>${op ? `<button type="button" data-source-test="${esc(s.name)}" ${status?.testing || sourceTestAllRunning ? "disabled" : ""}>Test</button>` : ""}${admin ? `<button type="button" class="danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td></tr>`;
+  }).join("")}</tbody></table>`;
+}
+function renderPhysicalSources() {
+  const container = $("#source-physical-machines"), sessions = p2vSessions.filter((s) => s.machine?.hostname);
+  const list = sourceViews.physical === "list";
+  container.classList.toggle("mg-source-list", list && !!sessions.length);
+  if (!sessions.length) {
+    container.innerHTML = `<div class="mg-source-empty mg-panel"><span class="mg-eyebrow">PHYSICAL LINK / AWAITING AGENT</span><div class="mg-agent-hologram" aria-hidden="true">${migrateSourceIcon("disk")}</div><h4>No physical machines connected</h4><p>Create an agent and run it on a physical machine. It appears here once its inventory arrives.</p><button type="button" data-source-tab="p2v">PHYSICAL MACHINES →</button></div>`;
+    return;
+  }
+  const rows = sessions.map((s) => {
+    const m = s.machine, disks = m.disks || [], percent = Math.max(0, Math.min(100, Number(s.percent) || 0));
+    const badge = `<span class="badge ${s.state === "ready" ? "done" : s.state === "imported" ? "mg-imported" : s.state === "failed" ? "failed" : "running"}" title="${esc(s.error || "")}">${esc(s.state === "uploading" ? `Copying · ${percent}%` : { ready: "Ready", imported: "Imported", failed: "Failed" }[s.state] || P2V_STATE[s.state] || s.state)}</span>`;
+    const progress = s.state === "uploading" ? `<progress max="100" value="${percent}" aria-label="Disk copy progress"></progress>` : "";
+    const specs = [m.hostname, m.os || "—", (m.firmware || "—").toUpperCase(), `${m.cpus || "—"} CPU · ${gbText(m.memory_mb || 0)}`, `${disks.length} · ${(disks.reduce((sum, d) => sum + (Number(d.size_bytes) || 0), 0) / 2 ** 30).toFixed(1)} GiB`, s.pool || "—"];
+    // The existing API exposes creation time, but no agent heartbeat timestamp.
+    const checked = p2vCheckedAt ? new Date(p2vCheckedAt).toLocaleString() : "—";
+    const actions = canOperate() ? `<button type="button" data-physical-import="${esc(s.id)}" ${s.state === "ready" ? "" : "disabled"}>Import</button><button type="button" class="danger" data-p2v-delete="${esc(s.id)}">${["uploading", "waiting"].includes(s.state) ? "Cancel" : "Remove"}</button>` : "";
+    if (list) return `<tr>${specs.map((value) => `<td>${esc(value)}</td>`).join("")}<td>${badge}${progress}</td><td title="Time this session was fetched; agent report time is unavailable">${esc(checked)}</td><td><div class="actions">${actions}</div></td></tr>`;
+    return `<article class="mg-source-card mg-panel"><header><div class="mg-source-badge">${migrateSourceIcon("disk")}</div><div class="mg-source-name"><h4>${esc(m.hostname)}</h4><span>${esc(m.os || "OS not reported")}</span></div></header><div>${badge}${progress}</div><dl class="mg-source-data">${["FIRMWARE", "CPU / RAM", "DISKS", "DESTINATION STORAGE"].map((label, i) => `<div><dt>${label}</dt><dd title="${esc(specs[i + 2])}">${esc(specs[i + 2])}</dd></div>`).join("")}<div><dt>LAST CHECKED</dt><dd title="Agent report time is unavailable">${esc(checked)}</dd></div></dl>${s.error ? `<div class="mg-source-failure">${esc(s.error)}</div>` : ""}<footer>${actions}</footer></article>`;
+  }).join("");
+  container.innerHTML = list ? `<table class="mg-vm-table" aria-label="Physical agent machines"><thead><tr>${["Machine", "OS", "Firmware", "CPU / RAM", "Disks · total", "Destination storage", "Status", "Last checked", "Actions"].map((label) => `<th scope="col">${label}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>` : rows;
+}
+
+let sourceTestAllRunning = false;
+function renderSources() {
+  renderMigrateSummary();
+  const sources = userMigrateSources(), admin = isAdmin(), op = canOperate();
+  const connected = sources.filter((s) => migrateSourceStatus.get(s.name)?.ok === true).length;
+  const failed = sources.filter((s) => migrateSourceStatus.get(s.name)?.ok === false).length;
+  $("#source-summary").innerHTML = `<span><b>${sources.length}</b> SOURCES</span><span class="ok"><b>${connected}</b> CONNECTED</span><span class="bad"><b>${failed}</b> FAILED</span><span><b>${sources.length - connected - failed}</b> UNTESTED</span>`;
+  $("#test-all-sources").hidden = !op;
+  $("#test-all-sources").disabled = sourceTestAllRunning || !sources.length || sources.some((s) => migrateSourceStatus.get(s.name)?.testing);
+  $("#test-all-sources").textContent = sourceTestAllRunning ? "Testing sources…" : "Test all";
+  $("#sources").classList.toggle("mg-source-list", sourceViews.connections === "list");
+  $("#sources").innerHTML = sources.length && sourceViews.connections === "list" ? renderSourceList(sources, admin, op) : sources.length ? sources.map((s) => {
+    const st = s.settings || {}, status = migrateSourceStatus.get(s.name);
+    const where = [st.host, st.path].filter(Boolean).join(" / ");
+    const test = status?.testedAt ? `${new Date(status.testedAt).toLocaleString()} · ${status.testOK ? "Passed" : "Failed"}` : "Not tested";
+    return `<article class="mg-source-card mg-panel ${status?.ok === true ? "ok" : status?.ok === false ? "bad" : "unknown"} ${status?.testing ? "testing" : ""}" aria-busy="${!!status?.testing}">
+      <header><div class="mg-source-badge kind-${esc(s.type)}">${migrateSourceIcon(s.type)}</div><div class="mg-source-name"><h4>${esc(s.name)}</h4><span>${esc(migrateSourceKinds[s.type]?.label || s.type)}</span></div></header>
+      <div class="mg-source-state" title="${esc(status?.label || "Not tested this visit")}">${status?.testing ? "Testing…" : status?.ok === true ? "Connected" : status?.ok === false ? "Failed" : "Not tested"}</div>
+      <dl class="mg-source-data"><div><dt>HOST / PATH</dt><dd class="mg-source-path" title="${esc(where)}">${esc(where || "Not provided")}</dd></div><div><dt>USER</dt><dd title="${esc(st.username || "")}">${esc(st.username || (s.type === "kvm" ? "root (SSH)" : "Not required"))}</dd></div><div><dt>VMs</dt><dd>${status?.vmCount ?? "Not loaded"}</dd></div><div><dt>LAST TEST</dt><dd>${esc(test)}</dd></div></dl>
+      ${status?.ok === false ? `<div class="mg-source-failure" title="${esc(status.failure || "Connection failed")}">${esc(status.failure || "Connection failed")}${status.node ? ` · Node: ${esc(status.node)}` : ""}</div>` : ""}
+      <footer><button type="button" data-source-browse="${esc(s.name)}">Browse VMs →</button>${op ? `<button type="button" data-source-test="${esc(s.name)}" ${status?.testing || sourceTestAllRunning ? "disabled" : ""}>Test</button>` : ""}${admin ? `<button type="button" class="danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</footer>
+    </article>`;
+  }).join("") : `<div class="mg-source-empty mg-panel"><span class="mg-eyebrow">SOURCE LINK / AWAITING CONNECTION</span><h4>Connect your first source</h4><p>Link a hypervisor or export folder to discover workloads for migration.</p>${admin ? '<button type="button" class="primary" data-open="source-dialog">+ ADD SOURCE</button>' : '<p>Ask an administrator to add a source.</p>'}<div class="mg-source-supported">${Object.entries(migrateSourceKinds).map(([type, kind]) => `<span class="kind-${type}" title="${kind.label}">${migrateSourceIcon(type)}<small>${kind.label}</small></span>`).join("")}</div></div>`;
+}
+$("#tab-sources").addEventListener("click", async (e) => {
+  const section = e.target.closest("[data-source-section]");
+  const view = e.target.closest("[data-source-view]");
+  if (section) {
+    sourceSection = section.dataset.sourceSection;
+    try { localStorage.setItem("ibhics.migrate.sources.section", sourceSection); } catch { /* private mode */ }
+    syncSourceSections();
+  }
+  if (view) {
+    sourceViews[view.dataset.sourceView] = view.dataset.view;
+    try { localStorage.setItem(`ibhics.migrate.sources.${view.dataset.sourceView}.view`, view.dataset.view); } catch { /* private mode */ }
+    syncSourceSections(); renderSources(); renderPhysicalSources();
+  }
+  const physicalImport = e.target.closest("[data-physical-import]");
+  if (physicalImport && canOperate() && p2vSessions.some((s) => s.id === physicalImport.dataset.physicalImport && s.state === "ready")) {
+    physicalImport.disabled = true;
+    try {
+      selectTab("migrate-tabs", "import");
+      $("#browse-source").value = "physical";
+      await renderSourceVMs();
+      if (sourceVMsFor !== "physical") return;
+      const index = sourceVMs.findIndex((vm) => vm.ref === physicalImport.dataset.physicalImport);
+      if (index < 0) { toast("This machine is no longer ready. Refresh the physical sessions."); return; }
+      migratePicked.clear(); migratePicked.add(index);
+      renderMigrateInventory();
+    } catch (err) { fail(err); } finally { physicalImport.disabled = false; }
+  }
+  const browse = e.target.closest("[data-source-browse]");
+  if (browse) {
+    selectTab("migrate-tabs", "import");
+    $("#browse-source").value = browse.dataset.sourceBrowse;
+    $("#browse-source").dispatchEvent(new Event("change"));
+  }
+  const tab = e.target.closest("[data-source-tab]");
+  if (tab) selectTab("migrate-tabs", tab.dataset.sourceTab);
+});
+$("#test-all-sources").addEventListener("click", async () => {
+  if (!canOperate() || sourceTestAllRunning) return;
+  sourceTestAllRunning = true;
+  renderSources();
+  try {
+    for (const source of userMigrateSources()) {
+      await runSourceTest(source.name, document.createElement("div"));
+    }
+  } finally { sourceTestAllRunning = false; renderSources(); }
+});
 
 let sourceVMs = [];
 let sourceVMsFor = null;  // the source the list above was read from
 const migratePicked = new Set();
 let sourceReadGeneration = 0;
+let migrateView = "cards";
+try { if (localStorage.getItem("ibhics.migrate.view") === "list") migrateView = "list"; } catch { /* private mode */ }
+let migrateSort = { key: null, direction: 1 };
+function syncMigrateView() {
+  $("#source-vms").classList.toggle("mg-list", migrateView === "list");
+  $$("[data-migrate-view]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.migrateView === migrateView)));
+}
+syncMigrateView();
+$$("[data-migrate-view]").forEach((button) => button.addEventListener("click", () => {
+  migrateView = button.dataset.migrateView;
+  try { localStorage.setItem("ibhics.migrate.view", migrateView); } catch { /* private mode */ }
+  syncMigrateView();
+  if (sourceVMsFor) renderMigrateInventory();
+}));
 function migrateSelection() {
   $("#migrate-selected").disabled = !canOperate() || !migratePicked.size || !sourceVMsFor;
-  $("#migrate-selected").textContent = `Migrate selected (${migratePicked.size})`;
+  $("#migrate-selected").textContent = `MIGRATE ${migratePicked.size} SELECTED`;
+  $$("#source-vms .mg-vm, #source-vms .mg-vm-row").forEach((card) => card.classList.toggle("selected", !!$("[data-migrate-pick]", card)?.checked));
+  renderMigrateSummary();
   const all = $("#migrate-select-all");
   all.checked = sourceVMs.length > 0 && migratePicked.size === sourceVMs.length;
   all.indeterminate = migratePicked.size > 0 && !all.checked;
@@ -4594,12 +4801,23 @@ function connectionChecks(result) {
   return `<ol>${result.checks.map((c) => `<li class="${c.ok ? "check-ok" : "check-failed"}"><strong>${c.ok ? "✓" : "✗"} ${esc(c.step)}</strong><div>${esc(c.detail)}</div>${c.hint ? `<p>${esc(c.hint)}</p>` : ""}</li>`).join("")}</ol>`;
 }
 async function runSourceTest(name, box) {
+  if (migrateSourceStatus.get(name)?.testing) return;
   box.innerHTML = "Testing connection…";
+  migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), testing: true });
+  renderSources();
   try {
     const result = await post(`/migrate/sources/${enc(name)}/test`, {});
+    const failed = result.checks.find((c) => !c.ok && c.step !== "TCP 902");
+    const ok = !failed;
+    const label = `Tested ${new Date().toLocaleTimeString()}: ${ok ? "passed" : "failed"}`;
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), testing: false, ok, label, testLabel: label, testedAt: Date.now(), testOK: ok, failure: failed ? `${failed.step} failed` : "", node: result.node });
+    renderSources();
     box.innerHTML = connectionChecks(result);
     return result;
-  } catch (err) { box.textContent = err.message; }
+  } catch (err) {
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), testing: false, ok: false, label: "Connection test failed", testLabel: "Connection test failed", testedAt: Date.now(), testOK: false, failure: "Connection test request failed", node: null });
+    renderSources(); box.textContent = err.message;
+  }
 }
 async function renderSourceVMs() {
   const name = $("#browse-source").value || state.sources[0]?.name;
@@ -4607,15 +4825,17 @@ async function renderSourceVMs() {
   const tbody = $("#source-vms"), error = $("#source-error");
   sourceVMs = []; sourceVMsFor = null; migratePicked.clear(); migrateSelection();
   error.hidden = true;
-  if (!name) { tbody.innerHTML = empty(9, "Add a source first (Sources tab)"); return; }
-  tbody.innerHTML = empty(9, "Reading the source…");
+  if (!name) { tbody.innerHTML = '<p class="mg-empty">Add a source first (Sources tab)</p>'; return; }
+  tbody.innerHTML = '<p class="mg-empty" role="status">Reading the source…</p>';
   try {
     const found = await api(`/migrate/sources/${enc(name)}/vms`);
     if (generation !== sourceReadGeneration) return;
     sourceVMs = found; sourceVMsFor = name;
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: true, label: "Inventory available", vmCount: found.length, failure: "" }); renderSources();
   } catch (err) {
     if (generation !== sourceReadGeneration) return;
-    tbody.innerHTML = empty(9, "Source inventory unavailable");
+    tbody.innerHTML = "";
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: false, label: "Inventory failed", failure: "VM inventory failed" }); renderSources();
     error.hidden = false;
     error.innerHTML = `<strong>Could not list VMs from ${esc(name)}</strong><p>Run the connection test to identify the failed step and how to fix it.</p><details><summary>Inventory error</summary><p>${esc(err.message)}</p></details><button type="button" data-source-test="${esc(name)}">Run connection test</button><div class="migrate-checks"></div>`;
     // Diagnose separately: inventory failures may be DNS, TCP, TLS, login or listing.
@@ -4627,19 +4847,57 @@ async function renderSourceVMs() {
     }
     return;
   }
-  const op = canOperate();
-  tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => `<tr>
-    <td><input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${op ? "" : "disabled"}></td>
-    <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip" title="${esc(vm.ref)}">${esc(vm.ref.split("/").pop())}</span></div></div></td>
-    <td>${vm.state ? `<span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state)}</span>` : "Unknown"}${vm.state === "running" ? '<span class="vm-sub">Power off at source first</span>' : ""}</td>
-    <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td>
-    <td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
-    <td>${esc(vm.firmware.toUpperCase())}</td>
-    <td>${esc(vm.guest_os || "–")}${vm.notes ? `<span class="vm-sub clip" title="${esc(vm.notes)}">${esc(vm.notes)}</span>` : ""}</td>
-    <td><div class="actions">${op ? `<button class="small primary" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads"
-      ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
-  </tr>`).join("") : empty(9, "No VMs found on this source");
+  renderMigrateInventory();
 }
+function renderMigrateInventory() {
+  const tbody = $("#source-vms"), op = canOperate();
+  if (migrateView === "list" && sourceVMs.length) {
+    const columns = [["name", "VM / OS"], [null, "Power"], ["vcpus", "vCPU"], ["memory_mb", "Memory"], ["disks", "Disks"], [null, "Firmware"]];
+    const diskSize = (vm) => vm.disks_gb.reduce((sum, size) => sum + (Number(size) || 0), 0);
+    const rows = sourceVMs.map((vm, i) => ({ vm, i }));
+    if (migrateSort.key) rows.sort((a, b) => {
+      const value = (vm) => migrateSort.key === "disks" ? diskSize(vm) : migrateSort.key === "name" ? String(vm.name) : Number(vm[migrateSort.key]) || 0;
+      const av = value(a.vm), bv = value(b.vm);
+      return (typeof av === "string" ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" }) : av - bv) * migrateSort.direction || a.i - b.i;
+    });
+    tbody.innerHTML = `<table class="mg-vm-table" aria-label="Source VMs"><thead><tr><th scope="col" aria-label="Select"></th>${columns.map(([key, label]) => `<th scope="col"${key ? ` aria-sort="${migrateSort.key === key ? migrateSort.direction === 1 ? "ascending" : "descending" : "none"}"` : ""}>${key ? `<button type="button" data-migrate-sort="${key}">${label}${migrateSort.key === key ? migrateSort.direction === 1 ? " ↑" : " ↓" : ""}</button>` : label}</th>`).join("")}<th scope="col">Actions</th></tr></thead><tbody>${rows.map(({ vm, i }) => `<tr class="mg-vm-row">
+      <td><input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${migratePicked.has(i) ? "checked" : ""} ${op ? "" : "disabled"}></td>
+      <td><div class="mg-vm-identity">${vxOs({ ...vm, os_type: vm.guest_os })}<span class="mg-vm-name"><b>${esc(vm.name)}</b><small>${esc(vm.guest_os || "OS not reported")}</small></span></div></td>
+      <td><span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state || "Unknown")}</span></td>
+      <td>${Number(vm.vcpus)}</td><td>${gbText(vm.memory_mb)}</td><td>${vm.disks_gb.length} · ${diskSize(vm)} GB${vm.disks_gb.some((g) => !g) ? " + ?" : ""}</td>
+      <td title="${esc(vm.notes || "")}">${esc((vm.firmware || "Unknown").toUpperCase())}${vm.state === "running" ? '<small>Power off at source first</small>' : ""}</td>
+      <td><div class="actions">${op ? `<button class="small" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads" ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
+    </tr>`).join("")}</tbody></table>`;
+    migrateSelection();
+    return;
+  }
+  tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => {
+    const kind = osKind(vm.guest_os || "");
+    return `<article class="mg-vm">
+      <label class="mg-vm-select"><span class="vx-os os-${kind.toLowerCase() || "other"}">${VX_OS_ART[kind] || VX_OS_ART[""]}</span>
+      <span class="mg-vm-name"><b>${esc(vm.name)}</b><small>${esc(vm.guest_os || "OS not reported")}</small></span>
+      <input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${migratePicked.has(i) ? "checked" : ""} ${op ? "" : "disabled"}></label>
+      <span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state || "Unknown")}</span>
+      <div class="mg-spec">${Number(vm.vcpus)} vCPU · ${gbText(vm.memory_mb)} · ${vm.disks_gb.length} disks · ${vm.disks_gb.map((g) => g ? `${g} GB` : "?").join(" + ")}</div>
+      <small class="mg-ref" title="${esc(vm.ref)}">${esc((vm.firmware || "").toUpperCase())} · ${esc(String(vm.ref).split("/").pop())}${vm.notes ? ` · ${esc(vm.notes)}` : ""}</small>
+      ${vm.state === "running" ? '<small>Power off at source first</small>' : ""}
+      <div class="actions">${op ? `<button class="small" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads" ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div>
+    </article>`;
+  }).join("") : '<p class="mg-empty">No VMs found on this source</p>';
+  migrateSelection();
+}
+$("#source-vms").addEventListener("click", (e) => {
+  const sort = e.target.closest("[data-migrate-sort]");
+  if (sort) {
+    migrateSort = { key: sort.dataset.migrateSort, direction: migrateSort.key === sort.dataset.migrateSort ? -migrateSort.direction : 1 };
+    renderMigrateInventory();
+    return;
+  }
+  const row = e.target.closest(".mg-vm-row");
+  if (!row || e.target.closest("button, input, a, label")) return;
+  const input = $("[data-migrate-pick]", row);
+  if (!input.disabled) input.click();
+});
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
 $("#source-vms").addEventListener("change", (e) => {
   const input = e.target.closest("[data-migrate-pick]");
@@ -4707,13 +4965,14 @@ function importElapsed(j) {
   return Number.isFinite(seconds) ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : "–";
 }
 function renderImports() {
+  renderMigrateSummary();
   $("#imports").innerHTML = state.imports.length ? state.imports.map((j) => `<tr>
     <td class="vm-sub" style="display:table-cell" title="${esc(j.vm)}">${esc(j.vm.split("/").pop())}</td><td>${esc(j.source)}</td>
-    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}<span class="vm-sub">Elapsed ${importElapsed(j)}</span></td>
+    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}${j.disks ? `<span class="vm-sub">${j.disks.map((d, i) => `Disk ${i + 1}: ${esc(d.pool || j.pool)} / ${d.size_gb || "Original"} GiB`).join("<br>")}</span>` : ""}${j.via ? `<span class="vm-sub">via ${esc(j.via)}</span>` : ""}</td><td>${esc(when(j.created))}<span class="vm-sub">Elapsed ${importElapsed(j)}</span></td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
     <td class="vm-sub" style="display:table-cell">${esc(j.error || j.step || "")}
       ${j.percent != null ? `<progress max="100" value="${Number(j.percent)}" aria-label="Migration progress"></progress> ${Number(j.percent)}%` : ""}
-      <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button></td></tr>`).join("") : empty(7, "No imports yet");
+      <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button>${canOperate() && ["queued", "running"].includes(j.state) ? `<button class="small danger" data-import-cancel="${esc(j.id)}">Cancel</button>` : ""}</td></tr>`).join("") : empty(7, "No imports yet");
 }
 
 async function openImportWizard(indices) {
@@ -4724,6 +4983,11 @@ async function openImportWizard(indices) {
 }
 $("#migrate-selected").addEventListener("click", () => openImportWizard([...migratePicked]).catch(fail));
 $("#page-migrate").addEventListener("click", async (e) => {
+  const cancel = e.target.closest("button[data-import-cancel]");
+  if (cancel && confirm("Cancel this import?")) {
+    cancel.disabled = true;
+    try { await post(`/migrate/jobs/${enc(cancel.dataset.importCancel)}/cancel`); await refresh("migrate"); } catch (err) { cancel.disabled = false; fail(err); }
+  }
   const imp = e.target.closest("button[data-import]");
   const rm = e.target.closest("button[data-source-del]");
   const test = e.target.closest("button[data-source-test]");
@@ -4792,42 +5056,119 @@ handlers["source-dialog"] = async (f) => {
 
 // Map the union of source networks, then rebuild each VM's NIC array in NIC order.
 const importForm = $("#import-form");
-const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() };
+const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() };
 function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
 function importNetworkKeys(vm) {
   return Array.from({ length: Math.max(vm.nics || 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
 }
+function importTarget(vm) {
+  if (!importBatch.targets.has(vm.ref)) importBatch.targets.set(vm.ref, {
+    node: importForm.elements.node.value, defaultNode: true, start: importForm.elements.start?.checked || false,
+    clear_hibernation: importForm.elements.clear_hibernation?.checked || false,
+    disks: vm.disks_gb.map((size) => ({ pool: importForm.elements.pool.value, size_gb: size || null, defaultPool: true })),
+  });
+  return importBatch.targets.get(vm.ref);
+}
+function importNicKey(vm, i) { return JSON.stringify([vm.ref, i]); }
+function importNicNetwork(vm, i, source) {
+  return importBatch.networks.get(importNicKey(vm, i)) || importBatch.networks.get(source) || "default";
+}
 function renderImportNets() {
-  const keys = [...new Set(importChosen().flatMap(importNetworkKeys))];
-  const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  $("#import-nets").innerHTML = `<table><thead><tr><th>Source network</th><th>Target virtual switch</th></tr></thead><tbody>${keys.map((src, i) => {
-    const pick = importBatch.networks.get(src) || state.networks.find((n) => slug(n.name) === slug(src))?.name || "default";
-    importBatch.networks.set(src, pick);
-    return `<tr><td>${esc(src)}</td><td><select data-import-network="${i}" aria-label="Target for ${esc(src)}">${netOptions(pick)}</select></td></tr>`;
-  }).join("")}</tbody></table><p class="hint">Add missing virtual switches under Network first.</p>`;
-  $$("#import-nets select").forEach((select, i) => select.addEventListener("change", () => importBatch.networks.set(keys[i], select.value)));
+  $("#import-nets").innerHTML = importChosen().map((vm, v) => `<h4>${esc(vm.name)}</h4><table><thead><tr><th>NIC / Source network</th><th>Target virtual switch</th></tr></thead><tbody>${importNetworkKeys(vm).map((src, i) => {
+    const target = importTarget(vm);
+    const nets = state.networks.filter((n) => !n.node || n.node === target.node);
+    const selected = importNicNetwork(vm, i, src);
+    return `<tr><td>NIC ${i + 1} · ${esc(src)}</td><td><select data-import-nic="${v}:${i}" aria-label="${esc(vm.name)} NIC ${i + 1}">${nets.map((n) => `<option value="${esc(n.name)}" ${selected === n.name ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select></td></tr>`;
+  }).join("")}</tbody></table>`).join("") + `<p class="hint">Add missing virtual switches under Network first.</p>`;
+  $$("#import-nets [data-import-nic]").forEach((select) => {
+    const [v, i] = select.dataset.importNic.split(":").map(Number), vm = importChosen()[v];
+    const save = () => importBatch.networks.set(importNicKey(vm, i), select.value);
+    save(); select.onchange = save;
+  });
+}
+function renderImportTargets() {
+  $("#import-disk-targets").innerHTML = importChosen().map((vm, v) => {
+    const t = importTarget(vm), locked = importBatch.submitted.has(vm.ref) ? "disabled" : "";
+    const pools = state.pools.filter((p) => p.node === t.node && p.active);
+    return `<article class="mg-vm-target"><h4>${esc(vm.name)}</h4><div class="form-grid">
+      <label>Destination node<select data-target-vm="${v}" data-target-field="node" ${locked}>${computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}" ${t.node === m.name ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
+      <label class="check"><input type="checkbox" data-target-vm="${v}" data-target-field="start" ${t.start ? "checked" : ""} ${locked}>Start after import</label>
+      ${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? `<label class="check"><input type="checkbox" data-target-vm="${v}" data-target-field="clear_hibernation" ${t.clear_hibernation ? "checked" : ""} ${locked}>Clear hibernation on copied disks (SSH VMware / KVM)</label>` : ""}</div>
+      <table><thead><tr><th>Disk / Source</th><th>Storage pool</th><th>Target GiB</th><th>Change</th></tr></thead><tbody>${t.disks.map((d, i) => {
+        const source = vm.disks_gb[i], shrink = d.size_gb && source && d.size_gb < source;
+        return `<tr><td>Disk ${i + 1} · ${source || "Unknown"} GB</td><td><select data-target-vm="${v}" data-target-disk="${i}" data-target-field="pool" ${locked}>${pools.map((p) => `<option value="${esc(p.name)}" ${d.pool === p.name ? "selected" : ""}>${esc(poolText(p))}</option>`).join("")}</select></td><td><input type="number" min="1" step="1" value="${d.size_gb || ""}" placeholder="Original" data-target-vm="${v}" data-target-disk="${i}" data-target-field="size_gb" ${locked} aria-label="Disk ${i + 1} target GiB"></td><td><span class="mg-resize-badge">${shrink ? "SHRINK" : d.size_gb > source && source ? "GROW" : "Original"}</span></td></tr>`;
+      }).join("")}</tbody></table><p class="hint">Shrink requires used space +10% (at least +1 GiB), checked after conversion. NTFS, ext2/3/4 and single-volume LVM supported. XFS/btrfs/ReFS unsupported; disable BitLocker. Grow adds disk capacity; extend the guest filesystem after boot.</p></article>`;
+  }).join("");
+  $$("#import-disk-targets [data-target-field]").forEach((input) => {
+    input.onchange = () => {
+      const vm = importChosen()[Number(input.dataset.targetVm)], t = importTarget(vm), key = input.dataset.targetField;
+      if (input.dataset.targetDisk != null) t.disks[Number(input.dataset.targetDisk)][key] = key === "size_gb" ? (input.value === "" ? null : Number(input.value)) : input.value;
+      else t[key] = input.type === "checkbox" ? input.checked : input.value;
+      if (key === "pool") t.disks[Number(input.dataset.targetDisk)].defaultPool = false;
+      if (key === "node") {
+        t.defaultNode = false;
+        const pools = state.pools.filter((p) => p.node === t.node && p.active);
+        t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool)) d.pool = pools[0]?.name || ""; });
+      }
+      renderImportTargets(); importCapacity();
+    };
+  });
 }
 function importCapacity() {
   const f = importForm.elements;
   const pool = state.pools.find((p) => p.node === f.node.value && p.name === f.pool.value && p.active);
   const disks = importChosen().reduce((total, vm) => total + vm.disks_gb.reduce((a, b) => a + b, 0), 0);
-  const needed = disks * (["lvm", "iscsi"].includes(pool?.type) ? 2 : 1);
+  let needed = disks * (["lvm", "iscsi"].includes(pool?.type) ? 2 : 1);
+  let invalid = false, insufficient = false;
+  const demand = new Map();
+  for (const vm of importChosen()) {
+    const t = importBatch.targets.get(vm.ref);
+    if (!t) continue;
+    const scratch = t.disks[0]?.pool || f.pool.value;
+    const shrinking = t.disks.some((d, i) => d.size_gb && d.size_gb < vm.disks_gb[i]);
+    const add = (p, size) => { const key = JSON.stringify([t.node, p]); demand.set(key, (demand.get(key) || 0) + size); };
+    add(scratch, t.disks.reduce((sum, d, i) => sum + Math.max(d.size_gb || vm.disks_gb[i], vm.disks_gb[i]), 0) * (shrinking ? 3 : 1));
+    t.disks.forEach((d, i) => {
+      if (d.size_gb != null && (!Number.isInteger(d.size_gb) || d.size_gb < 1)) invalid = true;
+      add(d.pool, d.size_gb || vm.disks_gb[i]);
+    });
+  }
+  for (const [key, size] of demand) {
+    const [node, name] = JSON.parse(key), selected = state.pools.find((p) => p.node === node && p.name === name && p.active);
+    if (!selected) invalid = true;
+    else if (selected.available_gb < size) insufficient = true;
+  }
+  if (demand.size) needed = [...demand.values()].reduce((a, b) => a + b, 0);
   const unknown = importChosen().some((v) => !v.disks_gb.length || v.disks_gb.some((g) => !g));
-  $("#import-capacity").textContent = `${disks} GB total disks; ${needed} GB required including conversion space; ${pool ? `${Math.floor(pool.available_gb)} GB free` : "select an available pool"}.${unknown ? " Warning: some disk sizes are unknown; actual space may be higher." : ""}${pool && pool.available_gb < needed ? " Warning: insufficient free space. Choose a larger pool." : ""}`;
-  return { pool, needed };
+  $("#import-capacity").textContent = `${disks} GB total disks; ${needed} GB required including conversion space; ${pool ? `${Math.floor(pool.available_gb)} GB free` : "select an available pool"}.${unknown ? " Warning: some disk sizes are unknown; actual space may be higher." : ""}${insufficient || (!demand.size && pool && pool.available_gb < needed) ? " Warning: insufficient free space. Choose a larger pool." : ""}`;
+  return { pool, needed, invalid, insufficient, customized: demand.size > 0 };
 }
 function importTargetPools() {
   const sel = importForm.elements.pool, was = sel.value;
   const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
   sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
   if (pools.some((p) => p.name === was)) sel.value = was;
+  for (const t of importBatch.targets.values()) {
+    if (!t.defaultNode) continue;
+    t.node = importForm.elements.node.value;
+    t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool) || d.defaultPool) d.pool = sel.value; });
+  }
+  if (importBatch.targets.size) renderImportTargets();
+  importCapacity();
+}
+function importDefaultPool() {
+  for (const t of importBatch.targets.values()) {
+    if (t.node !== importForm.elements.node.value) continue;
+    t.disks.forEach((d) => { if (d.defaultPool) d.pool = importForm.elements.pool.value; });
+  }
+  if (importBatch.targets.size) renderImportTargets();
   importCapacity();
 }
 const importWiz = wizard("import-dialog", {
   steps: 4,
   reset() {
     const ctx = dialogContext;
-    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), networks: new Map(), submitted: new Set() });
+    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() });
     $("#import-submit-status").textContent = "";
     importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
     importTargetPools();
@@ -4837,9 +5178,10 @@ const importWiz = wizard("import-dialog", {
     if (!chosen.length) throw new Error("Select at least one VM.");
     if (chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
     if (step >= 2) {
-      const { pool, needed } = importCapacity();
+      const { pool, needed, invalid, insufficient, customized } = importCapacity();
       if (!pool) throw new Error("Choose a healthy node and an available storage pool.");
-      if (pool.available_gb < needed) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      if (invalid) throw new Error("Choose an available pool and a positive whole target size for every disk.");
+      if (insufficient || (!customized && pool.available_gb < needed)) throw new Error("Insufficient space for the selected VMs and conversion files.");
       const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
       if (names.some((n) => !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters (English or Thai), digits, '-', '_' or '.'.");
       if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
@@ -4868,11 +5210,15 @@ const importWiz = wizard("import-dialog", {
       const source = state.sources.find((s) => s.name === importBatch.source);
       $("#import-win").hidden = !importChosen().some((v) => /windows/i.test(v.guest_os));
       $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings.transport || "ssh") === "ssh"));
+      renderImportTargets();
       importCapacity();
     }
     if (step === 3) renderImportNets();
     if (step === 4) {
-      $("#import-summary").innerHTML = `<p>${esc(importBatch.source)} → ${esc(importForm.elements.node.value)} / ${esc(importForm.elements.pool.value)}</p><table><thead><tr><th>Source VM</th><th>New name</th><th>Disks</th><th>Network mapping</th></tr></thead><tbody>${importChosen().map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(importBatch.names.get(v.ref) ?? v.name)}</td><td>${v.disks_gb.reduce((a, b) => a + b, 0)} GB</td><td>${importNetworkKeys(v).map((k) => `${esc(k)} → ${esc(importBatch.networks.get(k) || "default")}`).join("<br>")}</td></tr>`).join("")}</tbody></table><p class="hint">Unknown disk sizes are not included. VMs must remain powered off at the source.</p>`;
+      $("#import-summary").innerHTML = importChosen().map((vm) => {
+        const t = importTarget(vm), r = importBatch.resources.get(vm.ref) || vm;
+        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Unknown"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>")}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicNetwork(vm, i, src))}`).join("<br>")}</p></article>`;
+      }).join("") + `<p class="hint">Keep source VMs powered off until migration completes.</p>`;
     }
   },
 });
@@ -4883,7 +5229,7 @@ $("#import-pick-vms").addEventListener("change", (e) => {
   if (input.checked) importBatch.picked.add(ref); else importBatch.picked.delete(ref);
 });
 importForm.elements.node.addEventListener("change", importTargetPools);
-importForm.elements.pool.addEventListener("change", importCapacity);
+importForm.elements.pool.addEventListener("change", importDefaultPool);
 
 handlers["import-dialog"] = async (f) => {
   if (importWiz.step !== 4) throw new Error("Review the migration summary first.");
@@ -4892,10 +5238,11 @@ handlers["import-dialog"] = async (f) => {
   for (const vm of chosen) {
     if (importBatch.submitted.has(vm.ref)) continue;
     try {
+      const t = importBatch.targets.get(vm.ref);
       await post("/migrate/jobs", {
         source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
-        node: f.get("node"), pool: f.get("pool"), vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k) => importBatch.networks.get(k) || "default"), start: f.get("start") === "on",
-        clear_hibernation: f.get("clear_hibernation") === "on" && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
+        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), start: t ? t.start : f.get("start") === "on",
+        clear_hibernation: (t ? t.clear_hibernation : f.get("clear_hibernation") === "on") && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
       });
       importBatch.submitted.add(vm.ref);
       $("#import-submit-status").textContent = `${importBatch.submitted.size} of ${chosen.length} jobs created.`;

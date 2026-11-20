@@ -374,6 +374,24 @@ const post=async (url, body) => {
   assert.equal(requests[2].clear_hibernation,true);
   assert.equal(requests[0].vcpus,8);assert.equal(requests[0].memory_mb,8192);
   assert.equal(refreshes,1);assert.equal(tab,'imports');
+  importBatch.submitted.clear(); requests=[];
+  state.pools[0].available_gb=1000;
+  state.pools.push({node:'node2',name:'fast',active:true,type:'dir',available_gb:1000});
+  importBatch.targets.set('vm1',{node:'node1',start:true,clear_hibernation:false,disks:[{pool:'default',size_gb:25}]});
+  importBatch.targets.set('vm2',{node:'node2',start:false,clear_hibernation:true,disks:[{pool:'fast',size_gb:30}]});
+  importBatch.networks.set(importNicKey(vm1,1),'vm1-lan');
+  importBatch.networks.set(importNicKey(vm1,2),'vm1-other-lan');
+  importBatch.networks.set(importNicKey(vm2,0),'vm2-lan');
+  importWiz.show(4);
+  assert.match($('#import-summary').innerHTML,/node2/);
+  assert.match($('#import-summary').innerHTML,/SHRINK/);
+  assert.match($('#import-summary').innerHTML,/GROW/);
+  await handlers['import-dialog'](form);
+  assert.deepEqual(requests.map(r=>r.node),['node1','node2']);
+  assert.deepEqual(requests.map(r=>r.start),[true,false]);
+  assert.deepEqual(requests.map(r=>r.disks[0]),[{pool:'default',size_gb:25},{pool:'fast',size_gb:30}]);
+  assert.deepEqual(requests[0].network,['vs-wan','vm1-lan','vm1-other-lan']);
+  assert.deepEqual(requests[1].network,['vm2-lan']);
 })().catch(error=>{console.error(error);process.exitCode=1});
 """
     subprocess.run(["node", "-e", prefix + js[start:end] + suffix], check=True, capture_output=True)

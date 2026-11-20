@@ -1,4 +1,4 @@
-"""Physical-to-virtual: a small agent on a physical Linux server sends its disks here.
+"""Physical-to-virtual: a small agent on a physical Linux or Windows server sends its disks here.
 
 An operator opens a session for a storage pool on the manager's node and gets a
 one-time command. The agent posts the machine's inventory, streams each disk (gzip
@@ -235,6 +235,7 @@ def validate_inventory(data: dict) -> dict:
 
 
 AGENT = Path(__file__).parent / "static" / "p2v-agent.sh"
+WINDOWS_AGENT = AGENT.with_name("p2v-agent.exe")
 
 
 def source_vm(session: Session):

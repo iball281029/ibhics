@@ -525,6 +525,10 @@ def create_agent_app(
             source.validate()
             return source
 
+        @api.get("/imports/capabilities")
+        def import_capabilities() -> dict:
+            return {"disk_targets": True}
+
         @api.post("/imports/source-vms")
         def source_vms(body: dict) -> list[dict]:
             return [vm.to_dict() for vm in discover_source_vms(read_source(body))]
@@ -570,6 +574,7 @@ def create_agent_app(
                 body.memory_mb,
                 body.start,
                 clear_hibernation=body.clear_hibernation,
+                disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
             )
             return VMOut.from_info(info)
 

@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..cluster import Cluster
-from ..hypervisor import InvalidState, VMExists
+from ..hypervisor import InvalidState, PoolNotFound, VMExists
 from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceUnavailable, SourceVM, list_vms
 from ..importer.diagnostics import test_source
@@ -38,6 +38,7 @@ class ImportJob:
     step: str = ""  # what the conversion is doing now
     percent: int | None = None
     pool: str = "default"
+    disks: list[dict] | None = None
     via: str = ""  # the node that converted it, when the target could not reach the source
 
 
@@ -247,6 +248,7 @@ class ImportManager:
         memory_mb: int | None = None,
         start: bool = False,
         clear_hibernation: bool = False,
+        disks: list[dict] | None = None,
     ) -> ImportJob:
         self._cluster.require_quorum()
         source = self.source(source_name)
@@ -272,14 +274,46 @@ class ImportManager:
                     if node
                     else self._cluster.pick_node(memory_mb or vm.memory_mb)
                 )
+            if disks is not None and len(disks) != len(vm.disks_gb):
+                raise ValueError("disks must have one entry per source disk, in source order")
+            pools = {pool} | {d.get("pool") or pool for d in disks or []}
+            available = {p.name for p in member.driver.list_pools() if p.active}
+            for selected in pools:
+                if selected not in available:
+                    raise PoolNotFound(selected)
             via = member
             if source_ports(source):
                 reached, why = self._reaches(member, source)
                 if not reached:
-                    via = self._relay(member, source, pool, why)
+                    via = self._relay(member, source, pools, why)
                     if not node:
                         member = via  # no node was asked for: put it where it converts
-            check_space(via, pool, vm)
+            if disks is None:
+                check_space(via, pool, vm)
+            else:
+                # Raw conversion and an optional shrink working copy coexist in scratch.
+                required = {
+                    pool: sum(
+                        max(d.get("size_gb") or g, g)
+                        for d, g in zip(disks, vm.disks_gb, strict=True)
+                    )
+                    * (
+                        3
+                        if any(
+                            d.get("size_gb") and d["size_gb"] < size
+                            for d, size in zip(disks, vm.disks_gb, strict=False)
+                        )
+                        else 1
+                    )
+                }
+                for d, size in zip(disks, vm.disks_gb, strict=False):
+                    selected = d.get("pool") or pool
+                    required[selected] = required.get(selected, 0) + (d.get("size_gb") or size)
+                for info in via.driver.list_pools():
+                    if required.get(info.name, 0) > info.available_gb:
+                        raise NotEnoughSpace(
+                            f"Insufficient space in pool {info.name!r}, including conversion files"
+                        )
             job = ImportJob(
                 id=str(next(self._ids)),
                 source=source_name,
@@ -288,6 +322,7 @@ class ImportManager:
                 node=member.name,
                 created=self._now(),
                 pool=pool,
+                disks=disks,
                 via=via.name if via is not member else "",
             )
             self._jobs.append(job)
@@ -304,6 +339,8 @@ class ImportManager:
 
             try:
                 extra = {"clear_hibernation": True} if clear_hibernation else {}
+                if disks is not None:
+                    extra["disks"] = disks
                 info = via.imports.run(
                     source,
                     vm,
@@ -346,17 +383,22 @@ class ImportManager:
                 return False, detail
         return True, ""
 
-    def _relay(self, target, source: Source, pool: str, why: str):
+    def _relay(self, target, source: Source, pools: set[str], why: str):
         """A node that reaches the source and sees the target's pool, to convert there."""
         from .migrations import _shared
 
-        dst = next((p for p in target.driver.list_pools() if p.name == pool), None)
+        destinations = {p.name: p for p in target.driver.list_pools()}
         for member in self._cluster.compute_members():
             if member.name == target.name or member.maintenance:
                 continue
             try:
-                src = next((p for p in member.driver.list_pools() if p.name == pool), None)
-                if dst is None or src is None or not _shared(src, dst):
+                sources = {p.name: p for p in member.driver.list_pools()}
+                if any(
+                    p not in destinations
+                    or p not in sources
+                    or not _shared(sources[p], destinations[p])
+                    for p in pools
+                ):
                     continue
                 if self._reaches(member, source)[0]:
                     return member
@@ -364,7 +406,8 @@ class ImportManager:
                 continue  # a node that does not answer cannot help
         raise InvalidState(
             f"{target.name} cannot reach the source {source.host} ({why}), and no other node "
-            f"that can reach it shares the storage pool {pool!r}. Open the firewall from "
+            f"that can reach it shares every storage pool {sorted(pools)!r}. "
+            "Open the firewall from "
             f"{target.name} to {source.host}, or import onto shared storage."
         )
 
