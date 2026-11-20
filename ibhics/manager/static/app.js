@@ -1090,6 +1090,14 @@ const usageCell = (used, total, unit = "") => {
   const p = pct(used, total);
   return `<div class="u-cell"><span>${p}%${unit ? ` <span class="muted">${unit}</span>` : ""}</span>${bar(p)}</div>`;
 };
+// A ring dial for the VM cards: the percentage in the middle, the size underneath.
+const vxGauge = (label, value, size, color) => {
+  const known = Number.isFinite(value), p = known ? Math.max(0, Math.min(100, value)) : 0;
+  const r = 26, c = 2 * Math.PI * r, level = p > 90 ? " bad" : p > 75 ? " warn" : "";
+  return `<div class="vx-gauge${level}" style="--g:${color}" title="${esc(label)}: ${known ? `${Math.round(p)}%` : "not reported"}">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="vx-track" cx="32" cy="32" r="${r}"/><circle class="vx-arc" cx="32" cy="32" r="${r}" stroke-dasharray="${((p / 100) * c).toFixed(1)} ${c.toFixed(1)}"/></svg>
+    <b>${known ? `${Math.round(p)}<small>%</small>` : "–"}</b><span>${esc(label)}</span><em>${esc(size)}</em></div>`;
+};
 const osIcon = (vm) => { const k = osKind(osName(vm, state.guests[vm.uuid])); return k === "Windows" ? "i-os-win" : k === "Linux" ? "i-os-linux" : "i-compute"; };
 const ipCell = (vm) => {
   const ips = ipList(state.guests[vm.uuid]);
@@ -1217,17 +1225,17 @@ function renderVMs() {
   if (vmp.view === "panel") {
     $("#vm-panel").innerHTML = (where ? `<p class="hint vm-where">${esc(where)}</p>` : "") + (vms.length ? `<div class="vm-cards">${vms.map((vm) => {
       const g = state.guests[vm.uuid], u = diskUsage(vm, g), alerts = vmAlerts(vm);
-      return `<div class="vm-card${vmp.picked.has(vm.uuid) ? " picked" : ""}" data-uuid="${vm.uuid}" ${op ? 'draggable="true"' : ""}>
-        <div class="vc-top">${op ? `<input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}>` : ""}
-          <span class="avatar ${esc(vm.state)}"><svg><use href="#${osIcon(vm)}"/></svg></span>
-          <div class="vc-name"><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vm-sub">${ipCell(vm)}</span></div>
-          <span class="badge ${esc(vm.state)}">${esc(vm.state)}</span></div>
-        <div class="vc-meters">
-          <span>CPU</span>${usageCell(cpuUsed(vm), 100)}<em>${vm.vcpus} vCPU</em>
-          <span>Memory</span>${usageCell(memUsed(vm), vm.memory_mb)}<em>${gbText(vm.memory_mb)}</em>
-          <span>Storage</span>${usageCell(u.used, u.total)}<em>${num(u.total)} GB</em>
-        </div>
-        <div class="vc-foot">${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts[0])}</span>` : `<span class="vm-sub">${esc(vm.node || "")}</span>`}
+      const cpu = cpuUsed(vm), memPct = memUsed(vm) == null ? null : pct(memUsed(vm), vm.memory_mb);
+      const diskPct = u.used == null ? null : pct(u.used, u.total), st = state.stats[vm.uuid] || {};
+      const io = vm.state === "running" ? `<span title="Network received / sent">↓ ${rate(st.net_rx_bps)} · ↑ ${rate(st.net_tx_bps)}</span><span title="Disk read / write">R ${rate(st.disk_read_bps)} · W ${rate(st.disk_write_bps)}</span>` : `<span class="muted">Not running</span>`;
+      return `<div class="vm-card vx-card ${esc(vm.state)}${vmp.picked.has(vm.uuid) ? " picked" : ""}${alerts.length ? " alerting" : ""}" data-uuid="${vm.uuid}" ${op ? 'draggable="true"' : ""}>
+        <div class="vx-head">${op ? `<input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" aria-label="Select ${esc(vm.name)}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}>` : ""}
+          <span class="vx-os ${esc(vm.state)}"><svg><use href="#${osIcon(vm)}"/></svg></span>
+          <div class="vx-name"><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vx-ip">${ipCell(vm)}</span></div>
+          <span class="vx-state ${esc(vm.state)}"><i></i>${esc(vm.state)}</span></div>
+        <div class="vx-gauges">${vxGauge("CPU", cpu, `${vm.vcpus} vCPU`, "#54e8f0")}${vxGauge("Memory", memPct, gbText(vm.memory_mb), "#ed99da")}${vxGauge("Disk", diskPct, `${num(u.total)} GB`, "#bb83ff")}</div>
+        <div class="vx-io">${io}</div>
+        <div class="vx-foot">${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts[0])}</span>` : `<span class="vx-node"><svg><use href="#i-server"/></svg>${esc(nodeLabel(vm.node || ""))}</span>`}
           <span class="spacer"></span><div class="actions">${vmMenu(vm, { summary: true, compact: true })}</div></div>
       </div>`;
     }).join("")}</div>` : `<p class="empty">${esc(none)}</p>`);
