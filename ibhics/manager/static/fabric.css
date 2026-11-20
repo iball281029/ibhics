@@ -132,6 +132,8 @@
 .fx-3d{position:absolute;inset:0;z-index:1}
 .fx-3d canvas{display:block}
 .f3-labels{position:absolute;inset:0;pointer-events:none}
+.fx-3d .f3-labels{pointer-events:auto;touch-action:none;cursor:grab}
+.fx-3d .f3-labels:active{cursor:grabbing}
 .f3-label{display:grid;gap:2px;padding:2px 4px;font:8px ui-monospace,SFMono-Regular,Menlo,monospace;color:#a1bac9;background:transparent;border:1px solid transparent;opacity:.6;white-space:nowrap;pointer-events:auto;transition:opacity .15s,background .15s,border-color .15s}
 .f3-label b{font-weight:400;font-size:8.5px;color:color-mix(in srgb,var(--lc,#3ef0ff) 60%,#cfefff);letter-spacing:.1px}
 .f3-label span{color:color-mix(in srgb,var(--lc,#3ef0ff) 80%,#fff)}
@@ -158,3 +160,5 @@ a.fx-kpi:hover,a.fx-donut:hover,a.fx-bar:hover{background:#3ef0ff12;box-shadow:i
 a.fx-gauge:hover svg{filter:drop-shadow(0 0 10px var(--c))}
 a.fx-gauge:hover span{color:#fff}
 #fx-trend{cursor:pointer}
+.fx-help{position:absolute;right:10px;bottom:8px;z-index:3;font:9px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1px;color:#6b8fb4;pointer-events:none;display:none}
+.fabric-inside .fx-help{display:block}
