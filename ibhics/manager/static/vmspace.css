@@ -119,3 +119,22 @@
 .spatial-workspace .vm-table tbody td{background:#1c1d47!important}
 .spatial-workspace .vm-table tbody tr.vx-row:hover td{background:#242a5c!important}
 .spatial-workspace .vm-table tbody tr.vx-row.picked td{background:#2a2461!important}
+
+/* OS badges: Windows blue glass, Linux amber glass, unknown neutral. */
+.spatial-workspace .vx-os{position:relative;width:42px;height:42px;border-radius:13px;display:grid;place-items:center;color:inherit;box-shadow:none}
+.spatial-workspace .vx-os svg{width:26px!important;height:26px!important;min-width:0;fill:initial;stroke:initial;filter:drop-shadow(0 2px 4px #0006)}
+.spatial-workspace .vx-os.os-windows{background:linear-gradient(145deg,#2f7dff40,#14245a99);border:1px solid #7fd6ff66;box-shadow:inset 0 1px #ffffff26,0 0 16px #3c8cff33}
+.spatial-workspace .vx-os.os-linux{background:linear-gradient(145deg,#ffc23d38,#3a2a0e99);border:1px solid #ffc23d66;box-shadow:inset 0 1px #ffffff26,0 0 16px #ffc23d2e}
+.spatial-workspace .vx-os.os-other{background:linear-gradient(145deg,#ffffff14,#ffffff05);border:1px solid #ffffff22}
+.spatial-workspace .vx-os.running:after{content:"";position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:#7cf0a8;border:2px solid #1c1d47;box-shadow:0 0 8px #7cf0a8}
+.spatial-workspace .vx-os.stopped,.spatial-workspace .vx-os.shutoff{filter:saturate(.35) brightness(.85)}
+.spatial-workspace .vm-table .name-cell .vx-os{width:36px;height:36px;border-radius:11px}
+.spatial-workspace .vm-table .name-cell .vx-os svg{width:22px!important;height:22px!important}
+
+/* Selection box: a glass square with a neon tick. */
+.spatial-workspace .vm-pick,.spatial-workspace #vm-pick-all{appearance:none;-webkit-appearance:none;flex:none;width:18px;height:18px;margin:0;border-radius:6px;border:1.5px solid #9fb0d666;background:#0b0f2c99;display:grid;place-items:center;cursor:pointer;transition:border-color .15s,box-shadow .15s,background .15s}
+.spatial-workspace .vm-pick:hover,.spatial-workspace #vm-pick-all:hover{border-color:#7de5ff;box-shadow:0 0 10px #7de5ff55}
+.spatial-workspace .vm-pick:checked,.spatial-workspace #vm-pick-all:checked,.spatial-workspace #vm-pick-all:indeterminate{border-color:#a98bff;background:linear-gradient(135deg,#7d6bff,#d58ce8);box-shadow:0 0 12px #a98bff88}
+.spatial-workspace .vm-pick:checked:after,.spatial-workspace #vm-pick-all:checked:after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}
+.spatial-workspace #vm-pick-all:indeterminate:after{content:"";width:8px;height:2px;background:#fff;border-radius:2px}
+.spatial-workspace .vm-pick:focus-visible,.spatial-workspace #vm-pick-all:focus-visible{outline:2px solid #7de5ff;outline-offset:2px}

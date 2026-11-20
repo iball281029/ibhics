@@ -985,7 +985,7 @@ function renderHome() {
 
 // What the guest says about itself wins over the label the admin typed in.
 const osName = (vm, g) => (g?.agent && g.os_name) || vm.os_type || "";
-const osKind = (name) => (/windows/i.test(name) ? "Windows" : name ? "Linux" : "");
+const osKind = (name) => (/windows|^win/i.test(name) ? "Windows" : name ? "Linux" : "");
 const ipList = (g) => g?.ips || [];
 const num = (gb) => (gb >= 100 ? Math.round(gb) : Math.round(gb * 10) / 10).toLocaleString();
 
@@ -1097,6 +1097,16 @@ const vxGauge = (label, value, size, color) => {
   return `<div class="vx-gauge${level}" style="--g:${color}" title="${esc(label)}: ${known ? `${Math.round(p)}%` : "not reported"}">
     <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="vx-track" cx="32" cy="32" r="${r}"/><circle class="vx-arc" cx="32" cy="32" r="${r}" stroke-dasharray="${((p / 100) * c).toFixed(1)} ${c.toFixed(1)}"/></svg>
     <b>${known ? `${Math.round(p)}<small>%</small>` : "–"}</b><span>${esc(label)}</span><em>${esc(size)}</em></div>`;
+};
+// OS badge for the VM cards and list: Windows, Linux or unknown look clearly different.
+const VX_OS_ART = { // inline styles: the console's global svg rules must not repaint them
+  Windows: `<svg viewBox="0 0 32 32" aria-hidden="true"><path style="fill:#8fdcff;stroke:none" d="M4 7.2 14 5.8v9.4H4z"/><path style="fill:#4aa8ff;stroke:none" d="M15.6 5.6 28 3.8v11.4H15.6z"/><path style="fill:#4aa8ff;stroke:none" d="M4 16.8h10v9.4L4 24.8z"/><path style="fill:#2f7dff;stroke:none" d="M15.6 16.8H28v11.4l-12.4-1.8z"/></svg>`,
+  Linux: `<svg viewBox="0 0 32 32" aria-hidden="true"><ellipse style="fill:#16182b;stroke:none" cx="16" cy="17.5" rx="9.5" ry="11.5"/><ellipse style="fill:#f4f6ff;stroke:none" cx="16" cy="20" rx="6.2" ry="8"/><circle style="fill:#fff;stroke:none" cx="12.8" cy="10.4" r="2.2"/><circle style="fill:#fff;stroke:none" cx="19.2" cy="10.4" r="2.2"/><circle style="fill:#16182b;stroke:none" cx="13.3" cy="10.6" r="1.05"/><circle style="fill:#16182b;stroke:none" cx="18.7" cy="10.6" r="1.05"/><path style="fill:#ffc23d;stroke:none" d="M12.9 13.4h6.2L16 16.2z"/><path style="fill:#ffc23d;stroke:none" d="M7.4 29.2c1.3-3 4.8-2.8 6-.4-1.6 1.6-4.4 1.8-6 .4zm17.2 0c-1.3-3-4.8-2.8-6-.4 1.6 1.6 4.4 1.8 6 .4z"/></svg>`,
+  "": `<svg viewBox="0 0 32 32" aria-hidden="true"><rect style="fill:none;stroke:#9fb0d6;stroke-width:2" x="5" y="6" width="22" height="15" rx="2.5"/><path style="fill:none;stroke:#9fb0d6;stroke-width:2;stroke-linecap:round" d="M12 26h8M16 21v5"/></svg>`,
+};
+const vxOs = (vm) => {
+  const kind = osKind(osName(vm, state.guests[vm.uuid]));
+  return `<span class="vx-os os-${kind ? kind.toLowerCase() : "other"} ${esc(vm.state)}" title="${esc(kind || "Operating system not reported")}">${VX_OS_ART[kind] || VX_OS_ART[""]}</span>`;
 };
 const osIcon = (vm) => { const k = osKind(osName(vm, state.guests[vm.uuid])); return k === "Windows" ? "i-os-win" : k === "Linux" ? "i-os-linux" : "i-compute"; };
 const ipCell = (vm) => {
@@ -1230,7 +1240,7 @@ function renderVMs() {
       const io = vm.state === "running" ? `<span title="Network received / sent">↓ ${rate(st.net_rx_bps)} · ↑ ${rate(st.net_tx_bps)}</span><span title="Disk read / write">R ${rate(st.disk_read_bps)} · W ${rate(st.disk_write_bps)}</span>` : `<span class="muted">Not running</span>`;
       return `<div class="vm-card vx-card ${esc(vm.state)}${vmp.picked.has(vm.uuid) ? " picked" : ""}${alerts.length ? " alerting" : ""}" data-uuid="${vm.uuid}" ${op ? 'draggable="true"' : ""}>
         <div class="vx-head">${op ? `<input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" aria-label="Select ${esc(vm.name)}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}>` : ""}
-          <span class="vx-os ${esc(vm.state)}"><svg><use href="#${osIcon(vm)}"/></svg></span>
+          ${vxOs(vm)}
           <div class="vx-name"><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vx-ip">${ipCell(vm)}</span></div>
           <span class="vx-state ${esc(vm.state)}"><i></i>${esc(vm.state)}</span></div>
         <div class="vx-gauges">${vxGauge("CPU", cpu, `${vm.vcpus} vCPU`, "#54e8f0")}${vxGauge("Memory", memPct, gbText(vm.memory_mb), "#ed99da")}${vxGauge("Disk", diskPct, `${num(u.total)} GB`, "#bb83ff")}</div>
@@ -1254,7 +1264,7 @@ function renderVMs() {
     return `<tr data-uuid="${vm.uuid}" class="vx-row ${esc(vm.state)}${alerts.length ? " alerting" : ""}${vmp.picked.has(vm.uuid) ? " picked" : ""}" ${op ? 'draggable="true"' : ""}>
       ${op ? `<td class="pick"><input type="checkbox" class="vm-pick" data-uuid="${vm.uuid}" ${vmp.picked.has(vm.uuid) ? "checked" : ""}></td>` : ""}
       <td><span class="vx-state ${esc(vm.state)}"><i></i>${esc(vm.state)}</span></td>
-      <td><div class="name-cell"><span class="vx-os ${esc(vm.state)}"><svg><use href="#${osIcon(vm)}"/></svg></span><div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a>
+      <td><div class="name-cell">${vxOs(vm)}<div><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a>
         ${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts.join(" · "))}</span>` : `<span class="vm-sub clip">${esc(vmp.group === "all" && groupOf(vm) ? groupPath(groupOf(vm)) : vm.description || "")}</span>`}</div></div></td>
       ${cols.map((c) => `<td>${c[2](vm)}</td>`).join("")}
       <td><div class="actions">${vmMenu(vm, { summary: true, compact: true })}</div></td>
