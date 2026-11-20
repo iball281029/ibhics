@@ -122,6 +122,130 @@ function store(kind) {
   return g;
 }
 
+// ---------- detailed models (our own holographic take, built from primitives) ----------
+
+function lines(points, color, opacity = 0.9) { // pairs of points -> line segments
+  return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color, transparent: true, opacity, blending: THREE.AdditiveBlending }));
+}
+function screenGlyph(os, color) { // a VM's screen: a window frame and a Windows or Linux mark
+  const g = new THREE.Group(), V = (x, y) => new THREE.Vector3(x, y, 0);
+  g.add(holo(new THREE.PlaneGeometry(1.5, 1.05), color, 0.16, 0.9));
+  g.add(lines([V(-0.75, 0.38), V(0.75, 0.38)], color, 0.7));
+  for (let i = 0; i < 3; i++) { const d = glowSprite(color, 0.09); d.position.set(-0.64 + i * 0.1, 0.45, 0.01); g.add(d); }
+  if (os === "windows") {
+    for (const [x, y] of [[-0.17, 0.04], [0.04, 0.04], [-0.17, -0.17], [0.04, -0.17]]) {
+      const pane = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.18), new THREE.MeshBasicMaterial({ color: 0x8fdcff, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending }));
+      pane.position.set(x + 0.09, y + 0.09, 0.01); g.add(pane);
+    }
+  } else if (os === "linux") { // a penguin from two ellipses and a beak
+    const body = new THREE.Mesh(new THREE.CircleGeometry(0.2, 24), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    body.scale.set(0.8, 1.15, 1); body.position.set(0, -0.08, 0.01); g.add(body);
+    const head = new THREE.Mesh(new THREE.CircleGeometry(0.12, 20), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    head.position.set(0, 0.17, 0.012); g.add(head);
+    const beak = new THREE.Mesh(new THREE.CircleGeometry(0.045, 3), new THREE.MeshBasicMaterial({ color: COL.amber }));
+    beak.rotation.z = -Math.PI / 2; beak.position.set(0, 0.13, 0.015); g.add(beak);
+  } else {
+    g.add(lines([V(-0.3, -0.05), V(0.3, -0.05), V(-0.3, 0.1), V(0.15, 0.1)], color, 0.8));
+  }
+  return g;
+}
+function vmCube(os, running) { // a glass cube with the VM's screen and a stack of drives inside
+  const color = running ? 0x8fdcff : 0x6c7a92, g = new THREE.Group();
+  g.add(holo(new THREE.BoxGeometry(2, 1.9, 1.6), color, running ? 0.06 : 0.03, running ? 0.95 : 0.4));
+  const scr = screenGlyph(os, color); scr.position.set(0, 0.25, 0.81); g.add(scr);
+  for (let i = 0; i < 3; i++) { const plate = holo(new THREE.BoxGeometry(1.5, 0.08, 1.1), color, 0.12, 0.6); plate.position.set(0, -0.55 + i * 0.13, 0); g.add(plate); }
+  return g;
+}
+function serverOpen(color, healthy) { // a 2U server with its lid off: board, CPUs, DIMMs, fan, front bays
+  const g = new THREE.Group();
+  g.add(holo(new THREE.BoxGeometry(6.4, 0.9, 3.6), color, 0.05));
+  const board = holo(new THREE.BoxGeometry(6, 0.05, 3.2), color, 0.12, 0.5); board.position.y = -0.35; g.add(board);
+  for (let k = 0; k < 2; k++) { // CPUs with heatsink fins
+    const cpu = holo(new THREE.BoxGeometry(0.9, 0.18, 0.9), color, 0.25); cpu.position.set(-1.6 + k * 1.3, -0.2, 0.1); g.add(cpu);
+    const fins = [];
+    for (let i = 0; i < 7; i++) { const x = -1.6 + k * 1.3 - 0.4 + i * 0.13; fins.push(new THREE.Vector3(x, -0.1, -0.35), new THREE.Vector3(x, -0.1, 0.55)); }
+    g.add(lines(fins, color, 0.7));
+  }
+  for (let i = 0; i < 6; i++) { // DIMMs standing up
+    const d = holo(new THREE.BoxGeometry(0.08, 0.5, 1.5), color, 0.2, 0.8); d.position.set(0.7 + i * 0.22, -0.05, 0.2); g.add(d);
+  }
+  const fan = circle(0.32, color, 0.9, 32); fan.rotation.x = Math.PI / 2; fan.position.set(2.7, 0, 1.81); fan.userData.spin = 0; g.add(fan);
+  const blades = lines([new THREE.Vector3(-0.28, 0, 0), new THREE.Vector3(0.28, 0, 0), new THREE.Vector3(0, -0.28, 0), new THREE.Vector3(0, 0.28, 0)], color);
+  blades.position.set(2.7, 0, 1.82); blades.userData.fan = true; g.add(blades);
+  for (let i = 0; i < 4; i++) { // front drive bays and LEDs
+    const bay = holo(new THREE.BoxGeometry(1, 0.32, 0.04), color, 0.15, 0.8); bay.position.set(-2.4 + i * 1.15, 0.1, 1.82); g.add(bay);
+    const led = glowSprite(healthy ? COL.green : COL.red, 0.2); led.position.set(-2.0 + i * 1.15, 0.1, 1.86); led.userData.blink = i; g.add(led);
+  }
+  const traces = []; // glowing board traces
+  for (let i = 0; i < 6; i++) traces.push(new THREE.Vector3(-1.6, -0.3, 0.6 + i * 0.12), new THREE.Vector3(0.7 + (i % 3) * 0.4, -0.3, 0.6 + i * 0.12));
+  g.add(lines(traces, COL.cyan, 0.5));
+  return g;
+}
+function nasBox(color = COL.violet) { // a desktop NAS: front drive trays with pull rings, a lit display
+  const g = new THREE.Group();
+  g.add(holo(new THREE.BoxGeometry(4.2, 2.8, 3), color, 0.05));
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.32), new THREE.MeshBasicMaterial({ color: COL.cyan, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending }));
+  panel.position.set(0.9, 1.05, 1.51); panel.userData.blink = 0.3; g.add(panel);
+  for (let i = 0; i < 5; i++) {
+    const tray = holo(new THREE.BoxGeometry(0.58, 1.9, 0.12), color, 0.14, 0.9); tray.position.set(-1.35 + i * 0.7, -0.25, 1.5); g.add(tray);
+    const ring = circle(0.16, 0xffffff, 0.9, 24); ring.rotation.x = Math.PI / 2; ring.position.set(-1.35 + i * 0.7, 0.35, 1.58); g.add(ring);
+    const led = glowSprite(i === 4 ? COL.amber : COL.green, 0.18); led.position.set(-1.35 + i * 0.7, -1.05, 1.6); led.userData.blink = i * 0.6; g.add(led);
+  }
+  const vents = [];
+  for (let i = 0; i < 8; i++) vents.push(new THREE.Vector3(2.11, -1 + i * 0.25, -1.2), new THREE.Vector3(2.11, -1 + i * 0.25, 1.2));
+  g.add(lines(vents, color, 0.5));
+  return g;
+}
+function laptop(color) {
+  const g = new THREE.Group();
+  g.add(holo(new THREE.BoxGeometry(1.3, 0.06, 0.9), color, 0.2));
+  const keys = [];
+  for (let i = 0; i < 4; i++) keys.push(new THREE.Vector3(-0.5, 0.04, -0.25 + i * 0.12), new THREE.Vector3(0.5, 0.04, -0.25 + i * 0.12));
+  g.add(lines(keys, color, 0.6));
+  const scr = holo(new THREE.PlaneGeometry(1.3, 0.85), color, 0.22); scr.position.set(0, 0.42, -0.5); scr.rotation.x = -0.25; g.add(scr);
+  return g;
+}
+function numberSprite(text, color) {
+  const c = document.createElement("canvas"); c.width = 256; c.height = 64;
+  const x = c.getContext("2d"); x.font = "600 34px ui-monospace, Menlo, monospace"; x.fillStyle = `#${new THREE.Color(color).getHexString()}`; x.fillText(text, 8, 44);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending }));
+  s.scale.set(2.4, 0.6, 1);
+  return s;
+}
+function netGlobe(clients, color = COL.cyan) { // the outside world with clients on spokes
+  const g = new THREE.Group(), R = 1.9;
+  g.add(holo(new THREE.SphereGeometry(R, 32, 20), color, 0.06, 0.25));
+  const dots = [];
+  for (let i = 0; i < 380; i++) { // land-ish dot bands for a world feel
+    const y = 1 - (2 * (i + 0.5)) / 380, r = Math.sqrt(1 - y * y), a = i * 2.399963;
+    if (Math.sin(a * 3) + Math.cos(y * 5) > 0.3) dots.push(Math.cos(a) * r * R * 1.01, y * R * 1.01, Math.sin(a) * r * R * 1.01);
+  }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(dots, 3));
+  const world = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xbff6ff, size: 0.09, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  world.userData.spin = 0.2; g.add(world);
+  const n = Math.max(4, Math.min(10, clients));
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2, y = (i % 3 - 1) * 0.9, p = new THREE.Vector3(Math.cos(a) * 4.4, y, Math.sin(a) * 4.4);
+    const lap = laptop(color); lap.position.copy(p); lap.lookAt(0, y, 0); g.add(lap);
+    const hub = p.clone().setLength(R); const knob = glowSprite(color, 0.4); knob.position.copy(hub); g.add(knob);
+    const b = beam(hub, p, color, 0); b.userData.beam.level = 0.5; g.add(b);
+  }
+  ["25.36%", "653.25", "0.25", "+2.55"].forEach((tx, i) => { const s = numberSprite(tx, color); s.position.set(-3 + i * 2, 3.2 + (i % 2) * 0.6, -2); s.userData.bob = i; s.userData.baseY = s.position.y; g.add(s); });
+  return g;
+}
+function squarePad(w, d, color) { // an isometric slab with glowing edges and a grid on top
+  const g = new THREE.Group();
+  const slab = holo(new THREE.BoxGeometry(w, 0.5, d), color, 0.018, 0.9); slab.position.y = -0.25; g.add(slab);
+  const top = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.94, d * 0.94), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.012, depthWrite: false, blending: THREE.AdditiveBlending }));
+  top.rotation.x = -Math.PI / 2; top.position.y = 0.01; g.add(top);
+  const grid = [];
+  for (let x = -w / 2 + 1; x < w / 2; x += 1) grid.push(new THREE.Vector3(x, 0.02, -d / 2 + 0.2), new THREE.Vector3(x, 0.02, d / 2 - 0.2));
+  for (let z = -d / 2 + 1; z < d / 2; z += 1) grid.push(new THREE.Vector3(-w / 2 + 0.2, 0.02, z), new THREE.Vector3(w / 2 - 0.2, 0.02, z));
+  g.add(lines(grid, color, 0.08));
+  const glowEdge = holo(new THREE.BoxGeometry(w + 0.25, 0.08, d + 0.25), color, 0.03, 0.5); glowEdge.position.y = -0.52; g.add(glowEdge);
+  return g;
+}
+
 // A beam that arcs between two points with lights running along it.
 function beam(a, b, color, height = 3) {
   const mid = a.clone().lerp(b, 0.5); mid.y += height;
@@ -175,7 +299,7 @@ class Stage {
       this.frame = requestAnimationFrame(loop);
       if (document.hidden || !container.isConnected || !container.offsetParent) return;
       const dt = Math.min(0.05, this.clock.getDelta()), t = this.clock.elapsedTime;
-      this.tick(dt, t);
+      this.tick(dt, t); this.onTick?.(dt, t);
       this.controls?.update();
       if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
       this.labels.render(this.scene, this.camera);
@@ -200,6 +324,12 @@ class Stage {
           const f = still ? i / n : (t * (0.12 + lv * 0.5) + i / n) % 1;
           s.position.copy(curve.getPoint(f));
         });
+      }
+      if (u.fan && !still) o.rotation.z += 9 * dt;
+      if (u.rise) { // zones arrive from below, one after the other
+        const f = still ? 1 : Math.min(1, Math.max(0, (t - (this.born ?? (this.born = t)) - u.rise.delay) / 0.9));
+        const e = 1 - Math.pow(1 - f, 3); o.position.y = u.rise.from + (u.rise.to - u.rise.from) * e;
+        if (f >= 1) delete u.rise;
       }
       if (u.pulse && !still) { const f = (t * 0.5 + u.pulse) % 1; o.scale.setScalar(1 + f * 2.2); o.material.opacity = 0.7 * (1 - f); }
     });
@@ -237,102 +367,129 @@ function backdrop(scene) { // stars and a floor grid, once per stage
 
 // ---------- inside the datacenter ----------
 
-function inside(container) {
-  const stage = new Stage(container);
-  backdrop(stage.scene);
-  let signature = "";
-  const beams = [];
-  const R = 19; // radius of the ring of zones
+function rise(o, delay) { o.userData.rise = { delay, from: -7, to: o.position.y }; o.position.y = -7; return o; }
 
-  function zoneAt(angle) { return new THREE.Vector3(Math.cos(angle) * R, 0, Math.sin(angle) * R); }
+function inside(container) {
+  const stage = new Stage(container, { distance: 40, fov: 32, bloom: 0.55 });
+  stage.camera.position.set(44, 38, 44);
+  Object.assign(stage.controls, { autoRotate: false, minDistance: 18, maxDistance: 80, maxPolarAngle: Math.PI * 0.42 });
+  backdrop(stage.scene);
+  let signature = "", pads = [], hovered = null;
+  const beams = [], ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+  stage.labels.domElement.addEventListener("pointermove", (e) => {
+    const r = stage.labels.domElement.getBoundingClientRect();
+    mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(mouse, stage.camera);
+    const hit = ray.intersectObjects(pads.map((p) => p.hitbox), false)[0];
+    hovered = hit ? pads.find((p) => p.hitbox === hit.object) : null;
+    stage.labels.domElement.style.cursor = hovered ? "pointer" : "";
+  });
+  stage.labels.domElement.addEventListener("click", () => { if (hovered?.href) location.hash = hovered.href; });
+  stage.onTick = (dt) => { // the pointed-at zone rises and brightens; the camera leans towards it
+    for (const p of pads) {
+      if (p.group.userData.rise) continue;
+      const want = p === hovered ? 1.2 : 0, cur = p.group.userData.lift || 0, next = cur + (want - cur) * Math.min(1, dt * 6);
+      p.group.userData.lift = next; p.group.position.y = p.baseY + next;
+    }
+    const tgt = hovered ? hovered.group.position.clone().multiplyScalar(0.25) : new THREE.Vector3();
+    stage.controls.target.lerp(tgt.setY(1), Math.min(1, dt * 2));
+  };
 
   function build(d) {
-    stage.clear(); beams.length = 0;
+    stage.clear(); beams.length = 0; pads = [];
     const root = stage.root;
+    const zone = (x, z, w, dp, color, title, cls, href, delay) => {
+      const group = new THREE.Group(); group.position.set(x, 0, z); root.add(group);
+      group.add(squarePad(w, dp, color));
+      const hitbox = new THREE.Mesh(new THREE.BoxGeometry(w, 4, dp), new THREE.MeshBasicMaterial({ visible: false })); hitbox.position.y = 2; group.add(hitbox);
+      const head = label(`<b>${title}</b>`, `f3-zone ${cls}`); head.position.set(0, -0.3, dp / 2 + 0.6); group.add(head);
+      rise(group, delay);
+      const pad = { group, hitbox, href, baseY: 0 }; pads.push(pad);
+      return group;
+    };
 
-    // Centre: the HCI cluster.
-    const core = platform(7.5, COL.cyan); root.add(core);
-    const lab = label(`<b>HCI CLUSTER</b><span>${d.nodes.length} nodes${d.witness ? " + witness" : ""} · ${d.vmsRunning}/${d.vmsTotal} VMs running</span>`, "f3-zone f3-cyan");
-    lab.position.set(0, 0.4, 9.2); root.add(lab); // at the front edge of the platform
-    const members = [...d.nodes.map((n) => ({ n })), ...(d.witness ? [{ w: d.witness }] : [])];
-    const ringR = members.length > 1 ? 4 : 0;
-    const nodePos = {};
-    members.forEach((m, i) => {
-      const a = (i / Math.max(1, members.length)) * Math.PI * 2 + Math.PI / 2, x = Math.cos(a) * ringR, z = Math.sin(a) * ringR;
-      if (m.n) {
-        const n = m.n, r = rack(n.healthy ? COL.cyan : COL.red, n.healthy);
-        r.scale.setScalar(1.35); r.position.set(x, 2.3, z); root.add(r); nodePos[n.name] = new THREE.Vector3(x, 1.7, z);
-        const l = label(`<b>${esc(n.name)}</b><span>CPU ${n.cpu == null ? "—" : Math.round(n.cpu) + "%"} · MEM ${n.mem == null ? "—" : Math.round(n.mem) + "%"}</span><span>${n.vms} VMs · ${n.healthy ? "online" : "offline"}</span>`, `f3-node ${n.healthy ? "" : "f3-bad"}`, () => { location.hash = `node/${encodeURIComponent(n.name)}`; });
-        l.position.set(x * 2.1, 4.4, z * 2.1); root.add(l);
-      } else {
-        const w = holo(new THREE.BoxGeometry(1.2, 1.2, 1.2), COL.amber, 0.1); w.position.set(x, 0.9, z); w.userData.spinSelf = 0.3; root.add(w);
-        const l = label(`<b>WITNESS · ${esc(m.w.name)}</b><span>quorum vote · no VM data</span>`, "f3-node f3-amber");
-        l.position.set(x * 2.1, 2.6, z * 2.1); root.add(l);
-      }
-    });
-    const inter = circle(Math.max(1.6, ringR), COL.blue, 0.8, 128, [0.3, 0.2]); inter.position.y = 0.3; inter.userData.spin = 0.6; root.add(inter);
-
-    // Zones around the circle.
-    const zones = [
-      { key: "vm", title: "WORKLOADS · VM GROUPS", color: COL.green, cls: "f3-green", angle: -Math.PI / 2 },
-      { key: "net", title: "NETWORK", color: COL.pink, cls: "f3-pink", angle: Math.PI / 6 },
-      { key: "sto", title: "STORAGE", color: COL.violet, cls: "f3-violet", angle: (5 * Math.PI) / 6 },
-    ];
-    for (const z of zones) {
-      const c = zoneAt(z.angle), pad = platform(5.2, z.color); pad.position.copy(c); root.add(pad);
-      const head = label(`<b>${z.title}</b>`, `f3-zone ${z.cls}`); head.position.set(c.x * 1.32, 0.4, c.z * 1.32); root.add(head); // outer rim
-      const b = beam(new THREE.Vector3(0, 0.3, 0).lerp(c, 0.36), c.clone().lerp(new THREE.Vector3(), 0.24).setY(0.3), z.color, 4);
-      root.add(b); beams.push({ key: z.key, b });
-      z.center = c;
-    }
-    const at = (z, dx, y, dz) => new THREE.Vector3(z.center.x + dx, y, z.center.z + dz);
-
-    // VM groups: a cluster of VM tokens per group.
-    const vz = zones[0], groups = d.groups.slice(0, 5);
-    groups.forEach((g, i) => {
-      const a = (i / Math.max(1, groups.length)) * Math.PI * 2, gx = Math.cos(a) * (groups.length > 1 ? 2.6 : 0), gz = Math.sin(a) * (groups.length > 1 ? 2.6 : 0);
-      const tokens = g.vms.slice(0, 10);
-      tokens.forEach((v, k) => {
-        const t = vmToken(v.running), ka = (k / Math.max(1, tokens.length)) * Math.PI * 2;
-        t.position.copy(at(vz, gx + Math.cos(ka) * 1.6, 1.8, gz + Math.sin(ka) * 1.6));
-        t.userData.baseY = 1.8; t.userData.bob = k * 0.8; root.add(t);
+    // Centre: the HCI cluster, servers opened up with their VMs above them.
+    const center = zone(0, 0, 15, 11, COL.cyan, "HCI CLUSTER", "f3-cyan", "cluster", 0);
+    const nodes = d.nodes.slice(0, 4);
+    nodes.forEach((n, i) => {
+      const color = n.healthy ? COL.cyan : COL.red, x = (i - (nodes.length - 1) / 2) * 7.2 * (nodes.length > 2 ? 0.6 : 1);
+      const srv = serverOpen(color, n.healthy); srv.position.set(x, 0.5, 1.5); srv.scale.setScalar(nodes.length > 2 ? 0.6 : 0.95); center.add(srv);
+      const l = label(`<b>${esc(n.name)}</b><span>CPU ${n.cpu == null ? "—" : Math.round(n.cpu) + "%"} · MEM ${n.mem == null ? "—" : Math.round(n.mem) + "%"}</span><span>${n.vms} VMs · ${n.healthy ? "online" : "offline"}</span>`, `f3-node ${n.healthy ? "" : "f3-bad"}`, () => { location.hash = `node/${encodeURIComponent(n.name)}`; });
+      l.position.set(x, 1.4, 4); center.add(l);
+      (n.vmList || []).slice(0, 2).forEach((v, k) => {
+        const cube = vmCube(v.os, v.running); cube.scale.setScalar(0.85);
+        const cx = x + (k - 0.5) * 2.4, cy = 4.3; cube.position.set(cx, cy, 0.6); cube.userData.bob = k + i; cube.userData.baseY = cy; center.add(cube);
+        const dash = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(cx, cy - 0.9, 0.6), new THREE.Vector3(cx * 0.9, 0.7, 1.4)]),
+          new THREE.LineDashedMaterial({ color: 0x8fdcff, dashSize: 0.18, gapSize: 0.14, transparent: true, opacity: 0.9 }));
+        dash.computeLineDistances(); center.add(dash);
+        const dot = glowSprite(COL.cyan, 0.4); dot.position.set(cx * 0.9, 0.7, 1.4); center.add(dot);
       });
-      const l = label(`<b>${esc(g.name)}</b><span>${g.running}/${g.vms.length} running</span>`, "f3-item f3-green", () => { location.hash = "compute"; });
-      l.position.copy(at(vz, gx, 3.1, gz)); root.add(l);
     });
-    if (!groups.length) { const l = label("<span>No VMs yet</span>", "f3-item f3-green"); l.position.copy(at(vz, 0, 2, 0)); root.add(l); }
+    const summary = label(`<b>${d.nodes.length} nodes${d.witness ? " + witness" : ""}</b><span>${d.vmsRunning}/${d.vmsTotal} VMs running</span>`, "f3-item f3-cyan");
+    summary.position.set(-6, 0.4, -4.6); center.add(summary);
 
-    // Network: switch, the outside above it, the cabling and VLANs.
-    const nz = zones[1];
-    d.switches.slice(0, 2).forEach((s, i) => {
-      const sw = switchBox(); sw.position.copy(at(nz, 0, 1 + i * 1.3, (i - (d.switches.length > 1 ? 0.5 : 0)) * 2.6)); root.add(sw);
-      const ports = s.links.map((l) => `<span>${esc(l.port || "?")} ⇄ ${esc(l.node)} ${esc(l.iface)}${l.speed ? " · " + esc(l.speed) : ""}</span>`).join("");
-      const l = label(`<b>${esc(s.name)}</b><span>${esc([s.model, s.mgmt].filter(Boolean).join(" · ") || "switch")}</span>${ports}`, "f3-item f3-pink");
-      l.position.copy(at(nz, 0, 2.3 + i * 1.3, (i - (d.switches.length > 1 ? 0.5 : 0)) * 2.6 + 1.6)); root.add(l);
+    // Satellites on the diagonals, joined to the centre by lit ground lines.
+    const sats = [
+      { key: "vm", x: -16, z: -14, color: COL.green, title: "WORKLOADS · VM GROUPS", cls: "f3-green", href: "compute" },
+      { key: "net", x: 16, z: -14, color: COL.pink, title: "NETWORK", cls: "f3-pink", href: "network" },
+      { key: "sto", x: 16, z: 14, color: COL.violet, title: "STORAGE", cls: "f3-violet", href: "storage" },
+      { key: "wit", x: -16, z: 14, color: COL.amber, title: "WITNESS · QUORUM", cls: "f3-amber", href: "cluster" },
+    ];
+    sats.forEach((s, i) => {
+      if (s.key === "wit" && !d.witness) return;
+      s.group = zone(s.x, s.z, 10, 9, s.color, s.title, s.cls, s.href, 0.35 + i * 0.18);
+      const a = new THREE.Vector3(s.x * 0.45, 0.1, s.z * 0.37), b = new THREE.Vector3(s.x * 0.7, 0.1, s.z * 0.68);
+      const bm = beam(a, b, s.color, 0); root.add(bm); beams.push({ key: s.key, b: bm });
     });
-    const web = internet(); web.position.copy(at(nz, 0, 4.3, -1.6)); root.add(web);
-    const ext = label(`<b>EXTERNAL NETWORK</b>${d.nets.slice(0, 5).map((n) => `<span>${esc(n.name)} · ${n.vlan ? "VLAN " + n.vlan : "untagged"}</span>`).join("")}`, "f3-item f3-pink");
-    ext.position.copy(at(nz, 0, 6.2, -1.6)); root.add(ext);
-    const up = beam(at(nz, 0, 1.4, 0), at(nz, 0, 3.4, -1.6), COL.pink, 0.6); root.add(up); beams.push({ key: "net", b: up });
+    const by = (k) => sats.find((s) => s.key === k)?.group;
 
-    // Storage: devices in a row on the storage pad.
-    const sz = zones[2], stores = d.stores.slice(0, 4);
+    // VM groups: glass VM cubes per group.
+    const vg = by("vm"), groups = d.groups.slice(0, 4);
+    groups.forEach((g, i) => {
+      const gx = (i % 2 - (groups.length > 1 ? 0.5 : 0)) * 4.4, gz = (Math.floor(i / 2) - (groups.length > 2 ? 0.5 : 0)) * 3.6;
+      g.vms.slice(0, 3).forEach((v, k) => {
+        const c = vmCube(v.os, v.running); c.scale.setScalar(0.5);
+        c.position.set(gx + (k - 1) * 1.15, 0.9 + (k % 2) * 0.3, gz); c.userData.bob = k * 0.7 + i; c.userData.baseY = c.position.y; vg.add(c);
+      });
+      const l = label(`<b>${esc(g.name)}</b><span>${g.running}/${g.vms.length} running</span>`, "f3-item f3-green");
+      l.position.set(gx, 2.4, gz); vg.add(l);
+    });
+    if (!groups.length) { const l = label("<span>No VMs yet</span>", "f3-item f3-green"); l.position.set(0, 1, 0); vg.add(l); }
+
+    // Network: the outside world with clients, the switch in front.
+    const ng = by("net"), globe = netGlobe(Math.max(6, d.nets.length * 3)); globe.scale.setScalar(0.62); globe.position.set(0, 2.6, -0.6); ng.add(globe);
+    const sw = switchBox(); sw.scale.setScalar(0.9); sw.position.set(0, 0.45, 3); ng.add(sw);
+    const s0 = d.switches[0];
+    if (s0) {
+      const l = label(`<b>${esc(s0.name)}</b><span>${esc([s0.model, s0.mgmt].filter(Boolean).join(" · "))}</span>${s0.links.map((k) => `<span>${esc(k.port || "?")} ⇄ ${esc(k.node)} ${esc(k.iface)}${k.speed ? " · " + esc(k.speed) : ""}</span>`).join("")}`, "f3-item f3-pink");
+      l.position.set(0, 1.3, 3.6); ng.add(l);
+    }
+    const vl = label(`<b>VM NETWORKS</b>${d.nets.slice(0, 5).map((n) => `<span>${esc(n.name)} · ${n.vlan ? "VLAN " + n.vlan : "untagged"}</span>`).join("")}`, "f3-item f3-pink");
+    vl.position.set(0, 5.6, -0.6); ng.add(vl);
+
+    // Storage: a NAS-style chassis per device, vStore as its own unit.
+    const sg = by("sto"), stores = d.stores.slice(0, 2);
     stores.forEach((s, i) => {
-      const off = (i - (stores.length - 1) / 2) * 3, m = store(s.kind); m.position.copy(at(sz, off * 0.6, 0.6, off)); root.add(m);
+      const x = (i - (stores.length - 1) / 2) * 4.6, m = nasBox(s.kind === "vstore" ? COL.violet : COL.blue);
+      m.scale.setScalar(stores.length > 1 ? 0.8 : 1); m.position.set(x, 1.4, 0); sg.add(m);
       const l = label(`<b>${esc(s.label)}</b><span>${esc(s.name)} · ${Math.round(s.used)}% of ${Math.round(s.cap)} GB</span><span>${s.kind === "vstore" ? `replicated on ${s.nodes.length} nodes` : esc(s.nodes.join(", "))}</span>`, "f3-item f3-violet", () => { location.hash = "storage"; });
-      l.position.copy(at(sz, off * 0.6, 3.4, off)); root.add(l);
+      l.position.set(x, 3.4, 0); sg.add(l);
     });
-    if (!stores.length) { const l = label("<span>No storage pools</span>", "f3-item f3-violet"); l.position.copy(at(sz, 0, 2, 0)); root.add(l); }
+    if (!stores.length) { const l = label("<span>No storage pools</span>", "f3-item f3-violet"); l.position.set(0, 1, 0); sg.add(l); }
 
-    // Pulses rising from the centre.
-    for (let k = 0; k < 2; k++) { const p = circle(7.5, COL.cyan, 0.7); p.userData.pulse = k * 0.5; root.add(p); }
+    // Witness: a small server on its own pad.
+    const wg = by("wit");
+    if (wg) {
+      const w = serverOpen(COL.amber, true); w.scale.setScalar(0.55); w.position.set(0, 0.6, 0); wg.add(w);
+      const l = label(`<b>${esc(d.witness.name)}</b><span>votes in quorum · no VM data</span>`, "f3-item f3-amber"); l.position.set(0, 1.8, 0); wg.add(l);
+    }
   }
 
   function update(d) {
     const sig = JSON.stringify([d.nodes.map((n) => [n.name, n.healthy, n.vms, Math.round(n.cpu ?? -1), Math.round(n.mem ?? -1)]), d.witness?.name, d.groups.map((g) => [g.name, g.running, g.vms.length]),
       d.switches.map((s) => [s.name, s.links.length]), d.stores.map((s) => [s.key, Math.round(s.used)]), d.nets.map((n) => n.name)]);
     if (sig !== signature) { signature = sig; build(d); }
-    for (const { key, b } of beams) b.userData.beam.level = level(d.traffic[key] || 0);
+    for (const { key, b } of beams) b.userData.beam.level = level(d.traffic[key] || 0) || 0.15;
   }
   return { update, dispose: () => stage.dispose() };
 }
@@ -340,39 +497,32 @@ function inside(container) {
 // ---------- Overview pictures ----------
 
 function hero(container, kind) {
-  const stage = new Stage(container, { controls: false, distance: 16, fov: 40, bloom: 0 });
-  stage.camera.position.set(0, 6.5, 14); stage.camera.lookAt(0, 2.2, 0);
+  const stage = new Stage(container, { controls: false, distance: 16, fov: 36, bloom: 0 });
   stage.scene.fog = null;
-  const root = stage.root, spin = new THREE.Group(); spin.userData.spin = 0.35; root.add(spin);
-  const pad = platform(4.2, kind === "storage" ? COL.violet : kind === "network" ? COL.pink : COL.cyan); root.add(pad);
+  const root = stage.root, spin = new THREE.Group(); spin.userData.spin = 0.3; root.add(spin);
   if (kind === "compute") {
-    const r = rack(COL.cyan, true); r.position.y = 2.2; spin.add(r);
-    for (let i = 0; i < 6; i++) {
-      const v = vmToken(true); v.userData.orbit = { r: 3.2, y: 2 + Math.sin(i) * 0.8, speed: 0.6, phase: (i / 6) * Math.PI * 2 }; root.add(v);
-    }
-    const orbit = circle(3.2, COL.green, 0.5, 128, [0.3, 0.25]); orbit.position.y = 2; orbit.userData.spin = -0.3; root.add(orbit);
-  } else if (kind === "storage") {
-    for (let i = 0; i < 4; i++) {
-      const disk = holo(new THREE.CylinderGeometry(1.9, 1.9, 0.32, 64), COL.violet, 0.12); disk.position.y = 0.9 + i * 0.95; spin.add(disk);
-      const ring = circle(2.5, COL.cyan, 0.8, 160, [0.5, 0.3]); ring.position.y = 0.9 + i * 0.95; ring.userData.spin = i % 2 ? -1 : 1; root.add(ring);
-      const hub = glowSprite(COL.white, 0.9); hub.position.y = 0.9 + i * 0.95; root.add(hub);
-    }
-    for (let i = 0; i < 14; i++) { // data rising in a helix
-      const s = glowSprite(COL.cyan, 0.35); s.userData.orbit = { r: 2.2, y: 0.6 + (i / 14) * 3.6, speed: 1.1, phase: i * 0.9 }; root.add(s);
-    }
-  } else {
-    const hubM = holo(new THREE.IcosahedronGeometry(0.9, 1), COL.cyan, 0.1); hubM.position.y = 2.6; hubM.userData.spinSelf = 0.5; root.add(hubM);
-    const pts = Array.from({ length: 6 }, (_, i) => { const a = (i / 6) * Math.PI * 2; return new THREE.Vector3(Math.cos(a) * 3.3, 1.6 + (i % 2) * 1.6, Math.sin(a) * 3.3); });
-    pts.forEach((p, i) => {
-      const n = holo(new THREE.SphereGeometry(0.42, 16, 12), COL.pink, 0.15); n.position.copy(p); spin.add(n);
-      const b = beam(new THREE.Vector3(0, 2.6, 0), p, i % 2 ? COL.pink : COL.cyan, 0.4); b.userData.beam.level = 0.6; spin.add(b);
+    stage.camera.position.set(0, 7, 13); stage.camera.lookAt(0, 2.2, 0);
+    const srv = serverOpen(COL.cyan, true); srv.position.y = 0.6; spin.add(srv);
+    [["windows", -1.6], ["linux", 1.6]].forEach(([os, x], i) => {
+      const c = vmCube(os, true); c.position.set(x, 3.7, 0.2); c.userData.bob = i; c.userData.baseY = 3.7; spin.add(c);
+      const dash = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x, 2.7, 0.2), new THREE.Vector3(x * 0.8, 0.8, 0.4)]), new THREE.LineDashedMaterial({ color: 0x8fdcff, dashSize: 0.16, gapSize: 0.12 }));
+      dash.computeLineDistances(); spin.add(dash);
     });
-    for (let k = 0; k < 2; k++) { const p = circle(1.2, COL.cyan, 0.7); p.position.y = 2.6; p.userData.pulse = k * 0.5; root.add(p); }
+    root.add(squarePad(8, 5, COL.cyan));
+  } else if (kind === "storage") {
+    stage.camera.position.set(0, 5.5, 12); stage.camera.lookAt(0, 1.4, 0);
+    const nas = nasBox(COL.violet); nas.position.y = 1.5; spin.add(nas);
+    for (let i = 0; i < 10; i++) { const s = glowSprite(COL.cyan, 0.3); s.userData.orbit = { r: 3.3, y: 0.4 + (i / 10) * 3, speed: 0.9, phase: i * 0.8 }; root.add(s); }
+    root.add(squarePad(6.5, 5, COL.violet));
+  } else {
+    stage.camera.position.set(0, 4.5, 17); stage.camera.lookAt(0, 0.4, 0);
+    const globe = netGlobe(9); globe.position.y = 0.6; spin.add(globe);
   }
   return { dispose: () => stage.dispose() };
 }
 
 window.Fabric3D = { inside, hero };
+
 
 // Overview: pointing at Compute, Storage or Network projects its hologram.
 (() => {

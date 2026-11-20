@@ -709,10 +709,11 @@ window.FabricMap = (() => {
     }
     page.classList.toggle("fabric-inside", !!inside3d);
   }
+  const osOf = (vm) => { const k = typeof osKind === "function" ? osKind(osName(vm, state.guests?.[vm.uuid])) : ""; return k.toLowerCase(); };
   function insideData() {
     const snap = moment(), gdefs = state.groups?.groups || [], gm = state.groups?.members || {};
     const groups = [...gdefs.map((g) => ({ id: g.id, name: g.name })), { id: "", name: "Ungrouped" }]
-      .map((g) => { const vms = scene.vms.filter((v) => (gm[v.vm.uuid] || "") === g.id).map((v) => ({ name: v.vm.name, running: v.running })); return { name: g.name, vms, running: vms.filter((v) => v.running).length }; })
+      .map((g) => { const vms = scene.vms.filter((v) => (gm[v.vm.uuid] || "") === g.id).map((v) => ({ name: v.vm.name, running: v.running, os: osOf(v.vm) })); return { name: g.name, vms, running: vms.filter((v) => v.running).length }; })
       .filter((g) => g.vms.length);
     const sw = new Map();
     for (const n of scene.nodes) for (const nb of extras.nodes[n.name]?.lldp || []) {
@@ -725,7 +726,8 @@ window.FabricMap = (() => {
     if (!sw.size) sw.set("switch", { name: "Upstream switch", model: "not announced (LLDP off)", mgmt: "", links: scene.nodes.map((n) => ({ node: n.name, iface: (extras.nodes[n.name]?.nics || []).find((c) => c.kind === "ethernet" && c.link)?.name || "uplink", port: "", speed: "" })) });
     const nets = Object.values(snap.nets), nodes = Object.values(snap.nodes);
     return {
-      nodes: scene.nodes.map((n) => ({ name: n.name, healthy: n.healthy, cpu: snap.nodes[n.name]?.cpu ?? n.cpu, mem: n.mem, vms: scene.vms.filter((v) => v.node === n).length })),
+      nodes: scene.nodes.map((n) => ({ name: n.name, healthy: n.healthy, cpu: snap.nodes[n.name]?.cpu ?? n.cpu, mem: n.mem, vms: scene.vms.filter((v) => v.node === n).length,
+        vmList: scene.vms.filter((v) => v.node === n).sort((a, b) => b.running - a.running).map((v) => ({ name: v.vm.name, running: v.running, os: osOf(v.vm) })) })),
       witness: scene.witness ? { name: scene.witness.name } : null,
       vmsTotal: scene.vms.length, vmsRunning: scene.vms.filter((v) => v.running).length,
       groups, switches: [...sw.values()], nets: (state.networks || []).map((n) => ({ name: n.name, vlan: n.vlan })),
