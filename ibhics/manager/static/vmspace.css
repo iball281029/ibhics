@@ -1,0 +1,186 @@
+/* Virtual machines, futuristic but plain to use: no side inspector, wide cards with
+   ring dials, live I/O and the actions on the card itself. */
+.spatial-workspace .vmp{grid-template-columns:205px minmax(0,1fr)!important}
+.vm-spatial-inspector{display:none!important}
+
+/* Summary strip. */
+.spatial-workspace .spatial-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.spatial-workspace .spatial-kpi{position:relative;overflow:hidden;padding:15px 18px 14px;border-radius:14px;border:1px solid #8fa3ff2e;background:linear-gradient(135deg,#1b1f45cc,#251a44cc);box-shadow:inset 0 1px #ffffff12,0 10px 30px #0004}
+.spatial-workspace .spatial-kpi:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--k,#54e8f0);box-shadow:0 0 14px var(--k,#54e8f0)}
+.spatial-workspace .spatial-kpi:after{content:"";position:absolute;right:-30px;top:-40px;width:120px;height:120px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--k,#54e8f0) 22%,transparent),transparent 70%)}
+.spatial-workspace .spatial-kpi strong{font-variant-numeric:tabular-nums;color:#f1f4ff;text-shadow:0 0 18px color-mix(in srgb,var(--k,#54e8f0) 40%,transparent)}
+.spatial-kpi.k-green{--k:#7cf0a8}.spatial-kpi.k-cyan{--k:#54e8f0}.spatial-kpi.k-pink{--k:#ed99da}.spatial-kpi.k-violet{--k:#bb83ff}
+
+/* Cards. */
+.spatial-workspace .vm-cards{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.spatial-workspace .vm-card.vx-card{transform:none;position:relative;display:grid;gap:14px;padding:16px 16px 12px;border-radius:18px;border:1px solid #9aa7ff2a;background:linear-gradient(160deg,#1c2150e6,#1a1538e6 60%,#22183fe6);box-shadow:inset 0 1px #ffffff14,0 14px 34px #0005;transition:transform .18s,box-shadow .18s,border-color .18s;overflow:hidden}
+.spatial-workspace .vm-card.vx-card:before{content:"";position:absolute;inset:0 0 auto;height:2px;background:linear-gradient(90deg,transparent,var(--state,#6c7590),transparent);opacity:.9}
+.spatial-workspace .vm-card.vx-card:after{border:0;z-index:0;content:"";position:absolute;inset:-40% -20% auto auto;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--state,#6c7590) 14%,transparent),transparent 70%);pointer-events:none}
+.vx-card.running{--state:#7cf0a8}.vx-card.paused{--state:#ffcb66}.vx-card.stopped,.vx-card.shutoff{--state:#6c7590}.vx-card.alerting{--state:#ffcb66}
+.spatial-workspace .vm-card.vx-card:hover{transform:translateY(-3px);border-color:#9fdcff55;box-shadow:inset 0 1px #ffffff1c,0 18px 40px #0007,0 0 0 1px #7de5ff22}
+.spatial-workspace .vm-card.vx-card.picked{border-color:#a98bff;box-shadow:0 0 0 1px #a98bff,0 0 26px #a98bff44}
+.vx-head{display:flex;align-items:center;gap:11px;position:relative;z-index:1}
+.vx-head .vm-pick{margin:0;flex:none}
+.vx-os{flex:none;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,#ffffff1a,#ffffff08);border:1px solid #ffffff1f;color:#9fb0d6}
+.vx-os.running{color:#7cf0a8;box-shadow:0 0 18px #7cf0a833}
+.vx-os svg{width:22px;height:22px}
+.vx-name{min-width:0;flex:1;display:grid;gap:2px}
+.vx-name .vm-name{font-size:15px;font-weight:600;color:#f1f4ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vx-ip{font-size:12px;color:#9fb0d6}
+.vx-state{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;letter-spacing:.3px;text-transform:capitalize;color:#c9d3f0;background:#ffffff0d;border:1px solid #ffffff1a}
+.vx-state i{width:7px;height:7px;border-radius:50%;background:var(--state,#6c7590)}
+.vx-card .vx-state.running{color:#9ff5c2;border-color:#7cf0a844;background:#7cf0a812}
+.vx-card .vx-state.running i{box-shadow:0 0 0 0 #7cf0a8aa;animation:vx-pulse 2s infinite}
+@keyframes vx-pulse{70%{box-shadow:0 0 0 7px #7cf0a800}100%{box-shadow:0 0 0 0 #7cf0a800}}
+.vx-gauges{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;position:relative;z-index:1}
+.vx-gauge{position:relative;display:grid;justify-items:center;padding:8px 4px 6px;border-radius:14px;background:#0b0f2c66;border:1px solid #ffffff0f}
+.vx-gauge svg{width:64px;height:64px;transform:rotate(-90deg)}
+.vx-track{fill:none;stroke:#ffffff12;stroke-width:5}
+.vx-arc{fill:none;stroke:var(--g);stroke-width:5;stroke-linecap:round;filter:drop-shadow(0 0 4px var(--g));transition:stroke-dasharray .6s ease}
+.vx-gauge.warn{--g:#ffcb66}.vx-gauge.bad{--g:#ff6b7a}
+.vx-gauge b{position:absolute;top:27px;left:0;right:0;text-align:center;font:600 15px ui-monospace,SFMono-Regular,Menlo,monospace;color:#f1f4ff;font-variant-numeric:tabular-nums}
+.vx-gauge b small{font-size:9px;color:#9fb0d6}
+.vx-gauge span{margin-top:2px;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#9fb0d6}
+.vx-gauge em{font-style:normal;font-size:11px;color:#c9d3f0}
+.vx-io{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;color:#8fdcf0;position:relative;z-index:1;padding:0 2px}
+.vx-io span:last-child{color:#c8a2ff}
+.vx-io .muted{color:#7f8bb0}
+.vx-foot{display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid #ffffff12;position:relative;z-index:1}
+.vx-node{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#9fb0d6}
+.vx-node svg{width:14px;height:14px}
+.vx-foot .actions{display:flex;gap:6px;align-items:center}
+@media(max-width:1100px){.spatial-workspace .spatial-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:700px){.spatial-workspace .vmp{grid-template-columns:1fr!important}.spatial-workspace .vm-cards{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){.vx-card,.vx-arc{transition:none}.vx-card .vx-state.running i{animation:none}}
+.vx-foot .spacer{flex:1}
+
+/* Status pill shared by cards and list. */
+.vx-state{flex:none;display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;letter-spacing:.3px;text-transform:capitalize;color:#c9d3f0;background:#ffffff0d;border:1px solid #ffffff1a;white-space:nowrap}
+.vx-state i{width:7px;height:7px;border-radius:50%;background:#6c7590}
+.vx-state.running{color:#9ff5c2;border-color:#7cf0a844;background:#7cf0a812}
+.vx-state.running i{background:#7cf0a8;animation:vx-pulse 2s infinite}
+.vx-state.paused{color:#ffe0a2;border-color:#ffcb6644;background:#ffcb6612}.vx-state.paused i{background:#ffcb66}
+
+/* Toolbar: one glass bar. */
+.spatial-workspace .vmp-bar{padding:8px;border:1px solid #9aa7ff24;border-radius:16px;background:linear-gradient(90deg,#171b40cc,#1f1840cc);box-shadow:inset 0 1px #ffffff10;margin:0 0 12px}
+.spatial-workspace #vm-view{padding:3px;border-radius:12px;background:#0b0f2c99;border:1px solid #ffffff12}
+.spatial-workspace #vm-view button{border:0;border-radius:9px;background:none;color:#9fb0d6;padding:7px 16px}
+.spatial-workspace #vm-view button.on{color:#fff;background:linear-gradient(135deg,#7d6bff,#d58ce8);box-shadow:0 0 18px #a98bff66}
+.spatial-workspace #vm-filter{border-radius:10px;background:#0b0f2c99;border-color:#ffffff1f}
+.spatial-workspace .vm-batch button,.spatial-workspace .vm-batch summary,.spatial-workspace #vm-refresh{border-radius:10px;background:#ffffff08;border-color:#ffffff1a}
+.spatial-workspace .vm-batch button:not(:disabled):hover,.spatial-workspace #vm-refresh:hover{border-color:#7de5ff66;box-shadow:0 0 14px #7de5ff33}
+.spatial-workspace .vm-picked{color:#7de5ff;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* Metric tabs: neon segments. */
+.spatial-workspace .vm-metrics{display:flex;gap:4px;width:max-content;max-width:100%;overflow-x:auto;padding:4px;margin:0 0 12px;border:1px solid #9aa7ff24;border-radius:14px;background:#0b0f2c80}
+.spatial-workspace .vm-metrics button{border:0;border-radius:10px;background:none;color:#9fb0d6;padding:7px 14px;font-size:12px;letter-spacing:.3px}
+.spatial-workspace .vm-metrics button:hover{color:#e6ecff;background:#ffffff0a}
+.spatial-workspace .vm-metrics button.active{color:#eafcff;background:linear-gradient(135deg,#54e8f033,#bb83ff33);box-shadow:inset 0 0 0 1px #7de5ff55,0 0 16px #54e8f022}
+
+/* List: floating glass rows with a glowing state edge. */
+.spatial-workspace #vm-list{border:0;background:none;box-shadow:none;overflow:visible}
+.spatial-workspace .vm-table{border-collapse:separate;border-spacing:0 8px;margin-top:-8px}
+.spatial-workspace .vm-table thead th{border:0;background:none;padding:6px 12px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.6px;color:#7f8bb0;text-transform:uppercase}
+.spatial-workspace .vm-table thead th[data-sort]:hover{color:#7de5ff;cursor:pointer}
+.spatial-workspace .vm-table tbody td{border-top:1px solid #9aa7ff22;border-bottom:1px solid #9aa7ff22;background:linear-gradient(90deg,#1b2049e0,#1d173fe0);padding:12px;vertical-align:middle;transition:background .18s,border-color .18s}
+.spatial-workspace .vm-table tbody td:first-child{border-left:1px solid #9aa7ff22;border-radius:14px 0 0 14px;box-shadow:inset 3px 0 0 var(--state,#6c7590)}
+.spatial-workspace .vm-table tbody td:last-child{border-right:1px solid #9aa7ff22;border-radius:0 14px 14px 0}
+.vx-row.running{--state:#7cf0a8}.vx-row.paused,.vx-row.alerting{--state:#ffcb66}
+.spatial-workspace .vm-table tbody tr.vx-row:hover td{background:linear-gradient(90deg,#232a5ce8,#261d4ee8);border-color:#7de5ff44}
+.spatial-workspace .vm-table tbody tr.vx-row.picked td{border-color:#a98bff;background:linear-gradient(90deg,#2a2563e8,#2b1d55e8)}
+.spatial-workspace .vm-table .name-cell{display:flex;align-items:center;gap:11px}
+.spatial-workspace .vm-table .name-cell .vx-os{width:34px;height:34px;border-radius:10px}
+.spatial-workspace .vm-table .name-cell .vx-os svg{width:18px;height:18px}
+.spatial-workspace .vm-table .vm-name{font-weight:600;color:#f1f4ff}
+.spatial-workspace .vm-table .mono{color:#cfe0ff}
+.spatial-workspace .vm-table .u-cell{min-width:96px}
+.spatial-workspace .vm-table .u-cell>span{font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#eef3ff}
+.spatial-workspace .vm-table .bar,.spatial-workspace .vx-card .bar{height:5px;border-radius:99px;background:#ffffff12;overflow:hidden;margin-top:5px}
+.spatial-workspace .vm-table .bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#54e8f0,#bb83ff);box-shadow:0 0 10px #7de5ff88}
+.spatial-workspace .vm-table .bar.warn i{background:linear-gradient(90deg,#ffcb66,#ff907a)}
+.spatial-workspace .vm-table .bar.bad i{background:linear-gradient(90deg,#ff907a,#ff6b7a)}
+.spatial-workspace .vm-table .actions{justify-content:flex-end}
+
+/* Groups. */
+.spatial-workspace .vgroups{border-radius:18px;border:1px solid #9aa7ff24;background:linear-gradient(180deg,#191d45d9,#1a1538d9);box-shadow:inset 0 1px #ffffff10}
+.spatial-workspace .vg-head span{font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:#7de5ff}
+.spatial-workspace .vg-row{border-radius:11px;transition:background .15s}
+.spatial-workspace .vg-row:hover{background:#ffffff0a}
+.spatial-workspace .vg-row.active{background:linear-gradient(90deg,#54e8f022,#bb83ff22);box-shadow:inset 0 0 0 1px #7de5ff44,0 0 18px #54e8f01a;color:#fff}
+.spatial-workspace .vg-row.drop{box-shadow:inset 0 0 0 1px #7cf0a8,0 0 18px #7cf0a833}
+.spatial-workspace .vg-bin:hover{color:#ff9fae}
+/* Override the older table skin (header band, per-cell boxes). */
+.spatial-workspace .vm-table thead,.spatial-workspace .vm-table thead tr,.spatial-workspace .vm-table thead th{background:none!important;box-shadow:none!important;border:0!important}
+.spatial-workspace .vm-table tbody td{box-shadow:none;border-left:0!important;border-right:0!important;border-radius:0!important;background-clip:padding-box}
+.spatial-workspace .vm-table tbody td:first-child{border-left:1px solid #9aa7ff22!important;border-radius:14px 0 0 14px!important;box-shadow:inset 3px 0 0 var(--state,#6c7590)}
+.spatial-workspace .vm-table tbody td:last-child{border-right:1px solid #9aa7ff22!important;border-radius:0 14px 14px 0!important}
+.spatial-workspace .vm-table tbody tr,.spatial-workspace .vm-table tbody tr:hover{background:none!important;box-shadow:none!important}
+.spatial-workspace .vm-metrics button.active{color:#eafcff!important;background:linear-gradient(135deg,#54e8f033,#bb83ff33)!important;border:0!important}
+.spatial-workspace .vm-table tbody td{background:#1c1d47!important}
+.spatial-workspace .vm-table tbody tr.vx-row:hover td{background:#242a5c!important}
+.spatial-workspace .vm-table tbody tr.vx-row.picked td{background:#2a2461!important}
+
+/* OS badges: Windows blue glass, Linux amber glass, unknown neutral. */
+.spatial-workspace .vx-os{position:relative;width:42px;height:42px;border-radius:13px;display:grid;place-items:center;color:inherit;box-shadow:none}
+.spatial-workspace .vx-os svg{width:26px!important;height:26px!important;min-width:0;fill:initial;stroke:initial;filter:drop-shadow(0 2px 4px #0006)}
+.spatial-workspace .vx-os.os-windows{background:linear-gradient(145deg,#2f7dff40,#14245a99);border:1px solid #7fd6ff66;box-shadow:inset 0 1px #ffffff26,0 0 16px #3c8cff33}
+.spatial-workspace .vx-os.os-linux{background:linear-gradient(145deg,#ffc23d38,#3a2a0e99);border:1px solid #ffc23d66;box-shadow:inset 0 1px #ffffff26,0 0 16px #ffc23d2e}
+.spatial-workspace .vx-os.os-other{background:linear-gradient(145deg,#ffffff14,#ffffff05);border:1px solid #ffffff22}
+.spatial-workspace .vx-os.running:after{content:"";position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:#7cf0a8;border:2px solid #1c1d47;box-shadow:0 0 8px #7cf0a8}
+.spatial-workspace .vx-os.stopped,.spatial-workspace .vx-os.shutoff{filter:saturate(.35) brightness(.85)}
+.spatial-workspace .vm-table .name-cell .vx-os{width:36px;height:36px;border-radius:11px}
+.spatial-workspace .vm-table .name-cell .vx-os svg{width:22px!important;height:22px!important}
+
+/* Selection box: a glass square with a neon tick. */
+.spatial-workspace .vm-pick,.spatial-workspace #vm-pick-all{appearance:none;-webkit-appearance:none;flex:none;width:18px;height:18px;margin:0;border-radius:6px;border:1.5px solid #9fb0d666;background:#0b0f2c99;display:grid;place-items:center;cursor:pointer;transition:border-color .15s,box-shadow .15s,background .15s}
+.spatial-workspace .vm-pick:hover,.spatial-workspace #vm-pick-all:hover{border-color:#7de5ff;box-shadow:0 0 10px #7de5ff55}
+.spatial-workspace .vm-pick:checked,.spatial-workspace #vm-pick-all:checked,.spatial-workspace #vm-pick-all:indeterminate{border-color:#a98bff;background:linear-gradient(135deg,#7d6bff,#d58ce8);box-shadow:0 0 12px #a98bff88}
+.spatial-workspace .vm-pick:checked:after,.spatial-workspace #vm-pick-all:checked:after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}
+.spatial-workspace #vm-pick-all:indeterminate:after{content:"";width:8px;height:2px;background:#fff;border-radius:2px}
+.spatial-workspace .vm-pick:focus-visible,.spatial-workspace #vm-pick-all:focus-visible{outline:2px solid #7de5ff;outline-offset:2px}
+
+/* Card body v2: concentric light rings + stat list + activity wave. */
+.spatial-workspace .vm-card.vx-card{background:radial-gradient(circle at 18% 38%,#3b6cff1f,transparent 42%),repeating-linear-gradient(0deg,#ffffff05 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,#ffffff05 0 1px,transparent 1px 22px),linear-gradient(160deg,#1c2150f2,#1a1538f2 60%,#22183ff2)}
+.spatial-workspace .vm-card.vx-card .vx-sheen{display:none}
+.spatial-workspace .vm-card.vx-card:hover:after{animation:vx-sheen 1.1s ease-out}
+@keyframes vx-sheen{from{transform:translate(-160%,40%) rotate(25deg)}to{transform:translate(60%,-20%) rotate(25deg)}}
+.vx-body{display:grid;grid-template-columns:128px 1fr;gap:16px;align-items:center;position:relative;z-index:1}
+.vx-rings{position:relative;width:128px;height:128px}
+.vx-rings svg{width:128px;height:128px;overflow:visible}
+.vx-ticks line{stroke:#7de5ff33;stroke-width:1}
+.vx-ring-track{fill:none;stroke:#ffffff10;stroke-width:7}
+.vx-ring{fill:none;stroke-width:7;stroke-linecap:round;transition:stroke-dasharray .8s cubic-bezier(.2,.7,.2,1)}
+.vx-ring.cpu{stroke:#54e8f0;filter:drop-shadow(0 0 5px #54e8f0)}
+.vx-ring.mem{stroke:#ed99da;filter:drop-shadow(0 0 5px #ed99da)}
+.vx-ring.disk{stroke:#bb83ff;filter:drop-shadow(0 0 5px #bb83ff)}
+.vx-ring.warn{stroke:#ffcb66;filter:drop-shadow(0 0 6px #ffcb66)}
+.vx-ring.bad{stroke:#ff6b7a;filter:drop-shadow(0 0 6px #ff6b7a)}
+.vx-core{position:absolute;inset:0;display:grid;place-content:center;text-align:center;pointer-events:none}
+.vx-core b{font:700 22px ui-monospace,SFMono-Regular,Menlo,monospace;color:#fff;text-shadow:0 0 14px #54e8f0aa;line-height:1}
+.vx-core b small{font-size:11px;color:#9fe9ff}
+.vx-core span{font:9px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:#7de5ff;margin-top:3px}
+.vx-stats{display:grid;gap:9px;min-width:0}
+.vx-stat{display:grid;grid-template-columns:10px 1fr auto;column-gap:7px;row-gap:4px;align-items:center}
+.vx-stat i{width:8px;height:8px;border-radius:50%;background:var(--c);box-shadow:0 0 8px var(--c)}
+.vx-stat span{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:#9fb0d6}
+.vx-stat b{font:600 14px ui-monospace,SFMono-Regular,Menlo,monospace;color:#f1f4ff;font-variant-numeric:tabular-nums}
+.vx-stat em{grid-column:2;font-style:normal;font-size:11px;color:#7f8bb0}
+.vx-stat .vx-meter{grid-column:2/4;grid-row:2;justify-self:end;width:56%;height:3px;border-radius:9px;background:#ffffff12;overflow:hidden;align-self:center}
+.vx-stat .vx-meter u{display:block;height:100%;border-radius:9px;background:var(--c);box-shadow:0 0 8px var(--c)}
+.vx-stat.cpu{--c:#54e8f0}.vx-stat.mem{--c:#ed99da}.vx-stat.disk{--c:#bb83ff}.vx-stat.warn{--c:#ffcb66}.vx-stat.bad{--c:#ff6b7a}
+.vx-wave{position:relative;z-index:1;height:58px;border-radius:12px;background:#0a0e2a99;border:1px solid #7de5ff1f;overflow:hidden}
+.vx-wave svg{position:absolute;inset:4px 0 14px;width:100%;height:calc(100% - 18px)}
+.vx-wave-cpu{fill:none;stroke:#54e8f0;stroke-width:1.8;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 3px #54e8f0)}
+.vx-wave-net{fill:none;stroke:#ed99da;stroke-width:1.4;stroke-dasharray:3 3;vector-effect:non-scaling-stroke;opacity:.85}
+.vx-wave-key{position:absolute;left:10px;bottom:3px;font:9px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.8px;color:#7f8bb0}
+.vx-wave-key i{display:inline-block;width:10px;height:2px;margin:0 4px 2px 0;vertical-align:middle}
+.vx-wave-key i.c{background:#54e8f0}.vx-wave-key i.n{background:#ed99da;margin-left:8px}
+.vx-wave.empty{display:grid;place-items:center}
+.vx-wave.empty span{font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1px;color:#7f8bb0}
+.vx-wave:after{content:"";position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,#7de5ff14,transparent);animation:vx-scan 3.2s linear infinite}
+@keyframes vx-scan{from{left:-40%}to{left:100%}}
+@media(prefers-reduced-motion:reduce){.vx-wave:after,.spatial-workspace .vm-card.vx-card:hover:after{animation:none}.vx-ring{transition:none}}
+.vx-stats{gap:11px}
+.vx-stat{row-gap:3px}
+.vx-stat em{grid-row:2;grid-column:2}
+.vx-stat .vx-meter{grid-row:2;grid-column:3;width:64px;justify-self:end}
