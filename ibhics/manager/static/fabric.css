@@ -151,3 +151,9 @@
 .nexus-visual.has-3d .nexus-alt-home{opacity:1;transform:none}
 .nexus-visual.has-3d:has(.nexus-link:hover,.nexus-link:focus-visible) .nexus-alt-home{opacity:0;transform:scale(.9)}
 .nexus-alt-home{left:14%;width:66%;top:0;height:100%}
+/* Everything on the map page opens its page. */
+a.fx-kpi,a.fx-donut,a.fx-gauge,a.fx-bar{color:inherit;text-decoration:none;cursor:pointer;transition:background .15s,box-shadow .15s}
+a.fx-kpi:hover,a.fx-donut:hover,a.fx-bar:hover{background:#3ef0ff12;box-shadow:inset 2px 0 0 #3ef0ff}
+a.fx-gauge:hover svg{filter:drop-shadow(0 0 10px var(--c))}
+a.fx-gauge:hover span{color:#fff}
+#fx-trend{cursor:pointer}

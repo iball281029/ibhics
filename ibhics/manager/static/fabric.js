@@ -157,26 +157,27 @@ window.FabricMap = (() => {
     const live = (n) => snap.nodes[n.name] || {};
     const rx = Object.values(snap.nets).reduce((s, n) => s + n.rx, 0), tx = Object.values(snap.nets).reduce((s, n) => s + n.tx, 0);
     const io = nodes.reduce((s, n) => s + (live(n).read || 0) + (live(n).write || 0), 0);
-    const kpi = (label, value, d, c) => `<div class="fx-kpi">${icon(d, c)}<span>${label}</span><b>${value}</b></div>`;
+    const kpi = (label, value, d, c, href) => `<a class="fx-kpi" href="#${href}">${icon(d, c)}<span>${label}</span><b>${value}</b></a>`;
     $id("fabric-hud").innerHTML = `<h3>Cluster</h3>`
-      + kpi("Nodes online", `${nodes.filter((n) => n.healthy).length}<small> / ${nodes.length}</small>`, "M10 12h14v10H10zM13 22v3m8-3v3M10 25h14", H1)
-      + kpi("Network in", rate(rx), "M17 9v16m-5-5 5 5 5-5", H1)
-      + kpi("Network out", rate(tx), "M17 25V9m-5 5 5-5 5 5", PINK)
-      + kpi("Storage I/O", bytesRate(io), "M10 11c0-2 14-2 14 0v12c0 2-14 2-14 0zM10 11c0 2 14 2 14 0M10 17c0 2 14 2 14 0", "#b49bff");
+      + kpi("Nodes online", `${nodes.filter((n) => n.healthy).length}<small> / ${nodes.length}</small>`, "M10 12h14v10H10zM13 22v3m8-3v3M10 25h14", H1, "cluster")
+      + kpi("Network in", rate(rx), "M17 9v16m-5-5 5 5 5-5", H1, "network")
+      + kpi("Network out", rate(tx), "M17 25V9m-5 5 5-5 5 5", PINK, "network")
+      + kpi("Storage I/O", bytesRate(io), "M10 11c0-2 14-2 14 0v12c0 2-14 2-14 0zM10 11c0 2 14 2 14 0M10 17c0 2 14 2 14 0", "#b49bff", "storage");
 
     const running = vms.filter((v) => v.running).length, off = vms.length - running;
     const total = Math.max(1, vms.length), r = 42, c = 2 * Math.PI * r, on = (running / total) * c;
-    $id("fx-donut").innerHTML = `<div class="fx-donut"><svg viewBox="0 0 110 110" aria-hidden="true">
+    $id("fx-donut").innerHTML = `<a class="fx-donut" href="#compute"><svg viewBox="0 0 110 110" aria-hidden="true">
         <circle cx="55" cy="55" r="${r}" fill="none" stroke="#3ef0ff1f" stroke-width="12"/>
         <circle cx="55" cy="55" r="${r}" fill="none" stroke="${GREEN}" stroke-width="12" stroke-dasharray="${on.toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 55 55)" style="filter:drop-shadow(0 0 6px ${GREEN})"/>
         <circle cx="55" cy="55" r="${r}" fill="none" stroke="#5d6f88" stroke-width="12" stroke-dasharray="${((off / total) * c).toFixed(1)} ${c.toFixed(1)}" stroke-dashoffset="${(-on).toFixed(1)}" transform="rotate(-90 55 55)"/>
         <text x="55" y="58" text-anchor="middle" fill="#e8fbff" font-size="20" font-family="ui-monospace,monospace">${vms.length}</text>
         <text x="55" y="74" text-anchor="middle" fill="#6b8fb4" font-size="8" letter-spacing="1.5" font-family="ui-monospace,monospace">VMS</text></svg>
       <div class="fx-legend"><div style="--c:${GREEN}"><i></i>Running<b>${running}</b></div><div style="--c:#5d6f88"><i></i>Stopped<b>${off}</b></div>
-      ${nodes.map((n) => `<div style="--c:${n.healthy ? H2 : RED}"><i></i>${esc(n.name)}<b>${vms.filter((v) => v.node === n).length}</b></div>`).join("")}</div></div>`;
+      ${nodes.map((n) => `<div style="--c:${n.healthy ? H2 : RED}"><i></i>${esc(n.name)}<b>${vms.filter((v) => v.node === n).length}</b></div>`).join("")}</div></a>`;
 
     const span = history.slice(-40), sum = (h) => Object.values(h.nets).reduce((s, n) => s + n.rx + n.tx, 0);
     const mx = Math.max(1, ...span.map(sum)), bw = 240 / Math.max(1, span.length);
+    $id("fx-trend").onclick = () => { location.hash = "network"; };
     $id("fx-trend").innerHTML = span.length < 2 ? `<p style="font-size:11px;color:#6b8fb4;margin:0">Collecting readings…</p>` : `<svg viewBox="0 0 260 110" aria-hidden="true">
       ${[0, 1, 2, 3].map((k) => `<line x1="20" x2="260" y1="${10 + k * 30}" y2="${10 + k * 30}" stroke="#3ef0ff" stroke-opacity=".08"/>`).join("")}
       ${span.map((h, i) => { const hh = (sum(h) / mx) * 90, now = cursor >= 0 && history[cursor] === h;
@@ -191,17 +192,17 @@ window.FabricMap = (() => {
     const netMax = Math.max(1, ...scene.nets.map((n) => (snap.nets[n.name]?.rx || 0) + (snap.nets[n.name]?.tx || 0)));
     $id("fx-nets").innerHTML = `<div class="fx-bars">${scene.nets.map((n) => {
       const t = snap.nets[n.name] || { rx: 0, tx: 0 };
-      return `<div class="fx-bar" style="--c:${n.color}"><span>${esc(n.name)}</span><b>↓${rate(t.rx)} ↑${rate(t.tx)}</b><u><i style="width:${(((t.rx + t.tx) / netMax) * 100).toFixed(1)}%"></i></u></div>`;
+      return `<a class="fx-bar" href="#network" style="--c:${n.color}"><span>${esc(n.name)}</span><b>↓${rate(t.rx)} ↑${rate(t.tx)}</b><u><i style="width:${(((t.rx + t.tx) / netMax) * 100).toFixed(1)}%"></i></u></a>`;
     }).join("")}</div>`;
-    $id("fx-pools").innerHTML = `<div class="fx-bars">${scene.pools.slice(0, 5).map((p) => `<div class="fx-bar" style="--c:#b49bff"><span>${esc(p.name)}</span><b>${p.used.toFixed(0)}% · ${Math.round(p.cap)} GB</b><u><i style="width:${pct(p.used) ?? 0}%"></i></u></div>`).join("") || `<span style="font-size:11px;color:#6b8fb4">No storage pools</span>`}</div>`;
+    $id("fx-pools").innerHTML = `<div class="fx-bars">${scene.pools.slice(0, 5).map((p) => `<a class="fx-bar" href="#storage" style="--c:#b49bff"><span>${esc(p.name)}</span><b>${p.used.toFixed(0)}% · ${Math.round(p.cap)} GB</b><u><i style="width:${pct(p.used) ?? 0}%"></i></u></a>`).join("") || `<span style="font-size:11px;color:#6b8fb4">No storage pools</span>`}</div>`;
 
     const avg = (k) => { const v = nodes.map((n) => pct(live(n)[k] ?? n[k])).filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
     const cap = scene.pools.reduce((s, p) => s + p.cap, 0), store = cap ? (scene.pools.reduce((s, p) => s + p.alloc, 0) / cap) * 100 : null;
-    const gauge = (label, value, color, text) => `<div class="fx-gauge" style="--c:${color}">${ring(value, color)}<b>${text ?? (value == null ? "—" : `${Math.round(value)}<small>%</small>`)}</b><span>${label}</span></div>`;
+    const gauge = (label, value, color, text, href) => `<a class="fx-gauge" href="#${href}" style="--c:${color}">${ring(value, color)}<b>${text ?? (value == null ? "—" : `${Math.round(value)}<small>%</small>`)}</b><span>${label}</span></a>`;
     const net = rate(rx + tx).split(" ");
-    $id("fx-gauges").innerHTML = gauge("Cluster CPU", avg("cpu"), H1) + gauge("Cluster memory", avg("mem"), PINK)
-      + gauge("Storage used", store, "#b49bff") + gauge("VMs running", vms.length ? (running / vms.length) * 100 : null, GREEN)
-      + gauge("Network load", level(rx + tx) * 100, AMBER, `${net[0]}<small>${net[1]}</small>`);
+    $id("fx-gauges").innerHTML = gauge("Cluster CPU", avg("cpu"), H1, null, "cluster") + gauge("Cluster memory", avg("mem"), PINK, null, "cluster")
+      + gauge("Storage used", store, "#b49bff", null, "storage") + gauge("VMs running", vms.length ? (running / vms.length) * 100 : null, GREEN, null, "compute")
+      + gauge("Network load", level(rx + tx) * 100, AMBER, `${net[0]}<small>${net[1]}</small>`, "network");
   }
 
   // ---------- the globe ----------
@@ -408,7 +409,7 @@ window.FabricMap = (() => {
   function storeDevices() {
     const raw = state.pools || [], out = new Map();
     for (const p of raw) {
-      const src = String(p.source || ""), vstore = p.name === "virtualstorage" || /gateway-exports/.test(src);
+      const src = String(p.source || ""), vstore = p.name === "virtualstorage" || /gateway-exports/.test(src) || /virtual storage/i.test(p.display_name || "");
       const kind = vstore ? "vstore" : p.type === "iscsi" ? "iscsi" : p.type === "nfs" ? "nas" : p.type === "lvm" ? "san" : "local";
       const key = vstore ? "vstore" : kind === "local" ? `local:${p.node}:${p.name}` : `${kind}:${src || p.name}`;
       const d = out.get(key) || { key, kind, name: p.display_name || p.name, source: src, nodes: new Set(), cap: 0, alloc: 0 };
@@ -731,7 +732,11 @@ window.FabricMap = (() => {
       witness: scene.witness ? { name: scene.witness.name } : null,
       vmsTotal: scene.vms.length, vmsRunning: scene.vms.filter((v) => v.running).length,
       groups, switches: [...sw.values()], nets: (state.networks || []).map((n) => ({ name: n.name, vlan: n.vlan })),
-      stores: storeDevices().map((d) => ({ key: d.key, kind: d.kind, label: STORE_LABEL[d.kind], name: d.name, used: d.cap ? (d.alloc / d.cap) * 100 : 0, cap: d.cap, nodes: [...d.nodes] })),
+      stores: (() => { // Virtual Storage always first, also before it is set up
+        const list = storeDevices().map((d) => ({ key: d.key, kind: d.kind, label: STORE_LABEL[d.kind], name: d.name, used: d.cap ? (d.alloc / d.cap) * 100 : 0, cap: d.cap, nodes: [...d.nodes] }));
+        if (!list.some((d) => d.kind === "vstore")) list.unshift({ key: "vstore", kind: "vstore", label: STORE_LABEL.vstore, name: "Virtual Storage", used: 0, cap: 0, nodes: [] });
+        return list;
+      })(),
       traffic: { vm: scene.vms.reduce((a, v) => a + v.rx + v.tx, 0), net: nets.reduce((a, n) => a + n.rx + n.tx, 0), sto: nodes.reduce((a, n) => a + n.read + n.write, 0) },
     };
   }

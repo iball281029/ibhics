@@ -401,7 +401,7 @@ function inside(container) {
       const group = new THREE.Group(); group.position.set(x, 0, z); root.add(group);
       group.add(platform(radius, color));
       const hitbox = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 5, 24), new THREE.MeshBasicMaterial({ visible: false })); hitbox.position.y = 2.5; group.add(hitbox);
-      const head = label(`<b>${title}</b>`, `f3-zone ${cls}`); head.position.set(0, 0.3, radius + 0.8); group.add(head);
+      const head = label(`<b>${title}</b>`, `f3-zone ${cls}`, () => { location.hash = href; }); head.position.set(0, 0.3, radius + 0.8); group.add(head);
       if (delay != null) rise(group, delay);
       pads.push({ group, hitbox, href, baseY: 0 });
       return group;
@@ -423,7 +423,7 @@ function inside(container) {
         dash.computeLineDistances(); center.add(dash);
       });
     });
-    const summary = label(`<b>${d.nodes.length} nodes${d.witness ? " + witness" : ""}</b><span>${d.vmsRunning}/${d.vmsTotal} VMs running</span>`, "f3-item f3-cyan");
+    const summary = label(`<b>${d.nodes.length} nodes${d.witness ? " + witness" : ""}</b><span>${d.vmsRunning}/${d.vmsTotal} VMs running</span>`, "f3-item f3-cyan", () => { location.hash = "cluster"; });
     summary.position.set(0, 7.2, 0); center.add(summary);
 
     // The ring of zones around it.
@@ -447,7 +447,7 @@ function inside(container) {
         const c = vmCube(v.os, v.running); c.scale.setScalar(0.42);
         c.position.set(gx + (k - 1) * 0.95, 1 + (k % 2) * 0.35, gz); c.userData.bob = k * 0.7 + i; c.userData.baseY = c.position.y; vg.add(c);
       });
-      const l = label(`<b>${esc(g.name)}</b><span>${g.running}/${g.vms.length} running</span>`, "f3-item f3-green"); l.position.set(gx, 2.4, gz); vg.add(l);
+      const l = label(`<b>${esc(g.name)}</b><span>${g.running}/${g.vms.length} running</span>`, "f3-item f3-green", () => { location.hash = "compute"; }); l.position.set(gx, 2.4, gz); vg.add(l);
     });
     if (!groups.length) { const l = label("<span>No VMs yet</span>", "f3-item f3-green"); l.position.set(0, 1, 0); vg.add(l); }
 
@@ -455,16 +455,17 @@ function inside(container) {
     const sw = switchBox(); sw.scale.setScalar(0.85); sw.position.set(0, 0.45, 2.4); ng.add(sw);
     const s0 = d.switches[0];
     if (s0) {
-      const l = label(`<b>${esc(s0.name)}</b><span>${esc([s0.model, s0.mgmt].filter(Boolean).join(" · "))}</span>${s0.links.map((k) => `<span>${esc(k.port || "?")} ⇄ ${esc(k.node)} ${esc(k.iface)}${k.speed ? " · " + esc(k.speed) : ""}</span>`).join("")}`, "f3-item f3-pink");
+      const l = label(`<b>${esc(s0.name)}</b><span>${esc([s0.model, s0.mgmt].filter(Boolean).join(" · "))}</span>${s0.links.map((k) => `<span>${esc(k.port || "?")} ⇄ ${esc(k.node)} ${esc(k.iface)}${k.speed ? " · " + esc(k.speed) : ""}</span>`).join("")}`, "f3-item f3-pink", () => { location.hash = "network"; });
       l.position.set(0, 1.3, 3.2); ng.add(l);
     }
-    const vl = label(`<b>VM NETWORKS</b>${d.nets.slice(0, 5).map((n) => `<span>${esc(n.name)} · ${n.vlan ? "VLAN " + n.vlan : "untagged"}</span>`).join("")}`, "f3-item f3-pink"); vl.position.set(0, 6, -0.6); ng.add(vl);
+    const vl = label(`<b>VM NETWORKS</b>${d.nets.slice(0, 5).map((n) => `<span>${esc(n.name)} · ${n.vlan ? "VLAN " + n.vlan : "untagged"}</span>`).join("")}`, "f3-item f3-pink", () => { location.hash = "network"; }); vl.position.set(0, 6, -0.6); ng.add(vl);
 
-    const sg = by("sto"), stores = d.stores.slice(0, 2);
+    const sg = by("sto"), stores = d.stores.slice(0, 3);
     stores.forEach((s, i) => {
-      const x = (i - (stores.length - 1) / 2) * 3.8, m = nasBox(s.kind === "vstore" ? COL.violet : COL.blue);
-      m.scale.setScalar(stores.length > 1 ? 0.62 : 0.8); m.position.set(x, 1.2, 0); sg.add(m);
-      const l = label(`<b>${esc(s.label)}</b><span>${esc(s.name)} · ${Math.round(s.used)}% of ${Math.round(s.cap)} GB</span><span>${s.kind === "vstore" ? `replicated on ${s.nodes.length} nodes` : esc(s.nodes.join(", "))}</span>`, "f3-item f3-violet", () => { location.hash = "storage"; });
+      const x = (i - (stores.length - 1) / 2) * 3.4, m = nasBox(s.kind === "vstore" ? (s.cap ? COL.violet : 0x6c7a92) : COL.blue);
+      m.scale.setScalar(stores.length > 2 ? 0.48 : stores.length > 1 ? 0.62 : 0.8); m.position.set(x, 1.2, 0); sg.add(m);
+      const info = s.kind === "vstore" && !s.cap ? "<span>not set up yet</span>" : `<span>${esc(s.name)} · ${Math.round(s.used)}% of ${Math.round(s.cap)} GB</span><span>${s.kind === "vstore" ? `replicated on ${s.nodes.length} nodes` : esc(s.nodes.join(", "))}</span>`;
+      const l = label(`<b>${esc(s.label)}</b>${info}`, "f3-item f3-violet", () => { location.hash = "storage"; });
       l.position.set(x, 3.2, 0); sg.add(l);
     });
     if (!stores.length) { const l = label("<span>No storage pools</span>", "f3-item f3-violet"); l.position.set(0, 1, 0); sg.add(l); }
@@ -472,7 +473,7 @@ function inside(container) {
     const wg = by("wit");
     if (wg) {
       const w = serverOpen(COL.amber, true); w.scale.setScalar(0.5); w.position.set(0, 0.6, 0); wg.add(w);
-      const l = label(`<b>${esc(d.witness.name)}</b><span>votes in quorum · no VM data</span>`, "f3-item f3-amber"); l.position.set(0, 1.9, 0); wg.add(l);
+      const l = label(`<b>${esc(d.witness.name)}</b><span>votes in quorum · no VM data</span>`, "f3-item f3-amber", () => { location.hash = "cluster"; }); l.position.set(0, 1.9, 0); wg.add(l);
     }
     for (let k = 0; k < 2; k++) { const p = circle(8, COL.cyan, 0.7); p.userData.pulse = k * 0.5; root.add(p); }
   }
