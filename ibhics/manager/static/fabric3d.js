@@ -171,7 +171,7 @@ function vmCube(os, running) { // a glass cube with the VM's screen and a stack 
 function serverOpen(color, healthy) { // a 2U server with its lid off: board, CPUs, DIMMs, fan, front bays
   const g = new THREE.Group();
   g.add(holo(new THREE.BoxGeometry(6.4, 0.9, 3.6), color, 0.05));
-  const board = holo(new THREE.BoxGeometry(6, 0.05, 3.2), color, 0.12, 0.5); board.position.y = -0.35; g.add(board);
+  const board = holo(new THREE.BoxGeometry(6, 0.05, 3.2), color, 0.045, 0.5); board.position.y = -0.35; g.add(board);
   for (let k = 0; k < 2; k++) { // CPUs with heatsink fins
     const cpu = holo(new THREE.BoxGeometry(0.9, 0.18, 0.9), color, 0.25); cpu.position.set(-1.6 + k * 1.3, -0.2, 0.1); g.add(cpu);
     const fins = [];
@@ -288,7 +288,14 @@ class Stage {
     this.camera.position.set(0, distance * 0.62, distance);
     if (controls) {
       this.controls = new OrbitControls(this.camera, this.labels.domElement);
-      Object.assign(this.controls, { enableDamping: true, dampingFactor: 0.06, autoRotate: !reduced.matches, autoRotateSpeed: 0.45, minDistance: 14, maxDistance: 70, maxPolarAngle: Math.PI * 0.47, enablePan: false });
+      // Turn every way (also from below), zoom right in towards the pointer, pan with the right button.
+      Object.assign(this.controls, { enableDamping: true, dampingFactor: 0.08, autoRotate: !reduced.matches, autoRotateSpeed: 0.45,
+        minDistance: 4, maxDistance: 160, minPolarAngle: 0.02, maxPolarAngle: Math.PI - 0.02, enablePan: true, screenSpacePanning: true,
+        zoomToCursor: true, zoomSpeed: 1.2, rotateSpeed: 0.8 });
+      const stop = () => { this.controls.autoRotate = false; clearTimeout(this.resume); this.resume = setTimeout(() => { this.resume = 0; this.controls.autoRotate = !reduced.matches; }, 15000); };
+      this.controls.addEventListener("start", stop); // hold still while the user looks around
+      this.labels.domElement.addEventListener("wheel", stop, { passive: true });
+      this.labels.domElement.addEventListener("dblclick", () => this.home?.());
     }
     if (bloom) { // bloom needs an opaque frame; without it the canvas stays see-through
       this.composer = new EffectComposer(this.renderer);
@@ -311,7 +318,7 @@ class Stage {
         const fitDistance = frameRadius / Math.sin(halfAngle);
         this.camera.position.multiplyScalar(fitDistance / (this.fitDistance || this.camera.position.length()));
         this.fitDistance = fitDistance;
-        if (this.controls) this.controls.maxDistance = Math.max(70, fitDistance * 2);
+        if (this.controls) this.controls.maxDistance = Math.max(160, fitDistance * 3);
       }
       this.camera.updateProjectionMatrix();
     };
@@ -394,7 +401,9 @@ function rise(o, delay) { o.userData.rise = { delay, from: -7, to: o.position.y 
 
 
 function inside(container) {
-  const stage = new Stage(container, { distance: 44, fov: 42, bloom: 0.6, frameRadius: 34 });
+  const stage = new Stage(container, { distance: 44, fov: 42, bloom: 0.6, frameRadius: 25 });
+  const start = stage.camera.position.clone();
+  stage.home = () => { stage.camera.position.copy(start.clone().setLength(stage.fitDistance || start.length())); stage.controls.target.set(0, 0, 0); };
   backdrop(stage.scene);
   let signature = "", pads = [], hovered = null;
   const beams = [], R = 20, ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
@@ -418,7 +427,7 @@ function inside(container) {
       const want = p === hovered ? 1.2 : 0, cur = p.group.userData.lift || 0, next = cur + (want - cur) * Math.min(1, dt * 6);
       p.group.userData.lift = next; p.group.position.y = p.baseY + next;
     }
-    stage.controls.autoRotate = !hovered && !reduced.matches;
+    if (!stage.resume) stage.controls.autoRotate = !hovered && !reduced.matches;
   };
 
   function build(d) {
@@ -511,7 +520,7 @@ function inside(container) {
     if (sig !== signature) { signature = sig; build(d); }
     for (const { key, b } of beams) b.userData.beam.level = level(d.traffic[key] || 0) || 0.15;
   }
-  return { update, dispose: () => stage.dispose() };
+  return { update, home: () => stage.home(), dispose: () => stage.dispose() };
 }
 
 // ---------- Overview pictures ----------

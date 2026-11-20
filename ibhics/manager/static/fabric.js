@@ -674,7 +674,7 @@ window.FabricMap = (() => {
     e.currentTarget.textContent = view.spin ? "Pause rotation" : "Rotate";
     e.currentTarget.setAttribute("aria-pressed", String(!view.spin));
   });
-  $id("fabric-reset").addEventListener("click", () => Object.assign(view, HOME, { vyaw: 0 }));
+  $id("fabric-reset").addEventListener("click", () => { Object.assign(view, HOME, { vyaw: 0 }); inside3d?.home(); });
 
   function clock() {
     $id("fx-clock").textContent = new Date().toLocaleString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
