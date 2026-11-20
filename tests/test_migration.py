@@ -277,3 +277,12 @@ def test_staging_refusal_stops_the_migration(env):
     [job] = env.client.get("/api/v1/migrations").json()
     assert job["state"] == "failed" and "already uses" in job["error"]
     assert env.where(uuid) == "node1"
+
+
+def test_target_refreshes_the_vm_pools_before_moving(env):
+    env.add_shared_pool()
+    uuid = env.create_vm("fresh", pool="shared", start=False)
+    seen = []
+    env.node2.refresh_pools = lambda names: seen.append(list(names))
+    assert env.migrate(uuid, node="node2").status_code == 202
+    assert ["shared"] in seen and env.where(uuid) == "node2"

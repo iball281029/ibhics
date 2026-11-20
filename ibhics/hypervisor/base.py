@@ -608,6 +608,11 @@ class HypervisorDriver(abc.ABC):
         that another VM on this node uses. Returns the paths written."""
         return []
 
+    def refresh_pools(self, names: list[str]) -> None:
+        """Re-read these pools: a shared pool lists a volume another node made only after
+        a refresh, and libvirt finds a VM's disk volumes by that list."""
+        return None  # drivers without a pool cache have nothing to re-read
+
     def remove_migration_files(self, paths: list[str]) -> list[str]:
         """Delete staged or left-behind files that no VM on this node uses any more."""
         return []

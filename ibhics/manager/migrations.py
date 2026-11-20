@@ -261,6 +261,9 @@ class MigrationManager:
             job.step = "Preparing UEFI and seed files"
             files = plan.source.driver.migration_files(job.uuid)
             staged = plan.target.driver.stage_migration_files(files) if files else []
+            # A shared pool on the target lists a disk made on another node only after a
+            # refresh, and the target's libvirt looks the VM's disks up in that list.
+            plan.target.driver.refresh_pools(sorted({d.pool for d in plan.vm.spec.disks}))
             job.step = f"Moving to {plan.target.name}"
             try:
                 plan.source.driver.migrate_vm(
