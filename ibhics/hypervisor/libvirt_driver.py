@@ -1562,8 +1562,18 @@ class LibvirtDriver(HypervisorDriver):
     def vm_definition(self, uuid: str) -> str:
         return self._lookup(uuid).XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
 
+    def refresh_pools(self, names: list[str]) -> None:
+        for name in dict.fromkeys(names):
+            try:
+                pool = self._conn.storagePoolLookupByName(name)
+                if pool.isActive():
+                    pool.refresh(0)
+            except libvirt.libvirtError:
+                pass  # missing here: the migration or definition reports it
+
     def define_vm(self, definition: str) -> VMInfo:
         root = ET.fromstring(definition)
+        self.refresh_pools([s.get("pool") for s in root.findall("./devices/disk/source[@pool]")])
         for drive in root.findall("./devices/disk[@device='cdrom']"):
             source = drive.find("source")
             if source is not None and source.get("file") and not Path(source.get("file")).exists():

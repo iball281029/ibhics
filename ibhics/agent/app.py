@@ -398,6 +398,14 @@ def create_agent_app(
                 raise ValueError("file content must be base64") from None
             return {"staged": driver.stage_migration_files(files)}
 
+        @api.post("/pools/refresh")
+        def refresh_pools(body: dict) -> dict:
+            names = body.get("names")
+            if not isinstance(names, list):
+                raise ValueError("names must be a list")
+            driver.refresh_pools([str(n) for n in names])
+            return {"refreshed": names}
+
         @api.post("/migration-files/remove")
         def remove_migration_files(body: dict) -> dict:
             paths = body.get("paths")

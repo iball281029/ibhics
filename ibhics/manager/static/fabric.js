@@ -18,9 +18,10 @@ window.FabricMap = (() => {
   const timeLabel = document.getElementById("fabric-time-label");
   const liveBtn = document.getElementById("fabric-live");
   const playBtn = document.getElementById("fabric-play");
+  const nodePanel = document.getElementById("fabric-nodes");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
-  const HOME = { yaw: -0.6, pitch: 0.92, zoom: 1, cx: 0, cy: 0 };
+  const HOME = { yaw: -0.6, pitch: 1.05, zoom: 1, cx: 0, cy: 0 };
   const view = { ...HOME, spin: true, vyaw: 0, target: null };
   const NET_COLORS = ["#54e8f0", "#ed99da", "#9d8cff", "#7cf0a8", "#ffcb66", "#ff907a"];
   const HISTORY = 300; // 15 minutes of 3-second readings
@@ -155,7 +156,23 @@ window.FabricMap = (() => {
     showTime(); renderHud();
   }
 
+  function renderNodes() {
+    const snap = moment();
+    const bar = (p, cls) => `<div class="fn-bar ${cls}"><i style="width:${Math.max(0, Math.min(100, p || 0))}%"></i></div>`;
+    nodePanel.innerHTML = `<h4>NODES</h4>` + scene.nodes.map((n) => {
+      const live = snap.nodes[n.name] || {}, vms = scene.vms.filter((v) => v.node === n), cpu = live.cpu ?? n.cpu;
+      return `<a class="fn-node${n.healthy ? "" : " off"}" href="#node/${encodeURIComponent(n.name)}">
+        <div class="fn-top"><b>${esc(n.name)}</b><span>${n.healthy ? "Online" : "Offline"}</span></div>
+        <div class="fn-row"><span>CPU</span>${bar(cpu, "cpu")}<em>${cpu == null ? "—" : cpu.toFixed(0) + "%"}</em></div>
+        <div class="fn-row"><span>MEM</span>${bar(n.mem, "mem")}<em>${n.mem == null ? "—" : n.mem.toFixed(0) + "%"}</em></div>
+        <div class="fn-io"><span title="Network received / sent by its VMs">⇅ ${rate(live.rx)} / ${rate(live.tx)}</span><span title="Disk read / write by its VMs">⛁ ${bytesRate(live.read)} / ${bytesRate(live.write)}</span></div>
+        <div class="fn-vms">${vms.length ? vms.map((v) => `<i class="${v.running ? "on" : ""}" title="${esc(v.vm.name)}"></i>`).join("") : "<small>No VMs</small>"} <small>${vms.filter((v) => v.running).length}/${vms.length} VMs running</small></div>
+      </a>`;
+    }).join("");
+  }
+
   function renderHud() {
+    renderNodes();
     const snap = moment();
     const nets = Object.values(snap.nets), nodes = Object.values(snap.nodes);
     const rx = nets.reduce((s, n) => s + n.rx, 0), tx = nets.reduce((s, n) => s + n.tx, 0);
@@ -470,11 +487,17 @@ window.FabricMap = (() => {
     label(crown[0], crown[1], ["VIRTUAL STORAGE", ...pools.map((p) => `${p.name}  ${p.used.toFixed(0)}%`)], "#bb83ff", { title: true, bold: true });
     for (const node of scene.nodes) {
       const live = snap.nodes[node.name] || {}, vms = scene.vms.filter((v) => v.node === node), cpu = live.cpu ?? node.cpu;
-      const [x, y] = project(node.x, node.y, towerTop(node, scene.vms) + 30);
-      label(x, y, [node.name, `CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"} · MEM ${node.mem == null ? "—" : node.mem.toFixed(0) + "%"}`, `${vms.filter((v) => v.running).length}/${vms.length} VMs`], node.healthy ? "#4fafff" : "#ff6b7a", { title: true, bold: true });
+      const anchor = project(node.x, node.y, towerTop(node, scene.vms) + 8);
+      const [x, y] = project(node.x, node.y, towerTop(node, scene.vms) + 40);
+      const color = node.healthy ? "#4fafff" : "#ff6b7a";
+      label(x, y, [node.name, `${vms.filter((v) => v.running).length}/${vms.length} VMs · CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"}`], color, { title: true, bold: true });
+      const box = placed.at(-1);
+      ctx.beginPath(); ctx.moveTo(anchor[0], anchor[1]); ctx.lineTo(x, box.y + box.h);
+      ctx.strokeStyle = hexA(color, 0.6); ctx.lineWidth = 1; ctx.stroke();
     }
+    const focus = hover?.node || hover?.v?.node; // figures on links only for the node pointed at
     for (const link of scene.links) {
-      if (!link.labelAt) continue;
+      if (!link.labelAt || link.node !== focus) continue;
       const live = snap.links[link.key] || { up: 0, down: 0 };
       const up = tween(`${link.key}:up`, live.up), down = tween(`${link.key}:down`, live.down);
       label(link.labelAt[0], link.labelAt[1], [link.kind === "io" ? `R ${bytesRate(down)} · W ${bytesRate(up)}` : `↓ ${rate(down)} ↑ ${rate(up)}`], link.color, { size: 10, lift: 4 });

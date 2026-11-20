@@ -252,6 +252,11 @@ class RemoteDriver(HypervisorDriver):
             raise ValueError(str(resp.json().get("detail")))
         return list(self._ok(resp).json()["staged"])
 
+    def refresh_pools(self, names: list[str]) -> None:
+        resp = self._client.request("POST", "/pools/refresh", json={"names": names}, timeout=120)
+        if resp.status_code != 404:  # an older agent: the migration reports what is missing
+            self._ok(resp)
+
     def remove_migration_files(self, paths: list[str]) -> list[str]:
         resp = self._client.request(
             "POST", "/migration-files/remove", json={"paths": paths}, timeout=60

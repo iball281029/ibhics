@@ -312,6 +312,16 @@
         <div class="fabric-hud" id="fabric-hud" role="status"></div>
         <canvas id="fabric-canvas" aria-label="3D map of nodes, virtual machines, storage and networks with live traffic. Drag to turn, scroll to zoom, click a node or VM to open it."></canvas>
         <div class="fabric-tip" id="fabric-tip" hidden></div>
+        <aside class="fabric-nodes" id="fabric-nodes" aria-label="Nodes"></aside>
+        <div class="fabric-legend" aria-label="What the map shows">
+          <span><i class="lg-node"></i>Node (tower)</span>
+          <span><i class="lg-vm"></i>VM running</span>
+          <span><i class="lg-off"></i>VM off</span>
+          <span><i class="lg-core"></i>Virtual Storage (core)</span>
+          <span><i class="lg-net"></i>Network (ring)</span>
+          <span><i class="lg-io"></i>Disk traffic</span>
+          <span class="lg-tip">Point at a node for its traffic figures</span>
+        </div>
         <div class="fabric-timeline" role="group" aria-label="Time: replay the last 15 minutes of traffic">
           <span class="fabric-axis">4D · TIME</span>
           <button type="button" class="btn small" id="fabric-play" aria-pressed="false">▶ Replay</button>
