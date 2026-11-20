@@ -21,7 +21,7 @@ window.FabricMap = (() => {
   const nodePanel = document.getElementById("fabric-nodes");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
-  const HOME = { yaw: -0.6, pitch: 1.05, zoom: 1, cx: 0, cy: 0 };
+  const HOME = { yaw: -0.18, pitch: 1.12, zoom: 1, cx: 0, cy: 0 };
   const view = { ...HOME, spin: true, vyaw: 0, target: null };
   const NET_COLORS = ["#54e8f0", "#ed99da", "#9d8cff", "#7cf0a8", "#ffcb66", "#ff907a"];
   const HISTORY = 300; // 15 minutes of 3-second readings
@@ -31,7 +31,8 @@ window.FabricMap = (() => {
     const r = 200 + Math.random() * 1100, a = Math.random() * Math.PI * 2;
     return { x: Math.cos(a) * r, y: Math.sin(a) * r, z: -60 + Math.random() * 760, s: Math.random(), tw: Math.random() * 6 };
   });
-  let scene = { nodes: [], vms: [], nets: [], pools: [], links: [], ringR: 400 };
+  const NODE_GAP = 300, SLAB_Z = 36, NODE_Z = 150, RAIL_Z = 470, RAIL_Y = 110, SLAB_D = 150;
+  let scene = { nodes: [], vms: [], nets: [], pools: [], links: [], span: 380 };
   let hits = [], placed = [], hover = null, frame = 0, poll = 0, drag = null, last = 0, nextStep = 0;
   let cursor = -1, playing = false; // cursor -1: live, else an index into history
 
@@ -58,21 +59,19 @@ window.FabricMap = (() => {
   function build() {
     const members = (state.cluster?.members || []).filter((m) => m.role === "compute");
     const nets = (state.networks.length ? state.networks : [{ name: "default" }]).map((n, i) => ({
-      name: n.name, color: NET_COLORS[i % NET_COLORS.length], height: 170 + i * 52, rx: 0, tx: 0, index: i,
+      name: n.name, color: NET_COLORS[i % NET_COLORS.length], height: RAIL_Z + i * 58, rx: 0, tx: 0, index: i,
     }));
     const byNet = Object.fromEntries(nets.map((n) => [n.name, n]));
-    const R = members.length > 1 ? 260 + members.length * 20 : 0;
+    // Three layers, read top to bottom: networks, nodes with their VMs, Virtual Storage.
     const nodes = members.map((m, i) => {
-      const a = (i / Math.max(1, members.length)) * Math.PI * 2 - Math.PI / 2;
       const s = state.summaries?.[m.name] || {};
       return {
-        name: m.name, healthy: m.healthy !== false, x: Math.cos(a) * R, y: Math.sin(a) * R, angle: a,
+        name: m.name, healthy: m.healthy !== false, x: (i - (members.length - 1) / 2) * NODE_GAP, y: 0, angle: -Math.PI / 2,
         cpu: Number.isFinite(s.cpu_percent) ? s.cpu_percent : null,
         mem: s.memory_mb ? (s.memory_used_mb / s.memory_mb) * 100 : null,
         read: 0, write: 0, rx: 0, tx: 0, nets: {},
       };
     });
-    if (members.length === 1) Object.assign(nodes[0], { y: 230, angle: Math.PI / 2 });
     const byNode = Object.fromEntries(nodes.map((n) => [n.name, n]));
     const vms = [];
     for (const vm of state.vms) {
@@ -97,23 +96,23 @@ window.FabricMap = (() => {
       pools.push({ key: p.name, name: p.display_name || p.name, used: p.capacity_gb ? (p.allocation_gb / p.capacity_gb) * 100 : 0, cap: p.capacity_gb || 0 });
     }
     pools.sort((a, b) => b.cap - a.cap).splice(4);
-    const ringR = nodes.length > 1 ? R + 190 : 400;
+    const span = Math.max(380, (nodes.length * NODE_GAP) / 2 + 170); // half the width of the layers
     const links = [];
     for (const node of nodes) {
       links.push({ key: `io:${node.name}`, kind: "io", node, color: "#bb83ff",
-        a: [node.x, node.y, 34], b: [0, 0, 40 + pools.length * 24], up: node.write, down: node.read });
+        a: [node.x, node.y, NODE_Z], b: [node.x, node.y, SLAB_Z], up: node.write, down: node.read });
       for (const [name, t] of Object.entries(node.nets)) {
         const net = byNet[name];
         links.push({ key: `net:${node.name}:${name}`, kind: "net", node, net, color: net.color,
-          a: [node.x, node.y, towerTop(node, vms)], b: [Math.cos(node.angle) * ringR, Math.sin(node.angle) * ringR, net.height],
+          a: [node.x, node.y, towerTop(node, vms)], b: [node.x + (net.index - (nets.length - 1) / 2) * 34, RAIL_Y, net.height],
           up: t.tx, down: t.rx });
       }
     }
-    scene = { nodes, vms, nets, pools, links, ringR };
+    scene = { nodes, vms, nets, pools, links, span };
     record();
     renderHud();
   }
-  const towerTop = (node, vms) => 110 + Math.ceil(vms.filter((v) => v.node === node).length / 9) * 22;
+  const towerTop = (node, vms) => NODE_Z + 112 + Math.ceil(vms.filter((v) => v.node === node).length / 9) * 22;
 
   // ---------- the fourth dimension: time ----------
 
@@ -192,9 +191,9 @@ window.FabricMap = (() => {
     const c = Math.cos(view.yaw), s = Math.sin(view.yaw);
     const x1 = x * c - y * s, y1 = x * s + y * c;
     const cp = Math.cos(view.pitch), sp = Math.sin(view.pitch);
-    const depth = y1 * sp - (z - 90) * cp, up = y1 * cp + (z - 90) * sp;
-    const fit = (Math.min(W, H * 1.6) / 1300) * view.zoom, k = 2400 / Math.max(300, 2400 + depth);
-    return [W / 2 + x1 * k * fit, H * 0.5 - up * k * fit, depth, k * fit];
+    const depth = y1 * sp - (z - 280) * cp, up = y1 * cp + (z - 280) * sp;
+    const fit = Math.min(W / (2 * scene.span + 420), H / 860) * view.zoom, k = 2400 / Math.max(300, 2400 + depth);
+    return [W / 2 + x1 * k * fit, H * 0.44 - up * k * fit, depth, k * fit];
   }
   const P = (p) => project(p[0], p[1], p[2]);
 
@@ -281,18 +280,19 @@ window.FabricMap = (() => {
     if (playing && t >= nextStep) { nextStep = t + 450; step(); }
     hits = []; placed = [];
     const snap = moment();
-    const { nodes, vms, nets, pools, links, ringR } = scene;
+    const { nodes, vms, nets, pools, links, span } = scene;
 
     ctx.globalCompositeOperation = "lighter";
     drawStars(t);
-    drawFloor(t, ringR + 110);
-    nets.forEach((net) => drawNetRing(net, ringR, t, snap));
-    const items = [{ d: project(0, 0, 0)[2], draw: () => drawCore(pools, t, snap) }];
+    drawFloor(t, span);
+    drawCore(pools, t, snap, span);
+    nets.forEach((net) => drawNetRing(net, span, t, snap));
+    const items = [];
     nodes.forEach((node) => items.push({ d: project(node.x, node.y, 0)[2], draw: () => drawNode(node, vms.filter((v) => v.node === node), t, snap) }));
     items.sort((a, b) => b.d - a.d).forEach((i) => i.draw());
     links.forEach((link) => drawLink(link, t, snap));
     ctx.globalCompositeOperation = "source-over";
-    nets.forEach((net) => netLabel(net, ringR, snap));
+    nets.forEach((net) => netLabel(net, span, snap));
     labels(snap);
     drawScan(t);
   }
@@ -305,10 +305,7 @@ window.FabricMap = (() => {
     }
     if (!drag) {
       view.yaw += view.vyaw * dt; view.vyaw *= Math.pow(0.94, dt / 16);
-      if (view.spin && !still.matches) {
-        view.yaw += dt * 0.00004;
-        if (!view.target) view.pitch = Math.max(0.3, Math.min(1.4, view.pitch + Math.sin(t / 5200) * 0.00005 * dt));
-      }
+      if (view.spin && !still.matches) view.yaw += Math.cos(t / 7000) * 0.00004 * dt; // a slow sway
     }
   }
 
@@ -323,75 +320,67 @@ window.FabricMap = (() => {
     }
   }
 
-  function drawFloor(t, R) {
-    for (let r = 110; r <= R; r += 110) glowLine(circle3d(0, 0, r, 0), "rgba(125,160,255,.10)", 1, 0);
-    for (let i = 0; i < 24; i++) {
-      const a = (i / 24) * Math.PI * 2;
-      path([project(0, 0, 0), project(Math.cos(a) * R, Math.sin(a) * R, 0)]);
-      ctx.strokeStyle = "rgba(125,160,255,.05)"; ctx.lineWidth = 1; ctx.stroke();
-    }
+  function drawFloor(t, L) {
+    const X = L + 120, Y = 280;
+    for (let x = -X; x <= X; x += 80) glowLine([project(x, -Y, 0), project(x, Y, 0)], "rgba(125,160,255,.07)", 1, 0);
+    for (let y = -Y; y <= Y; y += 80) glowLine([project(-X, y, 0), project(X, y, 0)], "rgba(125,160,255,.07)", 1, 0);
     if (still.matches) return;
-    const a = (t / 2600) % (Math.PI * 2); // radar sweep
-    for (let k = 0; k < 14; k++) {
-      const b = a - k * 0.03;
-      path([project(0, 0, 0), project(Math.cos(b) * R, Math.sin(b) * R, 0)]);
-      ctx.strokeStyle = `rgba(84,232,240,${0.16 * (1 - k / 14)})`; ctx.lineWidth = 2; ctx.stroke();
-    }
-    for (let k = 0; k < 3; k++) { // pulse rings from the core
-      const f = (t / 4200 + k / 3) % 1;
-      glowLine(circle3d(0, 0, 60 + f * (R - 60), 0, 72), `rgba(187,131,255,${0.22 * (1 - f)})`, 1.5, 6);
-    }
+    const x = ((t / 9) % (2 * X)) - X; // a scan line sweeping across
+    glowLine([project(x, -Y, 0), project(x, Y, 0)], "rgba(84,232,240,.35)", 2, 14);
   }
 
-  function drawNetRing(net, R, t, snap) {
+  // The network layer: a glowing rail per network, dashes running with its traffic.
+  function drawNetRing(net, L, t, snap) {
     const live = snap.nets[net.name] || { rx: 0, tx: 0 }, lvl = level(live.rx + live.tx);
-    glowLine(circle3d(0, 0, R, net.height), hexA(net.color, 0.12 + lvl * 0.2), 7, 0);
-    const spin = still.matches ? 0 : t * (0.00012 + lvl * 0.0006) * (net.index % 2 ? -1 : 1);
-    for (const [off, alpha, dr, dz] of [[0, 0.95, 0, 0], [Math.PI / 24, 0.45, 7, 5]]) { // two strands
-      for (let seg = 0; seg < 24; seg++) {
-        const from = spin + off + (seg / 24) * Math.PI * 2;
-        glowLine(circle3d(0, 0, R + dr, net.height + dz, 6, from, from + Math.PI / 36), hexA(net.color, alpha), 1.8, 10);
-      }
+    const z = net.height, a = project(-L, RAIL_Y, z), b = project(L, RAIL_Y, z);
+    glowLine([a, b], hexA(net.color, 0.18 + lvl * 0.2), 9, 0);
+    glowLine([a, b], hexA(net.color, 0.9), 1.6, 10);
+    const shift = still.matches ? 0 : ((t * (0.04 + lvl * 0.2)) % 60) * (net.index % 2 ? -1 : 1);
+    for (let x = -L + shift; x < L; x += 60) {
+      const x0 = Math.max(-L, x), x1 = Math.min(L, x + 22);
+      if (x1 > x0) glowLine([project(x0, RAIL_Y, z + 7), project(x1, RAIL_Y, z + 7)], hexA(net.color, 0.7), 2, 8);
     }
-    for (let k = 0; k < 3; k++) { // satellites
-      const a = -spin * 3 + (k / 3) * Math.PI * 2;
-      dot(project(Math.cos(a) * R, Math.sin(a) * R, net.height), 3.2, net.color, 18);
+    for (let k = 0; k < 3; k++) { // packets riding the rail
+      const f = still.matches ? k / 3 : (t * (0.00008 + lvl * 0.0003) + k / 3) % 1;
+      dot(project(-L + f * 2 * L, RAIL_Y, z), 3.4, net.color, 18);
     }
   }
 
-  function netLabel(net, R, snap) {
+  function netLabel(net, L, snap) {
     const live = snap.nets[net.name] || { rx: 0, tx: 0 };
-    const a = -view.yaw + 0.35 - net.index * 0.5, [rx, ry] = P([Math.cos(a) * R, Math.sin(a) * R, net.height]);
-    const x = W - 140, y = 150 + net.index * 64;
-    ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(x - 70, y - 14);
-    ctx.strokeStyle = hexA(net.color, 0.45); ctx.lineWidth = 1; ctx.stroke();
-    dot([rx, ry], 3, net.color, 12);
-    label(x, y, [net.name.toUpperCase(), `↓ ${rate(tween(`n:${net.name}:rx`, live.rx))}  ↑ ${rate(tween(`n:${net.name}:tx`, live.tx))}`], net.color, { title: true, lift: 0 });
+    const [x, y] = project(L + 10, RAIL_Y, net.height);
+    label(x + 90, y + 14, [`NETWORK · ${net.name}`, `↓ ${rate(tween(`n:${net.name}:rx`, live.rx))}  ↑ ${rate(tween(`n:${net.name}:tx`, live.tx))}`], net.color, { title: true, lift: 0 });
   }
 
-  function drawCore(pools, t, snap) {
+  // The storage layer: one glowing slab under every node, a bar per pool on its face.
+  function drawCore(pools, t, snap, L) {
     const levels = pools.length ? pools : [{ name: "No storage pool", used: 0 }];
     const io = Object.values(snap.nodes).reduce((s, n) => s + n.read + n.write, 0), lvl = level(io);
-    const base = project(0, 0, 0), top = project(0, 0, 430); // light column
-    const g = ctx.createLinearGradient(base[0], base[1], top[0], top[1]);
-    g.addColorStop(0, `rgba(187,131,255,${0.16 + lvl * 0.26})`); g.addColorStop(1, "rgba(84,232,240,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.moveTo(base[0] - 26 * base[3], base[1]); ctx.lineTo(top[0] - 3, top[1]); ctx.lineTo(top[0] + 3, top[1]); ctx.lineTo(base[0] + 26 * base[3], base[1]); ctx.fill();
+    slab(-L, L, -SLAB_D, SLAB_D, 0, SLAB_Z, "#bb83ff", 0.14 + lvl * 0.1);
+    const face = -SLAB_D - 1, w = (2 * L - 40) / levels.length;
     levels.forEach((pool, i) => {
-      const z0 = 12 + i * 24, z1 = z0 + 16, r = 96 - i * 7;
-      glowLine(circle3d(0, 0, r, z0), "rgba(187,131,255,.45)", 1.2, 4);
-      glowLine(circle3d(0, 0, r, z1), "rgba(187,131,255,.75)", 1.4, 8);
-      glowLine(circle3d(0, 0, r, z1 + 1, 64, -Math.PI / 2, -Math.PI / 2 + (pool.used / 100) * Math.PI * 2), "#ed99da", 3.2, 14);
-      const spin = still.matches ? 0 : (t / (1800 - lvl * 900)) * (i % 2 ? -1 : 1);
-      for (let k = 0; k < 6; k++) { // data segments spinning in alternate directions
-        const from = spin + (k / 6) * Math.PI * 2;
-        glowLine(circle3d(0, 0, r + 12, (z0 + z1) / 2, 8, from, from + 0.35), "rgba(84,232,240,.75)", 2, 10);
-      }
+      const x0 = -L + 20 + i * w, x1 = x0 + w - 16, used = x0 + ((x1 - x0) * pool.used) / 100;
+      glowLine([project(x0, face, SLAB_Z / 2), project(x1, face, SLAB_Z / 2)], "rgba(255,255,255,.12)", 6, 0);
+      glowLine([project(x0, face, SLAB_Z / 2), project(used, face, SLAB_Z / 2)], "#ed99da", 6, 12);
     });
-    const crown = 12 + levels.length * 24;
-    const pulse = still.matches ? 0.6 : 0.45 + 0.35 * Math.sin(t / 500);
-    glowLine(circle3d(0, 0, 26, crown + 6, 48), `rgba(125,229,255,${pulse})`, 2.2, 16);
-    dot(project(0, 0, crown + 8), 5 + lvl * 4, "#e9f6ff", 30);
+    if (!still.matches) { // data streaming along the slab
+      for (let k = 0; k < 8; k++) {
+        const f = (t / (2600 - lvl * 1400) + k / 8) % 1;
+        dot(project(-L + f * 2 * L, (k % 2 ? 1 : -1) * SLAB_D * 0.5, SLAB_Z + 1), 2.6, k % 2 ? "#54e8f0" : "#bb83ff", 16);
+      }
+    }
+  }
+  function slab(x0, x1, y0, y1, z0, z1, color, alpha) {
+    const c = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    const bottom = c.map(([x, y]) => project(x, y, z0)), top = c.map(([x, y]) => project(x, y, z1));
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      path([bottom[i], bottom[j], top[j], top[i]], true); ctx.fillStyle = hexA(color, alpha * 0.6); ctx.fill();
+    }
+    path(top, true); ctx.fillStyle = hexA(color, alpha); ctx.fill();
+    glowLine(top, hexA(color, 0.9), 1.4, 10, true);
+    glowLine(bottom, hexA(color, 0.4), 1, 4, true);
+    for (let i = 0; i < 4; i++) glowLine([bottom[i], top[i]], hexA(color, 0.6), 1, 6);
   }
 
   function prism(cx, cy, z0, z1, half, color, alpha, edges = 0.8) {
@@ -415,20 +404,21 @@ window.FabricMap = (() => {
     const color = node.healthy ? "#4fafff" : "#ff6b7a";
     const live = snap.nodes[node.name] || {};
     const spin = still.matches ? 0 : t / 4000;
-    glowLine(circle3d(node.x, node.y, 74, 1, 6, spin, spin + Math.PI * 2), hexA(color, 0.5), 1.4, 10, true); // hex pad
-    glowLine(circle3d(node.x, node.y, 86, 1, 48, -spin, -spin + Math.PI * 1.3), hexA("#54e8f0", 0.35), 1, 6);
-    const top = prism(node.x, node.y, 0, 100, 48, color, 0.16);
+    const Z = NODE_Z;
+    glowLine(circle3d(node.x, node.y, 74, Z, 6, spin, spin + Math.PI * 2), hexA(color, 0.5), 1.4, 10, true); // hex pad
+    glowLine(circle3d(node.x, node.y, 86, Z, 48, -spin, -spin + Math.PI * 1.3), hexA("#54e8f0", 0.35), 1, 6);
+    const top = prism(node.x, node.y, Z, Z + 100, 48, color, 0.16);
     const cpu = live.cpu ?? node.cpu;
-    if (cpu != null) prism(node.x, node.y, 2, 2 + 94 * Math.min(1, cpu / 100), 40, "#54e8f0", 0.12, 0.3);
+    if (cpu != null) prism(node.x, node.y, Z + 2, Z + 2 + 94 * Math.min(1, cpu / 100), 40, "#54e8f0", 0.12, 0.3);
     if (!still.matches) { // scan line climbing the glass
-      const z = (t / 22) % 100;
+      const z = Z + ((t / 22) % 100);
       glowLine(circle3d(node.x, node.y, 48 * Math.SQRT2, z, 4, Math.PI / 4, Math.PI / 4 + Math.PI * 2), "rgba(220,250,255,.55)", 1.4, 14, true);
     }
     hits.push({ kind: "node", node, pts: top });
     ribbon(node, color);
     vms.forEach((v, i) => {
       const layer = Math.floor(i / 9), slot = i % 9, gx = (slot % 3) - 1, gy = Math.floor(slot / 3) - 1;
-      const cx = node.x + gx * 28, cy = node.y + gy * 28, z0 = 103 + layer * 22;
+      const cx = node.x + gx * 28, cy = node.y + gy * 28, z0 = NODE_Z + 103 + layer * 22;
       const pulse = v.running && !still.matches ? 0.12 * Math.sin(t / 380 + i) : 0;
       const col = v.running ? (hover?.v === v ? "#ffffff" : "#7cf0a8") : "#6c7590";
       const pts = prism(cx, cy, z0, z0 + 15, 10, col, (v.running ? 0.32 : 0.12) + pulse, v.running ? 0.9 : 0.4);
@@ -444,7 +434,7 @@ window.FabricMap = (() => {
     const vals = history.slice(from).map((h) => { const n = h.nodes[node.name]; return n ? level(n.rx + n.tx + n.read + n.write) : 0; });
     const pts = vals.map((v, i) => {
       const a = start + (i / (span - 1)) * arc, x = node.x + Math.cos(a) * r, y = node.y + Math.sin(a) * r;
-      return [project(x, y, 6), project(x, y, 6 + v * 160)];
+      return [project(x, y, NODE_Z + 6), project(x, y, NODE_Z + 6 + v * 160)];
     });
     ctx.beginPath();
     pts.forEach(([, hi], i) => (i ? ctx.lineTo(hi[0], hi[1]) : ctx.moveTo(hi[0], hi[1])));
@@ -458,7 +448,7 @@ window.FabricMap = (() => {
     const live = snap.links[link.key] || { up: 0, down: 0 };
     const total = live.up + live.down, lvl = level(total), hot = hover?.node === link.node || hover?.v?.node === link.node;
     const mid = link.a.map((v, k) => (v + link.b[k]) / 2);
-    mid[2] += link.kind === "io" ? 70 : 40; // arc through space
+    if (link.kind === "net") mid[1] += 30; // a slight bow towards the rail
     const at = (f) => { const u = 1 - f; return link.a.map((v, k) => u * u * v + 2 * u * f * mid[k] + f * f * link.b[k]); };
     const pts = Array.from({ length: 33 }, (_, i) => P(at(i / 32)));
     glowLine(pts, hexA(link.color, total > 0 ? 0.25 + lvl * 0.5 + (hot ? 0.25 : 0) : 0.12), total > 0 ? 1.4 + lvl * 2.5 : 1, total > 0 ? 12 : 0);
@@ -478,13 +468,13 @@ window.FabricMap = (() => {
         }
       }
     }
-    link.labelAt = P(at(link.kind === "io" ? 0.62 : 0.4 + (0.45 * link.net.index) / Math.max(1, scene.nets.length - 1)));
+    link.labelAt = P(at(link.kind === "io" ? 0.5 : 0.55));
   }
 
   function labels(snap) {
     const pools = scene.pools.length ? scene.pools : [{ name: "No storage pool", used: 0 }];
-    const crown = project(0, 0, 12 + pools.length * 24 + 46);
-    label(crown[0], crown[1], ["VIRTUAL STORAGE", ...pools.map((p) => `${p.name}  ${p.used.toFixed(0)}%`)], "#bb83ff", { title: true, bold: true });
+    const [sx, sy] = project(-scene.span + 150, -SLAB_D, SLAB_Z);
+    label(sx, sy - 6, ["STORAGE · Virtual Storage", ...pools.map((p) => `${p.name}  ${p.used.toFixed(0)}% used`)], "#bb83ff", { title: true, bold: true, lift: 0 });
     for (const node of scene.nodes) {
       const live = snap.nodes[node.name] || {}, vms = scene.vms.filter((v) => v.node === node), cpu = live.cpu ?? node.cpu;
       const anchor = project(node.x, node.y, towerTop(node, scene.vms) + 8);
@@ -569,7 +559,7 @@ window.FabricMap = (() => {
   canvas.addEventListener("dblclick", (e) => {
     clearTimeout(canvas.clickTimer);
     const hit = pick(e), node = hit?.node || hit?.v?.node;
-    view.target = node ? { cx: node.x, cy: node.y, zoom: 1.9, pitch: 0.82 } : { ...HOME };
+    view.target = node ? { cx: node.x, cy: node.y, zoom: 1.8, pitch: 1.05 } : { ...HOME };
   });
   canvas.addEventListener("pointerleave", () => { tip.hidden = true; hover = null; });
   canvas.addEventListener("wheel", (e) => {
