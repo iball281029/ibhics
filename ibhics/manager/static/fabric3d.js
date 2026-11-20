@@ -326,6 +326,7 @@ class Stage {
         });
       }
       if (u.fan && !still) o.rotation.z += 9 * dt;
+      if (u.sway && !still) o.rotation.y = Math.sin(t * 0.25) * 0.35;
       if (u.rise) { // zones arrive from below, one after the other
         const f = still ? 1 : Math.min(1, Math.max(0, (t - (this.born ?? (this.born = t)) - u.rise.delay) / 0.9));
         const e = 1 - Math.pow(1 - f, 3); o.position.y = u.rise.from + (u.rise.to - u.rise.from) * e;
@@ -369,13 +370,12 @@ function backdrop(scene) { // stars and a floor grid, once per stage
 
 function rise(o, delay) { o.userData.rise = { delay, from: -7, to: o.position.y }; o.position.y = -7; return o; }
 
+
 function inside(container) {
-  const stage = new Stage(container, { distance: 40, fov: 32, bloom: 0.55 });
-  stage.camera.position.set(44, 38, 44);
-  Object.assign(stage.controls, { autoRotate: false, minDistance: 18, maxDistance: 80, maxPolarAngle: Math.PI * 0.42 });
+  const stage = new Stage(container, { distance: 44, fov: 42, bloom: 0.6 });
   backdrop(stage.scene);
   let signature = "", pads = [], hovered = null;
-  const beams = [], ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+  const beams = [], R = 20, ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
   stage.labels.domElement.addEventListener("pointermove", (e) => {
     const r = stage.labels.domElement.getBoundingClientRect();
     mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -385,104 +385,96 @@ function inside(container) {
     stage.labels.domElement.style.cursor = hovered ? "pointer" : "";
   });
   stage.labels.domElement.addEventListener("click", () => { if (hovered?.href) location.hash = hovered.href; });
-  stage.onTick = (dt) => { // the pointed-at zone rises and brightens; the camera leans towards it
+  stage.onTick = (dt) => { // the pointed-at zone lifts; the turning pauses while one is pointed at
     for (const p of pads) {
       if (p.group.userData.rise) continue;
       const want = p === hovered ? 1.2 : 0, cur = p.group.userData.lift || 0, next = cur + (want - cur) * Math.min(1, dt * 6);
       p.group.userData.lift = next; p.group.position.y = p.baseY + next;
     }
-    const tgt = hovered ? hovered.group.position.clone().multiplyScalar(0.25) : new THREE.Vector3();
-    stage.controls.target.lerp(tgt.setY(1), Math.min(1, dt * 2));
+    stage.controls.autoRotate = !hovered && !reduced.matches;
   };
 
   function build(d) {
     stage.clear(); beams.length = 0; pads = [];
     const root = stage.root;
-    const zone = (x, z, w, dp, color, title, cls, href, delay) => {
+    const zone = (x, z, radius, color, title, cls, href, delay) => {
       const group = new THREE.Group(); group.position.set(x, 0, z); root.add(group);
-      group.add(squarePad(w, dp, color));
-      const hitbox = new THREE.Mesh(new THREE.BoxGeometry(w, 4, dp), new THREE.MeshBasicMaterial({ visible: false })); hitbox.position.y = 2; group.add(hitbox);
-      const head = label(`<b>${title}</b>`, `f3-zone ${cls}`); head.position.set(0, -0.3, dp / 2 + 0.6); group.add(head);
-      rise(group, delay);
-      const pad = { group, hitbox, href, baseY: 0 }; pads.push(pad);
+      group.add(platform(radius, color));
+      const hitbox = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 5, 24), new THREE.MeshBasicMaterial({ visible: false })); hitbox.position.y = 2.5; group.add(hitbox);
+      const head = label(`<b>${title}</b>`, `f3-zone ${cls}`); head.position.set(0, 0.3, radius + 0.8); group.add(head);
+      if (delay != null) rise(group, delay);
+      pads.push({ group, hitbox, href, baseY: 0 });
       return group;
     };
 
-    // Centre: the HCI cluster, servers opened up with their VMs above them.
-    const center = zone(0, 0, 15, 11, COL.cyan, "HCI CLUSTER", "f3-cyan", "cluster", 0);
-    const nodes = d.nodes.slice(0, 4);
+    // Centre: the HCI cluster, servers opened up with their VMs floating above.
+    const center = zone(0, 0, 8, COL.cyan, "HCI CLUSTER", "f3-cyan", "cluster", 0);
+    const nodes = d.nodes.slice(0, 4), sc = nodes.length > 2 ? 0.55 : 0.85;
     nodes.forEach((n, i) => {
-      const color = n.healthy ? COL.cyan : COL.red, x = (i - (nodes.length - 1) / 2) * 7.2 * (nodes.length > 2 ? 0.6 : 1);
-      const srv = serverOpen(color, n.healthy); srv.position.set(x, 0.5, 1.5); srv.scale.setScalar(nodes.length > 2 ? 0.6 : 0.95); center.add(srv);
+      const color = n.healthy ? COL.cyan : COL.red, z = (i - (nodes.length - 1) / 2) * 4.2 * (nodes.length > 2 ? 0.75 : 1);
+      const srv = serverOpen(color, n.healthy); srv.scale.setScalar(sc); srv.position.set(0, 0.6, z); center.add(srv);
       const l = label(`<b>${esc(n.name)}</b><span>CPU ${n.cpu == null ? "—" : Math.round(n.cpu) + "%"} · MEM ${n.mem == null ? "—" : Math.round(n.mem) + "%"}</span><span>${n.vms} VMs · ${n.healthy ? "online" : "offline"}</span>`, `f3-node ${n.healthy ? "" : "f3-bad"}`, () => { location.hash = `node/${encodeURIComponent(n.name)}`; });
-      l.position.set(x, 1.4, 4); center.add(l);
+      l.position.set(-3.6, 1.2, z); center.add(l);
       (n.vmList || []).slice(0, 2).forEach((v, k) => {
-        const cube = vmCube(v.os, v.running); cube.scale.setScalar(0.85);
-        const cx = x + (k - 0.5) * 2.4, cy = 4.3; cube.position.set(cx, cy, 0.6); cube.userData.bob = k + i; cube.userData.baseY = cy; center.add(cube);
-        const dash = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(cx, cy - 0.9, 0.6), new THREE.Vector3(cx * 0.9, 0.7, 1.4)]),
-          new THREE.LineDashedMaterial({ color: 0x8fdcff, dashSize: 0.18, gapSize: 0.14, transparent: true, opacity: 0.9 }));
+        const cube = vmCube(v.os, v.running); cube.scale.setScalar(0.6);
+        const cx = (k - 0.5) * 2.2, cy = 3.6 + k * 0.4; cube.position.set(cx, cy, z); cube.userData.bob = k + i; cube.userData.baseY = cy; center.add(cube);
+        const dash = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(cx, cy - 0.6, z), new THREE.Vector3(cx * 0.6, 0.75, z)]),
+          new THREE.LineDashedMaterial({ color: 0x8fdcff, dashSize: 0.16, gapSize: 0.12, transparent: true, opacity: 0.9 }));
         dash.computeLineDistances(); center.add(dash);
-        const dot = glowSprite(COL.cyan, 0.4); dot.position.set(cx * 0.9, 0.7, 1.4); center.add(dot);
       });
     });
     const summary = label(`<b>${d.nodes.length} nodes${d.witness ? " + witness" : ""}</b><span>${d.vmsRunning}/${d.vmsTotal} VMs running</span>`, "f3-item f3-cyan");
-    summary.position.set(-6, 0.4, -4.6); center.add(summary);
+    summary.position.set(0, 7.2, 0); center.add(summary);
 
-    // Satellites on the diagonals, joined to the centre by lit ground lines.
+    // The ring of zones around it.
     const sats = [
-      { key: "vm", x: -16, z: -14, color: COL.green, title: "WORKLOADS · VM GROUPS", cls: "f3-green", href: "compute" },
-      { key: "net", x: 16, z: -14, color: COL.pink, title: "NETWORK", cls: "f3-pink", href: "network" },
-      { key: "sto", x: 16, z: 14, color: COL.violet, title: "STORAGE", cls: "f3-violet", href: "storage" },
-      { key: "wit", x: -16, z: 14, color: COL.amber, title: "WITNESS · QUORUM", cls: "f3-amber", href: "cluster" },
+      { key: "vm", color: COL.green, title: "WORKLOADS · VM GROUPS", cls: "f3-green", href: "compute" },
+      { key: "net", color: COL.pink, title: "NETWORK", cls: "f3-pink", href: "network" },
+      { key: "sto", color: COL.violet, title: "STORAGE", cls: "f3-violet", href: "storage" },
+      ...(d.witness ? [{ key: "wit", color: COL.amber, title: "WITNESS · QUORUM", cls: "f3-amber", href: "cluster" }] : []),
     ];
     sats.forEach((s, i) => {
-      if (s.key === "wit" && !d.witness) return;
-      s.group = zone(s.x, s.z, 10, 9, s.color, s.title, s.cls, s.href, 0.35 + i * 0.18);
-      const a = new THREE.Vector3(s.x * 0.45, 0.1, s.z * 0.37), b = new THREE.Vector3(s.x * 0.7, 0.1, s.z * 0.68);
-      const bm = beam(a, b, s.color, 0); root.add(bm); beams.push({ key: s.key, b: bm });
+      const a = (i / sats.length) * Math.PI * 2 - Math.PI / 2, x = Math.cos(a) * R, z = Math.sin(a) * R;
+      s.group = zone(x, z, 5.2, s.color, s.title, s.cls, s.href, 0.4 + i * 0.2);
+      const bm = beam(new THREE.Vector3(x * 0.4, 0.3, z * 0.4), new THREE.Vector3(x * 0.74, 0.3, z * 0.74), s.color, 3); root.add(bm); beams.push({ key: s.key, b: bm });
     });
     const by = (k) => sats.find((s) => s.key === k)?.group;
 
-    // VM groups: glass VM cubes per group.
     const vg = by("vm"), groups = d.groups.slice(0, 4);
     groups.forEach((g, i) => {
-      const gx = (i % 2 - (groups.length > 1 ? 0.5 : 0)) * 4.4, gz = (Math.floor(i / 2) - (groups.length > 2 ? 0.5 : 0)) * 3.6;
+      const a = (i / Math.max(1, groups.length)) * Math.PI * 2, gx = groups.length > 1 ? Math.cos(a) * 2.4 : 0, gz = groups.length > 1 ? Math.sin(a) * 2.4 : 0;
       g.vms.slice(0, 3).forEach((v, k) => {
-        const c = vmCube(v.os, v.running); c.scale.setScalar(0.5);
-        c.position.set(gx + (k - 1) * 1.15, 0.9 + (k % 2) * 0.3, gz); c.userData.bob = k * 0.7 + i; c.userData.baseY = c.position.y; vg.add(c);
+        const c = vmCube(v.os, v.running); c.scale.setScalar(0.42);
+        c.position.set(gx + (k - 1) * 0.95, 1 + (k % 2) * 0.35, gz); c.userData.bob = k * 0.7 + i; c.userData.baseY = c.position.y; vg.add(c);
       });
-      const l = label(`<b>${esc(g.name)}</b><span>${g.running}/${g.vms.length} running</span>`, "f3-item f3-green");
-      l.position.set(gx, 2.4, gz); vg.add(l);
+      const l = label(`<b>${esc(g.name)}</b><span>${g.running}/${g.vms.length} running</span>`, "f3-item f3-green"); l.position.set(gx, 2.4, gz); vg.add(l);
     });
     if (!groups.length) { const l = label("<span>No VMs yet</span>", "f3-item f3-green"); l.position.set(0, 1, 0); vg.add(l); }
 
-    // Network: the outside world with clients, the switch in front.
-    const ng = by("net"), globe = netGlobe(Math.max(6, d.nets.length * 3)); globe.scale.setScalar(0.62); globe.position.set(0, 2.6, -0.6); ng.add(globe);
-    const sw = switchBox(); sw.scale.setScalar(0.9); sw.position.set(0, 0.45, 3); ng.add(sw);
+    const ng = by("net"), globe = netGlobe(Math.max(6, d.nets.length * 3)); globe.scale.setScalar(0.55); globe.position.set(0, 3, -0.6); ng.add(globe);
+    const sw = switchBox(); sw.scale.setScalar(0.85); sw.position.set(0, 0.45, 2.4); ng.add(sw);
     const s0 = d.switches[0];
     if (s0) {
       const l = label(`<b>${esc(s0.name)}</b><span>${esc([s0.model, s0.mgmt].filter(Boolean).join(" · "))}</span>${s0.links.map((k) => `<span>${esc(k.port || "?")} ⇄ ${esc(k.node)} ${esc(k.iface)}${k.speed ? " · " + esc(k.speed) : ""}</span>`).join("")}`, "f3-item f3-pink");
-      l.position.set(0, 1.3, 3.6); ng.add(l);
+      l.position.set(0, 1.3, 3.2); ng.add(l);
     }
-    const vl = label(`<b>VM NETWORKS</b>${d.nets.slice(0, 5).map((n) => `<span>${esc(n.name)} · ${n.vlan ? "VLAN " + n.vlan : "untagged"}</span>`).join("")}`, "f3-item f3-pink");
-    vl.position.set(0, 5.6, -0.6); ng.add(vl);
+    const vl = label(`<b>VM NETWORKS</b>${d.nets.slice(0, 5).map((n) => `<span>${esc(n.name)} · ${n.vlan ? "VLAN " + n.vlan : "untagged"}</span>`).join("")}`, "f3-item f3-pink"); vl.position.set(0, 6, -0.6); ng.add(vl);
 
-    // Storage: a NAS-style chassis per device, vStore as its own unit.
     const sg = by("sto"), stores = d.stores.slice(0, 2);
     stores.forEach((s, i) => {
-      const x = (i - (stores.length - 1) / 2) * 4.6, m = nasBox(s.kind === "vstore" ? COL.violet : COL.blue);
-      m.scale.setScalar(stores.length > 1 ? 0.8 : 1); m.position.set(x, 1.4, 0); sg.add(m);
+      const x = (i - (stores.length - 1) / 2) * 3.8, m = nasBox(s.kind === "vstore" ? COL.violet : COL.blue);
+      m.scale.setScalar(stores.length > 1 ? 0.62 : 0.8); m.position.set(x, 1.2, 0); sg.add(m);
       const l = label(`<b>${esc(s.label)}</b><span>${esc(s.name)} · ${Math.round(s.used)}% of ${Math.round(s.cap)} GB</span><span>${s.kind === "vstore" ? `replicated on ${s.nodes.length} nodes` : esc(s.nodes.join(", "))}</span>`, "f3-item f3-violet", () => { location.hash = "storage"; });
-      l.position.set(x, 3.4, 0); sg.add(l);
+      l.position.set(x, 3.2, 0); sg.add(l);
     });
     if (!stores.length) { const l = label("<span>No storage pools</span>", "f3-item f3-violet"); l.position.set(0, 1, 0); sg.add(l); }
 
-    // Witness: a small server on its own pad.
     const wg = by("wit");
     if (wg) {
-      const w = serverOpen(COL.amber, true); w.scale.setScalar(0.55); w.position.set(0, 0.6, 0); wg.add(w);
-      const l = label(`<b>${esc(d.witness.name)}</b><span>votes in quorum · no VM data</span>`, "f3-item f3-amber"); l.position.set(0, 1.8, 0); wg.add(l);
+      const w = serverOpen(COL.amber, true); w.scale.setScalar(0.5); w.position.set(0, 0.6, 0); wg.add(w);
+      const l = label(`<b>${esc(d.witness.name)}</b><span>votes in quorum · no VM data</span>`, "f3-item f3-amber"); l.position.set(0, 1.9, 0); wg.add(l);
     }
+    for (let k = 0; k < 2; k++) { const p = circle(8, COL.cyan, 0.7); p.userData.pulse = k * 0.5; root.add(p); }
   }
 
   function update(d) {
@@ -514,6 +506,30 @@ function hero(container, kind) {
     const nas = nasBox(COL.violet); nas.position.y = 1.5; spin.add(nas);
     for (let i = 0; i < 10; i++) { const s = glowSprite(COL.cyan, 0.3); s.userData.orbit = { r: 3.3, y: 0.4 + (i / 10) * 3, speed: 0.9, phase: i * 0.8 }; root.add(s); }
     root.add(squarePad(6.5, 5, COL.violet));
+  } else if (kind === "home") { // the whole system at a glance: the cluster and what it serves
+    stage.camera.position.set(21, 18, 21); stage.camera.lookAt(0, 0.4, 0);
+    spin.userData.spin = 0; spin.userData.sway = true;
+    const centerPad = squarePad(7, 7, COL.cyan); spin.add(centerPad);
+    for (let i = 0; i < 2; i++) { // two server towers
+      const t = new THREE.Group();
+      t.add(holo(new THREE.BoxGeometry(1.6, 3.6, 1.8), COL.cyan, 0.06));
+      for (let k = 0; k < 7; k++) {
+        const u = holo(new THREE.BoxGeometry(1.4, 0.34, 1.7), COL.cyan, 0.12, 0.7); u.position.y = -1.5 + k * 0.5; t.add(u);
+        const led = glowSprite(k % 3 ? COL.green : COL.cyan, 0.22); led.position.set(0.55, -1.5 + k * 0.5, 0.92); led.userData.blink = k + i; t.add(led);
+      }
+      t.position.set(-1.1 + i * 2.2, 1.85, -0.3); spin.add(t);
+    }
+    const panel = holo(new THREE.PlaneGeometry(1.8, 1.1), COL.cyan, 0.15); panel.position.set(2.6, 4.2, 0.6); panel.rotation.y = -0.6; panel.userData.bob = 0; panel.userData.baseY = 4.2; spin.add(panel);
+    const sats = [
+      [-7.5, -7.5, COL.green, () => { const g = new THREE.Group(); [["windows", -0.9], ["linux", 0.9]].forEach(([os, x], k) => { const c = vmCube(os, true); c.scale.setScalar(0.55); c.position.set(x, 0.9 + k * 0.2, 0); c.userData.bob = k; c.userData.baseY = c.position.y; g.add(c); }); return g; }],
+      [7.5, -7.5, COL.violet, () => { const n = nasBox(COL.violet); n.scale.setScalar(0.55); n.position.y = 0.8; return n; }],
+      [7.5, 7.5, COL.pink, () => { const w = netGlobe(6, COL.pink); w.scale.setScalar(0.32); w.position.y = 1.4; return w; }],
+      [-7.5, 7.5, COL.amber, () => { const sw = switchBox(); sw.scale.setScalar(0.55); sw.position.y = 0.4; return sw; }],
+    ];
+    sats.forEach(([x, z, color, make], i) => {
+      const g = new THREE.Group(); g.position.set(x, 0, z); g.add(squarePad(4.2, 4.2, color)); g.add(make()); rise(g, 0.25 + i * 0.15); spin.add(g);
+      const b = beam(new THREE.Vector3(x * 0.42, 0.05, z * 0.42), new THREE.Vector3(x * 0.74, 0.05, z * 0.74), color, 0); b.userData.beam.level = 0.6; spin.add(b);
+    });
   } else {
     stage.camera.position.set(0, 4.5, 17); stage.camera.lookAt(0, 0.4, 0);
     const globe = netGlobe(9); globe.position.y = 0.6; spin.add(globe);
@@ -524,10 +540,12 @@ function hero(container, kind) {
 window.Fabric3D = { inside, hero };
 
 
-// Overview: pointing at Compute, Storage or Network projects its hologram.
+// Overview: the whole system at rest; pointing at Compute, Storage or Network projects its hologram.
 (() => {
   const visual = document.querySelector(".nexus-visual");
   if (!visual) return;
+  const homeBox = visual.querySelector(".nexus-alt-home .nexus-3d");
+  if (homeBox) { try { hero(homeBox, "home"); visual.classList.add("has-3d"); } catch (err) { console.error(err); } }
   for (const kind of ["compute", "storage", "network"]) {
     const link = visual.querySelector(`.nexus-${kind}`), box = visual.querySelector(`.nexus-alt-${kind} .nexus-3d`);
     if (!link || !box) continue;

@@ -146,3 +146,8 @@
 .f3-label:not(.f3-zone) span{display:none}
 .f3-label:hover span,.f3-label.f3-zone span{display:block}
 .f3-label:hover{z-index:5;background:#0a2638f2}
+/* Overview at rest: the 3D system picture replaces the stack (when WebGL is there). */
+.nexus-visual.has-3d .nexus-parallax{opacity:0!important}
+.nexus-visual.has-3d .nexus-alt-home{opacity:1;transform:none}
+.nexus-visual.has-3d:has(.nexus-link:hover,.nexus-link:focus-visible) .nexus-alt-home{opacity:0;transform:scale(.9)}
+.nexus-alt-home{left:14%;width:66%;top:0;height:100%}
