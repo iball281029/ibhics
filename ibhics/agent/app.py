@@ -18,6 +18,8 @@ from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
 from ..hypervisor.serialize import guest_to_json
 from ..importer import NodeImport, Source, SourceVM
+from ..importer import list_vms as discover_source_vms
+from ..importer.diagnostics import test_source
 from ..manager.errors import install_driver_errors
 from ..manager.poollabels import PoolLabels
 from ..manager.schemas import (
@@ -514,6 +516,26 @@ def create_agent_app(
             }
 
         imports = imports or NodeImport(driver)
+
+        def read_source(body: dict) -> Source:
+            try:
+                source = Source.from_dict(body)
+            except (KeyError, TypeError, ValueError):
+                raise ValueError("bad source request") from None
+            source.validate()
+            return source
+
+        @api.post("/imports/source-vms")
+        def source_vms(body: dict) -> list[dict]:
+            return [vm.to_dict() for vm in discover_source_vms(read_source(body))]
+
+        @api.post("/imports/test-source")
+        def check_source(body: dict) -> dict:
+            result = test_source(read_source(body))
+            result["node"] = name
+            for check in result["checks"]:
+                check["detail"] = f"Tested from node {name}; {check['detail']}"
+            return result
 
         @api.get("/imports/progress")
         def import_progress() -> dict:

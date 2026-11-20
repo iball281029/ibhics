@@ -17,7 +17,7 @@ from pathlib import Path
 from ..cluster import Cluster
 from ..hypervisor import InvalidState, VMExists
 from ..hypervisor.base import BLOCK_POOL_TYPES
-from ..importer import Source, SourceNotFound, SourceType, SourceVM, list_vms
+from ..importer import Source, SourceNotFound, SourceType, SourceUnavailable, SourceVM, list_vms
 from ..importer.diagnostics import test_source
 from ..importer.logs import clean_v2v_log, parse_v2v_log
 from ..importer.sources import IMAGE_SUFFIXES
@@ -171,6 +171,12 @@ class ImportManager:
         """Diagnose without saving configuration or creating the uploads folder."""
         if isinstance(source, str):
             source = self.uploads_source if source == UPLOADS else self.source(source)
+        try:
+            member = self._source_query_node(source)
+        except SourceUnavailable:
+            member = None  # nobody reaches it: the local test shows which step fails
+        if member is not None:
+            return member.imports.test_source(source)
         return self._tester(source)
 
     def source_vms(self, name: str) -> list[SourceVM]:
@@ -181,7 +187,32 @@ class ImportManager:
             from .p2v import source_vm
 
             return [source_vm(s) for s in self.p2v.ready()]
+        member = self._source_query_node(source)
+        if member is not None:
+            return member.imports.source_vms(source)
         return self._discover(source)
+
+    def _source_query_node(self, source: Source):
+        """Use another compute agent only when the manager cannot reach a network source."""
+        if not source_ports(source):
+            return None
+        source.validate()
+        members = self._cluster.compute_members()
+        local = next((m for m in members if m.local), None)
+        if local is None or self._reaches(local, source)[0]:
+            return None
+        failed = [local.name]
+        for member in members:
+            if member.local or member.maintenance or not getattr(member, "healthy", True):
+                continue  # an offline node cannot answer for the source
+            if self._reaches(member, source)[0]:
+                return member
+            failed.append(member.name)
+        ports = ", ".join(str(port) for port in source_ports(source))
+        raise SourceUnavailable(
+            f"No compute node can reach source {source.host} on required TCP ports {ports}. "
+            f"Cannot reach from nodes: {', '.join(failed)}. Check routing and firewall rules."
+        )
 
     # Jobs
 
