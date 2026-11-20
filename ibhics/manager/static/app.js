@@ -448,7 +448,16 @@ const loaders = {
   recycle: async () => { state.recycle = await api("/recycle-bin"); },
   edge: async () => { state.edge = await api("/edge"); },
   guests: async () => { state.guests = Object.fromEntries((await api("/vms/guests")).map((g) => [g.uuid, g])); },
-  stats: async () => { state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s])); },
+  stats: async () => {
+    state.stats = Object.fromEntries((await api("/vms/stats")).map((s) => [s.uuid, s]));
+    const now = Date.now(); // a short trail per VM for the card waves (kept in the browser only)
+    for (const [uuid, st] of Object.entries(state.stats)) {
+      const h = (vxHistory[uuid] ||= []);
+      if (h.length && now - h.at(-1).at < 2000) h.pop();
+      h.push({ at: now, cpu: st.cpu_pct, net: (st.net_rx_bps || 0) + (st.net_tx_bps || 0) });
+      if (h.length > 40) h.shift();
+    }
+  },
   groups: async () => { state.groups = await api("/vm-groups"); },
   pools: async () => { state.pools = await api("/pools"); },
   networks: async () => { state.networks = await api("/networks"); },
@@ -1090,14 +1099,39 @@ const usageCell = (used, total, unit = "") => {
   const p = pct(used, total);
   return `<div class="u-cell"><span>${p}%${unit ? ` <span class="muted">${unit}</span>` : ""}</span>${bar(p)}</div>`;
 };
-// A ring dial for the VM cards: the percentage in the middle, the size underneath.
-const vxGauge = (label, value, size, color) => {
+// VM card visuals: three concentric light rings (CPU outside, memory, disk inside),
+// a stat list beside them, and a wave of the VM's recent CPU and network activity.
+const vxHistory = {};
+const vxLevel = (p) => (p > 90 ? "bad" : p > 75 ? "warn" : "");
+function vxRings(cpu, mem, disk) {
+  const ring = (r, value, cls) => {
+    const c = 2 * Math.PI * r, p = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
+    return `<circle class="vx-ring-track" cx="60" cy="60" r="${r}"/><circle class="vx-ring ${cls} ${vxLevel(p)}" cx="60" cy="60" r="${r}" stroke-dasharray="${((p / 100) * c).toFixed(1)} ${c.toFixed(1)}"/>`;
+  };
+  const ticks = Array.from({ length: 36 }, (_, i) => {
+    const a = (i / 36) * Math.PI * 2, r1 = 57, r2 = i % 3 ? 55 : 52;
+    return `<line x1="${(60 + Math.cos(a) * r1).toFixed(1)}" y1="${(60 + Math.sin(a) * r1).toFixed(1)}" x2="${(60 + Math.cos(a) * r2).toFixed(1)}" y2="${(60 + Math.sin(a) * r2).toFixed(1)}"/>`;
+  }).join("");
+  const big = Number.isFinite(cpu) ? Math.round(cpu) : "–";
+  return `<div class="vx-rings"><svg viewBox="0 0 120 120" aria-hidden="true"><g class="vx-ticks">${ticks}</g><g transform="rotate(-90 60 60)">${ring(46, cpu, "cpu")}${ring(36, mem, "mem")}${ring(26, disk, "disk")}</g></svg>
+    <div class="vx-core"><b>${big}${Number.isFinite(cpu) ? "<small>%</small>" : ""}</b><span>CPU</span></div></div>`;
+}
+const vxStat = (label, value, size, cls) => {
   const known = Number.isFinite(value), p = known ? Math.max(0, Math.min(100, value)) : 0;
-  const r = 26, c = 2 * Math.PI * r, level = p > 90 ? " bad" : p > 75 ? " warn" : "";
-  return `<div class="vx-gauge${level}" style="--g:${color}" title="${esc(label)}: ${known ? `${Math.round(p)}%` : "not reported"}">
-    <svg viewBox="0 0 64 64" aria-hidden="true"><circle class="vx-track" cx="32" cy="32" r="${r}"/><circle class="vx-arc" cx="32" cy="32" r="${r}" stroke-dasharray="${((p / 100) * c).toFixed(1)} ${c.toFixed(1)}"/></svg>
-    <b>${known ? `${Math.round(p)}<small>%</small>` : "–"}</b><span>${esc(label)}</span><em>${esc(size)}</em></div>`;
+  return `<div class="vx-stat ${cls} ${vxLevel(p)}"><i></i><span>${esc(label)}</span><b>${known ? `${Math.round(p)}%` : "–"}</b><em>${esc(size)}</em><div class="vx-meter"><u style="width:${p}%"></u></div></div>`;
 };
+function vxWave(vm) {
+  const h = vxHistory[vm.uuid] || [];
+  if (vm.state !== "running" || h.length < 2) return `<div class="vx-wave empty"><span>${vm.state === "running" ? "Collecting activity…" : "No activity while off"}</span></div>`;
+  const W = 300, H = 46, n = h.length, maxNet = Math.max(1, ...h.map((p) => p.net || 0));
+  const pts = (key, scale) => h.map((p, i) => `${((i / (n - 1)) * W).toFixed(1)},${(H - 3 - Math.min(1, (p[key] || 0) / scale) * (H - 8)).toFixed(1)}`);
+  const cpuPts = pts("cpu", 100), netPts = pts("net", maxNet);
+  return `<div class="vx-wave"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <defs><linearGradient id="vxwave-${vm.uuid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#54e8f0" stop-opacity=".45"/><stop offset="1" stop-color="#54e8f0" stop-opacity="0"/></linearGradient></defs>
+    <path class="vx-wave-area" d="M0,${H} L${cpuPts.join(" L")} L${W},${H} Z" fill="url(#vxwave-${vm.uuid})"/>
+    <polyline class="vx-wave-cpu" points="${cpuPts.join(" ")}"/><polyline class="vx-wave-net" points="${netPts.join(" ")}"/></svg>
+    <span class="vx-wave-key"><i class="c"></i>CPU <i class="n"></i>Network · last ${Math.round((h.at(-1).at - h[0].at) / 1000)} s</span></div>`;
+}
 // OS badge for the VM cards and list: Windows, Linux or unknown look clearly different.
 const VX_OS_ART = { // inline styles: the console's global svg rules must not repaint them
   Windows: `<svg viewBox="0 0 32 32" aria-hidden="true"><path style="fill:#8fdcff;stroke:none" d="M4 7.2 14 5.8v9.4H4z"/><path style="fill:#4aa8ff;stroke:none" d="M15.6 5.6 28 3.8v11.4H15.6z"/><path style="fill:#4aa8ff;stroke:none" d="M4 16.8h10v9.4L4 24.8z"/><path style="fill:#2f7dff;stroke:none" d="M15.6 16.8H28v11.4l-12.4-1.8z"/></svg>`,
@@ -1243,7 +1277,13 @@ function renderVMs() {
           ${vxOs(vm)}
           <div class="vx-name"><a class="vm-name vm-link" href="#vm/${vm.uuid}">${esc(vm.name)}</a><span class="vx-ip">${ipCell(vm)}</span></div>
           <span class="vx-state ${esc(vm.state)}"><i></i>${esc(vm.state)}</span></div>
-        <div class="vx-gauges">${vxGauge("CPU", cpu, `${vm.vcpus} vCPU`, "#54e8f0")}${vxGauge("Memory", memPct, gbText(vm.memory_mb), "#ed99da")}${vxGauge("Disk", diskPct, `${num(u.total)} GB`, "#bb83ff")}</div>
+        <div class="vx-body">${vxRings(cpu, memPct, diskPct)}
+          <div class="vx-stats">
+            ${vxStat("CPU", cpu, `${vm.vcpus} vCPU`, "cpu")}
+            ${vxStat("Memory", memPct, gbText(vm.memory_mb), "mem")}
+            ${vxStat("Disk", diskPct, `${num(u.total)} GB`, "disk")}
+          </div></div>
+        ${vxWave(vm)}
         <div class="vx-io">${io}</div>
         <div class="vx-foot">${alerts.length ? `<span class="vc-alert" title="${esc(alerts.join(", "))}"><svg><use href="#i-alert"/></svg>${esc(alerts[0])}</span>` : `<span class="vx-node"><svg><use href="#i-server"/></svg>${esc(nodeLabel(vm.node || ""))}</span>`}
           <span class="spacer"></span><div class="actions">${vmMenu(vm, { summary: true, compact: true })}</div></div>
