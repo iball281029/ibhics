@@ -918,6 +918,7 @@ class SourceCheckOut(BaseModel):
 
 class SourceTestOut(BaseModel):
     checks: list[SourceCheckOut]
+    node: str | None = None
 
 
 class SourceOut(BaseModel):

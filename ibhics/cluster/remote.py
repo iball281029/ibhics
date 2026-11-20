@@ -474,6 +474,29 @@ class RemoteImport:
     def __init__(self, client: AgentClient) -> None:
         self._client = client
 
+    def _source_query(self, path: str, source):
+        from ..importer import SourceUnavailable
+
+        resp = self._client.request("POST", path, json=source.to_dict(), timeout=90)
+        if resp.status_code == 404:
+            raise SourceUnavailable(
+                f"{self._client.address}: this node agent does not support source queries; "
+                "upgrade the agent and retry"
+            )
+        if resp.status_code >= 400:
+            raise SourceUnavailable(
+                f"{self._client.address}: source query failed (HTTP {resp.status_code})"
+            )
+        return resp.json()
+
+    def source_vms(self, source):
+        from ..importer import SourceVM
+
+        return [SourceVM.from_dict(vm) for vm in self._source_query("/imports/source-vms", source)]
+
+    def test_source(self, source) -> dict:
+        return self._source_query("/imports/test-source", source)
+
     def cancel(self, name: str) -> bool:
         resp = self._client.request("POST", f"/imports/{name}/cancel", timeout=30)
         return resp.status_code < 400 and bool(resp.json().get("stopped"))
