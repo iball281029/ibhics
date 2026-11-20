@@ -613,7 +613,7 @@
           </div>
         </div>
         <div class="subpage" id="tab-p2v">
-          <div class="mg-panel"><h3>① CHOOSE THE MACHINE'S OPERATING SYSTEM</h3>
+          <div class="mg-panel"><h3>① OPERATING SYSTEM</h3>
           <div class="mg-os-tabs" role="tablist" aria-label="Physical machine operating system">
             <button type="button" role="tab" id="p2v-linux-tab" data-p2v-os="apt" aria-controls="p2v-linux" aria-selected="true">Ubuntu / Debian <small>apt</small></button>
             <button type="button" role="tab" id="p2v-rhel-tab" data-p2v-os="rhel" aria-controls="p2v-linux" aria-selected="false">RHEL / CentOS / Rocky / Alma <small>dnf · yum</small></button>
@@ -621,7 +621,7 @@
             <button type="button" role="tab" id="p2v-other-tab" data-p2v-os="other" aria-controls="p2v-linux" aria-selected="false">Other Linux <small>wget</small></button>
             <button type="button" role="tab" id="p2v-windows-tab" data-p2v-os="windows" aria-controls="p2v-windows" aria-selected="false">Windows <small>.exe</small></button>
             <button type="button" role="tab" aria-selected="false" disabled>Boot ISO <small>Coming soon</small></button>
-          </div><h3>② RUN ON THE PHYSICAL SERVER (AS ROOT)</h3>
+          </div><h3>② AGENT COMMAND</h3>
           <div class="toolbar operator-only">
             <label style="display:flex;align-items:center;gap:8px">Storage <select id="p2v-pool" style="width:auto"></select></label>
             <button type="button" class="primary" id="p2v-open">Create agent command</button>
@@ -629,7 +629,7 @@
           </div>
           <div id="p2v-command" hidden>
             <div id="p2v-linux" role="tabpanel" aria-labelledby="p2v-linux-tab" tabindex="0">
-              <p class="hint">Run on the physical server (Linux, as root). The command works for 24 hours and for one machine. Stop databases and busy services first, or boot the server from a live USB, for a clean copy.</p>
+              <p class="hint">Run as root · valid for 24 hours · one machine.</p>
               <p class="hint" id="p2v-os-hint"></p><pre class="code" id="p2v-code"></pre>
               <button type="button" class="small" id="p2v-copy">COPY COMMAND</button><span class="hint" id="p2v-command-meta"></span>
             </div>
@@ -640,7 +640,7 @@
             </div>
           </div>
           <div class="mg-requirements"><div><b>Before you run</b>Stop databases and busy services for a clean copy.</div><div><b>Network</b>The physical server must reach this manager on port :8888.</div><div><b>Consistent copy</b>Use a live USB for an offline copy. Boot ISO support is coming soon.</div></div>
-          </div><div class="mg-panel"><h3>③ MACHINES REPORTING IN</h3>
+          </div><div class="mg-panel"><h3>③ PHYSICAL MACHINES</h3>
           <div class="table-wrap"><table>
             <thead><tr><th>Machine</th><th>Status</th><th>CPU / Memory</th><th>Disks</th><th>Storage</th><th>Created</th><th>Progress / Actions</th></tr></thead>
             <tbody id="p2v-rows"></tbody>
@@ -1617,9 +1617,9 @@
   </form>
 </dialog>
 
-<dialog id="source-dialog">
+<dialog id="source-dialog" class="mg-dialog">
   <form method="dialog" id="source-form">
-    <header><h3>Add migrate source</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Add migrate source</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <div class="body form-grid">
       <label>Name <input name="name" required placeholder="esx01"></label>
       <label>Type
@@ -1639,13 +1639,13 @@
       <label data-for="ova disk">Folder on the nodes <input name="path" placeholder="/mnt/exports"></label>
       <label data-for="vmware" class="wide">Transfer
         <select name="transport">
-          <option value="ssh">SSH: works with every ESXi version (ibHiCS turns SSH on and sets up a key)</option>
-          <option value="https">HTTPS: no SSH needed, but many ESXi versions refuse it</option>
+          <option value="ssh" title="ibHiCS turns SSH on and sets up a key">SSH · all ESXi versions (enables SSH + key)</option>
+          <option value="https" title="No SSH needed, but many ESXi versions refuse it">HTTPS · limited ESXi support</option>
         </select>
       </label>
       <label class="check" data-for="vmware nutanix sangfor"><input name="verify_tls" type="checkbox"> Verify the host's TLS certificate</label>
     </div>
-    <p class="hint" style="padding:0 18px">Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Nutanix: give the Prism Element or Prism Central address and a user that can read VMs and create images; each disk is copied through a temporary image that is deleted afterwards. Sangfor HCI: the VM is exported as OVA by Sangfor itself, downloaded and converted; shut it down first. Files from Hyper-V or Xen: export them and use Upload files.</p>
+    <details class="mg-help"><summary>Connection requirements</summary><p>Proxmox and KVM hosts are read over SSH as root; ibHiCS sets up a key with the password once. Folders must be mounted at the same path on every node, e.g. an NFS or SMB share. Nutanix: give the Prism Element or Prism Central address and a user that can read VMs and create images; each disk is copied through a temporary image that is deleted afterwards. Sangfor HCI: the VM is exported as OVA by Sangfor itself, downloaded and converted; shut it down first. Files from Hyper-V or Xen: export them and use Upload files.</p></details>
     <div id="source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
     <footer><button type="button" id="test-source-form">Test connection</button><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add source</button></footer>
   </form>
@@ -1653,7 +1653,7 @@
 
 <dialog id="log-dialog">
   <form method="dialog">
-    <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3 id="log-title">Log</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <div id="import-log-body">
       <div id="log-summary" aria-live="polite"></div>
       <details id="log-raw"><summary>Raw log</summary>
@@ -1666,23 +1666,23 @@
   </form>
 </dialog>
 
-<dialog id="source-test-dialog">
+<dialog id="source-test-dialog" class="mg-dialog">
   <form method="dialog">
-    <header><h3>Source connection test</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Source connection test</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <div id="saved-source-test-results" class="migrate-checks" role="status" aria-live="polite"></div>
     <footer><button value="cancel">Close</button></footer>
   </form>
 </dialog>
 
-<dialog id="import-dialog" class="wizard migrate-wizard">
+<dialog id="import-dialog" class="wizard migrate-wizard mg-dialog">
   <form method="dialog" id="import-form">
-    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <ol class="wiz-steps">
       <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
       <li data-step="3"><b>3</b>Network mapping</li><li data-step="4"><b>4</b>Summary</li>
     </ol>
     <section class="wiz-page body" data-page="1">
-      <p class="hint">Power off selected VMs at the source before migration. Running VMs cannot proceed.</p>
+      <p class="hint">Power off selected VMs at the source to continue.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
     </section>
     <section class="wiz-page body" data-page="2" hidden>

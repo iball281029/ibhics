@@ -662,7 +662,7 @@ async function renderP2V() {
     return `<tr><td class="vm-name">${esc(m.hostname || "—")}<div class="vm-sub">${esc(m.os || `session ${s.id}`)}</div></td>
       <td><span class="badge ${s.state === "ready" ? "done" : s.state === "failed" ? "failed" : "running"}">${esc(P2V_STATE[s.state] || s.state)}</span>${s.state === "uploading" ? ` ${s.percent}%` : ""}</td>
       <td>${m.cpus ? `${m.cpus} vCPU · ${Math.round(m.memory_mb / 1024)} GB` : "—"}</td><td>${disks || "—"}</td><td>${esc(s.pool)}</td><td>${esc(when(s.created))}</td>
-      <td>${s.state === "uploading" || s.state === "ready" ? `<progress max="100" value="${s.state === "ready" ? 100 : Math.max(0, Math.min(100, Number(s.percent) || 0))}" aria-label="Disk copy progress"></progress>` : ""}<span class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></span></td></tr>`;
+      <td>${s.state === "uploading" || s.state === "ready" ? `<progress max="100" value="${s.state === "ready" ? 100 : Math.max(0, Math.min(100, Number(s.percent) || 0))}" aria-label="Disk copy progress"></progress>` : ""}<span class="operator-only"><button type="button" class="small danger" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></span></td></tr>`;
   }).join("") : empty(7, "No physical machines yet. Create an agent command to start.");
 }
 let p2vDownload = null;
@@ -753,6 +753,7 @@ async function showLog(id, title) {
   clearTimeout(logTimer);
   $("#log-title").textContent = `Import log: ${title}`;
   const dlg = $("#log-dialog"), body = $("#import-log-body"), pre = $("#log-text");
+  dlg.classList.toggle("mg-dialog", currentPage() === "migrate");
   $("#log-summary").textContent = "Loading…";
   $("#log-fetch-error").textContent = "";
   $("#log-raw").open = false;
@@ -4662,7 +4663,7 @@ function renderSources() {
     const test = status?.testedAt ? `${new Date(status.testedAt).toLocaleString()} · ${status.testOK ? "Passed" : "Failed"}` : "Not tested";
     return `<article class="mg-source-card mg-panel ${status?.ok === true ? "ok" : status?.ok === false ? "bad" : "unknown"} ${status?.testing ? "testing" : ""}" aria-busy="${!!status?.testing}">
       <header><div class="mg-source-badge kind-${esc(s.type)}">${migrateSourceIcon(s.type)}</div><div class="mg-source-name"><h4>${esc(s.name)}</h4><span>${esc(migrateSourceKinds[s.type]?.label || s.type)}</span></div></header>
-      <div class="mg-source-state">${esc(status?.testing ? "Testing connection…" : status?.label || "Not tested")}</div>
+      <div class="mg-source-state" title="${esc(status?.label || "Not tested this visit")}">${status?.testing ? "Testing…" : status?.ok === true ? "Connected" : status?.ok === false ? "Failed" : "Not tested"}</div>
       <dl class="mg-source-data"><div><dt>HOST / PATH</dt><dd class="mg-source-path" title="${esc(where)}">${esc(where || "Not provided")}</dd></div><div><dt>USER</dt><dd title="${esc(st.username || "")}">${esc(st.username || (s.type === "kvm" ? "root (SSH)" : "Not required"))}</dd></div><div><dt>VMs</dt><dd>${status?.vmCount ?? "Not loaded"}</dd></div><div><dt>LAST TEST</dt><dd>${esc(test)}</dd></div></dl>
       ${status?.ok === false ? `<div class="mg-source-failure" title="${esc(status.failure || "Connection failed")}">${esc(status.failure || "Connection failed")}${status.node ? ` · Node: ${esc(status.node)}` : ""}</div>` : ""}
       <footer><button type="button" data-source-browse="${esc(s.name)}">Browse VMs →</button>${op ? `<button type="button" data-source-test="${esc(s.name)}" ${status?.testing || sourceTestAllRunning ? "disabled" : ""}>Test</button>` : ""}${admin ? `<button type="button" class="danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</footer>
