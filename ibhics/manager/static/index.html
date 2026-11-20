@@ -648,11 +648,15 @@
         </div>
           </div>
         <div class="subpage" id="tab-sources"><h3 class="mg-section-title">SOURCE CONNECTIONS</h3>
-          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="source-dialog">+ Add source</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Name</th><th>Type</th><th>Location</th><th>User</th><th></th></tr></thead>
-            <tbody id="sources"></tbody>
-          </table></div>
+          <div class="mg-source-command mg-panel">
+            <div id="source-summary" class="mg-source-summary" role="status" aria-live="polite"></div>
+            <div class="mg-source-tools"><button type="button" id="test-all-sources">Test all</button><button type="button" class="primary admin-only" data-open="source-dialog">+ ADD SOURCE</button></div>
+          </div>
+          <div id="sources" aria-label="Source connections"></div>
+          <div class="mg-builtins" aria-label="Built-in sources">
+            <div class="mg-panel"><span class="mg-builtin-label">BUILT-IN / UPLOADS</span><p>Import your OVA files and disk images.</p><button type="button" data-source-browse="uploads">Upload files →</button></div>
+            <div class="mg-panel"><span class="mg-builtin-label">BUILT-IN / PHYSICAL</span><p>Bring physical machines into your cluster.</p><button type="button" data-source-tab="p2v">Physical machines →</button></div>
+          </div>
         </div>
         <div class="subpage" id="tab-imports"><h3 class="mg-section-title">IMPORT JOBS</h3>
           <div class="table-wrap" style="margin-top:8px"><table>

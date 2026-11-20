@@ -4631,22 +4631,64 @@ $("#source-chips").addEventListener("click", (e) => {
   $("#browse-source").dispatchEvent(new Event("change"));
 });
 
+// Original platform silhouettes, not vendor logos.
+const migrateSourceKinds = {
+  vmware: { label: "VMware ESXi / vCenter", art: '<rect x="4" y="5" width="20" height="13" rx="2"/><rect x="12" y="22" width="20" height="9" rx="2"/><path d="M14 18v8H8m16-15h7v11"/>' },
+  kvm: { label: "Proxmox / KVM", art: '<path d="m18 4 13 7-13 7L5 11Zm-13 14 13 7 13-7M5 25l13 7 13-7"/>' },
+  sangfor: { label: "Sangfor HCI", art: '<path d="m18 3 12 6v10c0 7-12 14-12 14S6 26 6 19V9Z"/><path d="M11 17h14m-14 6h14m-7-12v17"/>' },
+  nutanix: { label: "Nutanix AHV / Prism", art: '<path d="m18 3 14 8v14l-14 8-14-8V11Zm0 0v15m14-7-14 7-14-7m14 7v15"/><circle cx="18" cy="18" r="4"/>' },
+  ova: { label: "OVA folder", art: '<path d="M3 11V6h12l4 5h14v20H3Zm0 6h30M12 23l6-3 6 3-6 4Zm0 0v5l6 3 6-3v-5m-6 4v4"/>' },
+  disk: { label: "Disk image folder", art: '<rect x="5" y="4" width="26" height="28" rx="3"/><circle cx="18" cy="16" r="8"/><circle cx="18" cy="16" r="2"/><path d="m20 18 6 9M9 28h5"/>' },
+};
+function migrateSourceIcon(type) {
+  return `<svg viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true">${(migrateSourceKinds[type] || migrateSourceKinds.ova).art}</svg>`;
+}
+function userMigrateSources() {
+  return state.sources.filter((s) => !["uploads", "physical"].includes(s.name) && !["upload", "p2v"].includes(s.type));
+}
+let sourceTestAllRunning = false;
 function renderSources() {
   renderMigrateSummary();
-  const admin = isAdmin();
-  $("#sources").innerHTML = state.sources.length ? state.sources.map((s) => {
-    const st = s.settings;
-    const where = ["vmware", "kvm", "nutanix", "sangfor"].includes(s.type) ? `${st.host}${st.path ? ` / ${st.path}` : ""}`
-      : s.type === "upload" ? "Files uploaded with Import VMs → Upload files" : st.path;
-    return `<tr>
-      <td><div class="name-cell">${avatar("i-migrate")}<span class="vm-name">${esc(s.name)}</span></div></td>
-      <td><span class="badge info plain">${esc(SOURCE_TYPES[s.type] || s.type)}</span></td>
-      <td class="vm-sub" style="display:table-cell">${esc(where)}</td>
-      <td>${esc(st.username || "–")}<span class="vm-sub">${esc(migrateSourceStatus.get(s.name)?.testLabel || migrateSourceStatus.get(s.name)?.label || "Not tested this visit")}</span></td>
-      <td><div class="actions">${canOperate() ? `<button class="small" data-source-test="${esc(s.name)}">Test</button>` : ""}${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
-    </tr>`;
-  }).join("") : empty(5, "No sources yet. Add an ESXi host, a vCenter or a folder of exports.");
+  const sources = userMigrateSources(), admin = isAdmin(), op = canOperate();
+  const connected = sources.filter((s) => migrateSourceStatus.get(s.name)?.ok === true).length;
+  const failed = sources.filter((s) => migrateSourceStatus.get(s.name)?.ok === false).length;
+  $("#source-summary").innerHTML = `<span><b>${sources.length}</b> SOURCES</span><span class="ok"><b>${connected}</b> CONNECTED</span><span class="bad"><b>${failed}</b> FAILED</span><span><b>${sources.length - connected - failed}</b> UNTESTED</span>`;
+  $("#test-all-sources").hidden = !op;
+  $("#test-all-sources").disabled = sourceTestAllRunning || !sources.length || sources.some((s) => migrateSourceStatus.get(s.name)?.testing);
+  $("#test-all-sources").textContent = sourceTestAllRunning ? "Testing sources…" : "Test all";
+  $("#sources").innerHTML = sources.length ? sources.map((s) => {
+    const st = s.settings || {}, status = migrateSourceStatus.get(s.name);
+    const where = [st.host, st.path].filter(Boolean).join(" / ");
+    const test = status?.testedAt ? `${new Date(status.testedAt).toLocaleString()} · ${status.testOK ? "Passed" : "Failed"}` : "Not tested";
+    return `<article class="mg-source-card mg-panel ${status?.ok === true ? "ok" : status?.ok === false ? "bad" : "unknown"} ${status?.testing ? "testing" : ""}" aria-busy="${!!status?.testing}">
+      <header><div class="mg-source-badge kind-${esc(s.type)}">${migrateSourceIcon(s.type)}</div><div class="mg-source-name"><h4>${esc(s.name)}</h4><span>${esc(migrateSourceKinds[s.type]?.label || s.type)}</span></div></header>
+      <div class="mg-source-state">${esc(status?.testing ? "Testing connection…" : status?.label || "Not tested")}</div>
+      <dl class="mg-source-data"><div><dt>HOST / PATH</dt><dd class="mg-source-path" title="${esc(where)}">${esc(where || "Not provided")}</dd></div><div><dt>USER</dt><dd title="${esc(st.username || "")}">${esc(st.username || (s.type === "kvm" ? "root (SSH)" : "Not required"))}</dd></div><div><dt>VMs</dt><dd>${status?.vmCount ?? "Not loaded"}</dd></div><div><dt>LAST TEST</dt><dd>${esc(test)}</dd></div></dl>
+      ${status?.ok === false ? `<div class="mg-source-failure" title="${esc(status.failure || "Connection failed")}">${esc(status.failure || "Connection failed")}${status.node ? ` · Node: ${esc(status.node)}` : ""}</div>` : ""}
+      <footer><button type="button" data-source-browse="${esc(s.name)}">Browse VMs →</button>${op ? `<button type="button" data-source-test="${esc(s.name)}" ${status?.testing || sourceTestAllRunning ? "disabled" : ""}>Test</button>` : ""}${admin ? `<button type="button" class="danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</footer>
+    </article>`;
+  }).join("") : `<div class="mg-source-empty mg-panel"><span class="mg-eyebrow">SOURCE LINK / AWAITING CONNECTION</span><h4>Connect your first source</h4><p>Link a hypervisor or export folder to discover workloads for migration.</p>${admin ? '<button type="button" class="primary" data-open="source-dialog">+ ADD SOURCE</button>' : '<p>Ask an administrator to add a source.</p>'}<div class="mg-source-supported">${Object.entries(migrateSourceKinds).map(([type, kind]) => `<span class="kind-${type}" title="${kind.label}">${migrateSourceIcon(type)}<small>${kind.label}</small></span>`).join("")}</div></div>`;
 }
+$("#tab-sources").addEventListener("click", (e) => {
+  const browse = e.target.closest("[data-source-browse]");
+  if (browse) {
+    selectTab("migrate-tabs", "import");
+    $("#browse-source").value = browse.dataset.sourceBrowse;
+    $("#browse-source").dispatchEvent(new Event("change"));
+  }
+  const tab = e.target.closest("[data-source-tab]");
+  if (tab) selectTab("migrate-tabs", tab.dataset.sourceTab);
+});
+$("#test-all-sources").addEventListener("click", async () => {
+  if (!canOperate() || sourceTestAllRunning) return;
+  sourceTestAllRunning = true;
+  renderSources();
+  try {
+    for (const source of userMigrateSources()) {
+      await runSourceTest(source.name, document.createElement("div"));
+    }
+  } finally { sourceTestAllRunning = false; renderSources(); }
+});
 
 let sourceVMs = [];
 let sourceVMsFor = null;  // the source the list above was read from
@@ -4665,16 +4707,23 @@ function connectionChecks(result) {
   return `<ol>${result.checks.map((c) => `<li class="${c.ok ? "check-ok" : "check-failed"}"><strong>${c.ok ? "✓" : "✗"} ${esc(c.step)}</strong><div>${esc(c.detail)}</div>${c.hint ? `<p>${esc(c.hint)}</p>` : ""}</li>`).join("")}</ol>`;
 }
 async function runSourceTest(name, box) {
+  if (migrateSourceStatus.get(name)?.testing) return;
   box.innerHTML = "Testing connection…";
+  migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), testing: true });
+  renderSources();
   try {
     const result = await post(`/migrate/sources/${enc(name)}/test`, {});
-    const ok = result.checks.every((c) => c.ok || c.step === "TCP 902");
+    const failed = result.checks.find((c) => !c.ok && c.step !== "TCP 902");
+    const ok = !failed;
     const label = `Tested ${new Date().toLocaleTimeString()}: ${ok ? "passed" : "failed"}`;
-    migrateSourceStatus.set(name, { ok, label, testLabel: label });
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), testing: false, ok, label, testLabel: label, testedAt: Date.now(), testOK: ok, failure: failed ? `${failed.step} failed` : "", node: result.node });
     renderSources();
     box.innerHTML = connectionChecks(result);
     return result;
-  } catch (err) { migrateSourceStatus.set(name, { ok: false, label: "Connection test failed", testLabel: "Connection test failed" }); renderSources(); box.textContent = err.message; }
+  } catch (err) {
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), testing: false, ok: false, label: "Connection test failed", testLabel: "Connection test failed", testedAt: Date.now(), testOK: false, failure: "Connection test request failed", node: null });
+    renderSources(); box.textContent = err.message;
+  }
 }
 async function renderSourceVMs() {
   const name = $("#browse-source").value || state.sources[0]?.name;
@@ -4688,11 +4737,11 @@ async function renderSourceVMs() {
     const found = await api(`/migrate/sources/${enc(name)}/vms`);
     if (generation !== sourceReadGeneration) return;
     sourceVMs = found; sourceVMsFor = name;
-    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: true, label: "Inventory available" }); renderSources();
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: true, label: "Inventory available", vmCount: found.length, failure: "" }); renderSources();
   } catch (err) {
     if (generation !== sourceReadGeneration) return;
     tbody.innerHTML = "";
-    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: false, label: "Inventory failed" }); renderSources();
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: false, label: "Inventory failed", failure: "VM inventory failed" }); renderSources();
     error.hidden = false;
     error.innerHTML = `<strong>Could not list VMs from ${esc(name)}</strong><p>Run the connection test to identify the failed step and how to fix it.</p><details><summary>Inventory error</summary><p>${esc(err.message)}</p></details><button type="button" data-source-test="${esc(name)}">Run connection test</button><div class="migrate-checks"></div>`;
     // Diagnose separately: inventory failures may be DNS, TCP, TLS, login or listing.
