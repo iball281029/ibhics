@@ -59,7 +59,7 @@ for _ in range(20):
         req = urllib.request.Request(agent_url, headers={'X-Ibhics-Token': token})
         with urllib.request.urlopen(req, timeout=3) as response:
             agent = json.load(response)
-        assert agent['version'] == '1.3.0b2+X
+        assert agent['version'] == '1.3.0b2+vstore3.28'
         if sys.argv[1] == 'compute':
             try:
                 with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',
