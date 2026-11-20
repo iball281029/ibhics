@@ -654,7 +654,7 @@ async function renderP2V() {
   const keep = select.value;
   select.innerHTML = state.pools.filter((p) => p.active && (!local || p.node === local.name) && !["lvm", "iscsi"].includes(p.type))
     .map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))}</option>`).join("");
-  if (keep) select.value = keep;
+  if ([...select.options].some((o) => o.value === keep)) select.value = keep;
   const sessions = await api("/p2v/sessions");
   $("#p2v-rows").innerHTML = sessions.length ? sessions.map((s) => {
     const m = s.machine || {};
@@ -662,27 +662,36 @@ async function renderP2V() {
     return `<tr><td class="vm-name">${esc(m.hostname || "—")}<div class="vm-sub">${esc(m.os || `session ${s.id}`)}</div></td>
       <td><span class="badge ${s.state === "ready" ? "done" : s.state === "failed" ? "failed" : "running"}">${esc(P2V_STATE[s.state] || s.state)}</span>${s.state === "uploading" ? ` ${s.percent}%` : ""}</td>
       <td>${m.cpus ? `${m.cpus} vCPU · ${Math.round(m.memory_mb / 1024)} GB` : "—"}</td><td>${disks || "—"}</td><td>${esc(s.pool)}</td><td>${esc(when(s.created))}</td>
-      <td class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></td></tr>`;
+      <td>${s.state === "uploading" || s.state === "ready" ? `<progress max="100" value="${s.state === "ready" ? 100 : Math.max(0, Math.min(100, Number(s.percent) || 0))}" aria-label="Disk copy progress"></progress>` : ""}<span class="operator-only"><button type="button" class="small" data-p2v-delete="${esc(s.id)}">${s.state === "ready" ? "Discard" : "Cancel"}</button></span></td></tr>`;
   }).join("") : empty(7, "No physical machines yet. Create an agent command to start.");
 }
 let p2vDownload = null;
+let p2vBaseCommand = "", p2vOs = "apt";
+function renderP2VCommand() {
+  const prefixes = { apt: "sudo apt-get install -y curl gzip && ", rhel: "sudo dnf install -y curl gzip || sudo yum install -y curl gzip; ", suse: "sudo zypper -n install curl gzip && " };
+  let command = p2vBaseCommand;
+  // Preserve all API-issued agent arguments, including its certificate pin.
+  if (p2vOs === "other") command = command.replace(/^curl -fsS (?:--pinnedpubkey '[^']+' )?-k (\S+) \|/, "wget --no-check-certificate -qO- $1 |");
+  $("#p2v-code").textContent = command ? (prefixes[p2vOs] || "") + command : "";
+  $("#p2v-os-hint").textContent = p2vOs === "other" ? "wget downloads the script without certificate verification. The agent still requires curl, gzip, bash, dd and lsblk to upload disks; install curl first if missing. The API-issued pin remains on agent uploads." : "Installs curl and gzip before starting the API-issued agent command.";
+  const windows = p2vOs === "windows";
+  $("#p2v-linux").hidden = windows;
+  $("#p2v-windows").hidden = !windows;
+  $("#p2v-linux").setAttribute("aria-labelledby", $(`[data-p2v-os="${p2vOs}"]`).id);
+  $$("[data-p2v-os]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.p2vOs === p2vOs)));
+}
+$$("[data-p2v-os]").forEach((tab) => tab.addEventListener("click", () => { p2vOs = tab.dataset.p2vOs; renderP2VCommand(); }));
 $("#p2v-open").addEventListener("click", async () => {
   try {
     const r = await post("/p2v/sessions", { pool: $("#p2v-pool").value });
     p2vDownload = { url: r.windows_agent_url, token: r.agent_token, sid: r.session.id };
-    $("#p2v-code").textContent = r.command;
+    p2vBaseCommand = r.command;
+    $("#p2v-command-meta").textContent = `valid 24 h · one machine · storage: ${r.session.pool || $("#p2v-pool").value}`;
+    renderP2VCommand();
     $("#p2v-command").hidden = false;
     await renderP2V();
   } catch (err) { fail(err); }
 });
-for (const platform of ["linux", "windows"]) {
-  $(`#p2v-${platform}-tab`).addEventListener("click", () => {
-    for (const name of ["linux", "windows"]) {
-      $(`#p2v-${name}`).hidden = name !== platform;
-      $(`#p2v-${name}-tab`).setAttribute("aria-selected", String(name === platform));
-    }
-  });
-}
 $("#p2v-download").addEventListener("click", async () => {
   if (!p2vDownload) return;
   const download = p2vDownload;
@@ -4590,7 +4599,40 @@ handlers["restore-dialog"] = async (f) => {
 
 // ---------- migrate ----------
 
+// Status is based only on an observed inventory read or connection test this visit.
+const migrateSourceStatus = new Map();
+// Keep the destination line under the Migrate button in step with the wizard.
+$("#import-form").addEventListener("change", () => renderMigrateSummary());
+$("#import-dialog").addEventListener("close", () => renderMigrateSummary());
+function renderMigrateSummary() {
+  const name = $("#browse-source").value;
+  const source = state.sources.find((s) => s.name === name);
+  $("#source-chips").innerHTML = state.sources.map((s) => {
+    const status = migrateSourceStatus.get(s.name);
+    return `<button type="button" class="mg-chip ${status?.ok === true ? "ok" : status?.ok === false ? "bad" : "unknown"}" data-browse-source="${esc(s.name)}" aria-pressed="${s.name === name}" title="${esc(status?.label || "Not tested this visit")}"><i aria-hidden="true"></i>${esc(s.name)} · ${esc(SOURCE_TYPES[s.type] || s.type)}<small>${esc(status?.label || "Not tested")}</small></button>`;
+  }).join("") || '<p class="hint">Add a source in the Sources tab to begin.</p>';
+  $("#mg-source-meta").textContent = source ? `${source.name} · ${SOURCE_TYPES[source.type] || source.type}` : "Select a source";
+  $("#mg-vm-count").textContent = sourceVMsFor === name ? `${sourceVMs.length} VMs` : "— VMs";
+  $("#mg-running").textContent = `${state.imports.filter((j) => ["queued", "running"].includes(j.state)).length} active`;
+  const members = state.cluster?.members || [];
+  $("#mg-nodes").textContent = members.map((m) => m.name).join(" · ") || "No cluster nodes available";
+  $("#mg-node-count").textContent = `${members.length} nodes`;
+  const f = $("#import-form").elements;
+  const pool = state.pools.find((p) => p.active && computeMembers().some((m) => m.healthy && m.name === p.node));
+  $("#mg-write").textContent = `WRITE · ${f.pool.value || pool?.name || "select storage"}`;
+  $("#mg-destination").textContent = f.node.value && f.pool.value
+    ? `to ${f.node.value} · ${f.pool.value} · network ${[...importBatch.networks.values()].join(", ") || "default"}`
+    : pool ? `Suggested: ${pool.node} · ${pool.name} · network default — confirm in wizard` : "Choose destination in the import wizard";
+}
+$("#source-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-browse-source]");
+  if (!chip) return;
+  $("#browse-source").value = chip.dataset.browseSource;
+  $("#browse-source").dispatchEvent(new Event("change"));
+});
+
 function renderSources() {
+  renderMigrateSummary();
   const admin = isAdmin();
   $("#sources").innerHTML = state.sources.length ? state.sources.map((s) => {
     const st = s.settings;
@@ -4600,7 +4642,7 @@ function renderSources() {
       <td><div class="name-cell">${avatar("i-migrate")}<span class="vm-name">${esc(s.name)}</span></div></td>
       <td><span class="badge info plain">${esc(SOURCE_TYPES[s.type] || s.type)}</span></td>
       <td class="vm-sub" style="display:table-cell">${esc(where)}</td>
-      <td>${esc(st.username || "–")}</td>
+      <td>${esc(st.username || "–")}<span class="vm-sub">${esc(migrateSourceStatus.get(s.name)?.testLabel || migrateSourceStatus.get(s.name)?.label || "Not tested this visit")}</span></td>
       <td><div class="actions">${canOperate() ? `<button class="small" data-source-test="${esc(s.name)}">Test</button>` : ""}${admin && s.type !== "upload" ? `<button class="small danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td>
     </tr>`;
   }).join("") : empty(5, "No sources yet. Add an ESXi host, a vCenter or a folder of exports.");
@@ -4612,7 +4654,9 @@ const migratePicked = new Set();
 let sourceReadGeneration = 0;
 function migrateSelection() {
   $("#migrate-selected").disabled = !canOperate() || !migratePicked.size || !sourceVMsFor;
-  $("#migrate-selected").textContent = `Migrate selected (${migratePicked.size})`;
+  $("#migrate-selected").textContent = `MIGRATE ${migratePicked.size} SELECTED`;
+  $$("#source-vms .mg-vm").forEach((card) => card.classList.toggle("selected", !!$("[data-migrate-pick]", card)?.checked));
+  renderMigrateSummary();
   const all = $("#migrate-select-all");
   all.checked = sourceVMs.length > 0 && migratePicked.size === sourceVMs.length;
   all.indeterminate = migratePicked.size > 0 && !all.checked;
@@ -4624,9 +4668,13 @@ async function runSourceTest(name, box) {
   box.innerHTML = "Testing connection…";
   try {
     const result = await post(`/migrate/sources/${enc(name)}/test`, {});
+    const ok = result.checks.every((c) => c.ok || c.step === "TCP 902");
+    const label = `Tested ${new Date().toLocaleTimeString()}: ${ok ? "passed" : "failed"}`;
+    migrateSourceStatus.set(name, { ok, label, testLabel: label });
+    renderSources();
     box.innerHTML = connectionChecks(result);
     return result;
-  } catch (err) { box.textContent = err.message; }
+  } catch (err) { migrateSourceStatus.set(name, { ok: false, label: "Connection test failed", testLabel: "Connection test failed" }); renderSources(); box.textContent = err.message; }
 }
 async function renderSourceVMs() {
   const name = $("#browse-source").value || state.sources[0]?.name;
@@ -4634,15 +4682,17 @@ async function renderSourceVMs() {
   const tbody = $("#source-vms"), error = $("#source-error");
   sourceVMs = []; sourceVMsFor = null; migratePicked.clear(); migrateSelection();
   error.hidden = true;
-  if (!name) { tbody.innerHTML = empty(9, "Add a source first (Sources tab)"); return; }
-  tbody.innerHTML = empty(9, "Reading the source…");
+  if (!name) { tbody.innerHTML = '<p class="mg-empty">Add a source first (Sources tab)</p>'; return; }
+  tbody.innerHTML = '<p class="mg-empty" role="status">Reading the source…</p>';
   try {
     const found = await api(`/migrate/sources/${enc(name)}/vms`);
     if (generation !== sourceReadGeneration) return;
     sourceVMs = found; sourceVMsFor = name;
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: true, label: "Inventory available" }); renderSources();
   } catch (err) {
     if (generation !== sourceReadGeneration) return;
-    tbody.innerHTML = empty(9, "Source inventory unavailable");
+    tbody.innerHTML = "";
+    migrateSourceStatus.set(name, { ...migrateSourceStatus.get(name), ok: false, label: "Inventory failed" }); renderSources();
     error.hidden = false;
     error.innerHTML = `<strong>Could not list VMs from ${esc(name)}</strong><p>Run the connection test to identify the failed step and how to fix it.</p><details><summary>Inventory error</summary><p>${esc(err.message)}</p></details><button type="button" data-source-test="${esc(name)}">Run connection test</button><div class="migrate-checks"></div>`;
     // Diagnose separately: inventory failures may be DNS, TCP, TLS, login or listing.
@@ -4655,17 +4705,20 @@ async function renderSourceVMs() {
     return;
   }
   const op = canOperate();
-  tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => `<tr>
-    <td><input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${op ? "" : "disabled"}></td>
-    <td><div class="name-cell">${avatar("i-compute")}<div><span class="vm-name">${esc(vm.name)}</span><span class="vm-sub clip" title="${esc(vm.ref)}">${esc(vm.ref.split("/").pop())}</span></div></div></td>
-    <td>${vm.state ? `<span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state)}</span>` : "Unknown"}${vm.state === "running" ? '<span class="vm-sub">Power off at source first</span>' : ""}</td>
-    <td>${vm.vcpus}</td><td>${gbText(vm.memory_mb)}</td>
-    <td>${vm.disks_gb.map((g) => (g ? `${g} GB` : "?")).join(", ")}</td>
-    <td>${esc(vm.firmware.toUpperCase())}</td>
-    <td>${esc(vm.guest_os || "–")}${vm.notes ? `<span class="vm-sub clip" title="${esc(vm.notes)}">${esc(vm.notes)}</span>` : ""}</td>
-    <td><div class="actions">${op ? `<button class="small primary" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads"
-      ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
-  </tr>`).join("") : empty(9, "No VMs found on this source");
+  tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => {
+    const kind = osKind(vm.guest_os || "");
+    return `<article class="mg-vm">
+      <label class="mg-vm-select"><span class="vx-os os-${kind.toLowerCase() || "other"}">${VX_OS_ART[kind] || VX_OS_ART[""]}</span>
+      <span class="mg-vm-name"><b>${esc(vm.name)}</b><small>${esc(vm.guest_os || "OS not reported")}</small></span>
+      <input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${op ? "" : "disabled"}></label>
+      <span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state || "Unknown")}</span>
+      <div class="mg-spec">${Number(vm.vcpus)} vCPU · ${gbText(vm.memory_mb)} · ${vm.disks_gb.length} disks · ${vm.disks_gb.map((g) => g ? `${g} GB` : "?").join(" + ")}</div>
+      <small class="mg-ref" title="${esc(vm.ref)}">${esc((vm.firmware || "").toUpperCase())} · ${esc(String(vm.ref).split("/").pop())}${vm.notes ? ` · ${esc(vm.notes)}` : ""}</small>
+      ${vm.state === "running" ? '<small>Power off at source first</small>' : ""}
+      <div class="actions">${op ? `<button class="small" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads" ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div>
+    </article>`;
+  }).join("") : '<p class="mg-empty">No VMs found on this source</p>';
+  migrateSelection();
 }
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
 $("#source-vms").addEventListener("change", (e) => {
@@ -4734,13 +4787,14 @@ function importElapsed(j) {
   return Number.isFinite(seconds) ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : "–";
 }
 function renderImports() {
+  renderMigrateSummary();
   $("#imports").innerHTML = state.imports.length ? state.imports.map((j) => `<tr>
     <td class="vm-sub" style="display:table-cell" title="${esc(j.vm)}">${esc(j.vm.split("/").pop())}</td><td>${esc(j.source)}</td>
-    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}</td><td>${esc(when(j.created))}<span class="vm-sub">Elapsed ${importElapsed(j)}</span></td>
+    <td class="vm-name">${esc(j.name)}</td><td>${esc(j.node)}${j.via ? `<span class="vm-sub">via ${esc(j.via)}</span>` : ""}</td><td>${esc(when(j.created))}<span class="vm-sub">Elapsed ${importElapsed(j)}</span></td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
     <td class="vm-sub" style="display:table-cell">${esc(j.error || j.step || "")}
       ${j.percent != null ? `<progress max="100" value="${Number(j.percent)}" aria-label="Migration progress"></progress> ${Number(j.percent)}%` : ""}
-      <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button></td></tr>`).join("") : empty(7, "No imports yet");
+      <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button>${canOperate() && ["queued", "running"].includes(j.state) ? `<button class="small danger" data-import-cancel="${esc(j.id)}">Cancel</button>` : ""}</td></tr>`).join("") : empty(7, "No imports yet");
 }
 
 async function openImportWizard(indices) {
@@ -4751,6 +4805,11 @@ async function openImportWizard(indices) {
 }
 $("#migrate-selected").addEventListener("click", () => openImportWizard([...migratePicked]).catch(fail));
 $("#page-migrate").addEventListener("click", async (e) => {
+  const cancel = e.target.closest("button[data-import-cancel]");
+  if (cancel && confirm("Cancel this import?")) {
+    cancel.disabled = true;
+    try { await post(`/migrate/jobs/${enc(cancel.dataset.importCancel)}/cancel`); await refresh("migrate"); } catch (err) { cancel.disabled = false; fail(err); }
+  }
   const imp = e.target.closest("button[data-import]");
   const rm = e.target.closest("button[data-source-del]");
   const test = e.target.closest("button[data-source-test]");
