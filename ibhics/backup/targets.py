@@ -56,6 +56,8 @@ class BackupTarget:
     # local: a backup repository carved out of a storage pool (its folder is in the pool)
     pool: str | None = None
     quota_gb: int | None = None  # local: space set aside; backups stop when it is used up
+    storage_class: str = "STANDARD"  # S3 archive tiers with immediate retrieval only
+    compression: str = "balanced"
 
     @property
     def shared(self) -> bool:
@@ -74,6 +76,12 @@ class BackupTarget:
         return self.type in EXCLUSIVE_TYPES
 
     def validate(self) -> None:
+        if self.compression not in ("fast", "balanced", "maximum"):
+            raise ValueError("Compression must be fast, balanced or maximum")
+        if self.storage_class not in ("STANDARD", "STANDARD_IA", "ONEZONE_IA", "GLACIER_IR"):
+            raise ValueError("Use an S3 storage class with immediate retrieval")
+        if self.type != TargetType.S3 and self.storage_class != "STANDARD":
+            raise ValueError("Storage class applies to S3 repositories only")
         if not NAME_RE.match(self.name):
             raise ValueError("target name must use only letters, digits, '_', '.', '-'")
         if not PREFIX_RE.match(self.prefix) or ".." in self.prefix.split("/"):
@@ -150,3 +158,26 @@ class BackupTarget:
             TargetType.FC: self.device or "",
             TargetType.S3: f"{self.endpoint} {self.bucket}",
         }[self.type]
+
+
+def repository_identity(target):
+    """Detect aliases of the same repository before copying into ourselves."""
+    from pathlib import Path
+
+    if target.type == TargetType.LOCAL:
+        return ("local", str(Path(target.path or f"{LOCAL_ROOT}/{target.name}").resolve()))
+    return tuple(
+        str(getattr(target, key) or "")
+        for key in (
+            "type",
+            "host",
+            "export",
+            "share",
+            "device",
+            "iqn",
+            "lun",
+            "endpoint",
+            "bucket",
+            "prefix",
+        )
+    )

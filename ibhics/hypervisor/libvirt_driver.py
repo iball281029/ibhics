@@ -1774,6 +1774,11 @@ class LibvirtDriver(HypervisorDriver):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def export_backup(self, uuid, parent=None):
+        from .backup_cbt import capture
+
+        return capture(self, uuid, parent)
+
     def import_disk(self, uuid: str, index: int, raw_image: Path) -> None:
         dom = self._lookup(uuid)
         if dom.isActive():

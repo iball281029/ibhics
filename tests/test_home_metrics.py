@@ -51,28 +51,23 @@ const html = $('#usage').innerHTML;
 assert.equal((html.match(/overallocated"/g)||[]).length,3);
 assert.equal(html.split('<strong>125%</strong>').length-1,3);
 assert.equal((html.match(/Overallocated by 25%/g)||[]).length,3);
-assert.equal((html.match(/class="resource-chart"/g)||[]).length,3);
+// One combined Compute + Memory activity chart (Resource activity panel).
+assert.equal((html.match(/class="resource-activity"/g)||[]).length,1);
 assert(!html.includes('allocation-track'));
 assert(!html.includes('chart-ring'));
-assert.equal(html.split('100%</text>').length-1,3);
-assert.equal(html.split('50%</text>').length-1,3);
-assert.equal(html.split('class="resource-chart"').length-1,3);
-assert(html.split('time-tick').length-1 >= 3); // clock-time axis, not "min ago"
-assert(html.includes('Idle: <b>75%</b>'));
-assert(html.includes('Available: <b>75%</b>'));
+assert(html.includes('activity-cpu') && html.includes('activity-memory'));
+assert(html.includes('Compute<b>25%</b>'));
+assert(html.includes('Memory<b>25%</b>'));
+assert(html.includes('class="activity-times"')); // clock-time axis, not "min ago"
 assert(html.includes('No recorded data in this period'));
 assert(!html.includes('NaN'));
 assert(!allocationMeter('CPU',8,8,'').includes('overallocated'));
 assert(allocationMeter('CPU',8.01,8,'').includes('overallocated'));
 assert(allocationMeter('CPU',1,0,'').includes('Capacity unavailable'));
-const chart=usageChart('cpu','CPU',50,'');
-assert(!chart.includes('NaN'));
-assert(!usageChart('memory','Memory',null,'').includes('Available: <b>100%'));
-assert(chart.includes('gradientUnits="userSpaceOnUse"')); // flat lines need gradient space
 state.hosts={};state.summaries={};state.pools=[];
 renderHome();
 assert(!$('#usage').innerHTML.includes('NaN'));
-assert($('#usage').innerHTML.includes('No data'));
+assert($('#usage').innerHTML.includes('No history'));
 """
     result = subprocess.run(["node", "-e", helpers + "\n" + code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

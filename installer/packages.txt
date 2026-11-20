@@ -53,3 +53,9 @@ uidmap
 wget
 gnupg
 xz-utils
+
+# Incremental backups via the libvirt NBD dirty bitmap export
+python3-libnbd
+
+# Maximum backup compression; optional pip extra is available for custom installs
+python3-zstandard

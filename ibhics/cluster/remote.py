@@ -388,9 +388,29 @@ class RemoteBackup:
     def __init__(self, client: AgentClient) -> None:
         self._client = client
 
-    def backup(self, uuid: str, target: BackupTarget) -> BackupInfo:
-        body = {"uuid": uuid, "target": target.to_dict()}
+    def backup(self, uuid: str, target: BackupTarget, mode="incremental") -> BackupInfo:
+        body = {"uuid": uuid, "target": target.to_dict(), "mode": mode}
         return _backup_info(self._call("/backups/run", body, uuid).json())
+
+    def synthetic_full(self, target, backup_id):
+        return _backup_info(
+            self._call(
+                "/backups/synthetic", {"target": target.to_dict(), "backup_id": backup_id}
+            ).json()
+        )
+
+    def copy(self, source, destination, backup_id, archive=False):
+        return _backup_info(
+            self._call(
+                "/backups/copy",
+                {
+                    "target": source.to_dict(),
+                    "destination": destination.to_dict(),
+                    "backup_id": backup_id,
+                    "archive": archive,
+                },
+            ).json()
+        )
 
     def list(self, target: BackupTarget, vm_name: str | None = None) -> list[BackupInfo]:
         body = {"target": target.to_dict(), "vm_name": vm_name}
@@ -410,8 +430,17 @@ class RemoteBackup:
         body = {"target": target.to_dict(), "backup_id": backup_id}
         return self._call("/backups/delete", body).json()["freed_chunks"]
 
-    def prune(self, target: BackupTarget, vm_name: str, keep_last: int) -> list[str]:
-        body = {"target": target.to_dict(), "vm_name": vm_name, "keep_last": keep_last}
+    def prune(
+        self, target: BackupTarget, vm_name: str, keep_last: int, weekly=0, monthly=0, yearly=0
+    ) -> list[str]:
+        body = {
+            "target": target.to_dict(),
+            "vm_name": vm_name,
+            "keep_last": keep_last,
+            "weekly": weekly,
+            "monthly": monthly,
+            "yearly": yearly,
+        }
         return self._call("/backups/prune", body).json()["removed"]
 
     def _call(self, path: str, body: dict, uuid: str = "") -> httpx.Response:

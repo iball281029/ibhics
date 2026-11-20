@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import csv
+import io
 import json
 import logging
 import re
@@ -52,6 +54,7 @@ from .poollabels import PoolLabels
 from .recycle import RecycleBin
 from .schemas import (
     AuditOut,
+    BackupOperation,
     BackupOut,
     BackupRequest,
     BackupTargetIn,
@@ -187,6 +190,7 @@ ADMIN_ROUTES = {
     ("DELETE", f"{API}/backup/targets/{{name}}"),
     ("DELETE", f"{API}/backup/targets/{{name}}/backups/{{backup_id}}"),
     ("POST", f"{API}/backup/policies"),
+    ("PUT", f"{API}/backup/policies/{{name}}"),
     ("DELETE", f"{API}/backup/policies/{{name}}"),
     ("GET", f"{API}/users"),
     ("POST", f"{API}/users"),
@@ -1791,11 +1795,63 @@ def create_app(
 
     @api.post("/vms/{uuid}/backup", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
     def backup_vm(uuid: str, body: BackupRequest) -> JobOut:
-        return JobOut(**backups.start_backup(uuid, body.target, body.keep_last).__dict__)
+        return JobOut(**backups.start_backup(uuid, body.target, body.keep_last, body.mode).__dict__)
+
+    @api.post(
+        "/backup/targets/{name}/backups/{backup_id}/synthetic",
+        response_model=JobOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def synthetic_backup(name: str, backup_id: str, body: BackupOperation) -> JobOut:
+        cluster.require_quorum()
+        return JobOut(**backups.start_repository_job(name, backup_id, body.node).__dict__)
+
+    @api.post(
+        "/backup/targets/{name}/backups/{backup_id}/copy",
+        response_model=JobOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def copy_backup(name: str, backup_id: str, body: BackupOperation) -> JobOut:
+        cluster.require_quorum()
+        if not body.destination:
+            raise ValueError("Destination repository is required")
+        return JobOut(
+            **backups.start_repository_job(
+                name, backup_id, body.node, body.destination, body.archive
+            ).__dict__
+        )
 
     @api.get("/backup/jobs", response_model=list[JobOut])
     def list_jobs() -> list[JobOut]:
         return [JobOut(**job.__dict__) for job in backups.jobs()]
+
+    @api.get("/backup/jobs/{job_id}/report")
+    def export_backup_report(job_id: str, format: str = "json"):
+        from ..backup.report import backup_report
+
+        job = next((j for j in backups.jobs() if j.id == job_id), None)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Backup job not found")
+        report = backup_report(job)
+        if format == "json":
+            return JSONResponse(report)
+        if format != "csv":
+            raise ValueError("Report format must be csv or json")
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=list(report))
+        writer.writeheader()
+        # Escape spreadsheet formula prefixes in textual values.
+        writer.writerow(
+            {
+                k: "'" + v if isinstance(v, str) and v.startswith(("=", "+", "-", "@")) else v
+                for k, v in report.items()
+            }
+        )
+        return Response(
+            "\ufeff" + output.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="backup-job-{job.id}.csv"'},
+        )
 
     @api.get("/backup/policies", response_model=list[PolicyOut])
     def list_policies() -> list[PolicyOut]:
@@ -1805,6 +1861,12 @@ def create_app(
     def add_policy(body: PolicyIn) -> PolicyOut:
         cluster.require_quorum()
         return PolicyOut(**backups.add_policy(Policy(**body.model_dump())).__dict__)
+
+    @api.put("/backup/policies/{name}", response_model=PolicyOut)
+    def update_policy(name: str, body: PolicyIn) -> PolicyOut:
+        cluster.require_quorum()
+        updated = backups.update_policy(name, Policy(**body.model_dump()))
+        return PolicyOut(**updated.__dict__)
 
     @api.delete("/backup/policies/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_policy(name: str) -> None:

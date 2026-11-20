@@ -276,3 +276,20 @@ def test_sessions_survive_a_manager_restart_but_not_logout(tmp_path):
     c.load()
     with pytest.raises(AuthError):
         c.authenticate(s1.token)
+
+
+@pytest.mark.parametrize("role", ["viewer", "operator"])
+def test_only_admin_can_edit_backup_schedules(env, role):
+    client, auth, *_ = env
+    admin(client, auth)
+    user = as_user(env, "schedule-user", role)
+    response = user.put(
+        "/api/v1/backup/policies/nightly",
+        json={
+            "name": "nightly",
+            "target": "local",
+            "every_hours": 6,
+        },
+    )
+    assert response.status_code == 403
+    assert "admin" in response.json()["detail"].lower()

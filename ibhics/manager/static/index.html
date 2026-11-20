@@ -6,8 +6,11 @@
 <title>ibHiCS</title>
 <link rel="icon" href="logo-mark.svg" type="image/svg+xml">
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="future.css">
+<link rel="stylesheet" href="command.css">
+<link rel="stylesheet" href="spatial.css">
 </head>
-<body>
+<body class="command-workspace spatial-workspace">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <linearGradient id="g-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#22d3ee"/></linearGradient>
@@ -59,25 +62,11 @@
   <symbol id="i-disk" viewBox="0 0 56 56"><g fill="currentColor"><ellipse cx="28" cy="13" rx="20" ry="7"/><path d="M8 19c0 3.9 9 7 20 7s20-3.1 20-7v8c0 3.9-9 7-20 7S8 30.9 8 27z" opacity=".85"/><path d="M8 33c0 3.9 9 7 20 7s20-3.1 20-7v8c0 3.9-9 7-20 7S8 44.9 8 41z" opacity=".7"/></g></symbol>
 </svg>
 
-<aside class="rail">
-  <button class="logo" id="rail-toggle" type="button" aria-label="Expand navigation" aria-expanded="false" aria-controls="menu"><svg><use href="#logo"/></svg><span class="rail-title">ibHiCS</span></button>
-  <nav id="menu">
-    <a href="#home" data-page="home" data-label="Dashboard"><svg><use href="#i-home"/></svg></a>
-    <a href="#compute" data-page="compute" data-label="Virtual Machines"><svg><use href="#i-compute"/></svg></a>
-    <a href="#containers" data-page="containers" data-label="Containers"><svg><use href="#i-ct"/></svg></a>
-    <a href="#templates" data-page="templates" data-label="Templates"><svg><use href="#i-template"/></svg></a>
-    <a href="#storage" data-page="storage" data-label="Storage"><svg><use href="#i-storage"/></svg></a>
-    <a href="#network" data-page="network" data-label="Network"><svg><use href="#i-nic"/></svg></a>
-    <a href="#cluster" data-page="cluster" data-label="Cluster"><svg><use href="#i-nodes"/></svg></a>
-    <a href="#backup" data-page="backup" data-label="Backup"><svg><use href="#i-backup"/></svg></a>
-    <a href="#migrate" data-page="migrate" data-label="Migrate"><svg><use href="#i-migrate"/></svg></a>
-    <a href="#terminal" data-page="terminal" data-label="Terminal" class="admin-only"><svg><use href="#i-term"/></svg></a>
-  </nav>
-</aside>
+<aside class="rail spatial-rail"><a class="logo spatial-logo" href="#home" aria-label="ibHiCS home"><svg><use href="#logo"/></svg></a><button id="rail-toggle" class="orbit-toggle" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="menu"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M7 22C-2 9 32 2 34 16S7 39 6 25" fill="none" stroke="#a7a3ff" stroke-width="1.3"/><path d="m20 10 9 10-9 10-9-10z" fill="#8ccffb33" stroke="#99e8ff"/><path d="M15 20h10M20 15v10" stroke="#ddccff"/><circle cx="33" cy="16" r="2.2" fill="#f0b9ef"/></svg></button><div class="rail-caption" aria-hidden="true">CONTROL / PLANE</div><nav id="menu" aria-label="Main navigation" hidden><a href="#home" class="orbit-item " data-orbit-group="primary" data-page="home" data-label="Overview" style="--x:26.25px;--y:32px;--icon:#50ebf3"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-home" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-home" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="8" width="24" height="21" rx="3" fill="url(#glass-home)"/><rect x="37" y="8" width="20" height="21" rx="3" fill="url(#glass-home)"/><rect x="7" y="35" width="50" height="20" rx="3" fill="url(#glass-home)"/><path d="m12 22 5-6 5 3 4-6" fill="none" stroke="#d9fbff"/><circle cx="47" cy="18.5" r="5" fill="none" stroke-width="2.3" stroke-dasharray="23 9"/><path d="M14 49v-5m8 5v-9m8 9v-6m8 6v-10m8 10v-6" stroke-width="3"/><path d="M8 8h18m13 0h14" stroke="#e9ffff" opacity=".8"/></g></svg></span><span class="orbit-label">Overview<small>HOME</small></span></a><a href="#compute" class="orbit-item " data-orbit-group="primary" data-page="compute" data-label="Virtual Machines" style="--x:63.84px;--y:96px;--icon:#4fafff"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-compute" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-compute" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m8 12 47-5 3 32-47 6Z" fill="var(--icon)" opacity=".18" stroke="none"/><path d="m5 9 47-5 3 32-47 6Z" fill="url(#glass-compute)"/><path d="m5 18-1-9 11-1m27-3 10-1 1 9m1 14 1 9-11 1m-26 4-10 1-1-9" fill="none" stroke="#b4eaff" stroke-width="1.8"/><path d="m14 17 14-1 1 12-14 2Zm20-2 10-1 1 5-10 1Zm1 10 10-1" fill="var(--icon)" fill-opacity=".3"/><ellipse cx="32" cy="52" rx="19" ry="4" fill="none" stroke-opacity=".4"/><path d="M25 47h12M32 42v4" stroke-width="2"/><path d="m19 21 4 0m-3 4 4-1" stroke="#e3f6ff"/></g></svg></span><span class="orbit-label">Virtual machines<small>COMPUTE</small></span></a><a href="#storage" class="orbit-item " data-orbit-group="primary" data-page="storage" data-label="Storage" style="--x:88.9px;--y:160px;--icon:#bb83ff"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-storage" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-storage" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16v27c0 10 40 10 40 0V16" fill="url(#glass-storage)"/><ellipse cx="32" cy="16" rx="20" ry="8" fill="url(#glass-storage)"/><path d="M12 28c0 10 40 10 40 0M12 40c0 10 40 10 40 0" fill="none" stroke-width="1.5"/><path d="M18 19c9 4 19 4 28 0" fill="none" stroke="#f0deff" stroke-opacity=".75"/><circle cx="46" cy="31" r="1.6" fill="#f4dbff" stroke="none"/><circle cx="46" cy="43" r="1.6" fill="#f4dbff" stroke="none"/><ellipse cx="32" cy="55" rx="17" ry="3" fill="var(--icon)" opacity=".16" stroke="none"/></g></svg></span><span class="orbit-label">Storage fabric<small>STORAGE</small></span></a><a href="#network" class="orbit-item " data-orbit-group="primary" data-page="network" data-label="Network" style="--x:101.43px;--y:224px;--icon:#43e8b7"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-network" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-network" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M31 28 16 13M34 29 50 16M31 34 15 49M36 35l15 13" fill="none" stroke-width="2"/><path d="m19 20 5 5m18-4-3 4m-15 16-4 4m22-5 4 4" stroke="#dafff4" stroke-width="2"/><circle cx="32" cy="32" r="8" fill="url(#sphere-network)"/><circle cx="13" cy="11" r="6" fill="url(#sphere-network)"/><circle cx="52" cy="13" r="6" fill="url(#sphere-network)"/><circle cx="12" cy="52" r="6" fill="url(#sphere-network)"/><circle cx="53" cy="51" r="6" fill="url(#sphere-network)"/><circle cx="30" cy="29" r="2" fill="#d5fff5" stroke="none"/></g></svg></span><span class="orbit-label">Network<small>NETWORK</small></span></a><a href="#cluster" class="orbit-item " data-orbit-group="primary" data-page="cluster" data-label="Cluster" style="--x:101.43px;--y:288px;--icon:#8b96ff"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-cluster" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-cluster" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M32 28v26M12 49v5h41v-5" fill="none" stroke-width="1.5" stroke-opacity=".65"/><rect x="27" y="8" width="14" height="25" rx="2" fill="var(--icon)" opacity=".2" stroke="none"/><rect x="25" y="5" width="14" height="25" rx="2" fill="url(#glass-cluster)"/><path d="M29 12h6m-6 5h6m-6 5h6" stroke-width="1" opacity=".8"/><circle cx="29" cy="26" r="1.3" fill="#a5ffe1" stroke="none"/><rect x="6" y="28" width="14" height="25" rx="2" fill="var(--icon)" opacity=".2" stroke="none"/><rect x="4" y="25" width="14" height="25" rx="2" fill="url(#glass-cluster)"/><path d="M8 32h6m-6 5h6m-6 5h6" stroke-width="1" opacity=".8"/><circle cx="8" cy="46" r="1.3" fill="#a5ffe1" stroke="none"/><rect x="48" y="28" width="14" height="25" rx="2" fill="var(--icon)" opacity=".2" stroke="none"/><rect x="46" y="25" width="14" height="25" rx="2" fill="url(#glass-cluster)"/><path d="M50 32h6m-6 5h6m-6 5h6" stroke-width="1" opacity=".8"/><circle cx="50" cy="46" r="1.3" fill="#a5ffe1" stroke="none"/><path d="M26 5h11M5 25h11m31 0h11" fill="none" stroke="#e6e8ff"/></g></svg></span><span class="orbit-label">Cluster<small>CLUSTER</small></span></a><a href="#backup" class="orbit-item " data-orbit-group="primary" data-page="backup" data-label="Backup" style="--x:88.9px;--y:352px;--icon:#ffcb66"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-backup" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-backup" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 11a23 23 0 1 1-7 31" fill="none" stroke-width="2.6"/><path d="m8 9 11-1-2 11" fill="none" stroke-width="2.6"/><circle cx="31" cy="31" r="16" fill="url(#glass-backup)" stroke-opacity=".35"/><path d="M30 19v12l9 5" fill="none" stroke="#fff2cf" stroke-width="2.5"/><path d="m44 39 11 5v8c0 6-11 11-11 11s-11-5-11-11v-8Z" fill="#2a2530"/><path d="m39 50 4 4 7-8" fill="none" stroke="#ffe0a2" stroke-width="2.2"/></g></svg></span><span class="orbit-label">Data protection<small>BACKUP</small></span></a><a href="#migrate" class="orbit-item " data-orbit-group="primary" data-page="migrate" data-label="Migrate" style="--x:63.84px;--y:416px;--icon:#ff907a"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-migrate" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-migrate" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="13" width="10" height="18" rx="3" fill="url(#glass-migrate)"/><rect x="51" y="33" width="10" height="18" rx="3" fill="url(#glass-migrate)"/><path d="M19 19h30l-7-7m7 7-7 7M45 45H15l7-7m-7 7 7 7" fill="none" stroke-width="3.6"/><path d="M22 19h10m-1 26h10" stroke="#ffe3db" stroke-width="1.3"/><path d="M18 32h4m5 0h4m5 0h4m5 0h3" stroke-opacity=".35"/></g></svg></span><span class="orbit-label">Migration<small>MIGRATE</small></span></a><a href="#system" class="orbit-item " data-orbit-group="primary" data-page="system" data-label="Settings" style="--x:26.25px;--y:480px;--icon:#ee91cd"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-settings" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-settings" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M50.17 26.44L56.62 27.66L56.62 36.34L50.17 37.56L48.78 40.92L52.48 46.34L46.34 52.48L40.92 48.78L37.56 50.17L36.34 56.62L27.66 56.62L26.44 50.17L23.08 48.78L17.66 52.48L11.52 46.34L15.22 40.92L13.83 37.56L7.38 36.34L7.38 27.66L13.83 26.44L15.22 23.08L11.52 17.66L17.66 11.52L23.08 15.22L26.44 13.83L27.66 7.38L36.34 7.38L37.56 13.83L40.92 15.22L46.34 11.52L52.48 17.66L48.78 23.08Z M42 32a10 10 0 1 0-20 0a10 10 0 1 0 20 0Z" transform="translate(1.5 2.5)" fill="var(--icon)" opacity=".2" stroke="none" fill-rule="evenodd"/><path d="M50.17 26.44L56.62 27.66L56.62 36.34L50.17 37.56L48.78 40.92L52.48 46.34L46.34 52.48L40.92 48.78L37.56 50.17L36.34 56.62L27.66 56.62L26.44 50.17L23.08 48.78L17.66 52.48L11.52 46.34L15.22 40.92L13.83 37.56L7.38 36.34L7.38 27.66L13.83 26.44L15.22 23.08L11.52 17.66L17.66 11.52L23.08 15.22L26.44 13.83L27.66 7.38L36.34 7.38L37.56 13.83L40.92 15.22L46.34 11.52L52.48 17.66L48.78 23.08Z M42 32a10 10 0 1 0-20 0a10 10 0 1 0 20 0Z" fill="url(#glass-settings)" fill-rule="evenodd"/><circle cx="32" cy="32" r="6" fill="none" stroke-opacity=".5"/><path d="M19 16a21 21 0 0 1 17-4" fill="none" stroke="#ffe4f3" stroke-width="1.6"/></g></svg></span><span class="orbit-label">Settings<small>SETTINGS</small></span></a><a href="#containers" class="orbit-item " data-orbit-group="extra" data-page="containers" data-label="Containers" style="--x:26.25px;--y:32px;--icon:#5fd2c0"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-containers" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-containers" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m32 5 23 13v28L32 59 9 46V18Z" fill="url(#glass-containers)"/><path d="m9 18 23 13 23-13M32 31v28M20 12l23 13" fill="none"/></g></svg></span><span class="orbit-label">Containers<small>CONTAINERS</small></span></a><a href="#templates" class="orbit-item " data-orbit-group="extra" data-page="templates" data-label="Templates" style="--x:63.84px;--y:96px;--icon:#d2a0ff"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-templates" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-templates" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m8 15 24-11 24 11-24 12Z" fill="url(#glass-templates)"/><path d="m8 25 24 12 24-12M8 36l24 12 24-12M8 46l24 12 24-12" fill="none" stroke-width="2.5"/></g></svg></span><span class="orbit-label">Templates<small>TEMPLATES</small></span></a><a href="#activity" class="orbit-item " data-orbit-group="extra" data-page="activity" data-label="Activity" style="--x:88.9px;--y:160px;--icon:#5ce5ee"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-activity" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-activity" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 32h11l7-19 13 38 7-19h16" fill="none" stroke-width="3"/><circle cx="32" cy="32" r="25" fill="url(#glass-activity)" stroke-opacity=".35"/></g></svg></span><span class="orbit-label">Activity<small>ACTIVITY</small></span></a><a href="#terminal" class="orbit-item admin-only" data-orbit-group="extra" data-page="terminal" data-label="Terminal" style="--x:101.43px;--y:224px;--icon:#8cddb3"><span class="orbit-tile"><svg class="depth-icon semantic-icon" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="glass-terminal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="var(--icon)" stop-opacity=".65"/><stop offset=".46" stop-color="var(--icon)" stop-opacity=".25"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".1"/></linearGradient><radialGradient id="sphere-terminal" cx=".3" cy=".2"><stop stop-color="#efffff"/><stop offset=".35" stop-color="var(--icon)"/><stop offset="1" stop-color="var(--icon)" stop-opacity=".28"/></radialGradient></defs><g fill="none" stroke="var(--icon)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="10" width="52" height="42" rx="6" fill="url(#glass-terminal)"/><path d="m15 23 9 8-9 8m17 0h15" fill="none" stroke-width="3"/></g></svg></span><span class="orbit-label">Terminal<small>TERMINAL</small></span></a><button type="button" class="orbit-more" id="orbit-more" aria-label="Show more navigation">More · Containers, Templates, Activity, Terminal →</button></nav><div class="rail-tail" aria-hidden="true"><span>ibHiCS</span></div></aside><div id="spatial-scrim" hidden></div>
 
 <div class="shell">
   <header class="appbar">
-    <div class="product"><span class="mark"><svg><use href="#logo"/></svg></span><span><b>ibHiCS</b> <span class="full">Hyper-Converged</span></span></div>
+    <a class="brand brand-holo" href="#home" aria-label="ibHiCS home"><span class="brand-corner" aria-hidden="true"></span><span class="brand-word"><span class="brand-ib">ib</span><span class="brand-hics">HiCS</span></span><small>HYPER-CONVERGED</small></a>
     <span class="spacer"></span>
     <div class="menu-btn meta" id="tasks-menu" tabindex="0">
       <small>Tasks</small><span id="tasks-count"><span class="dot"></span> None running</span>
@@ -102,7 +91,37 @@
   </header>
 
   <main>
+    <div class="workspace-context"><div><span>Workspace</span><i>/</i><strong id="workspace-section">Overview</strong></div><span class="context-tag">INFRASTRUCTURE OS</span></div>
     <section class="page" id="page-home">
+      <div class="command-deck nexus-home">
+        <section class="command-hero nexus-hero" aria-labelledby="command-title">
+          <div class="command-copy">
+            <div class="command-eyebrow">INFRASTRUCTURE / CONTROL PLANE</div>
+            <h1 id="command-title">Everything.<br><span>Connected.</span></h1>
+            <p>A clear view of your connected infrastructure.<br>Designed for your next move.</p>
+            <div class="command-health" id="command-health" role="status">Loading cluster status…</div>
+            <div class="command-actions"><a class="btn primary" href="#compute">Open workspace</a><a class="btn" href="#cluster">View cluster</a></div>
+          </div>
+          <div class="nexus-visual" role="group" aria-label="Interactive infrastructure navigation">
+            <div class="nexus-aura" aria-hidden="true"></div>
+            <div class="nexus-floor" aria-hidden="true"></div>
+            <div class="nexus-parallax" aria-hidden="true"><div class="nexus-space">
+              <div class="nexus-ring nexus-ring-one"><i></i><i></i></div>
+              <div class="nexus-ring nexus-ring-two"><i></i></div>
+              <div class="nexus-ring nexus-ring-three"><i></i></div>
+              <div class="nexus-stack"><div class="nexus-layer nexus-layer-0"><div class="nexus-face nexus-top"><span class="nexus-chip"></span><i></i><i></i><i></i><i></i></div><div class="nexus-face nexus-front"><span></span></div><div class="nexus-face nexus-side"><span></span></div><div class="nexus-face nexus-bottom"></div></div><div class="nexus-layer nexus-layer-1"><div class="nexus-face nexus-top"><span class="nexus-chip"></span><i></i><i></i><i></i><i></i></div><div class="nexus-face nexus-front"><span></span></div><div class="nexus-face nexus-side"><span></span></div><div class="nexus-face nexus-bottom"></div></div><div class="nexus-layer nexus-layer-2"><div class="nexus-face nexus-top"><span class="nexus-chip"></span><i></i><i></i><i></i><i></i></div><div class="nexus-face nexus-front"><span></span></div><div class="nexus-face nexus-side"><span></span></div><div class="nexus-face nexus-bottom"></div></div></div>
+              <div class="nexus-base"></div>
+            </div></div>
+            <svg class="nexus-connectors" viewBox="0 0 600 400" preserveAspectRatio="none" aria-hidden="true"><g fill="none" stroke="currentColor"><path d="M80 194H143L210 165"/><path d="M445 82H409L367 128"/><path d="M454 319H406L362 272"/></g><g fill="currentColor"><circle cx="210" cy="165" r="3"/><circle cx="367" cy="128" r="3"/><circle cx="362" cy="272" r="3"/></g></svg>
+            <a class="nexus-link nexus-compute" href="#compute"><span class="nexus-link-icon"><svg aria-hidden="true"><use href="#i-compute"/></svg></span><span><b>COMPUTE</b><small>Virtual machines</small></span></a>
+            <a class="nexus-link nexus-storage" href="#storage"><span class="nexus-link-icon"><svg aria-hidden="true"><use href="#i-storage"/></svg></span><span><b>STORAGE</b><small>Storage fabric</small></span></a>
+            <a class="nexus-link nexus-network" href="#network"><span class="nexus-link-icon"><svg aria-hidden="true"><use href="#i-nic"/></svg></span><span><b>NETWORK</b><small>Network fabric</small></span></a>
+            <button class="nexus-motion" type="button" aria-pressed="false" aria-label="Pause infrastructure animation">Pause motion</button>
+          </div>
+        </section>
+        <section class="command-kpis" id="command-kpis" aria-label="Infrastructure overview"></section>
+      </div>
+
       <div class="sheet">
         <div class="overview">
           <div>
@@ -142,6 +161,7 @@
           <button class="operator-only" id="vm-import-open" title="OVA, VMDK, VHD/VHDX, QCOW2 or raw disk images exported from any platform">Import VM</button>
           <button class="primary operator-only" data-open="vm-dialog">+ New VM</button>
         </div>
+        <div id="spatial-vm-kpis" class="spatial-kpis" aria-label="VM resource overview"></div>
         <div class="vmp">
           <aside class="vgroups">
             <div class="vg-head"><span>Groups</span><button type="button" class="icon ghost operator-only" id="vg-add" title="New group">+</button></div>
@@ -1154,12 +1174,13 @@
       <label data-for="usb fc">Device <input name="device" placeholder="/dev/disk/by-label/BACKUP"></label>
       <label data-for="s3">Endpoint <input name="endpoint" placeholder="https://minio.local:9000"></label>
       <label data-for="s3">Bucket <input name="bucket" placeholder="vm-backup"></label>
+      <label data-for="s3">Chunk storage class <select name="storage_class"><option value="STANDARD">Standard</option><option value="STANDARD_IA">Standard infrequent access</option><option value="ONEZONE_IA">One-zone infrequent access</option><option value="GLACIER_IR">Glacier instant retrieval</option></select></label>
       <label data-for="s3">Access key <input name="access_key"></label>
       <label data-for="s3">Secret key <input name="secret_key" type="password" autocomplete="new-password"></label>
       <label class="check" data-for="iscsi fc"><input name="confirm_wipe" type="checkbox"> Format the LUN if it has no filesystem</label>
     </div>
     <p class="hint" style="padding:0 18px">NAS, SAN and USB targets are attached only while a job runs and detached when it ends.</p>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add repository</button></footer>
+    <div class="body"><label>Compression <select name="compression"><option value="fast">Fast — less CPU</option><option value="balanced" selected>Balanced</option><option value="maximum">Maximum — smaller backups, more CPU and time</option></select></label><p class="hint" style="padding:0">Deduplication is always enabled. Actual space savings depend on the data. Compression applies to new chunks; synthetic full and archive can recompress an existing restore point.</p></div><footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add repository</button></footer>
   </form>
 </dialog>
 
@@ -1203,15 +1224,44 @@
           <label class="inline unit"><input name="keep_last" type="number" min="1" max="1000" value="7"> latest backups of each VM</label>
         </div>
         <p class="hint pol-keep" style="padding:0;margin-top:8px"></p>
+        <details class="backup-advanced"><summary>Backup method, full backups and long-term retention</summary>
+          <div class="form-grid">
+            <label>Backup method <select name="backup_mode"><option value="incremental">Incremental with CBT (full when needed)</option><option value="active_full">Active full every run</option></select></label>
+            <label>Weekly active full <select name="full_weekday"><option value="">Not scheduled</option><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
+            <label>Weekly synthetic full <select name="synthetic_weekday"><option value="">Not scheduled</option><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
+          </div>
+          <p class="hint">CBT reads only changed blocks on running qcow2 VMs. The first run or unsupported storage uses a full backup. Synthetic full builds an independent backup from existing repository data.</p>
+          <div class="form-grid">
+            <label>Weekly restore points <input name="keep_weekly" type="number" min="0" max="520" value="0"></label>
+            <label>Monthly restore points <input name="keep_monthly" type="number" min="0" max="120" value="0"></label>
+            <label>Yearly restore points <input name="keep_yearly" type="number" min="0" max="100" value="0"></label>
+          </div>
+          <p class="hint">GFS keeps the newest available restore point in each retained calendar week, month or year, in addition to recent points.</p>
+        </details>
+
       </section>
 
       <section class="wiz-page" data-page="3">
         <div class="type-cards pol-targets"></div>
+        <details class="backup-advanced"><summary>Secondary copy and archive</summary>
+          <div class="form-grid">
+            <label>Copy to repository <select name="copy_target" class="secondary-repos"><option value="">No secondary copy</option></select></label>
+            <label>Keep recent copies <input name="copy_keep_last" type="number" min="1" max="1000" value="14"></label>
+            <label>Archive repository <select name="archive_target" class="secondary-repos"><option value="">No archive</option></select></label>
+            <label>Archive on <select name="archive_weekday"><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6" selected>Sunday</option></select></label>
+            <label>Archive weeks <input name="archive_keep_weekly" type="number" min="0" max="520" value="4"></label>
+            <label>Archive months <input name="archive_keep_monthly" type="number" min="0" max="120" value="12"></label>
+            <label>Archive years <input name="archive_keep_yearly" type="number" min="0" max="100" value="3"></label>
+          </div>
+          <p class="hint">Copies transfer verified restore points after each successful backup. Archives have independent data and their own GFS retention. Local destinations are on the node doing the copy. Use NAS or S3 for an offsite destination.</p>
+        </details>
+
         <p class="hint" style="padding:0;margin-top:12px">Need somewhere new? Add a target (NAS, USB disk, S3...) under Backup → Repositories first.</p>
       </section>
 
       <section class="wiz-page" data-page="4">
-        <div class="form-grid"><label>Schedule name <input name="name" placeholder="nightly" autocomplete="off"></label></div>
+        <div class="form-grid"><label>Schedule name <input name="name" placeholder="nightly" autocomplete="off"></label><label class="inline"><input type="checkbox" name="enabled" checked> Schedule enabled</label></div>
+        <p class="hint pol-edit-note" hidden>The schedule name stays the same. Changes apply to future runs; existing jobs and restore points keep their history.</p>
         <dl class="kv wiz-summary"></dl>
       </section>
     </div>
@@ -1427,9 +1477,29 @@
     <header><h3>Back up VM</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
       <label>Backup repository <select name="target" class="target-list" required></select></label>
+      <label>Method <select name="mode"><option value="incremental">Incremental with CBT (full when needed)</option><option value="active_full">Active full</option></select></label>
       <label>Keep last (optional) <input name="keep_last" type="number" min="1"></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Back up now</button></footer>
+  </form>
+</dialog>
+
+
+<dialog id="backup-report-dialog">
+  <form method="dialog"><header><h3>Backup job report</h3><button value="close" aria-label="Close report">×</button></header>
+    <div class="body"><dl class="kv" id="backup-report-details"></dl><p class="hint" id="backup-report-basis" style="padding:0"></p></div>
+    <footer><a class="button" id="backup-report-csv" download>Export CSV</a><a class="button" id="backup-report-json">Export JSON</a><button value="close">Close</button></footer>
+  </form>
+</dialog>
+<dialog id="backup-operation-dialog">
+  <form method="dialog" id="backup-operation-form">
+    <header><h3>Use an existing restore point</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label>Operation <select name="operation"><option value="synthetic">Create synthetic full</option><option value="copy">Copy to another repository</option><option value="archive">Archive independent full</option></select></label>
+      <label>Destination for copy or archive <select name="destination"></select></label>
+      <p class="hint">Synthetic full verifies and builds a separate full chunk set in the current repository. Copy and archive require another repository. These operations do not read the production VM.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start job</button></footer>
   </form>
 </dialog>
 
@@ -1572,5 +1642,6 @@
 <script src="storage-view.js"></script>
 <script src="app.js"></script>
 <script src="virtual-storage.js"></script>
+<script src="spatial.js"></script>
 </body>
 </html>

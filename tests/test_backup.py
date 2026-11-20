@@ -192,7 +192,10 @@ def test_gc_waits_for_running_backup(repo):
     repo.store.put("locks/web@20261029T015900Z", repo.clock.now.isoformat().encode())
     with pytest.raises(RepositoryBusy):
         repo.gc()
-    repo.clock.now += timedelta(hours=13)  # a lock this old is from a crashed job
+    repo.clock.now += timedelta(hours=13)  # a long operation must still be protected
+    with pytest.raises(RepositoryBusy):
+        repo.gc()
+    repo.store.delete("locks/web@20261029T015900Z")
     assert repo.gc() == 0
 
 
@@ -362,7 +365,11 @@ class FakeS3:
     def __init__(self):
         self.objects = {}
 
-    def put_object(self, Bucket, Key, Body):  # noqa: N803
+    def put_object(self, Bucket, Key, Body, IfNoneMatch=None):  # noqa: N803
+        if IfNoneMatch == "*" and (Bucket, Key) in self.objects:
+            exc = RuntimeError("PreconditionFailed")
+            exc.response = {"ResponseMetadata": {"HTTPStatusCode": 412}}
+            raise exc
         self.objects[(Bucket, Key)] = Body
 
     def get_object(self, Bucket, Key):  # noqa: N803
@@ -642,3 +649,103 @@ def test_repository_in_a_storage_pool(api, monkeypatch):
     target = BackupTarget(name="r", type=TargetType.LOCAL, path="/tmp", quota_gb=5)
     with pytest.raises(InvalidState, match="full"):
         service.check_quota(target)
+
+
+def test_edit_policy_preserves_history_restore_points_and_persists(api):
+    client, _, backups, clock = api
+    new_vm(client)
+    body = {"name": "nightly", "target": "local", "every_hours": 6, "vms": ["web"]}
+    assert client.post("/api/v1/backup/policies", json=body).status_code == 201
+    assert client.post("/api/v1/backup/policies/nightly/run").status_code == 202
+    before = client.get("/api/v1/backup/policies").json()[0]
+    jobs = client.get("/api/v1/backup/jobs").json()
+    points = client.get("/api/v1/backup/targets/local/backups").json()
+    old_settings = backups.policies()[0]
+    updated = {
+        **before,
+        "every_hours": None,
+        "at": "03:15",
+        "enabled": False,
+        "keep_last": 11,
+        "mode": "active_full",
+        "full_weekday": 2,
+        "synthetic_weekday": 5,
+        "keep_weekly": 4,
+        "keep_monthly": 12,
+        "keep_yearly": 2,
+        "copy_keep_last": 21,
+        "archive_weekday": 4,
+        "archive_keep_weekly": 8,
+        "archive_keep_monthly": 24,
+        "archive_keep_yearly": 5,
+        "last_run": "2000-01-01T00:00:00+00:00",
+    }
+    response = client.put("/api/v1/backup/policies/nightly", json=updated)
+    assert response.status_code == 200, response.text
+    expected = {**updated, "last_run": before["last_run"]}
+    assert response.json() == expected
+    assert old_settings.every_hours == 6 and old_settings.enabled
+    assert backups.tick() == []  # disabled schedules do not run
+    assert client.get("/api/v1/backup/jobs").json() == jobs
+    assert client.get("/api/v1/backup/targets/local/backups").json() == points
+    reloaded = BackupManager(backups._cluster, backups._state_path, clock, Inline())
+    reloaded.load()
+    assert reloaded.policies()[0].__dict__ == expected
+
+
+@pytest.mark.parametrize(
+    "fields,status",
+    [
+        ({"target": "missing"}, 404),
+        ({"at": "04:00"}, 422),  # interval and daily time cannot both be supplied
+        ({"keep_last": 0}, 422),
+        ({"name": "renamed"}, 422),
+        ({"copy_target": "local"}, 422),
+        ({"copy_target": "missing"}, 404),
+    ],
+)
+def test_edit_policy_rejects_invalid_changes_atomically(api, fields, status):
+    client, *_ = api
+    body = {"name": "nightly", "target": "local", "every_hours": 6}
+    assert client.post("/api/v1/backup/policies", json=body).status_code == 201
+    before = client.get("/api/v1/backup/policies").json()
+    response = client.put("/api/v1/backup/policies/nightly", json={**body, **fields})
+    assert response.status_code == status, response.text
+    assert client.get("/api/v1/backup/policies").json() == before
+
+
+def test_edit_policy_requires_existing_policy_and_quorum(api, monkeypatch):
+    from ibhics.cluster.registry import NoQuorum
+
+    client, _, backups, _ = api
+    body = {"name": "nightly", "target": "local", "every_hours": 6}
+    assert client.put("/api/v1/backup/policies/nightly", json=body).status_code == 404
+    assert client.post("/api/v1/backup/policies", json=body).status_code == 201
+
+    def no_quorum():
+        raise NoQuorum("No quorum")
+
+    monkeypatch.setattr(backups._cluster, "require_quorum", no_quorum)
+    response = client.put("/api/v1/backup/policies/nightly", json={**body, "keep_last": 3})
+    assert response.status_code == 503
+    assert backups.policies()[0].keep_last == 7
+
+
+def test_edit_policy_rejects_repository_alias_and_recovers_from_save_failure(api, monkeypatch):
+    client, _, backups, _ = api
+    body = {"name": "nightly", "target": "local", "every_hours": 6}
+    assert client.post("/api/v1/backup/policies", json=body).status_code == 201
+    same_path = backups.target("local").path
+    alias = {"name": "alias", "type": "local", "path": same_path}
+    assert client.post("/api/v1/backup/targets", json=alias).status_code == 201
+    response = client.put("/api/v1/backup/policies/nightly", json={**body, "copy_target": "alias"})
+    assert response.status_code == 422
+    original = backups.policies()[0]
+
+    def failed_save():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(backups, "_save", failed_save)
+    with pytest.raises(OSError, match="disk full"):
+        backups.update_policy("nightly", Policy("nightly", "local", every_hours=2))
+    assert backups.policies()[0] is original
