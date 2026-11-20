@@ -784,6 +784,10 @@ def create_app(
     def node_summary(name: str) -> dict:
         return asdict(host_of(name).summary())
 
+    @api.get("/nodes/{name}/lldp")
+    def node_lldp(name: str) -> list[dict]:
+        return host_of(name).lldp()
+
     @api.get("/nodes/{name}/nics")
     def node_nics(name: str) -> list[dict]:
         return [asdict(n) for n in host_of(name).nics()]

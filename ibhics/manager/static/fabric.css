@@ -38,6 +38,26 @@
 .nxn-nodes .hub{fill:#7de5ff33;stroke:#bff3ff}
 .nxn-pulse{stroke:#7de5ff;animation:nxn-pulse 1.8s ease-out infinite;transform-box:fill-box;transform-origin:center}
 @keyframes nxn-pulse{from{transform:scale(1);opacity:.9}to{transform:scale(3.2);opacity:0}}
+.nxh-emitter{opacity:.9}
+.nxh-pad-ring{transform-box:fill-box;transform-origin:center;animation:nxh-rot 4s linear infinite}
+@keyframes nxh-rot{to{stroke-dashoffset:-48}}
+.nxh-holo{animation:nxh-flicker 5s infinite;filter:drop-shadow(0 0 6px #7de5ffaa)}
+@keyframes nxh-flicker{0%,100%{opacity:.95}47%{opacity:.95}48%{opacity:.6}49%{opacity:1}}
+.nxh-blades g{animation:nxc-in .45s both;animation-delay:var(--d)}
+.nxh-led{fill:#7cf0a8;animation:nx-blink .9s infinite alternate}
+.nxh-blades g:nth-child(even) .nxh-led{animation-delay:.45s}
+.nxh-scan{fill:#bff6ff;opacity:.7;animation:nxh-scan 2.6s ease-in-out infinite}
+@keyframes nxh-scan{0%{transform:translateY(0)}50%{transform:translateY(183px)}100%{transform:translateY(0)}}
+.nxh-hud path{stroke-width:1}
+.nxh-hud text{font:600 9px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.5px;fill:#dff8ff}
+.nxh-hud text.sub{font-weight:400;fill:#7de5ff}
+.nxh-hud{animation:nxh-hud 3s ease-in-out infinite}
+@keyframes nxh-hud{50%{opacity:.6}}
+.nxh-platter{animation:nxc-in .5s both;animation-delay:var(--d)}
+.nxh-spin{animation:nxs-spin 3s linear infinite}
+.nxh-beams rect{fill:#7de5ff;opacity:0;animation:nxh-beam 1.6s infinite;animation-delay:var(--d)}
+@keyframes nxh-beam{0%{opacity:0;transform:translateY(40px)}40%{opacity:.9}100%{opacity:0;transform:translateY(-40px)}}
+.nxh-ring{animation:nxs-spin 6s linear infinite}.nxh-ring.rev{animation-direction:reverse;animation-duration:9s}
 @media(prefers-reduced-motion:reduce){.nexus-alt *{animation:none!important}}
 
 /* The map page: a holographic command centre. */
@@ -101,3 +121,5 @@
 .fabric-replay .fabric-time-label{color:#ffcb66}
 @media(max-width:1200px){#page-fabric .fx{grid-template-columns:1fr;grid-template-rows:auto 460px auto auto auto}.fx-left{grid-row:3}.fx-right{grid-row:4}.fx-stage{grid-row:2;min-height:460px}.fx-foot{grid-row:5}}
 @media(prefers-reduced-motion:reduce){#page-fabric .fx:after{animation:none}}
+.fx-back{position:absolute;left:8px;top:8px;z-index:3}
+.fx-back[hidden]{display:none}

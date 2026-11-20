@@ -12,7 +12,7 @@ window.FabricMap = (() => {
   const $id = (id) => document.getElementById(id);
   const page = $id("page-fabric"), canvas = $id("fabric-canvas"), tip = $id("fabric-tip");
   const timeBar = $id("fabric-time"), timeLabel = $id("fabric-time-label");
-  const liveBtn = $id("fabric-live"), playBtn = $id("fabric-play");
+  const liveBtn = $id("fabric-live"), playBtn = $id("fabric-play"), backBtn = $id("fx-back");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
   const H1 = "#3ef0ff", H2 = "#7fb8ff", PINK = "#ff8fd8", GREEN = "#6dffb3", RED = "#ff6b7a", AMBER = "#ffcb66";
@@ -28,7 +28,8 @@ window.FabricMap = (() => {
   });
   let scene = { nodes: [], vms: [], nets: [], pools: [] };
   let hits = [], hover = null, frame = 0, poll = 0, drag = null, last = 0, nextStep = 0;
-  let cursor = -1, playing = false, W = 0, H = 0;
+  let cursor = -1, playing = false, W = 0, H = 0, mode = "globe", entered = 0;
+  const extras = { nodes: {}, at: 0 }; // per node: time zone, NICs, LLDP switch ports
 
   const rate = (bytes) => {
     let n = Math.max(0, bytes || 0) * 8, i = 0;
@@ -91,7 +92,9 @@ window.FabricMap = (() => {
       pools.push({ key: p.name, name: p.display_name || p.name, used: p.capacity_gb ? (p.allocation_gb / p.capacity_gb) * 100 : 0, cap: p.capacity_gb || 0, alloc: p.allocation_gb || 0 });
     }
     pools.sort((a, b) => b.cap - a.cap);
-    scene = { nodes, vms, nets, pools };
+    const witness = (state.cluster?.members || []).find((m) => m.role === "witness") || null;
+    const tz = members.map((m) => extras.nodes[m.name]?.tz).find(Boolean) || "";
+    scene = { nodes, vms, nets, pools, witness, tz };
     record();
     panels();
   }
@@ -258,12 +261,16 @@ window.FabricMap = (() => {
     const dt = Math.min(64, t - last || 16); last = t;
     if (!drag) {
       view.yaw += view.vyaw * dt; view.vyaw *= Math.pow(0.94, dt / 16);
-      if (view.spin && !still.matches) view.yaw += dt * 0.00012;
+      if (view.spin && !still.matches) { // sway around the datacenter, so it stays in view
+        const face = Math.PI / 2 - sitePosition().lon;
+        view.yaw += ((face + Math.sin(t / 6000) * 0.55 - view.yaw) * dt) / 2500;
+      }
     }
     if (playing && t >= nextStep) { nextStep = t + 450; step(); }
     hits = [];
     const snap = moment(), cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.33 * view.zoom;
     ctx.globalCompositeOperation = "lighter";
+    if (mode === "inside") { drawInside(t, snap); ctx.globalCompositeOperation = "source-over"; return; }
 
     // HUD rings around the globe, turning slowly, with four brackets.
     const turn = still.matches ? 0 : t / 9000;
@@ -308,72 +315,292 @@ window.FabricMap = (() => {
       line(Array.from({ length: 49 }, (_, i) => project([Math.cos((i / 48) * Math.PI * 2) * r, y, Math.sin((i / 48) * Math.PI * 2) * r])), H1, 1.4, 0.5);
     }
 
-    // Virtual Storage at the core: pulsing, brighter with disk traffic.
-    const io = Object.values(snap.nodes).reduce((s, n) => s + n.read + n.write, 0), lvl = level(io);
-    const pulse = still.matches ? 1 : 1 + 0.12 * Math.sin(t / 420);
-    glow(cx, cy, R * (0.22 + lvl * 0.12) * pulse, "#b49bff", 0.9);
-    glow(cx, cy, R * 0.08, "#ffffff", 0.9);
-    hits.push({ kind: "core", x: cx, y: cy, r: R * 0.18 });
-
-    // Network orbits with lights running along them.
+    // Network orbits with lights running along them (the cluster's networks).
     for (const net of scene.nets) {
       const t1 = snap.nets[net.name] || { rx: 0, tx: 0 }, nl = level(t1.rx + t1.tx);
       const orbit = (f) => { const a = f * Math.PI * 2; return [Math.cos(a) * net.radius, Math.sin(a) * net.radius * Math.sin(net.incl), Math.sin(a) * net.radius * Math.cos(net.incl)]; };
       const pts = Array.from({ length: 97 }, (_, i) => project(orbit(i / 96)));
       for (let i = 1; i < pts.length; i++) {
-        const front = pts[i][2] > -0.2;
         ctx.beginPath(); ctx.moveTo(pts[i - 1][0], pts[i - 1][1]); ctx.lineTo(pts[i][0], pts[i][1]);
-        ctx.strokeStyle = hexA(net.color, front ? 0.55 + nl * 0.3 : 0.15); ctx.lineWidth = front ? 1.6 : 1; ctx.stroke();
+        ctx.strokeStyle = hexA(net.color, pts[i][2] > -0.2 ? 0.45 + nl * 0.3 : 0.12); ctx.lineWidth = 1.3; ctx.stroke();
       }
-      for (let k = 0; k < 4; k++) {
-        const f = still.matches ? k / 4 : (((t * (0.00004 + nl * 0.0002) * (net.index % 2 ? -1 : 1) + k / 4) % 1) + 1) % 1;
-        const p = project(orbit(f)); glow(p[0], p[1], 9, net.color, p[2] > -0.2 ? 1 : 0.3);
+      for (let k = 0; k < 3; k++) {
+        const f = still.matches ? k / 3 : (((t * (0.00004 + nl * 0.0002) * (net.index % 2 ? -1 : 1) + k / 3) % 1) + 1) % 1;
+        const q = project(orbit(f)); glow(q[0], q[1], 8, net.color, q[2] > -0.2 ? 1 : 0.3);
       }
       net.anchor = orbit;
     }
 
-    // Arcs: node to each network orbit (network traffic), node to the core (disk traffic).
-    for (const node of scene.nodes) {
-      const L = snap.nodes[node.name] || { nets: {}, read: 0, write: 0 };
-      for (const net of scene.nets) {
-        const tr = (L.nets || {})[net.name];
-        if (!tr || !net.anchor) continue;
-        const target = net.anchor(node.lon / (Math.PI * 2) + 0.06), total = tr.rx + tr.tx, al = level(total);
-        line(Array.from({ length: 25 }, (_, i) => project(arcPoint(node.pos, target, i / 24, 0.35))), net.color, 1 + al * 2, 0.35 + al * 0.6);
-        if (total > 0 && !still.matches) for (let k = 0; k < 3; k++) {
-          const f = (t * (0.0002 + al * 0.0008) + k / 3) % 1, p = project(arcPoint(node.pos, target, f, 0.35));
-          glow(p[0], p[1], 7 + al * 6, net.color);
-        }
-      }
-      const total = (L.read || 0) + (L.write || 0), al = level(total);
-      line(Array.from({ length: 13 }, (_, i) => project(lerp3(node.pos, [0, 0, 0], i / 12))), "#b49bff", 1 + al * 2, 0.25 + al * 0.6);
-      if (total > 0 && !still.matches) {
-        const p = project(lerp3(node.pos, [0, 0, 0], (t * (0.0003 + al * 0.0008)) % 1));
-        glow(p[0], p[1], 8, "#b49bff");
+    // The datacenter: a tower at the place the cluster's time zone points to.
+    const site = sitePosition(), p = project(site.pos), front = p[2] > -0.05;
+    const up = project(site.pos.map((x) => x * 1.32));
+    for (const net of scene.nets) { // uplinks from the site into each network orbit
+      if (!net.anchor) continue;
+      const target = net.anchor(site.lon / (Math.PI * 2) + 0.08);
+      line(Array.from({ length: 25 }, (_, i) => project(arcPoint(site.pos, target, i / 24, 0.3))), net.color, 1.2, front ? 0.6 : 0.2);
+      if (!still.matches) {
+        const f = (t * 0.0004 + net.index / 3) % 1, q = project(arcPoint(site.pos, target, f, 0.3));
+        glow(q[0], q[1], 7, net.color, front ? 1 : 0.3);
       }
     }
-
-    // Nodes: beacons on the surface, their VMs circling them as small lights.
-    for (const node of scene.nodes) {
-      const p = project(node.pos), front = p[2] > -0.15, color = node.healthy ? H1 : RED;
-      const beat = still.matches ? 0 : 0.3 * Math.sin(t / 300 + node.lon * 3);
-      glow(p[0], p[1], 22 + beat * 10, color, front ? 1 : 0.35);
-      ctx.beginPath(); ctx.arc(p[0], p[1], 14, 0, Math.PI * 2); ctx.strokeStyle = hexA(color, front ? 0.9 : 0.3); ctx.lineWidth = 1.4; ctx.stroke();
-      hits.push({ kind: "node", node, x: p[0], y: p[1], r: 18 });
-      const mine = scene.vms.filter((v) => v.node === node);
-      mine.forEach((v, i) => {
-        const a = (i / Math.max(1, mine.length)) * Math.PI * 2 + (still.matches ? 0 : t / 2600);
-        const off = norm(node.pos.map((x, k) => x + [Math.cos(a), Math.sin(a), -Math.cos(a)][k] * 0.16));
-        const q = project(off.map((x) => x * 1.06));
-        glow(q[0], q[1], hover?.v === v ? 12 : 8, v.running ? GREEN : "#6c7a92", q[2] > -0.15 ? 1 : 0.3);
-        hits.push({ kind: "vm", v, x: q[0], y: q[1], r: 7 });
-      });
-      if (front) {
-        const L = snap.nodes[node.name] || {}, cpu = L.cpu ?? node.cpu;
-        tag(p[0], p[1], [node.name, `${mine.filter((v) => v.running).length}/${mine.length} VMs · CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"}`], color);
-      }
+    const beam = ctx.createLinearGradient(p[0], p[1], up[0], up[1]);
+    beam.addColorStop(0, hexA(H1, front ? 0.55 : 0.15)); beam.addColorStop(1, hexA(H1, 0));
+    ctx.strokeStyle = beam; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(up[0], up[1]); ctx.stroke();
+    for (let k = 0; k < 3; k++) { // pulse rings on the ground
+      const f = still.matches ? 0.5 : ((t / 1600 + k / 3) % 1);
+      ctx.beginPath(); ctx.ellipse(p[0], p[1], 10 + f * 46, (10 + f * 46) * 0.38, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = hexA(H1, (front ? 0.7 : 0.2) * (1 - f)); ctx.lineWidth = 1.4; ctx.stroke();
+    }
+    building(p[0], p[1], front ? 1 : 0.35, t);
+    hits.push({ kind: "site", x: p[0], y: p[1] - 22, r: 34 });
+    if (front) {
+      const online = scene.nodes.filter((n) => n.healthy).length;
+      tag(p[0] + 10, p[1] - 40, [`DATACENTER · ${site.tz}`, `${scene.nodes.length} nodes${scene.witness ? " + witness" : ""} · ${online} online`, "Click to look inside ▸"], H1);
     }
     ctx.globalCompositeOperation = "source-over";
+  }
+
+  // A small holographic datacenter: two towers with lit floors.
+  function building(x, y, a, t) {
+    ctx.globalAlpha = a;
+    const tower = (bx, w, h, d) => {
+      ctx.fillStyle = "rgba(62,240,255,.10)"; ctx.strokeStyle = H1; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(bx, y); ctx.lineTo(bx + w, y - d); ctx.lineTo(bx + w, y - d - h); ctx.lineTo(bx, y - h); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bx, y - h); ctx.lineTo(bx - w * 0.8, y - h - d * 0.6); ctx.lineTo(bx - w * 0.8 + w, y - h - d * 1.6); ctx.lineTo(bx + w, y - d - h); ctx.closePath();
+      ctx.fillStyle = "rgba(62,240,255,.22)"; ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bx, y); ctx.lineTo(bx - w * 0.8, y - d * 0.6); ctx.lineTo(bx - w * 0.8, y - h - d * 0.6); ctx.lineTo(bx, y - h); ctx.closePath();
+      ctx.fillStyle = "rgba(62,240,255,.06)"; ctx.fill(); ctx.stroke();
+      for (let f = 6; f < h - 2; f += 6) { // lit floors
+        const on = still.matches || Math.sin(t / 500 + f + bx) > -0.6;
+        ctx.strokeStyle = hexA(on ? "#b8fbff" : H1, on ? 0.8 : 0.25);
+        ctx.beginPath(); ctx.moveTo(bx + 2, y - f - 0.3 * (f / h) * 0); ctx.lineTo(bx + w - 2, y - d - f + 1); ctx.stroke();
+      }
+    };
+    tower(x - 6, 16, 44, 8); tower(x + 12, 12, 30, 6);
+    ctx.globalAlpha = 1;
+    glow(x + 4, y - 50, 10, "#ffffff", a);
+  }
+
+  // Where to put the datacenter: the cluster's time zone, else its UTC offset.
+  const TZ_PLACES = {
+    "Asia/Bangkok": [13.75, 100.5], "Asia/Ho_Chi_Minh": [10.8, 106.7], "Asia/Jakarta": [-6.2, 106.8], "Asia/Singapore": [1.35, 103.8],
+    "Asia/Kuala_Lumpur": [3.14, 101.7], "Asia/Manila": [14.6, 121], "Asia/Hong_Kong": [22.3, 114.2], "Asia/Shanghai": [31.2, 121.5],
+    "Asia/Tokyo": [35.7, 139.7], "Asia/Seoul": [37.6, 127], "Asia/Kolkata": [19.1, 72.9], "Asia/Dubai": [25.2, 55.3],
+    "Europe/London": [51.5, -0.1], "Europe/Berlin": [52.5, 13.4], "Europe/Paris": [48.9, 2.35], "Europe/Amsterdam": [52.4, 4.9],
+    "America/New_York": [40.7, -74], "America/Chicago": [41.9, -87.6], "America/Los_Angeles": [34.05, -118.2], "America/Sao_Paulo": [-23.5, -46.6],
+    "Australia/Sydney": [-33.9, 151.2], "UTC": [51.5, 0], "Etc/UTC": [51.5, 0],
+  };
+  function sitePosition() {
+    const tz = scene.tz || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    let [lat, lon] = TZ_PLACES[tz] || [];
+    if (lat == null) {
+      const off = /GMT([+-]\d+)/.exec(new Date().toLocaleString("en-US", { timeZone: tz, timeZoneName: "shortOffset" }) || "");
+      lat = 15; lon = (off ? Number(off[1]) : 0) * 15;
+    }
+    const la = (lat * Math.PI) / 180, lo = (-lon * Math.PI) / 180;
+    return { tz, lat: la, lon: lo, pos: [Math.cos(la) * Math.cos(lo), Math.sin(la), Math.cos(la) * Math.sin(lo)] };
+  }
+
+
+  // ---------- inside the datacenter: the HCI system in zones ----------
+
+  function storeDevices() {
+    const raw = state.pools || [], out = new Map();
+    for (const p of raw) {
+      const src = String(p.source || ""), vstore = p.name === "virtualstorage" || /gateway-exports/.test(src);
+      const kind = vstore ? "vstore" : p.type === "iscsi" ? "iscsi" : p.type === "nfs" ? "nas" : p.type === "lvm" ? "san" : "local";
+      const key = vstore ? "vstore" : kind === "local" ? `local:${p.node}:${p.name}` : `${kind}:${src || p.name}`;
+      const d = out.get(key) || { key, kind, name: p.display_name || p.name, source: src, nodes: new Set(), cap: 0, alloc: 0 };
+      d.nodes.add(p.node); d.cap = Math.max(d.cap, p.capacity_gb || 0); d.alloc = Math.max(d.alloc, p.allocation_gb || 0);
+      out.set(key, d);
+    }
+    const order = { vstore: 0, san: 1, iscsi: 2, nas: 3, local: 4 };
+    return [...out.values()].sort((a, b) => order[a.kind] - order[b.kind]).slice(0, 6);
+  }
+  const STORE_LABEL = { vstore: "vStore · Virtual Storage", san: "FC / SAN array", iscsi: "iSCSI target", nas: "NAS · NFS", local: "Local disk" };
+
+  function zone(z, t) {
+    const { x, y, w, h, title, color } = z;
+    ctx.globalCompositeOperation = "source-over";
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, hexA(color, 0.07)); g.addColorStop(1, hexA(color, 0.02));
+    ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = hexA(color, 0.35); ctx.lineWidth = 1; ctx.setLineDash([3, 5]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+    ctx.strokeStyle = hexA(color, 0.06);
+    for (let gx = x + 24; gx < x + w; gx += 24) { ctx.beginPath(); ctx.moveTo(gx, y); ctx.lineTo(gx, y + h); ctx.stroke(); }
+    for (let gy = y + 24; gy < y + h; gy += 24) { ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke(); }
+    ctx.strokeStyle = color; ctx.lineWidth = 2.5; // corner brackets
+    for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+      ctx.beginPath(); ctx.moveTo(cx + 16 * dx, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + 16 * dy); ctx.stroke();
+    }
+    ctx.fillStyle = color; ctx.fillRect(x + 12, y + 10, 3, 14);
+    ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = hexA(color, 0.95); ctx.fillText(title, x + 22, y + 21);
+    if (!still.matches) { // a scan line moving through the zone
+      const sx = x + ((t / 14 + w * z.phase) % w);
+      const sg = ctx.createLinearGradient(sx - 50, 0, sx, 0); sg.addColorStop(0, hexA(color, 0)); sg.addColorStop(1, hexA(color, 0.12));
+      ctx.fillStyle = sg; ctx.fillRect(Math.max(x, sx - 50), y, Math.min(50, sx - x), h);
+    }
+    ctx.globalCompositeOperation = "lighter";
+  }
+  function text(x, y, str, color, size = 11, align = "center", weight = "") {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.font = `${weight} ${size}px ui-monospace, SFMono-Regular, Menlo, monospace`; ctx.textAlign = align;
+    ctx.fillStyle = color; ctx.fillText(str, x, y);
+    ctx.globalCompositeOperation = "lighter";
+  }
+  function wire(a, b, color, t, amount, bend = 0) {
+    const mid = [(a[0] + b[0]) / 2 + bend, (a[1] + b[1]) / 2];
+    const at = (f) => { const u = 1 - f; return [u * u * a[0] + 2 * u * f * mid[0] + f * f * b[0], u * u * a[1] + 2 * u * f * mid[1] + f * f * b[1]]; };
+    line(Array.from({ length: 21 }, (_, i) => at(i / 20)), color, 1.3, 0.75);
+    const lv = level(amount);
+    if (!still.matches) for (let k = 0; k < 2 + Math.round(lv * 4); k++) {
+      const q = at((t * (0.00025 + lv * 0.0008) + k / (2 + Math.round(lv * 4))) % 1);
+      glow(q[0], q[1], 6 + lv * 5, color);
+    }
+  }
+  function server(x, y, w, h, color, healthy) { // a 2U chassis seen slightly from above
+    ctx.fillStyle = hexA(color, 0.14); ctx.strokeStyle = color; ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 14, y - 10); ctx.lineTo(x + w + 14, y - 10); ctx.lineTo(x + w, y); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + w, y); ctx.lineTo(x + w + 14, y - 10); ctx.lineTo(x + w + 14, y + h - 10); ctx.lineTo(x + w, y + h); ctx.closePath();
+    ctx.fillStyle = hexA(color, 0.08); ctx.fill(); ctx.stroke();
+    for (let i = 0; i < 6; i++) { // drive bays
+      ctx.strokeStyle = hexA(color, 0.6); ctx.strokeRect(x + 8 + i * ((w - 40) / 6), y + 8, (w - 40) / 6 - 3, h - 16);
+    }
+    for (let i = 0; i < 3; i++) glow(x + w - 22 + i * 7, y + h / 2, 5, healthy ? GREEN : RED);
+  }
+  function device(x, y, w, h, color, kind) { // switch, SAN, NAS, cloud
+    ctx.strokeStyle = color; ctx.fillStyle = hexA(color, 0.12); ctx.lineWidth = 1.3;
+    if (kind === "cloud") {
+      ctx.beginPath();
+      ctx.arc(x + w * 0.3, y + h * 0.6, h * 0.35, Math.PI * 0.5, Math.PI * 1.5); ctx.arc(x + w * 0.5, y + h * 0.35, h * 0.35, Math.PI, 0);
+      ctx.arc(x + w * 0.72, y + h * 0.6, h * 0.32, Math.PI * 1.5, Math.PI * 0.5); ctx.closePath(); ctx.fill(); ctx.stroke(); return;
+    }
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.fill(); ctx.stroke();
+    if (kind === "switch") for (let i = 0; i < 12; i++) { ctx.strokeStyle = hexA(color, 0.7); ctx.strokeRect(x + 8 + i * ((w - 16) / 12), y + h - 12, (w - 16) / 12 - 2, 6); }
+    if (kind === "disks") for (let i = 0; i < 3; i++) {
+      ctx.beginPath(); ctx.ellipse(x + w / 2, y + 10 + i * ((h - 20) / 2), w * 0.36, 6, 0, 0, Math.PI * 2); ctx.strokeStyle = hexA(color, 0.8); ctx.stroke();
+    }
+    if (kind === "array") for (let r = 0; r < 3; r++) for (let c = 0; c < 6; c++) { ctx.strokeStyle = hexA(color, 0.6); ctx.strokeRect(x + 6 + c * ((w - 12) / 6), y + 6 + r * ((h - 12) / 3), (w - 12) / 6 - 2, (h - 12) / 3 - 3); }
+  }
+
+  function drawInside(t, snap) {
+    const ent = still.matches ? 1 : Math.min(1, (performance.now() - entered) / 650);
+    ctx.save(); ctx.translate(W / 2, H / 2); ctx.scale(0.85 + 0.15 * ent, 0.85 + 0.15 * ent); ctx.translate(-W / 2, -H / 2);
+    ctx.globalAlpha = ent;
+    const Z = {
+      net: { x: W * 0.01, y: H * 0.05, w: W * 0.22, h: H * 0.9, title: "NETWORK", color: PINK, phase: 0.1 },
+      vm: { x: W * 0.26, y: H * 0.05, w: W * 0.73, h: H * 0.25, title: "WORKLOADS · VM GROUPS", color: GREEN, phase: 0.4 },
+      cmp: { x: W * 0.26, y: H * 0.35, w: W * 0.73, h: H * 0.29, title: "HCI CLUSTER · COMPUTE", color: H1, phase: 0.7 },
+      sto: { x: W * 0.26, y: H * 0.69, w: W * 0.73, h: H * 0.26, title: "STORAGE", color: "#b49bff", phase: 0.2 },
+    };
+    for (const z of Object.values(Z)) zone(z, t);
+
+    // Compute: one server per node, then the witness.
+    const members = [...scene.nodes.map((n) => ({ n })), ...(scene.witness ? [{ w: scene.witness }] : [])];
+    const slot = Z.cmp.w / Math.max(1, members.length), pos = {};
+    members.forEach((m, i) => {
+      const cx = Z.cmp.x + slot * (i + 0.5), sw = Math.min(150, slot * 0.6), sh = 44, x = cx - sw / 2, y = Z.cmp.y + Z.cmp.h * 0.38;
+      if (m.n) {
+        const n = m.n, L = snap.nodes[n.name] || {}, color = n.healthy ? H1 : RED;
+        server(x, y, sw, sh, color, n.healthy);
+        text(cx, y + sh + 18, n.name, "#e8fbff", 12, "center", "600");
+        const cpu = pct(L.cpu ?? n.cpu), mem = pct(n.mem);
+        text(cx, y + sh + 33, `CPU ${cpu == null ? "—" : cpu.toFixed(0) + "%"} · MEM ${mem == null ? "—" : mem.toFixed(0) + "%"} · ${scene.vms.filter((v) => v.node === n).length} VMs`, hexA(color, 0.9), 10);
+        pos[n.name] = { top: [cx, y - 10], left: [x, y + sh / 2], bottom: [cx, y + sh], right: [x + sw + 14, y + sh / 2] };
+        hits.push({ kind: "node", node: n, x: cx, y: y + sh / 2, r: sw / 2 });
+      } else {
+        const ww = Math.min(90, sw * 0.6);
+        server(cx - ww / 2, y + 8, ww, 30, AMBER, m.w.healthy !== false);
+        text(cx, y + 58, `WITNESS · ${m.w.name}`, AMBER, 11, "center", "600");
+        text(cx, y + 72, "quorum vote · no VM data", hexA(AMBER, 0.8), 10);
+        pos.__witness = { left: [cx - ww / 2, y + 23] };
+        hits.push({ kind: "witness", w: m.w, x: cx, y: y + 23, r: ww / 2 });
+      }
+    });
+    const ids = scene.nodes.map((n) => pos[n.name]).filter(Boolean);
+    for (let i = 1; i < ids.length; i++) wire(ids[i - 1].right, ids[i].left, H2, t, 1e6, 0);
+    if (ids.length && pos.__witness) wire(ids.at(-1).right, pos.__witness.left, AMBER, t, 1e3, 0);
+    if (ids.length > 1) text((ids[0].right[0] + ids[1].left[0]) / 2, ids[0].right[1] - 12, "cluster + replication", hexA(H2, 0.9), 10);
+
+    // Workloads: VM groups, wired to the nodes their VMs run on.
+    const gdefs = state.groups?.groups || [], members2 = state.groups?.members || {};
+    const groups = [...gdefs.map((g) => ({ id: g.id, name: g.name })), { id: "", name: "Ungrouped" }]
+      .map((g) => ({ ...g, vms: scene.vms.filter((v) => (members2[v.vm.uuid] || "") === g.id) })).filter((g) => g.vms.length);
+    const gslot = Z.vm.w / Math.max(1, groups.length);
+    groups.forEach((g, i) => {
+      const cx = Z.vm.x + gslot * (i + 0.5), gw = Math.min(200, gslot * 0.8), gh = 64, x = cx - gw / 2, y = Z.vm.y + Z.vm.h * 0.3;
+      ctx.fillStyle = hexA(GREEN, 0.1); ctx.strokeStyle = hexA(GREEN, 0.8); ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.roundRect(x, y, gw, gh, 14); ctx.fill(); ctx.stroke();
+      text(cx, y + 18, g.name, "#e8fbff", 12, "center", "600");
+      text(cx, y + 32, `${g.vms.filter((v) => v.running).length}/${g.vms.length} running`, hexA(GREEN, 0.9), 10);
+      g.vms.slice(0, 14).forEach((v, k) => glow(x + 16 + k * ((gw - 32) / Math.max(1, Math.min(14, g.vms.length) - 1 || 1)), y + 48, 7, v.running ? GREEN : "#6c7a92"));
+      hits.push({ kind: "group", g, x: cx, y: y + gh / 2, r: gw / 2 });
+      for (const node of new Set(g.vms.map((v) => v.node))) {
+        const nb = pos[node.name];
+        if (nb) wire([cx, y + gh], nb.top, GREEN, t, g.vms.filter((v) => v.node === node).reduce((s, v) => s + v.rx + v.tx, 0));
+      }
+    });
+    if (!groups.length) text(Z.vm.x + Z.vm.w / 2, Z.vm.y + Z.vm.h / 2, "No VMs yet", hexA(GREEN, 0.8), 12);
+
+    // Network: each node's cabled ports to the switch LLDP reports, then outside.
+    const sw = new Map();
+    for (const n of scene.nodes) for (const nb of extras.nodes[n.name]?.lldp || []) {
+      const key = nb.system_name || nb.chassis_id || "switch";
+      const e = sw.get(key) || { key, desc: nb.system_desc || "", mgmt: nb.management || "", links: [] };
+      e.links.push({ node: n, iface: nb.interface, port: nb.port_id || nb.port_desc || "" }); sw.set(key, e);
+    }
+    if (!sw.size) sw.set("switch", { key: "Upstream switch", desc: "not announced (LLDP off)", mgmt: "", links: scene.nodes.map((n) => ({ node: n, iface: (extras.nodes[n.name]?.nics || []).find((c) => c.kind === "ethernet" && c.link)?.name || "uplink", port: "" })) });
+    const cloud = { x: Z.net.x + Z.net.w * 0.18, y: Z.net.y + 40, w: Z.net.w * 0.64, h: 56 };
+    device(cloud.x, cloud.y, cloud.w, cloud.h, PINK, "cloud");
+    text(cloud.x + cloud.w / 2, cloud.y + cloud.h + 16, "EXTERNAL NETWORK", hexA(PINK, 0.9), 10, "center", "600");
+    const switches = [...sw.values()], sslot = (Z.net.h * 0.42) / Math.max(1, switches.length);
+    switches.forEach((s2, i) => {
+      const w = Z.net.w * 0.78, h = 34, x = Z.net.x + (Z.net.w - w) / 2, y = Z.net.y + Z.net.h * 0.3 + i * sslot;
+      device(x, y, w, h, PINK, "switch");
+      const model = (/C\d{3,4}\w*/.exec(s2.desc) || [""])[0];
+      text(x + w / 2, y + 14, s2.key, "#ffe6f6", 11, "center", "600");
+      text(x + w / 2, y + h + 14, [model || s2.desc.slice(0, 24), s2.mgmt].filter(Boolean).join(" · "), hexA(PINK, 0.85), 10);
+      hits.push({ kind: "switch", s: s2, x: x + w / 2, y: y + h / 2, r: w / 2 });
+      wire([x + w / 2, y], [cloud.x + cloud.w / 2, cloud.y + cloud.h], PINK, t, Object.values(snap.nets).reduce((a, n) => a + n.rx + n.tx, 0));
+      for (const l of s2.links) {
+        const nb = pos[l.node.name];
+        if (!nb) continue;
+        const nic = (extras.nodes[l.node.name]?.nics || []).find((c) => c.name === l.iface);
+        wire([x + w, y + h / 2], nb.left, PINK, t, (snap.nodes[l.node.name]?.rx || 0) + (snap.nodes[l.node.name]?.tx || 0), 0);
+        const speed = nic?.speed_mbps ? ` ${nic.speed_mbps >= 1000 ? nic.speed_mbps / 1000 + "G" : nic.speed_mbps + "M"}` : "";
+        text(x + 4, y + h + 30 + s2.links.indexOf(l) * 14, `${l.port || "?"} ⇄ ${l.node.name} ${l.iface}${speed}`, hexA(PINK, 0.9), 10, "left");
+      }
+    });
+    const nets = state.networks || [];
+    nets.slice(0, 6).forEach((n, i) => {
+      const y = Z.net.y + Z.net.h * 0.78 + i * 18;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.fillStyle = hexA(scene.nets[i]?.color || PINK, 0.9); ctx.fillRect(Z.net.x + 16, y - 8, 8, 8);
+      text(Z.net.x + 30, y, `${n.name}${n.vlan ? ` · VLAN ${n.vlan}` : " · untagged"}`, "#ffe6f6", 10, "left");
+    });
+    text(Z.net.x + 16, Z.net.y + Z.net.h * 0.78 - 18, "VM NETWORKS", hexA(PINK, 0.8), 9, "left", "600");
+
+    // Storage: vStore, external arrays and local disks, wired to the nodes using them.
+    const stores = storeDevices(), dslot = Z.sto.w / Math.max(1, stores.length);
+    stores.forEach((d, i) => {
+      const cx = Z.sto.x + dslot * (i + 0.5), w = Math.min(130, dslot * 0.55), h = 50, x = cx - w / 2, y = Z.sto.y + Z.sto.h * 0.35;
+      const color = d.kind === "vstore" ? "#b49bff" : d.kind === "local" ? "#7f95b8" : "#c39bff";
+      device(x, y, w, h, color, d.kind === "vstore" || d.kind === "local" ? "disks" : "array");
+      text(cx, y + h + 16, STORE_LABEL[d.kind], "#f1e6ff", 11, "center", "600");
+      const used = d.cap ? (d.alloc / d.cap) * 100 : 0;
+      text(cx, y + h + 30, `${d.name} · ${used.toFixed(0)}% of ${Math.round(d.cap)} GB${d.source && d.kind !== "vstore" && d.kind !== "local" ? " · " + d.source.slice(0, 22) : ""}`, hexA(color, 0.9), 10);
+      hits.push({ kind: "store", d, x: cx, y: y + h / 2, r: w / 2 });
+      for (const name of d.nodes) {
+        const nb = pos[name];
+        if (!nb) continue;
+        wire(nb.bottom, [cx, y], color, t, (snap.nodes[name]?.read || 0) + (snap.nodes[name]?.write || 0));
+      }
+      if (d.kind === "vstore" && d.nodes.size > 1) text(cx, y - 8, `replicated on ${d.nodes.size} nodes`, hexA(color, 0.9), 10);
+    });
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   // ---------- interaction ----------
@@ -388,6 +615,7 @@ window.FabricMap = (() => {
     view.vyaw = 0; canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", (e) => {
+    if (drag && mode === "inside") drag = null;
     if (drag) {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y, now = performance.now();
       if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
@@ -409,6 +637,19 @@ window.FabricMap = (() => {
     } else if (hover.kind === "node") {
       const n = hover.node;
       tip.innerHTML = `<b>${esc(n.name)}</b><span>${n.healthy ? "Online" : "Offline"} · CPU ${n.cpu == null ? "—" : n.cpu.toFixed(0) + "%"}</span><span>Network ↓ ${rate(n.rx)} ↑ ${rate(n.tx)}</span><span>Disk R ${bytesRate(n.read)} · W ${bytesRate(n.write)}</span><em>Click to open</em>`;
+    } else if (hover.kind === "site") {
+      tip.innerHTML = `<b>Datacenter · ${esc(scene.tz || "time zone not reported")}</b><span>${scene.nodes.length} nodes${scene.witness ? " + witness" : ""}, ${scene.vms.length} VMs</span><em>Click to look inside</em>`;
+    } else if (hover.kind === "switch") {
+      const s2 = hover.s;
+      tip.innerHTML = `<b>${esc(s2.key)}</b><span>${esc(s2.desc || "")}</span>${s2.mgmt ? `<span>Management ${esc(s2.mgmt)}</span>` : ""}${s2.links.map((l) => `<span>${esc(l.node.name)} ${esc(l.iface)} → ${esc(l.port || "?")}</span>`).join("")}<em>From LLDP announcements</em>`;
+    } else if (hover.kind === "group") {
+      const g = hover.g;
+      tip.innerHTML = `<b>${esc(g.name)}</b>${g.vms.slice(0, 8).map((v) => `<span>${v.running ? "●" : "○"} ${esc(v.vm.name)} · ${esc(v.node.name)}</span>`).join("")}<em>Click to open Virtual machines</em>`;
+    } else if (hover.kind === "store") {
+      const d = hover.d;
+      tip.innerHTML = `<b>${esc(STORE_LABEL[d.kind])} · ${esc(d.name)}</b><span>${Math.round(d.alloc)} of ${Math.round(d.cap)} GB used</span>${d.source ? `<span>${esc(d.source)}</span>` : ""}<span>Nodes: ${esc([...d.nodes].join(", "))}</span><em>Click to open Storage</em>`;
+    } else if (hover.kind === "witness") {
+      tip.innerHTML = `<b>Witness · ${esc(hover.w.name)}</b><span>Votes in quorum, stores no VM data</span>`;
     } else {
       tip.innerHTML = `<b>Virtual Storage</b>${scene.pools.slice(0, 4).map((p) => `<span>${esc(p.name)} · ${p.used.toFixed(0)}% of ${Math.round(p.cap)} GB</span>`).join("")}<em>Click to open Storage</em>`;
     }
@@ -417,12 +658,15 @@ window.FabricMap = (() => {
     const moved = drag?.moved; drag = null;
     if (moved) return;
     const hit = pick(e);
+    if (hit?.kind === "site") { setMode("inside"); return; }
+    if (hit?.kind === "group") { location.hash = "compute"; return; }
+    if (hit?.kind === "store") { location.hash = "storage"; return; }
     if (hit?.kind === "vm") location.hash = `vm/${encodeURIComponent(hit.v.vm.uuid)}`;
     else if (hit?.kind === "node") location.hash = `node/${encodeURIComponent(hit.node.name)}`;
     else if (hit?.kind === "core") location.hash = "storage";
   });
   canvas.addEventListener("pointerleave", () => { tip.hidden = true; hover = null; });
-  canvas.addEventListener("wheel", (e) => { e.preventDefault(); view.zoom = Math.max(0.6, Math.min(2.2, view.zoom * (e.deltaY > 0 ? 0.93 : 1.07))); }, { passive: false });
+  canvas.addEventListener("wheel", (e) => { if (mode === "inside") return; e.preventDefault(); view.zoom = Math.max(0.6, Math.min(2.2, view.zoom * (e.deltaY > 0 ? 0.93 : 1.07))); }, { passive: false });
   $id("fabric-spin").addEventListener("click", (e) => {
     view.spin = !view.spin;
     e.currentTarget.textContent = view.spin ? "Pause rotation" : "Rotate";
@@ -440,14 +684,33 @@ window.FabricMap = (() => {
     if (t - ticked > 1000) { ticked = t; clock(); }
     frame = requestAnimationFrame(loop);
   }
+  async function loadExtras() {
+    if (Date.now() - extras.at < 60000) return;
+    extras.at = Date.now();
+    const members = (state.cluster?.members || []).filter((m) => m.role === "compute" && m.healthy !== false);
+    await Promise.all(members.map(async (m) => {
+      const name = encodeURIComponent(m.name), get = (path) => api(path).catch(() => null);
+      const [settings, nics, lldp] = await Promise.all([get(`/nodes/${name}/settings`), get(`/nodes/${name}/nics`), get(`/nodes/${name}/lldp`)]);
+      extras.nodes[m.name] = { tz: settings?.timezone || "", nics: nics || [], lldp: lldp || [] };
+    }));
+    build();
+  }
+  function setMode(next) {
+    mode = next; entered = performance.now();
+    backBtn.hidden = mode !== "inside";
+    page.classList.toggle("fabric-inside", mode === "inside");
+    tip.hidden = true;
+  }
+  backBtn.addEventListener("click", () => setMode("globe"));
   function start() {
     build();
+    loadExtras();
     if (!frame) frame = requestAnimationFrame(loop);
     clearInterval(poll);
     poll = setInterval(async () => {
       if (!page.classList.contains("active")) { clearInterval(poll); poll = 0; return; }
       if (document.hidden) return;
-      try { await load("stats"); build(); } catch { /* next tick */ }
+      try { await load("stats"); build(); loadExtras(); } catch { /* next tick */ }
     }, 3000);
   }
   return { render: start, rate, bytesRate, view };

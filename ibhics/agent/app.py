@@ -169,6 +169,17 @@ def create_agent_app(
         def host_summary() -> dict:
             return asdict(driver.host_system().summary())
 
+        @api.get("/host/lldp")
+        def host_lldp() -> list[dict]:
+            return driver.host_system().lldp()
+
+        from ..hypervisor.fake import FakeDriver as _FakeDriver
+
+        if not isinstance(driver, _FakeDriver):
+            from ..hypervisor.lldp import start as _lldp_start
+
+            _lldp_start()  # listen from the start, so the first question has an answer
+
         @api.get("/host/nics")
         def host_nics() -> list[dict]:
             return [asdict(n) for n in driver.host_system().nics()]

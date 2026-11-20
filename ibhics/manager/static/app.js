@@ -777,7 +777,7 @@ async function refresh(page, auto = false) {
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
-  if (page === "fabric") { await load("vms", "pools", "networks", "stats", "summaries"); window.FabricMap?.render(); }
+  if (page === "fabric") { await load("vms", "pools", "networks", "stats", "summaries", "groups"); window.FabricMap?.render(); }
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); if (!auto || !document.querySelector("details.more[open]")) { renderVMs(); renderMoves(); } }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
