@@ -189,15 +189,30 @@ const spatialMenu = document.getElementById("menu"), spatialScrim = document.get
 function setRailExpanded(expanded) {
   document.body.classList.remove("rail-expanded");
   spatialMenu.hidden = !expanded; spatialScrim.hidden = !expanded;
-  if (!expanded) { spatialMenu.classList.remove("show-extra"); document.getElementById("orbit-more").textContent = "More · Containers, Templates, Activity, Terminal →"; }
+  if (!expanded) setOrbitExtra(false);
   railToggle.setAttribute("aria-expanded", String(expanded));
   railToggle.setAttribute("aria-label", expanded ? "Close navigation" : "Open navigation");
   const scale = Math.min(1, (innerHeight - 130) / 560, (innerWidth - (innerWidth < 700 ? 60 : 95)) / 400);
   spatialMenu.style.setProperty("--orbit-scale", String(Math.max(.45, scale)));
 }
-document.getElementById("orbit-more").addEventListener("click", (event) => {
-  const extra = spatialMenu.classList.toggle("show-extra");
-  event.currentTarget.textContent = extra ? "← Main navigation" : "More · Containers, Templates, Activity, Terminal →";
+// The bouncing arrow swaps the two menu sets: pointing at it is enough with a mouse,
+// a tap or a key press does it elsewhere. It sits below the first set (pointing down)
+// and above the second (pointing up), so it moves away from the pointer once used.
+const orbitMore = document.getElementById("orbit-more");
+let orbitSwapped = 0;
+function setOrbitExtra(extra) {
+  spatialMenu.classList.toggle("show-extra", extra);
+  orbitMore.setAttribute("aria-label", extra ? "Back to the main navigation" : "More: Containers, Templates, Activity, Terminal");
+  orbitMore.title = extra ? "Main navigation" : "Containers · Templates · Activity · Terminal";
+}
+orbitMore.addEventListener("pointerenter", (event) => {
+  if (event.pointerType !== "mouse") return;
+  orbitSwapped = Date.now();
+  setOrbitExtra(!spatialMenu.classList.contains("show-extra"));
+});
+orbitMore.addEventListener("click", () => {
+  if (Date.now() - orbitSwapped < 600) return; // the pointer already swapped it
+  setOrbitExtra(!spatialMenu.classList.contains("show-extra"));
 });
 setRailExpanded(false);
 railToggle.addEventListener("click", () => setRailExpanded(spatialMenu.hidden));
@@ -208,7 +223,7 @@ addEventListener("resize", () => { if (!spatialMenu.hidden) setRailExpanded(true
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
+const PAGES = ["home", "fabric", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash === "nodes") return "cluster"; // Preserve old node inventory bookmarks.
@@ -228,9 +243,9 @@ function show() {
   }
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
   document.body.dataset.section = page;
-  const sectionTitle = {home:"Overview",compute:"Virtual machines",containers:"Containers",templates:"Templates",storage:"Storage",network:"Network",cluster:"Cluster",backup:"Data protection",migrate:"Migration",activity:"Activity",system:"Settings",tasks:"Jobs",recycle:"Recycle bin",terminal:"Terminal",vm:"Virtual machine",node:"Cluster node"};
+  const sectionTitle = {fabric:"Infrastructure map",home:"Overview",compute:"Virtual machines",containers:"Containers",templates:"Templates",storage:"Storage",network:"Network",cluster:"Cluster",backup:"Data protection",migrate:"Migration",activity:"Activity",system:"Settings",tasks:"Jobs",recycle:"Recycle bin",terminal:"Terminal",vm:"Virtual machine",node:"Cluster node"};
   $("#workspace-section").textContent = sectionTitle[page] || page;
-  const section = { vm: "compute", node: "cluster", recycle: "compute" }[page] || page;
+  const section = { vm: "compute", node: "cluster", recycle: "compute", fabric: "home" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
@@ -753,6 +768,7 @@ async function refresh(page, auto = false) {
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
   await loadCluster();
   await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
+  if (page === "fabric") { await load("vms", "pools", "networks", "stats", "summaries"); window.FabricMap?.render(); }
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); if (!auto || !document.querySelector("details.more[open]")) { renderVMs(); renderMoves(); } }
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }

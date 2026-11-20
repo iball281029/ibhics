@@ -44,7 +44,14 @@
 .spatial-workspace #menu.show-extra .orbit-item[data-orbit-group="extra"]{display:flex}
 .spatial-workspace #menu.show-extra .admin-only{display:none}
 .spatial-workspace.can-admin #menu.show-extra .admin-only{display:flex}
-.spatial-workspace #menu .orbit-more{position:absolute;left:10px;top:550px;pointer-events:auto;background:#15172b99;border:1px solid #9e9ac633;color:#b8bfd6;padding:9px 12px;border-radius:10px;font:10px inherit;white-space:nowrap;cursor:pointer}
+.spatial-workspace #menu .orbit-more{position:absolute;left:32px;top:548px;width:44px;height:44px;min-height:44px;padding:0;display:grid;place-items:center;pointer-events:auto;background:radial-gradient(circle at 50% 35%,#7de5ff22,#15172b99 70%);border:1px solid #9fdcff44;border-radius:50%;color:#9fe9ff;cursor:pointer;box-shadow:0 0 18px #6fd8ff33,inset 0 0 10px #a98bff22;animation:orbit-more-down 1.6s ease-in-out infinite;transition:top .35s cubic-bezier(.2,.7,.2,1),box-shadow .2s}
+.spatial-workspace #menu .orbit-more svg{width:24px;height:24px;display:block;filter:drop-shadow(0 0 6px #7de5ffaa);transition:transform .35s}
+.spatial-workspace #menu .orbit-more:hover{box-shadow:0 0 26px #7de5ff66,inset 0 0 12px #a98bff44}
+.spatial-workspace #menu.show-extra .orbit-more{top:-30px;animation-name:orbit-more-up}
+.spatial-workspace #menu.show-extra .orbit-more svg{transform:rotate(180deg)}
+@keyframes orbit-more-down{0%,100%{translate:0 0}50%{translate:0 7px}}
+@keyframes orbit-more-up{0%,100%{translate:0 0}50%{translate:0 -7px}}
+@media(prefers-reduced-motion:reduce){.spatial-workspace #menu .orbit-more{animation:none}}
 .spatial-workspace #menu .orbit-more:focus-visible{outline:2px solid #7de5ff;outline-offset:3px}
 
 /* Prism overview, existing Cosmic palette and navigation. Native CSS 3D: no CDN. */
