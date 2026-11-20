@@ -97,6 +97,7 @@ window.FabricMap = (() => {
     scene = { nodes, vms, nets, pools, witness, tz };
     record();
     panels();
+    if (inside3d) inside3d.update(insideData());
   }
 
   // ---------- time ----------
@@ -270,7 +271,7 @@ window.FabricMap = (() => {
     hits = [];
     const snap = moment(), cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.33 * view.zoom;
     ctx.globalCompositeOperation = "lighter";
-    if (mode === "inside") { drawInside(t, snap); ctx.globalCompositeOperation = "source-over"; return; }
+    if (mode === "inside") { if (!inside3d) drawInside(t, snap); ctx.globalCompositeOperation = "source-over"; return; }
 
     // HUD rings around the globe, turning slowly, with four brackets.
     const turn = still.matches ? 0 : t / 9000;
@@ -695,11 +696,42 @@ window.FabricMap = (() => {
     }));
     build();
   }
+  let inside3d = null;
   function setMode(next) {
     mode = next; entered = performance.now();
     backBtn.hidden = mode !== "inside";
-    page.classList.toggle("fabric-inside", mode === "inside");
     tip.hidden = true;
+    inside3d?.dispose(); inside3d = null; $id("fx-3d")?.remove();
+    if (mode === "inside" && window.Fabric3D) { // real 3D when it loaded; the 2D zones otherwise
+      const box = document.createElement("div"); box.className = "fx-3d"; box.id = "fx-3d";
+      canvas.parentElement.insertBefore(box, tip);
+      try { inside3d = window.Fabric3D.inside(box); inside3d.update(insideData()); } catch (err) { console.error(err); box.remove(); inside3d = null; }
+    }
+    page.classList.toggle("fabric-inside", !!inside3d);
+  }
+  function insideData() {
+    const snap = moment(), gdefs = state.groups?.groups || [], gm = state.groups?.members || {};
+    const groups = [...gdefs.map((g) => ({ id: g.id, name: g.name })), { id: "", name: "Ungrouped" }]
+      .map((g) => { const vms = scene.vms.filter((v) => (gm[v.vm.uuid] || "") === g.id).map((v) => ({ name: v.vm.name, running: v.running })); return { name: g.name, vms, running: vms.filter((v) => v.running).length }; })
+      .filter((g) => g.vms.length);
+    const sw = new Map();
+    for (const n of scene.nodes) for (const nb of extras.nodes[n.name]?.lldp || []) {
+      const key = nb.system_name || nb.chassis_id || "switch";
+      const e = sw.get(key) || { name: key, model: (/C\d{3,4}\w*/.exec(nb.system_desc || "") || [""])[0] || (nb.system_desc || "").slice(0, 30), mgmt: nb.management || "", links: [] };
+      const nic = (extras.nodes[n.name]?.nics || []).find((c) => c.name === nb.interface);
+      e.links.push({ node: n.name, iface: nb.interface, port: nb.port_id || nb.port_desc || "", speed: nic?.speed_mbps ? (nic.speed_mbps >= 1000 ? `${nic.speed_mbps / 1000}G` : `${nic.speed_mbps}M`) : "" });
+      sw.set(key, e);
+    }
+    if (!sw.size) sw.set("switch", { name: "Upstream switch", model: "not announced (LLDP off)", mgmt: "", links: scene.nodes.map((n) => ({ node: n.name, iface: (extras.nodes[n.name]?.nics || []).find((c) => c.kind === "ethernet" && c.link)?.name || "uplink", port: "", speed: "" })) });
+    const nets = Object.values(snap.nets), nodes = Object.values(snap.nodes);
+    return {
+      nodes: scene.nodes.map((n) => ({ name: n.name, healthy: n.healthy, cpu: snap.nodes[n.name]?.cpu ?? n.cpu, mem: n.mem, vms: scene.vms.filter((v) => v.node === n).length })),
+      witness: scene.witness ? { name: scene.witness.name } : null,
+      vmsTotal: scene.vms.length, vmsRunning: scene.vms.filter((v) => v.running).length,
+      groups, switches: [...sw.values()], nets: (state.networks || []).map((n) => ({ name: n.name, vlan: n.vlan })),
+      stores: storeDevices().map((d) => ({ key: d.key, kind: d.kind, label: STORE_LABEL[d.kind], name: d.name, used: d.cap ? (d.alloc / d.cap) * 100 : 0, cap: d.cap, nodes: [...d.nodes] })),
+      traffic: { vm: scene.vms.reduce((a, v) => a + v.rx + v.tx, 0), net: nets.reduce((a, n) => a + n.rx + n.tx, 0), sto: nodes.reduce((a, n) => a + n.read + n.write, 0) },
+    };
   }
   backBtn.addEventListener("click", () => setMode("globe"));
   function start() {

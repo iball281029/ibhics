@@ -123,3 +123,26 @@
 @media(prefers-reduced-motion:reduce){#page-fabric .fx:after{animation:none}}
 .fx-back{position:absolute;left:8px;top:8px;z-index:3}
 .fx-back[hidden]{display:none}
+
+/* Real 3D (fabric3d.js): Overview holograms and the inside view. */
+.nexus-3d{position:absolute;inset:0}
+.nexus-3d canvas{display:block}
+.nexus-3d .f3-labels{display:none}
+.nexus-3d-cap{position:absolute;left:0;right:0;bottom:2%;text-align:center;font:9px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:3px;color:#bfe9ff;text-shadow:0 0 10px #7de5ff}
+.fx-3d{position:absolute;inset:0;z-index:1}
+.fx-3d canvas{display:block}
+.f3-labels{position:absolute;inset:0;pointer-events:none}
+.f3-label{display:grid;gap:2px;padding:6px 10px;font:10px ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfefff;background:#04121fcc;border:1px solid var(--lc,#3ef0ff66);border-left:3px solid var(--lc,#3ef0ff);box-shadow:0 0 18px color-mix(in srgb,var(--lc,#3ef0ff) 30%,transparent);white-space:nowrap;pointer-events:none;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,0 100%)}
+.f3-label b{font-weight:600;font-size:11px;color:#fff;letter-spacing:.5px}
+.f3-label span{color:color-mix(in srgb,var(--lc,#3ef0ff) 80%,#fff)}
+.f3-click{pointer-events:auto;cursor:pointer}
+.f3-click:hover{background:#0a2638ee}
+.f3-zone{font-size:11px;letter-spacing:2px;--lc:#3ef0ff}
+.f3-zone b{font-size:12px;letter-spacing:3px}
+.f3-cyan{--lc:#3ef0ff}.f3-green{--lc:#6dffb3}.f3-pink{--lc:#ff8fd8}.f3-violet{--lc:#b49bff}.f3-amber{--lc:#ffcb66}.f3-bad{--lc:#ff6b7a}
+.fabric-inside #fabric-canvas{visibility:hidden}
+/* Labels: the title always, details when pointed at, so the scene stays readable. */
+.f3-label{pointer-events:auto;font-size:9.5px;padding:4px 8px}
+.f3-label:not(.f3-zone) span{display:none}
+.f3-label:hover span,.f3-label.f3-zone span{display:block}
+.f3-label:hover{z-index:5;background:#0a2638f2}
