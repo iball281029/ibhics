@@ -603,6 +603,10 @@
           <div class="toolbar">
             <select id="browse-source" class="source-list" aria-label="Source" hidden></select><label><input type="checkbox" id="migrate-select-all" aria-label="Select all source VMs"> Select all VMs</label>
             <span class="spacer"></span>
+            <div class="mg-view-switch" role="group" aria-label="VM view">
+              <button type="button" data-migrate-view="cards" aria-label="Card view" aria-pressed="true" title="Cards"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+              <button type="button" data-migrate-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+            </div>
             <label class="btn operator-only" title="OVA, VMDK, VHD/VHDX (Hyper-V), QCOW2 or raw: exports from any platform">Upload files<input type="file" id="upload-files" multiple accept=".ova,.vmdk,.vhdx,.vhd,.qcow2,.img,.raw" hidden></label>
             <button id="refresh-source">Refresh</button>
           </div>

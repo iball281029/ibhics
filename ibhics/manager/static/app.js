@@ -4698,10 +4698,24 @@ let sourceVMs = [];
 let sourceVMsFor = null;  // the source the list above was read from
 const migratePicked = new Set();
 let sourceReadGeneration = 0;
+let migrateView = "cards";
+try { if (localStorage.getItem("ibhics.migrate.view") === "list") migrateView = "list"; } catch { /* private mode */ }
+let migrateSort = { key: null, direction: 1 };
+function syncMigrateView() {
+  $("#source-vms").classList.toggle("mg-list", migrateView === "list");
+  $$("[data-migrate-view]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.migrateView === migrateView)));
+}
+syncMigrateView();
+$$("[data-migrate-view]").forEach((button) => button.addEventListener("click", () => {
+  migrateView = button.dataset.migrateView;
+  try { localStorage.setItem("ibhics.migrate.view", migrateView); } catch { /* private mode */ }
+  syncMigrateView();
+  if (sourceVMsFor) renderMigrateInventory();
+}));
 function migrateSelection() {
   $("#migrate-selected").disabled = !canOperate() || !migratePicked.size || !sourceVMsFor;
   $("#migrate-selected").textContent = `MIGRATE ${migratePicked.size} SELECTED`;
-  $$("#source-vms .mg-vm").forEach((card) => card.classList.toggle("selected", !!$("[data-migrate-pick]", card)?.checked));
+  $$("#source-vms .mg-vm, #source-vms .mg-vm-row").forEach((card) => card.classList.toggle("selected", !!$("[data-migrate-pick]", card)?.checked));
   renderMigrateSummary();
   const all = $("#migrate-select-all");
   all.checked = sourceVMs.length > 0 && migratePicked.size === sourceVMs.length;
@@ -4757,13 +4771,36 @@ async function renderSourceVMs() {
     }
     return;
   }
-  const op = canOperate();
+  renderMigrateInventory();
+}
+function renderMigrateInventory() {
+  const tbody = $("#source-vms"), op = canOperate();
+  if (migrateView === "list" && sourceVMs.length) {
+    const columns = [["name", "VM / OS"], [null, "Power"], ["vcpus", "vCPU"], ["memory_mb", "Memory"], ["disks", "Disks"], [null, "Firmware"]];
+    const diskSize = (vm) => vm.disks_gb.reduce((sum, size) => sum + (Number(size) || 0), 0);
+    const rows = sourceVMs.map((vm, i) => ({ vm, i }));
+    if (migrateSort.key) rows.sort((a, b) => {
+      const value = (vm) => migrateSort.key === "disks" ? diskSize(vm) : migrateSort.key === "name" ? String(vm.name) : Number(vm[migrateSort.key]) || 0;
+      const av = value(a.vm), bv = value(b.vm);
+      return (typeof av === "string" ? av.localeCompare(bv, undefined, { numeric: true, sensitivity: "base" }) : av - bv) * migrateSort.direction || a.i - b.i;
+    });
+    tbody.innerHTML = `<table class="mg-vm-table" aria-label="Source VMs"><thead><tr><th scope="col" aria-label="Select"></th>${columns.map(([key, label]) => `<th scope="col"${key ? ` aria-sort="${migrateSort.key === key ? migrateSort.direction === 1 ? "ascending" : "descending" : "none"}"` : ""}>${key ? `<button type="button" data-migrate-sort="${key}">${label}${migrateSort.key === key ? migrateSort.direction === 1 ? " ↑" : " ↓" : ""}</button>` : label}</th>`).join("")}<th scope="col">Actions</th></tr></thead><tbody>${rows.map(({ vm, i }) => `<tr class="mg-vm-row">
+      <td><input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${migratePicked.has(i) ? "checked" : ""} ${op ? "" : "disabled"}></td>
+      <td><div class="mg-vm-identity">${vxOs({ ...vm, os_type: vm.guest_os })}<span class="mg-vm-name"><b>${esc(vm.name)}</b><small>${esc(vm.guest_os || "OS not reported")}</small></span></div></td>
+      <td><span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state || "Unknown")}</span></td>
+      <td>${Number(vm.vcpus)}</td><td>${gbText(vm.memory_mb)}</td><td>${vm.disks_gb.length} · ${diskSize(vm)} GB${vm.disks_gb.some((g) => !g) ? " + ?" : ""}</td>
+      <td title="${esc(vm.notes || "")}">${esc((vm.firmware || "Unknown").toUpperCase())}${vm.state === "running" ? '<small>Power off at source first</small>' : ""}</td>
+      <td><div class="actions">${op ? `<button class="small" data-import="${i}">Import</button>` : ""}${op && sourceVMsFor === "uploads" ? `<button class="small danger" data-upload-del="${esc(vm.ref.split("/").pop())}">Delete file</button>` : ""}</div></td>
+    </tr>`).join("")}</tbody></table>`;
+    migrateSelection();
+    return;
+  }
   tbody.innerHTML = sourceVMs.length ? sourceVMs.map((vm, i) => {
     const kind = osKind(vm.guest_os || "");
     return `<article class="mg-vm">
       <label class="mg-vm-select"><span class="vx-os os-${kind.toLowerCase() || "other"}">${VX_OS_ART[kind] || VX_OS_ART[""]}</span>
       <span class="mg-vm-name"><b>${esc(vm.name)}</b><small>${esc(vm.guest_os || "OS not reported")}</small></span>
-      <input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${op ? "" : "disabled"}></label>
+      <input type="checkbox" data-migrate-pick="${i}" aria-label="Select ${esc(vm.name)}" ${migratePicked.has(i) ? "checked" : ""} ${op ? "" : "disabled"}></label>
       <span class="badge ${vm.state === "running" ? "running" : ""}">${esc(vm.state || "Unknown")}</span>
       <div class="mg-spec">${Number(vm.vcpus)} vCPU · ${gbText(vm.memory_mb)} · ${vm.disks_gb.length} disks · ${vm.disks_gb.map((g) => g ? `${g} GB` : "?").join(" + ")}</div>
       <small class="mg-ref" title="${esc(vm.ref)}">${esc((vm.firmware || "").toUpperCase())} · ${esc(String(vm.ref).split("/").pop())}${vm.notes ? ` · ${esc(vm.notes)}` : ""}</small>
@@ -4773,6 +4810,18 @@ async function renderSourceVMs() {
   }).join("") : '<p class="mg-empty">No VMs found on this source</p>';
   migrateSelection();
 }
+$("#source-vms").addEventListener("click", (e) => {
+  const sort = e.target.closest("[data-migrate-sort]");
+  if (sort) {
+    migrateSort = { key: sort.dataset.migrateSort, direction: migrateSort.key === sort.dataset.migrateSort ? -migrateSort.direction : 1 };
+    renderMigrateInventory();
+    return;
+  }
+  const row = e.target.closest(".mg-vm-row");
+  if (!row || e.target.closest("button, input, a, label")) return;
+  const input = $("[data-migrate-pick]", row);
+  if (!input.disabled) input.click();
+});
 $("#browse-source").addEventListener("change", () => renderSourceVMs());
 $("#source-vms").addEventListener("change", (e) => {
   const input = e.target.closest("[data-migrate-pick]");
