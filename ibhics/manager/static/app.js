@@ -675,6 +675,9 @@ function renderP2VCommand() {
   $("#p2v-code").textContent = command ? (prefixes[p2vOs] || "") + command : "";
   $("#p2v-os-hint").textContent = p2vOs === "other" ? "wget downloads the script without certificate verification. The agent still requires curl, gzip, bash, dd and lsblk to upload disks; install curl first if missing. The API-issued pin remains on agent uploads." : "Installs curl and gzip before starting the API-issued agent command.";
   const windows = p2vOs === "windows";
+  // Windows gets a program to download, Linux a command to paste: say which.
+  $("#p2v-open").textContent = windows ? "Create Windows agent" : "Create agent command";
+  $("#p2v-step2").textContent = windows ? "② WINDOWS AGENT (.EXE)" : "② AGENT COMMAND";
   $("#p2v-linux").hidden = windows;
   $("#p2v-windows").hidden = !windows;
   $("#p2v-linux").setAttribute("aria-labelledby", $(`[data-p2v-os="${p2vOs}"]`).id);
