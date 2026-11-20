@@ -648,6 +648,7 @@ async function renderOps() {
 }
 
 const P2V_STATE = { waiting: "Waiting for the agent", uploading: "Copying disks", ready: "Ready to import", imported: "Imported", failed: "Failed" };
+let p2vSessions = [], p2vCheckedAt = null;
 async function renderP2V() {
   const local = (state.cluster?.members || []).find((m) => m.local);
   const select = $("#p2v-pool");
@@ -656,6 +657,9 @@ async function renderP2V() {
     .map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))}</option>`).join("");
   if ([...select.options].some((o) => o.value === keep)) select.value = keep;
   const sessions = await api("/p2v/sessions");
+  p2vSessions = sessions;
+  p2vCheckedAt = Date.now();
+  renderPhysicalSources();
   $("#p2v-rows").innerHTML = sessions.length ? sessions.map((s) => {
     const m = s.machine || {};
     const disks = (m.disks || []).map((d) => `${esc(d.name)} ${Math.ceil(d.size_bytes / 2 ** 30)} GiB`).join(", ");
@@ -714,11 +718,11 @@ $("#p2v-download").addEventListener("click", async () => {
 });
 $("#p2v-copy").addEventListener("click", () => navigator.clipboard.writeText($("#p2v-code").textContent).then(() => toast("Command copied")).catch(fail));
 $("#p2v-refresh").addEventListener("click", () => renderP2V().catch(fail));
-$("#p2v-rows").addEventListener("click", (e) => {
+[$("#p2v-rows"), $("#source-physical-machines")].forEach((container) => container.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-p2v-delete]");
   if (!b || !confirm("Remove this session and any disk data it received?")) return;
   del(`/p2v/sessions/${enc(b.dataset.p2vDelete)}`).then(renderP2V).catch(fail);
-});
+}));
 
 function logTime(seconds) {
   const n = Math.max(0, Math.floor(seconds || 0));
@@ -4650,6 +4654,51 @@ function migrateSourceIcon(type) {
 function userMigrateSources() {
   return state.sources.filter((s) => !["uploads", "physical"].includes(s.name) && !["upload", "p2v"].includes(s.type));
 }
+// Source categories share the workload view controls and table styles.
+let sourceSection = "connections";
+const sourceViews = { connections: "cards", physical: "cards" };
+try {
+  if (localStorage.getItem("ibhics.migrate.sources.section") === "physical") sourceSection = "physical";
+  for (const section of Object.keys(sourceViews)) {
+    if (localStorage.getItem(`ibhics.migrate.sources.${section}.view`) === "list") sourceViews[section] = "list";
+  }
+} catch { /* private mode */ }
+function syncSourceSections() {
+  $$("[data-source-section]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.sourceSection === sourceSection)));
+  for (const section of Object.keys(sourceViews)) $("#source-" + section).hidden = section !== sourceSection;
+  $$("[data-source-view]").forEach((button) => button.setAttribute("aria-pressed", String(sourceViews[button.dataset.sourceView] === button.dataset.view)));
+}
+syncSourceSections();
+function renderSourceList(sources, admin, op) {
+  return `<table class="mg-vm-table" aria-label="Source connections"><thead><tr>${["Type", "Name", "Host / path", "User", "VMs", "Status", "Last test", "Actions"].map((label) => `<th scope="col">${label}</th>`).join("")}</tr></thead><tbody>${sources.map((s) => {
+    const st = s.settings || {}, status = migrateSourceStatus.get(s.name);
+    const where = [st.host, st.path].filter(Boolean).join(" / ");
+    const label = status?.testing ? "Testing…" : status?.ok === true ? "Connected" : status?.ok === false ? "Failed" : "Not tested";
+    return `<tr aria-busy="${!!status?.testing}"><td><span class="mg-source-list-icon kind-${esc(s.type)}" title="${esc(migrateSourceKinds[s.type]?.label || s.type)}">${migrateSourceIcon(s.type)}</span></td><td>${esc(s.name)}</td><td><span class="mg-source-list-path" title="${esc(where)}">${esc(where || "Not provided")}</span></td><td>${esc(st.username || (s.type === "kvm" ? "root (SSH)" : "Not required"))}</td><td>${status?.vmCount ?? "Not loaded"}</td><td><span class="badge ${status?.ok === true ? "done" : status?.ok === false ? "failed" : "plain"}" title="${esc(status?.failure || status?.label || label)}">${label}</span></td><td>${status?.testedAt ? `${esc(new Date(status.testedAt).toLocaleString())} · ${status.testOK ? "Passed" : "Failed"}` : "Not tested"}</td><td><div class="actions"><button type="button" data-source-browse="${esc(s.name)}">Browse</button>${op ? `<button type="button" data-source-test="${esc(s.name)}" ${status?.testing || sourceTestAllRunning ? "disabled" : ""}>Test</button>` : ""}${admin ? `<button type="button" class="danger" data-source-del="${esc(s.name)}">Remove</button>` : ""}</div></td></tr>`;
+  }).join("")}</tbody></table>`;
+}
+function renderPhysicalSources() {
+  const container = $("#source-physical-machines"), sessions = p2vSessions.filter((s) => s.machine?.hostname);
+  const list = sourceViews.physical === "list";
+  container.classList.toggle("mg-source-list", list && !!sessions.length);
+  if (!sessions.length) {
+    container.innerHTML = `<div class="mg-source-empty mg-panel"><span class="mg-eyebrow">PHYSICAL LINK / AWAITING AGENT</span><div class="mg-agent-hologram" aria-hidden="true">${migrateSourceIcon("disk")}</div><h4>No physical machines connected</h4><p>Create an agent and run it on a physical machine. It appears here once its inventory arrives.</p><button type="button" data-source-tab="p2v">PHYSICAL MACHINES →</button></div>`;
+    return;
+  }
+  const rows = sessions.map((s) => {
+    const m = s.machine, disks = m.disks || [], percent = Math.max(0, Math.min(100, Number(s.percent) || 0));
+    const badge = `<span class="badge ${s.state === "ready" ? "done" : s.state === "imported" ? "mg-imported" : s.state === "failed" ? "failed" : "running"}" title="${esc(s.error || "")}">${esc(s.state === "uploading" ? `Copying · ${percent}%` : { ready: "Ready", imported: "Imported", failed: "Failed" }[s.state] || P2V_STATE[s.state] || s.state)}</span>`;
+    const progress = s.state === "uploading" ? `<progress max="100" value="${percent}" aria-label="Disk copy progress"></progress>` : "";
+    const specs = [m.hostname, m.os || "—", (m.firmware || "—").toUpperCase(), `${m.cpus || "—"} CPU · ${gbText(m.memory_mb || 0)}`, `${disks.length} · ${(disks.reduce((sum, d) => sum + (Number(d.size_bytes) || 0), 0) / 2 ** 30).toFixed(1)} GiB`, s.pool || "—"];
+    // The existing API exposes creation time, but no agent heartbeat timestamp.
+    const checked = p2vCheckedAt ? new Date(p2vCheckedAt).toLocaleString() : "—";
+    const actions = canOperate() ? `<button type="button" data-physical-import="${esc(s.id)}" ${s.state === "ready" ? "" : "disabled"}>Import</button><button type="button" class="danger" data-p2v-delete="${esc(s.id)}">${["uploading", "waiting"].includes(s.state) ? "Cancel" : "Remove"}</button>` : "";
+    if (list) return `<tr>${specs.map((value) => `<td>${esc(value)}</td>`).join("")}<td>${badge}${progress}</td><td title="Time this session was fetched; agent report time is unavailable">${esc(checked)}</td><td><div class="actions">${actions}</div></td></tr>`;
+    return `<article class="mg-source-card mg-panel"><header><div class="mg-source-badge">${migrateSourceIcon("disk")}</div><div class="mg-source-name"><h4>${esc(m.hostname)}</h4><span>${esc(m.os || "OS not reported")}</span></div></header><div>${badge}${progress}</div><dl class="mg-source-data">${["FIRMWARE", "CPU / RAM", "DISKS", "DESTINATION STORAGE"].map((label, i) => `<div><dt>${label}</dt><dd title="${esc(specs[i + 2])}">${esc(specs[i + 2])}</dd></div>`).join("")}<div><dt>LAST CHECKED</dt><dd title="Agent report time is unavailable">${esc(checked)}</dd></div></dl>${s.error ? `<div class="mg-source-failure">${esc(s.error)}</div>` : ""}<footer>${actions}</footer></article>`;
+  }).join("");
+  container.innerHTML = list ? `<table class="mg-vm-table" aria-label="Physical agent machines"><thead><tr>${["Machine", "OS", "Firmware", "CPU / RAM", "Disks · total", "Destination storage", "Status", "Last checked", "Actions"].map((label) => `<th scope="col">${label}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>` : rows;
+}
+
 let sourceTestAllRunning = false;
 function renderSources() {
   renderMigrateSummary();
@@ -4660,7 +4709,8 @@ function renderSources() {
   $("#test-all-sources").hidden = !op;
   $("#test-all-sources").disabled = sourceTestAllRunning || !sources.length || sources.some((s) => migrateSourceStatus.get(s.name)?.testing);
   $("#test-all-sources").textContent = sourceTestAllRunning ? "Testing sources…" : "Test all";
-  $("#sources").innerHTML = sources.length ? sources.map((s) => {
+  $("#sources").classList.toggle("mg-source-list", sourceViews.connections === "list");
+  $("#sources").innerHTML = sources.length && sourceViews.connections === "list" ? renderSourceList(sources, admin, op) : sources.length ? sources.map((s) => {
     const st = s.settings || {}, status = migrateSourceStatus.get(s.name);
     const where = [st.host, st.path].filter(Boolean).join(" / ");
     const test = status?.testedAt ? `${new Date(status.testedAt).toLocaleString()} · ${status.testOK ? "Passed" : "Failed"}` : "Not tested";
@@ -4673,7 +4723,33 @@ function renderSources() {
     </article>`;
   }).join("") : `<div class="mg-source-empty mg-panel"><span class="mg-eyebrow">SOURCE LINK / AWAITING CONNECTION</span><h4>Connect your first source</h4><p>Link a hypervisor or export folder to discover workloads for migration.</p>${admin ? '<button type="button" class="primary" data-open="source-dialog">+ ADD SOURCE</button>' : '<p>Ask an administrator to add a source.</p>'}<div class="mg-source-supported">${Object.entries(migrateSourceKinds).map(([type, kind]) => `<span class="kind-${type}" title="${kind.label}">${migrateSourceIcon(type)}<small>${kind.label}</small></span>`).join("")}</div></div>`;
 }
-$("#tab-sources").addEventListener("click", (e) => {
+$("#tab-sources").addEventListener("click", async (e) => {
+  const section = e.target.closest("[data-source-section]");
+  const view = e.target.closest("[data-source-view]");
+  if (section) {
+    sourceSection = section.dataset.sourceSection;
+    try { localStorage.setItem("ibhics.migrate.sources.section", sourceSection); } catch { /* private mode */ }
+    syncSourceSections();
+  }
+  if (view) {
+    sourceViews[view.dataset.sourceView] = view.dataset.view;
+    try { localStorage.setItem(`ibhics.migrate.sources.${view.dataset.sourceView}.view`, view.dataset.view); } catch { /* private mode */ }
+    syncSourceSections(); renderSources(); renderPhysicalSources();
+  }
+  const physicalImport = e.target.closest("[data-physical-import]");
+  if (physicalImport && canOperate() && p2vSessions.some((s) => s.id === physicalImport.dataset.physicalImport && s.state === "ready")) {
+    physicalImport.disabled = true;
+    try {
+      selectTab("migrate-tabs", "import");
+      $("#browse-source").value = "physical";
+      await renderSourceVMs();
+      if (sourceVMsFor !== "physical") return;
+      const index = sourceVMs.findIndex((vm) => vm.ref === physicalImport.dataset.physicalImport);
+      if (index < 0) { toast("This machine is no longer ready. Refresh the physical sessions."); return; }
+      migratePicked.clear(); migratePicked.add(index);
+      renderMigrateInventory();
+    } catch (err) { fail(err); } finally { physicalImport.disabled = false; }
+  }
   const browse = e.target.closest("[data-source-browse]");
   if (browse) {
     selectTab("migrate-tabs", "import");

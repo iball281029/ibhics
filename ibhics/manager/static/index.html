@@ -651,7 +651,16 @@
           </table></div>
         </div>
           </div>
-        <div class="subpage" id="tab-sources"><h3 class="mg-section-title">SOURCE CONNECTIONS</h3>
+        <div class="subpage" id="tab-sources"><h3 class="mg-section-title">SOURCES</h3>
+          <div class="mg-os-tabs" role="tablist" aria-label="Source category">
+            <button type="button" role="tab" id="source-connections-tab" data-source-section="connections" aria-controls="source-connections" aria-selected="true">CONNECTIONS</button>
+            <button type="button" role="tab" id="source-physical-tab" data-source-section="physical" aria-controls="source-physical" aria-selected="false">PHYSICAL (AGENT)</button>
+          </div>
+          <div id="source-connections" role="tabpanel" aria-labelledby="source-connections-tab">
+          <div class="toolbar mg-source-view-tools"><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="VM view">
+              <button type="button" data-source-view="connections" data-view="cards" aria-label="Panel view" aria-pressed="true" title="Panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+              <button type="button" data-source-view="connections" data-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+            </div></div>
           <div class="mg-source-command mg-panel">
             <div id="source-summary" class="mg-source-summary" role="status" aria-live="polite"></div>
             <div class="mg-source-tools"><button type="button" id="test-all-sources">Test all</button><button type="button" class="primary admin-only" data-open="source-dialog">+ ADD SOURCE</button></div>
@@ -660,6 +669,14 @@
           <div class="mg-builtins" aria-label="Built-in sources">
             <div class="mg-panel"><span class="mg-builtin-label">BUILT-IN / UPLOADS</span><p>Import your OVA files and disk images.</p><button type="button" data-source-browse="uploads">Upload files →</button></div>
             <div class="mg-panel"><span class="mg-builtin-label">BUILT-IN / PHYSICAL</span><p>Bring physical machines into your cluster.</p><button type="button" data-source-tab="p2v">Physical machines →</button></div>
+          </div>
+          </div>
+          <div id="source-physical" role="tabpanel" aria-labelledby="source-physical-tab" hidden>
+            <div class="toolbar mg-source-view-tools"><span class="hint">Machines with agent inventory</span><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="VM view">
+              <button type="button" data-source-view="physical" data-view="cards" aria-label="Panel view" aria-pressed="true" title="Panel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+              <button type="button" data-source-view="physical" data-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+            </div></div>
+            <div id="source-physical-machines" aria-live="polite"></div>
           </div>
         </div>
         <div class="subpage" id="tab-imports"><h3 class="mg-section-title">IMPORT JOBS</h3>
