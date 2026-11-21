@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="migrate.css">
 <link rel="stylesheet" href="network.css">
 <link rel="stylesheet" href="virtual-storage.css">
+<link rel="stylesheet" href="cluster.css">
 </head>
 <body class="command-workspace spatial-workspace">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -441,20 +442,20 @@
     </section>
 
     <section class="page" id="page-cluster">
-      <div class="sheet">
-        <div class="page-head"><h1>Cluster management</h1><span class="spacer"></span>
+      <div class="sheet cl-command">
+        <div class="page-head"><div><span class="cl-eyebrow">WORKSPACE / CLUSTER</span><h1>Cluster management</h1><p class="hint" id="cluster-guide"></p></div><span class="spacer"></span>
           <button class="primary admin-only" id="cluster-page-create" data-open="cluster-create-dialog">Create cluster</button>
           <button class="primary admin-only" id="cluster-page-add" data-open="node-dialog" hidden>+ Add node</button>
         </div>
-        <div class="cards"><div class="card"><h3>Cluster</h3><dl class="kv" id="cluster-details"></dl></div>
-          <div class="card"><h3>Health and quorum</h3><dl class="kv" id="cluster-health"></dl></div></div>
-        <div class="card wide" id="cluster-pairing"><h3>Connect this standalone server</h3><div class="body">
-          <p class="hint">To add this server to a cluster, copy its pairing key and use its Node ID and agent address on the cluster's Add node form.</p>
+        <div id="cluster-empty" class="cl-empty" hidden><h2>Build your cluster, one node at a time</h2><ol><li><b>Create cluster</b><span>Start on this server. Existing VMs stay here.</span></li><li><b>Add nodes</b><span>Connect other independently installed servers.</span></li><li><b>Add a witness for 2 nodes</b><span>An independent Arbiter helps keep quorum.</span></li></ol><button class="primary admin-only" data-open="cluster-create-dialog">Create cluster</button></div>
+        <div id="cluster-hero" class="cl-hero"></div>
+        <div id="cluster-overview" class="cl-overview"></div>
+        <div class="cl-pairing" id="cluster-pairing"><h3>Joining an existing cluster?</h3>
+          <p class="hint">Copy this server’s pairing key, then enter its Node ID and agent address in Add node on your cluster manager.</p>
           <p id="cluster-pairing-address"></p><button class="admin-only" id="cluster-copy-key">Copy pairing key</button>
-        </div></div>
-        <div class="toolbar"><h3>Nodes and Arbiter</h3></div>
-        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Role</th><th>Address</th><th>IPMI / BMC</th><th>Status</th><th>Device health</th><th>CPU</th><th>Memory</th><th>VMs</th><th></th></tr></thead><tbody id="cluster-members"></tbody></table></div>
-        <p class="hint section">Create a cluster on the first server, then add other independently installed servers. A two-node cluster needs an independent witness for resilient quorum. Automatic VM failover is not implemented.</p>
+        </div>
+        <div class="toolbar cl-members-head"><h3>Nodes and Arbiter</h3><span class="spacer"></span><div class="cl-views" role="group" aria-label="Node view"><button data-cl-view="cards" aria-pressed="true">Panels</button><button data-cl-view="list" aria-pressed="false">List</button></div></div>
+        <div id="cluster-members" class="cl-members"></div>
       </div>
     </section>
 

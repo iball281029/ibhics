@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], replications: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
+const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, clusterHA: null, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], replications: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -436,8 +436,9 @@ async function loadCluster() {
 }
 const loaders = {
   vms: async () => {
-    const [all, ha] = await Promise.all([api("/vms"), api("/ha").catch(() => ({ vms: [] }))]);
-    state.ha = new Set((ha.vms || []).map((v) => v.uuid));
+    const [all, ha] = await Promise.all([api("/vms"), api("/ha").catch(() => null)]);
+    state.clusterHA = ha;
+    state.ha = new Set((ha?.vms || []).map((v) => v.uuid));
     state.vms = all.filter((v) => !v.template && !v.recycled);
     state.templates = all.filter((v) => v.template && !v.recycled);
   },
@@ -3322,54 +3323,89 @@ function ipmiText(info = {}) {
   return `<span class="muted">${esc(info.note || "Unavailable")}</span>`;
 }
 
+// HA's vms array contains the VMs explicitly protected by the restart service.
+function clusterHAStatus(ha) {
+  if (!ha || typeof ha.available !== "boolean" || !Array.isArray(ha.vms)) return "—";
+  return ha.available ? `On · ${ha.vms.length} protected VMs` : "Unavailable on this manager";
+}
+
+function clusterIcon(m) {
+  if (m.role === "compute" && typeof NetworkCore !== "undefined") return NetworkCore.deviceIcon("node", { stopped: !m.healthy });
+  return `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${m.role === "compute" ? '<rect x="17" y="6" width="30" height="50" rx="3"/><path d="M23 17h18M23 28h18M23 39h18M23 50h18"/>' : '<path d="m32 6 22 10-4 25-18 17-18-17-4-25Z"/><path d="m22 31 7 7 14-15"/>'}</svg>`;
+}
+
+function clusterMetric(label, value, capacity, percent) {
+  const measured = Number.isFinite(percent);
+  const p = measured ? Math.max(0, Math.min(100, percent)) : 0;
+  return `<div class="cl-metric"><span>${label}<b>${esc(value)}</b></span>${measured ? `<meter min="0" max="100" value="${p}" aria-label="${label} used">${Math.round(p)}%</meter>` : ""}<small>${esc(capacity)}</small></div>`;
+}
+
 function nodeRows(c, admin) {
   return c.members.map((m) => {
-    const h = state.hosts[m.name];
-    const vms = state.vms.filter((v) => v.node === m.name).length;
+    const h = state.hosts[m.name], s = m.healthy ? state.summaries[m.name] : null;
+    const compute = m.role === "compute", vms = state.vms.filter((v) => v.node === m.name).length;
     const buttons = [
-      m.role === "compute" ? `<a class="btn small" href="#node/${enc(m.name)}">Summary</a>` : "",
       admin ? `<button class="small" data-node-label="${esc(m.name)}">Rename</button>` : "",
-      admin && m.role === "compute" ? `<button class="small" data-maint="${esc(m.name)}" data-on="${m.maintenance ? "" : "1"}">${m.maintenance ? "Exit maintenance" : "Maintenance"}</button>` : "",
-      admin && m.role === "compute" && vms && computeMembers().length > 1 ? `<button class="small" data-evacuate="${esc(m.name)}">Evacuate</button>` : "",
+      admin && compute ? `<button class="small" data-maint="${esc(m.name)}" data-on="${m.maintenance ? "" : "1"}">${m.maintenance ? "Exit maintenance" : "Maintenance"}</button>` : "",
+      admin && compute && vms && computeMembers().length > 1 ? `<button class="small" data-evacuate="${esc(m.name)}">Evacuate</button>` : "",
       admin && !m.local ? `<button class="small danger" data-node="${esc(m.name)}">Remove</button>` : "",
     ].join("");
-    return `<tr>
-      <td><div class="name-cell">${avatar("i-nodes")}<div>${m.role === "compute" ? `<a class="vm-name vm-link" href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a>` : `<span class="vm-name">${esc(nodeLabel(m.name))}</span>`}<span class="vm-sub">${esc(m.name)}${m.local ? " · runs the manager" : ""}</span></div></div></td>
-      <td>${esc(m.role)}</td>
-      <td class="vm-sub" style="display:table-cell">${esc(m.address || "local")}</td>
-      <td>${m.role === "compute" ? ipmiText(state.summaries[m.name]?.ipmi) : '<span class="muted">Not applicable</span>'}</td>
-      <td><span class="badge ${m.healthy ? "online" : "offline"}">${m.healthy ? "online" : "offline"}</span>${m.maintenance ? ` <span class="badge plain">maintenance</span>` : ""}</td>
-      <td data-hardware-node="${esc(m.name)}">${m.role === "compute" ? '<span class="muted">Checking…</span>' : '<span class="muted">Not applicable</span>'}</td>
-      <td>${h ? `${h.cpus} cores` : "–"}</td>
-      <td>${h ? gbText(h.memory_mb) : "–"}</td>
-      <td>${m.role === "compute" ? vms : "–"}</td>
-      <td><div class="actions">${buttons}</div></td>
-    </tr>`;
+    const cpu = Number.isFinite(s?.cpu_percent) ? s.cpu_percent : null;
+    const memory = Number.isFinite(s?.memory_used_mb) && s.memory_mb > 0 ? 100 * s.memory_used_mb / s.memory_mb : null;
+    return `<article class="cl-node ${m.healthy ? "" : "cl-offline"}">
+      <div class="cl-node-heading"><span class="cl-node-icon">${clusterIcon(m)}</span><div class="cl-node-name"><span class="badge plain">${compute ? "Compute" : "Arbiter"}</span><h3>${compute ? `<a href="#node/${enc(m.name)}">${esc(nodeLabel(m.name))}</a>` : esc(nodeLabel(m.name))}</h3><small>${esc(m.name)}${m.local ? " · Management node" : ""}</small>${m.maintenance ? '<span class="badge plain">In maintenance</span>' : ""}</div><span class="cl-status ${m.healthy ? "up" : "down"}">${m.healthy ? "Online" : "Offline"}</span></div>
+      <div class="cl-resources">${compute ? clusterMetric("CPU", cpu === null ? (h ? `${h.cpus} cores` : "—") : `${Math.round(cpu)}% used`, cpu === null ? "Capacity · live usage unavailable" : `${h?.cpus || s.threads || "—"} cores / threads`, cpu) + clusterMetric("Memory", memory === null ? (h ? gbText(h.memory_mb) : "—") : `${Math.round(memory)}% used`, memory === null ? "Capacity · live usage unavailable" : `${gbText(s.memory_used_mb)} / ${gbText(s.memory_mb)}`, memory) : '<p class="hint">Quorum witness<br>No compute workloads</p>'}</div>
+      <dl class="cl-node-facts"><div><dt>VMs</dt><dd>${compute ? vms : "—"}</dd></div><div><dt>Address</dt><dd>${esc(m.address || "Local server")}</dd></div><div><dt>IPMI / BMC</dt><dd>${compute ? ipmiText(s?.ipmi) : "Not applicable"}</dd></div><div><dt>Device health</dt><dd data-hardware-node="${esc(m.name)}">${compute ? '<span class="muted">Checking…</span>' : "Not applicable"}</dd></div></dl>
+      <div class="cl-node-actions">${compute ? `<a class="btn small primary" href="#node/${enc(m.name)}">Summary</a>` : '<span class="hint">Quorum only</span>'}<span class="spacer"></span>${buttons ? `<details class="more"><summary class="btn small" aria-label="Actions for ${esc(nodeLabel(m.name))}">⋯</summary><div class="dropdown open">${buttons}</div></details>` : ""}</div>
+    </article>`;
   }).join("");
 }
 
 function renderCluster() {
   const c = state.cluster, local = c.members.find((m) => m.local), created = Boolean(c.cluster_id) || c.members.length > 1;
-  const kv = (rows) => rows.map(([key,value]) => `<dt>${esc(key)}</dt><dd>${value}</dd>`).join("");
+  const online = c.members.filter((m) => m.healthy).length, compute = computeMembers().length;
+  const witnesses = c.members.length - compute;
+  const topology = created && c.members.length === 1 ? "Single-node cluster" : TOPOLOGY[c.topology] || c.topology;
   $("#cluster-page-create").hidden = created;
   $("#cluster-page-add").hidden = !created;
-  $("#cluster-details").innerHTML = kv([
-    ["Name", esc(c.name || "Standalone server")],
-    ["Cluster ID", c.cluster_id ? `<span class="mono cluster-id">${esc(c.cluster_id)}</span>` : "Create a cluster to begin"],
-    ["Management node", esc(local ? nodeLabel(local.name) : "Unavailable")],
-    ["Members", String(c.members.length)],
-  ]);
-  $("#cluster-health").innerHTML = kv([
-    ["Online", `${c.members.filter((m) => m.healthy).length} / ${c.members.length}`],
-    ["Quorum", `<span class="badge ${c.quorum ? "online" : "offline"}">${c.quorum ? "OK" : "Lost"}</span>`],
-    ["Topology", created && c.members.length === 1 ? "Single-node cluster" : esc(TOPOLOGY[c.topology] || c.topology)],
-    ["Automatic VM failover", "Not implemented"],
-  ]);
+  $("#cluster-empty").hidden = created;
+  $("#cluster-hero").hidden = !created;
+  $("#cluster-overview").hidden = !created;
+  $("#cluster-guide").textContent = !created ? "Start here, or join an existing cluster below." : compute === 2 && !witnesses ? "2 nodes need an independent witness for resilient quorum. Add a node and choose Witness." : "Create cluster → Add nodes · Check quorum before managing workloads.";
+  const rows = Math.ceil(c.members.length / 3), height = rows * 170 + 25;
+  const links = c.members.map((m, i) => {
+    const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
+    const x = (i % 3 + .5) * 900 / count, y = row * 170 + 65;
+    return `<path class="cl-link ${m.healthy ? "up" : "down"}" d="M450 12 V${row * 170 + 25} H${x} V${y}"/>`;
+  }).join("");
+  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Quorum OK" : "! Quorum lost"}</h2><p>${online}/${c.members.length} online</p><small>${c.quorum ? "Enough votes to keep the cluster working." : "Not enough votes. Check offline members."}</small><span class="cl-legend">Cyan · online link / Red · offline link</span></div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
+    const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
+    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon(m)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.role === "compute" ? "Compute" : "Arbiter"} · ${m.healthy ? "Online" : "Offline"}</small></div>`;
+  }).join("")}</div>`;
+  const summary = (label, value, note) => `<div><small>${label}</small><b>${value}</b><span>${note}</span></div>`;
+  $("#cluster-overview").innerHTML = [
+    summary("Cluster", esc(c.name || "Cluster"), c.cluster_id ? `<button class="cl-copy" id="cluster-copy-id" title="Copy full cluster ID" aria-label="Copy full cluster ID">${esc(c.cluster_id.slice(0, 8))}… ⧉</button>` : "ID unavailable"),
+    summary("Management node", esc(local ? nodeLabel(local.name) : "Unavailable"), "Runs this manager"),
+    summary("Quorum & topology", c.quorum ? "✓ Quorum OK" : "! Quorum lost", esc(topology)),
+    summary("HA restart", esc(clusterHAStatus(state.clusterHA)), "Restarts protected VMs after node failure"),
+    summary("Members", `${c.members.length}`, `${compute} compute · ${witnesses} witness${witnesses === 1 ? "" : "es"}`),
+  ].join("");
   $("#cluster-pairing").hidden = created;
   $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
-  $("#cluster-members").innerHTML = nodeRows(c, isAdmin());
+  $("#cluster-members").innerHTML = nodeRows(c, isAdmin()) + (created && isAdmin() ? '<button class="cl-add" data-open="node-dialog"><span>+</span><b>Add a node</b><small>Connect a compute server or witness</small></button>' : "");
   for (const m of c.members.filter((m) => m.role === "compute")) void loadHardwareBadge(m.name);
 }
+
+$("#page-cluster").addEventListener("click", async (e) => {
+  const view = e.target.closest("[data-cl-view]");
+  if (view) {
+    $("#cluster-members").classList.toggle("cl-list", view.dataset.clView === "list");
+    $$("[data-cl-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === view)));
+  }
+  if (e.target.closest("#cluster-copy-id")) {
+    try { await navigator.clipboard.writeText(state.cluster.cluster_id); toast("Cluster ID copied"); } catch (err) { fail(err); }
+  }
+});
 
 $("#cluster-copy-key").addEventListener("click", async () => {
   try {
