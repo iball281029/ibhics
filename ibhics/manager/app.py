@@ -36,6 +36,7 @@ from ..cluster import Cluster, NodeUnavailable, Topology
 from ..hypervisor import (
     HypervisorDriver,
     InvalidState,
+    NetworkInfo,
     NetworkSpec,
     VMExists,
     VMInfo,
@@ -334,6 +335,11 @@ def create_app(
                     await asyncio.to_thread(replications.tick)
                     await asyncio.to_thread(recycle.purge_expired)
                     await asyncio.to_thread(activity.purge)
+                    try:
+                        # A node that missed a new VLAN gets it once it is back.
+                        await asyncio.to_thread(sync_all_networks)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Network sync failed")
                     try:
                         # VM and group firewall rules follow moves and new addresses.
                         await asyncio.to_thread(edge.refresh)
@@ -911,6 +917,7 @@ def create_app(
     @api.post("/networks", response_model=NetworkOut, status_code=status.HTTP_201_CREATED)
     def create_network(body: NetworkIn) -> NetworkOut:
         cluster.require_quorum()
+        _remember_deleted(body.name, False)
         done = []
         try:
             for member in cluster.compute_members():
@@ -1009,9 +1016,60 @@ def create_app(
             have.append(member.name)
         return NetworkOut(name=spec.name, bridge=spec.bridge, vlan=spec.vlan, nodes=have)
 
+    deleted_path = edge_state.with_name("networks-deleted.json") if edge_state else None
+    deleted_networks: set[str] = set()
+    if deleted_path and deleted_path.is_file():
+        try:
+            deleted_networks.update(json.loads(deleted_path.read_text()))
+        except (ValueError, OSError):
+            pass
+
+    def _remember_deleted(name: str, deleted: bool) -> None:
+        (deleted_networks.add if deleted else deleted_networks.discard)(name)
+        if deleted_path:
+            deleted_path.parent.mkdir(parents=True, exist_ok=True)
+            deleted_path.write_text(json.dumps(sorted(deleted_networks)))
+
+    def sync_all_networks() -> list[str]:
+        """Give every compute node every VLAN network another node has (a node that was
+        away when a VLAN was made gets it when it is back). Returns 'name@node' added."""
+        if not cluster.has_quorum():
+            return []
+        seen: dict[str, NetworkInfo] = {}
+        have: dict[str, set[str]] = {}
+        members = []
+        for member in cluster.compute_members():
+            try:
+                nets = member.driver.list_networks()
+            except Exception:
+                continue  # unreachable now: next round
+            members.append((member, nets))
+            for n in nets:
+                if n.vlan is not None:
+                    seen.setdefault(n.name, n)
+                    have.setdefault(n.name, set()).add(member.name)
+        added = []
+        for member, nets in members:
+            names = {n.name for n in nets}
+            vlans = {n.vlan for n in nets}
+            for name, net in seen.items():
+                if name in names or name in deleted_networks or net.vlan in vlans:
+                    continue  # present, deleted on purpose, or its tag is taken here
+                try:
+                    member.driver.create_network(NetworkSpec(name=name, vlan=net.vlan))
+                    added.append(f"{name}@{member.name}")
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "could not add network %s to %s", name, member.name
+                    )
+        return added
+
+    app.state.sync_networks = sync_all_networks
+
     @api.delete("/networks/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_network(name: str) -> None:
         cluster.require_quorum()
+        _remember_deleted(name, True)
         for member in cluster.compute_members():
             if any(n.name == name for n in member.driver.list_networks()):
                 member.driver.delete_network(name)

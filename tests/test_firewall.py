@@ -137,3 +137,23 @@ def test_nic_move_to_switch_missing_on_node(tmp_path):
     resp = client.patch(f"/api/v1/vms/{info.uuid}", json={"nics": [{"network": "lab"}]})
     assert resp.status_code == 409, resp.text
     assert "not on node2" in resp.json()["detail"]
+
+
+def test_vlans_reach_every_node_by_themselves(tmp_path):
+    from test_migration import Env
+
+    env = Env(tmp_path)
+    env.node1.create_network(NetworkSpec("lab", 30))  # made while node2 was away
+    client = TestClient(create_app(env.cluster, edge_state=tmp_path / "edge.json"))
+    sync = client.app.state.sync_networks
+    assert sync() == ["lab@node2"]
+    assert "lab" in {n.name for n in env.node2.list_networks()}
+    assert sync() == []
+    # Deleted on purpose: a node that still has it does not bring it back.
+    assert client.delete("/api/v1/networks/lab").status_code == 204
+    env.node1.create_network(NetworkSpec("lab", 30))
+    assert sync() == []
+    assert "lab" not in {n.name for n in env.node2.list_networks()}
+    # Made again through the API: it is wanted everywhere once more.
+    client.delete("/api/v1/networks/lab")
+    assert client.post("/api/v1/networks", json={"name": "lab", "vlan": 30}).status_code == 201
