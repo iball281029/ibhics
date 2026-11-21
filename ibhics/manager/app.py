@@ -1379,7 +1379,14 @@ def create_app(
         if edit.nics:
             # A NIC on a switch this node lacks fails deep in libvirt; say so plainly.
             here = {n.name for n in member.driver.list_networks()}
-            missing = sorted({n.network for n in edit.nics} - here)
+            elsewhere = {
+                n.name
+                for m in cluster.compute_members()
+                if m.name != member.name
+                for n in m.driver.list_networks()
+            }
+            # Only switches another node has: this node is the one missing them.
+            missing = sorted(({n.network for n in edit.nics} - here) & elsewhere)
             if missing:
                 raise InvalidState(
                     f"network {', '.join(missing)} is not on {member.name}: "
