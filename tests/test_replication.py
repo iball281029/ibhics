@@ -258,7 +258,8 @@ def test_busy_rejected_and_failed_sync_does_not_expose_secrets(env):
     manager.executor = executor
     assert client.post(url + "/sync").status_code == 202
     assert client.post(url + "/sync").status_code == 409
-    assert client.patch(url, json={"paused": True}).status_code == 409
+    # Pause during a running sync asks it to stop at the next chunk.
+    assert client.patch(url, json={"paused": True}).json()["stop_requested"] is True
     assert client.delete(url + "?confirm=true").status_code == 409
     executor.work.pop()()
     assert manager.job(job["id"]).state == "failed"

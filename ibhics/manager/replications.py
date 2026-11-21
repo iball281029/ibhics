@@ -23,6 +23,11 @@ from ..replication.providers import capability
 from ..replication.runtime import ClusterRuntime
 from ..replication.store import durable_json
 
+
+class SyncStopped(Exception):
+    """The operator paused a running sync."""
+
+
 BUSY = {"seeding", "syncing", "cutover-pending", "cutting-over"}
 SYNCABLE = {"new", "idle", "failed"}
 
@@ -65,6 +70,7 @@ class ReplicationJob:
     done_bytes: int = 0  # read/compared so far in the running sync
     total_bytes: int = 0
     run_started: str | None = None
+    stop_requested: bool = False
     bytes_transferred: int = 0
     changed_pct: float = 0
     error: str | None = None
@@ -226,6 +232,11 @@ class ReplicationManager:
         self.cluster.require_quorum()
         with self._lock:
             job = self.job(job_id)
+            if paused and job.operation == "sync":
+                # Stop a running sync at the next chunk; its snapshot is cleaned up.
+                job.stop_requested = True
+                self._save()
+                return job
             if job.state in BUSY or job.operation:
                 raise InvalidState("Replication has an active operation")
             if job.state == "done":
@@ -274,6 +285,9 @@ class ReplicationManager:
         def run():
             try:
                 work(job)
+            except SyncStopped:
+                with self._lock:
+                    job.state, job.error = "paused", None
             except Exception as exc:
                 # The exception type and our own message only; never provider/SSH output.
                 logging.getLogger(__name__).error(
@@ -290,6 +304,7 @@ class ReplicationManager:
             finally:
                 with self._lock:
                     job.operation = None
+                    job.stop_requested = False
                     job.history.append(
                         {
                             "at": self.clock().isoformat(),
@@ -331,6 +346,8 @@ class ReplicationManager:
 
         def progress(done, total):
             with self._lock:
+                if job.stop_requested:
+                    raise SyncStopped
                 job.percent = round(done * 100 / total, 1) if total else 0
                 job.done_bytes, job.total_bytes = done, total
 
