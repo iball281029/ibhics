@@ -227,6 +227,7 @@ const PAGES = ["home", "fabric", "compute", "storage", "network", "cluster", "ba
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash === "nodes") return "cluster"; // Preserve old node inventory bookmarks.
+  if (hash.startsWith("storage/")) return "storage";
   if (hash.startsWith("vm/")) return "vm";
   if (hash.startsWith("node/")) return "node";
   return PAGES.includes(hash) ? hash : "home";
@@ -2759,12 +2760,12 @@ function renderPools() {
   $("#pools").innerHTML = pools.length ? pools.map((p) => {
     const used = pct(p.allocation_gb, p.capacity_gb);
     return `<tr>
-      <td><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.display_name || p.name)}${p.display_name ? `<span class="vm-sub">Pool ID: ${esc(p.name)}</span>` : ""}</span></div></td>
-      <td>${p.shared ? `<b>Shared · ${esc(state.cluster?.name || "Cluster")}</b><span class="vm-sub">${p.members.map((m) => esc(nodeLabel(m.node))).join(", ")}</span>` : esc(nodeLabel(p.node))}</td>
-      <td><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
-      <td class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
-      <td><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
-      <td><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button>${p.shared ? "" : `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>`}` : ""}</div></td>
+      <td data-label="Pool"><div class="name-cell pool-link" data-pool-view="${esc(p.name)}" data-node="${esc(p.node)}">${avatar("i-storage")}<span class="vm-name">${esc(p.display_name || p.name)}${p.display_name ? `<span class="vm-sub">Pool ID: ${esc(p.name)}</span>` : ""}</span></div></td>
+      <td data-label="Scope / nodes">${p.shared ? `<b>Shared · ${esc(state.cluster?.name || "Cluster")}</b><span class="vm-sub">${p.members.map((m) => esc(nodeLabel(m.node))).join(", ")}</span>` : esc(nodeLabel(p.node))}</td>
+      <td data-label="Type"><span class="badge info plain">${esc(poolTypeText(p))}</span></td>
+      <td data-label="Source" class="vm-sub" style="display:table-cell">${esc(p.source)}</td>
+      <td data-label="Usage"><div class="bar-row"><span>${p.allocation_gb} / ${p.capacity_gb} GB</span><span>${used}%</span>${bar(used)}</div></td>
+      <td data-label="Actions"><div class="actions">${admin ? `<button class="small" data-pool-rename="${esc(p.name)}" data-node="${esc(p.node)}">Rename</button>${p.shared ? "" : `<button class="small danger" data-pool="${esc(p.name)}" data-node="${esc(p.node)}">Remove</button>`}` : ""}</div></td>
     </tr>`;
   }).join("") : empty(6, "No local or external storage pools");
 }
@@ -2965,11 +2966,11 @@ function renderIsos() {
     const own = !i.pool && i.name !== "ibHiCS guest tools";
     const where = i.pool ? `${i.pool}${i.folder ? ` / ${i.folder}` : ""}` : own ? "System disk" : "Built in";
     return `<tr>
-      <td><div class="name-cell">${avatar("i-cd")}<span class="vm-name">${esc(i.name)}</span></div></td>
-      <td>${esc(where)}</td>
-      <td>${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}</td>
-      <td>${esc(users(i.path).join(", ") || "–")}</td>
-      <td><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
+      <td data-label="ISO"><div class="name-cell">${avatar("i-cd")}<span class="vm-name">${esc(i.name)}</span></div></td>
+      <td data-label="Stored on">${esc(where)}</td>
+      <td data-label="Size">${gbText(Math.max(1, Math.round(i.size_bytes / 1048576)))}</td>
+      <td data-label="In CD/DVD drive">${esc(users(i.path).join(", ") || "–")}</td>
+      <td data-label="Actions"><div class="actions">${own && canOperate() ? `<button class="small danger" data-iso-del="${esc(i.name)}">Delete</button>` : ""}</div></td>
     </tr>`;
   }).join("") : empty(5, "No ISOs in this storage yet: upload one to install a new VM from it");
 }
