@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="fabric.css">
 <link rel="stylesheet" href="vmspace.css">
 <link rel="stylesheet" href="migrate.css">
+<link rel="stylesheet" href="network.css">
 <link rel="stylesheet" href="virtual-storage.css">
 </head>
 <body class="command-workspace spatial-workspace">
@@ -362,18 +363,24 @@
     <section class="page" id="page-network">
       <div class="sheet">
         <div class="page-head">
-          <h1>Network</h1><span class="sub">The LAN (VLAN 1, native on br0) and tagged VLANs on it, on every compute node</span>
+          <h1>Network fabric</h1><span class="sub">Trunk uplink · External L3 routing · Distributed firewall</span>
           <span class="spacer"></span>
           <button id="topo-refresh">Refresh</button>
-          <button class="primary admin-only" data-open="net-dialog">+ Add virtual switch (VLAN)</button>
+
         </div>
         <div class="tabs" id="net-tabs">
-          <button data-tab="net-topology" class="active">Topology</button>
-          <button data-tab="net-list">Virtual switches</button>
-          <button data-tab="net-router">Router</button>
-          <button data-tab="net-fw">Firewall</button>
+          <button data-tab="net-topology" class="active">TOPOLOGY 3D</button>
+          <button data-tab="net-fw">FIREWALL</button>
+          <button data-tab="net-list">VIRTUAL SWITCHES</button>
+          <button data-tab="net-router">ADVANCED</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
+          <div class="toolbar nw-view-tools">
+            <button id="nw-view-3d" aria-pressed="true">3D layers</button><button id="nw-view-top">2D top view</button><button id="nw-view-edit">2D NIC editor</button><button id="nw-reset">Reset view</button>
+            <label><input type="checkbox" id="nw-labels" checked> Labels</label><label><input type="checkbox" id="nw-traffic" checked> Traffic</label><label><input type="checkbox" id="nw-lines" checked> Rules</label><label><input type="checkbox" id="nw-stopped" checked> Stopped VMs</label>
+          </div>
+          <div id="nw-three-wrap" class="nw-scene-layout"><div id="nw-three"><div class="nw-scene-hint">Drag to orbit · Scroll to zoom · Right drag to pan · Drag a VM to arrange</div></div><aside id="nw-vm-panel" class="nw-panel"><h3>Layered fabric</h3><p>Select a VM to inspect its connections and policy.</p><div id="nw-layer-colors"></div></aside></div>
+          <div id="nw-legacy" hidden>
           <div class="topo-toolbar">
             <button id="topo-edit" class="operator-only">Edit</button>
             <div id="topo-edit-tools" hidden>
@@ -406,25 +413,29 @@
             </aside>
           </div>
         </div>
+        </div>
         <div class="subpage" id="tab-net-list">
+          <div class="toolbar"><h3>Virtual switches</h3><span class="spacer"></span><button id="nw-switch-view">List view</button><button class="primary admin-only" data-open="net-dialog">+ Add virtual switch (VLAN)</button></div>
+          <div id="nw-switch-cards" class="nw-switch-cards"></div>
         <div class="table-wrap" style="margin-top:14px"><table>
           <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
           <tbody id="networks"></tbody>
         </table></div>
         </div>
         <div class="subpage" id="tab-net-router">
-          <div class="toolbar"><span class="hint">A gateway for a VLAN: VMs on routed VLANs reach each other through it, and the LAN through NAT. It runs on <b id="edge-router-node">–</b>.</span><span class="spacer"></span><button class="primary operator-only" id="router-add">+ Add router</button></div>
+          <div class="toolbar"><span class="hint">Optional isolated network gateway. Normal VLAN routing uses your external L3 switch over a trunk uplink. Gateway runs on <b id="edge-router-node">–</b>.</span><span class="spacer"></span><button class="primary operator-only" id="router-add">+ Isolated network gateway</button></div>
           <div class="table-wrap"><table>
             <thead><tr><th>Network</th><th>Gateway</th><th>NAT to the LAN</th><th>DHCP</th><th></th></tr></thead>
             <tbody id="routers"></tbody>
           </table></div>
         </div>
         <div class="subpage" id="tab-net-fw">
-          <div class="toolbar"><span class="hint">Checked top to bottom on every compute node; the first rule that matches decides. Traffic no rule matches is allowed.</span><span class="spacer"></span><button class="primary operator-only" id="fw-add">+ Add rule</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>#</th><th>Rule</th><th>Action</th><th>From</th><th>To</th><th>Protocol</th><th></th></tr></thead>
-            <tbody id="fw-rules"></tbody>
-          </table></div>
+          <div class="toolbar"><div><h3>Policy studio</h3><span class="hint">First match wins · Unmatched traffic is allowed</span></div><span class="spacer"></span><span id="nw-draft-count" role="status"></span><button id="nw-discard" class="operator-only">Discard draft</button><button id="nw-apply" class="primary operator-only">Apply changes</button></div>
+          <div id="nw-safe" class="nw-safe" hidden role="status"><span id="nw-safe-text"></span><button id="nw-keep" class="operator-only">Keep changes</button><button id="nw-revert" class="operator-only">Revert now</button></div>
+          <div class="nw-panel"><div class="toolbar"><h3>Connect a policy</h3><span class="hint">Drag between endpoints or select two endpoints to create a rule</span></div><div id="nw-policy" class="nw-policy"><svg aria-hidden="true"></svg><div id="nw-policy-nodes"></div></div></div>
+          <div class="toolbar"><button id="fw-add" class="primary operator-only">+ Add rule</button><button id="nw-rule-view">List view</button><label>Template <select id="nw-template"><option value="isolate">Isolate VM</option><option value="web">Web server</option><option value="database">Database</option><option value="lock">Lock VLAN</option></select></label><button id="nw-template-add" class="operator-only">Stage template</button></div>
+          <div id="fw-rules" class="nw-rules"></div>
+          <div class="nw-panel nw-test"><h3>Test connection</h3><form id="nw-test-form"><label>From VM or IPv4 <input name="src" list="nw-test-ends" required></label><label>To VM or IPv4 <input name="dst" list="nw-test-ends" required></label><label>Service <select name="service" id="nw-test-service"></select></label><label>Protocol <select name="proto"><option>tcp</option><option>udp</option><option>icmp</option></select></label><label>Port <input name="port" type="number" min="1" max="65535" value="443"></label><button class="primary">Test connection</button></form><datalist id="nw-test-ends"></datalist><div id="nw-test-result" role="status" aria-live="polite">Explore a connection before applying your policy.</div></div>
         </div>
       </div>
     </section>
@@ -1038,7 +1049,7 @@
 
 <dialog id="router-dialog">
   <form method="dialog" id="router-form">
-    <header><h3>Router for a VLAN</h3><button value="cancel" formnovalidate>×</button></header>
+    <header><h3>Isolated network gateway</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
       <label>Network <select name="network" id="router-net" required></select></label>
       <label>Gateway address <input name="gateway" required placeholder="192.168.50.1/24" autocomplete="off"></label>
@@ -1057,15 +1068,18 @@
     <header><h3>Firewall rule</h3><button value="cancel" formnovalidate>×</button></header>
     <div class="body form-grid">
       <label>Name <input name="name" required maxlength="63" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" placeholder="web-to-db"></label>
-      <label>Action <select name="action"><option value="deny">Deny</option><option value="allow">Allow</option></select></label>
+      <label>Action <select name="action"><option value="deny">Block</option><option value="allow">Allow</option></select></label>
       <label>From <input name="src" list="fw-ends" value="any" required></label>
       <label>To <input name="dst" list="fw-ends" value="any" required></label>
       <label>Protocol <select name="proto"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP (ping)</option></select></label>
-      <label>Port (TCP/UDP) <input name="port" type="number" min="1" max="65535"></label>
+      <label>Service preset <select id="nw-rule-service"></select></label>
+      <label>Ports (TCP/UDP) <input name="ports" placeholder="80,443,8000-8100" pattern="[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*"></label>
+      <label class="wide">Description <input name="description" maxlength="200"></label>
+      <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>
       <datalist id="fw-ends"></datalist>
-      <p class="hint wide" style="padding:0">From and To: a network name, a range such as 10.0.10.0/24 or 10.0.10.25/32, or any.</p>
+      <p class="hint wide" style="padding:0">From and To: VLAN name, vm:name, group:id, IPv4 CIDR, or any. Changes are staged until Apply.</p>
     </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save rule</button></footer>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Stage rule</button></footer>
   </form>
 </dialog>
 
@@ -1076,7 +1090,7 @@
       <label>Name <input name="name" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,62}" placeholder="service-network"></label>
       <label>VLAN ID <input name="vlan" type="number" min="1" max="4094" required placeholder="101"></label>
     </div>
-    <p class="hint" style="padding:0 22px 18px">VMs on this network get the frames tagged with this VLAN on the node's LAN port, untagged. The switch port must carry the VLAN tagged (trunk).</p>
+    <p class="hint" style="padding:0 22px 18px">Frames for this VLAN are tagged on the node's trunk uplink. The switch port must carry the VLAN tagged (trunk).</p>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Add</button></footer>
   </form>
 </dialog>
@@ -1797,6 +1811,7 @@
 <div id="toast"></div>
 <script src="history-time.js"></script>
 <script src="storage-view.js"></script>
+<script src="network-core.js"></script>
 <script src="app.js"></script>
 <script src="virtual-storage.js"></script>
 <script src="storage-navigation.js"></script>
@@ -1804,6 +1819,7 @@
 <script src="fabric.js"></script>
 <script type="importmap">{"imports":{"three":"./vendor/three/three.module.min.js","three/addons/":"./vendor/three/addons/"}}</script>
 <script type="module" src="fabric3d.js"></script>
+<script type="module" src="network3d.js"></script>
 <script defer src="storage-scene.js"></script>
 </body>
 </html>

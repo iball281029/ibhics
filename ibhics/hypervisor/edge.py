@@ -25,6 +25,25 @@ SYSCTL_FILE = "/etc/sysctl.d/90-ibhics-router.conf"
 ACTIONS = ("allow", "deny")
 PROTOCOLS = ("any", "tcp", "udp", "icmp")
 TARGET_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
+PORTS_RE = re.compile(r"^\d{1,5}(-\d{1,5})?(,\d{1,5}(-\d{1,5})?)*$")
+MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
+# A rule end may name a VM or a VM group. The manager resolves it to the VM's MACs and
+# guest addresses ("mac:..", "ip:..") before pushing, so nodes never look VMs up.
+OBJECT_PREFIXES = ("vm:", "group:")
+
+
+def parse_ports(ports: str) -> list[tuple[int, int]]:
+    """'80,443,8000-8100' -> [(80, 80), (443, 443), (8000, 8100)]."""
+    if not PORTS_RE.match(ports):
+        raise ValueError("ports are numbers or ranges, e.g. 80,443,8000-8100")
+    out = []
+    for part in ports.split(","):
+        low, _, high = part.partition("-")
+        a, b = int(low), int(high or low)
+        if not 0 < a <= b < 65536:
+            raise ValueError("ports must be 1 to 65535, ranges low-high")
+        out.append((a, b))
+    return out
 
 
 @dataclass
@@ -86,13 +105,36 @@ class FirewallRule:
     proto: str = "any"
     port: int | None = None  # tcp/udp destination port
     enabled: bool = True
+    ports: str = ""  # several ports or ranges: "80,443,8000-8100"
+    description: str = ""
+    src_match: list[str] = field(default_factory=list)  # resolved "vm:"/"group:" ends
+    dst_match: list[str] = field(default_factory=list)
+
+    def dports(self) -> list[tuple[int, int]]:
+        ranges = parse_ports(self.ports) if self.ports else []
+        if self.port:
+            ranges.insert(0, (self.port, self.port))
+        return ranges
 
     def validate(self, networks: set[str]) -> None:
         if not NAME_RE.match(self.name):
             raise ValueError("rule name must use only letters, digits, '_', '.', '-'")
         if self.action not in ACTIONS or self.proto not in PROTOCOLS:
             raise ValueError("action is allow or deny; protocol any, tcp, udp or icmp")
-        for end in (self.src, self.dst):
+        for end, matches in ((self.src, self.src_match), (self.dst, self.dst_match)):
+            if end.startswith(OBJECT_PREFIXES):
+                name = end.split(":", 1)[1]
+                if not 0 < len(name) <= 80 or any(c in name for c in '"\\\n'):
+                    raise ValueError(f"{end!r} is not a VM or group name")
+                for m in matches:
+                    kind, _, value = m.partition(":")
+                    if kind == "mac" and MAC_RE.match(value):
+                        continue
+                    if kind == "ip":
+                        ipaddress.IPv4Address(value)
+                        continue
+                    raise ValueError(f"bad resolved address {m!r}")
+                continue
             if end != "any" and end not in networks:
                 try:
                     ipaddress.IPv4Network(end, strict=False)
@@ -101,6 +143,12 @@ class FirewallRule:
         bad_port = self.proto not in ("tcp", "udp") or not 0 < (self.port or 0) < 65536
         if self.port is not None and bad_port:
             raise ValueError("a port needs protocol tcp or udp and must be 1 to 65535")
+        if self.ports:
+            if self.proto not in ("tcp", "udp"):
+                raise ValueError("ports need protocol tcp or udp")
+            parse_ports(self.ports)
+        if len(self.description) > 200:
+            raise ValueError("description is at most 200 characters")
 
 
 @dataclass
@@ -146,6 +194,24 @@ class EdgeConfig:
 # Rendering
 
 
+def _alternatives(
+    end: str, matches: list[str], bridges: dict[str, str], family: str, side: str
+) -> list[str]:
+    """Every nft match for one end; a rule renders once per combination. A VM or group
+    matches by MAC inside a bridge and by guest IPv4 address anywhere."""
+    if not end.startswith(OBJECT_PREFIXES):
+        one = _match(end, bridges, family, side)
+        return [] if one is None else [one]
+    macs = sorted(m[4:] for m in matches if m.startswith("mac:"))
+    ips = sorted(m[3:] for m in matches if m.startswith("ip:"))
+    out = []
+    if macs and family == "bridge":
+        out.append(f"ether {'saddr' if side == 'src' else 'daddr'} {{ {', '.join(macs)} }}")
+    if ips:
+        out.append(f"ip {'saddr' if side == 'src' else 'daddr'} {{ {', '.join(ips)} }}")
+    return out
+
+
 def _match(end: str, bridges: dict[str, str], family: str, side: str) -> str | None:
     """The nft match for one end of a rule, or None when it cannot match in `family`."""
     if end == "any":
@@ -159,20 +225,33 @@ def _match(end: str, bridges: dict[str, str], family: str, side: str) -> str | N
     return f"ip {'saddr' if side == 'src' else 'daddr'} {cidr}"
 
 
-def _rule_line(rule: FirewallRule, bridges: dict[str, str], family: str) -> str | None:
+def _rule_lines(rule: FirewallRule, bridges: dict[str, str], family: str) -> list[str]:
     if not rule.enabled:
-        return None
-    parts = [_match(rule.src, bridges, family, "src"), _match(rule.dst, bridges, family, "dst")]
-    if None in parts:
-        return None
+        return []
     if family == "bridge" and rule.src in bridges and rule.dst in bridges and rule.src != rule.dst:
-        return None  # two VLANs never share a bridge: that traffic is routed
+        return []  # two VLANs never share a bridge: that traffic is routed
+    tail = []
     if rule.proto != "any":
-        parts.append(f"meta l4proto {rule.proto}")
-        if rule.port:
-            parts.append(f"th dport {rule.port}")
+        tail.append(f"meta l4proto {rule.proto}")
+        ports = [f"{a}-{b}" if a != b else str(a) for a, b in rule.dports()]
+        if len(ports) == 1:
+            tail.append(f"th dport {ports[0]}")
+        elif ports:
+            tail.append(f"th dport {{ {', '.join(ports)} }}")
     verdict = "accept" if rule.action == "allow" else "drop"
-    return " ".join(p for p in parts if p) + f' counter {verdict} comment "{rule.name}"'
+    lines = []
+    for src in _alternatives(rule.src, rule.src_match, bridges, family, "src"):
+        for dst in _alternatives(rule.dst, rule.dst_match, bridges, family, "dst"):
+            parts = [src, dst, *tail]
+            lines.append(
+                " ".join(p for p in parts if p) + f' counter {verdict} comment "{rule.name}"'
+            )
+    return lines
+
+
+def _rule_line(rule: FirewallRule, bridges: dict[str, str], family: str) -> str | None:
+    lines = _rule_lines(rule, bridges, family)
+    return "\n    ".join(lines) if lines else None
 
 
 def render_nft(config: EdgeConfig, bridges: dict[str, str], lan: str, router: bool) -> str:
