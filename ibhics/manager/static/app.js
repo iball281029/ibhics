@@ -72,7 +72,7 @@ const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + wi
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
-const JOB_STATE = { skipped: "Skipped", queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
+const JOB_STATE = { accepted: "Accepted", skipped: "Skipped", queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
 // Jobs that can be stopped from the Tasks page, and the API call that stops them.
 const CANCEL_PATH = { Import: (id) => `/migrate/jobs/${enc(id)}/cancel`, "Live migration": (id) => `/migrations/${enc(id)}/cancel`, Move: (id) => `/migrations/${enc(id)}/cancel` };
 const isAdmin = () => !state.me || state.me.role === "admin";
@@ -525,15 +525,24 @@ function allTasks() {
       state: d.state, step: "Copying the disks", percent: null, created: d.created, finished: d.finished,
       error: d.error, id: d.id, result: d.result ? `VM ${d.result}${d.power_on ? ", powered on" : ""}` : "",
     })),
+    // Replication runs: the live one with its progress, then each finished run with its real result.
+    ...(state.replications || []).flatMap((j) => [
+      ...(j.operation ? [{ kind: "Replication", title: j.name, sub: `${j.source} → ${j.node}`, state: "running",
+        step: replicationLive(j), percent: Number(j.percent) || 0, created: j.run_started || j.last_attempt, finished: null, error: "", id: `rep-${j.id}-live` }] : []),
+      ...(j.history || []).map((h, i) => ({ kind: "Replication", title: j.name, sub: `${h.operation || "sync"} · ${j.source} → ${j.node}`,
+        state: h.state === "failed" ? "failed" : "done", step: "", percent: null, created: h.at, finished: h.at, error: h.state === "failed" ? h.error || "Failed" : "",
+        id: `rep-${j.id}-${i}`, result: h.state === "failed" ? "" : `${h.operation || "sync"} finished · ${Number(h.bytes_transferred || 0).toLocaleString()} bytes transferred` })),
+    ]),
     ...(state.activity || []).map((a) => {
       const vm = [...(state.vms || []), ...(state.templates || [])].find((v) => v.uuid === a.object.split(" / ")[0]);
       const named = (a.note || "").startsWith("name: ") ? a.note.slice(6) : "";
       const object = vm ? a.object.replace(vm.uuid, vm.name) : a.object || named;
       return {
         kind: a.category, title: object || a.action, sub: [object ? a.action : "", a.user && a.user !== "-" ? `by ${a.user}` : ""].filter(Boolean).join(" · "),
-        state: a.ok ? "done" : "failed", step: "", percent: null, created: a.at, finished: a.at, duration_ms: a.duration_ms,
+        // 202 means the request was accepted and the work runs in the background (its own task row).
+        state: a.status === 202 ? "accepted" : a.ok ? "done" : "failed", step: "", percent: null, created: a.at, finished: a.at, duration_ms: a.duration_ms,
         error: a.ok ? "" : `HTTP ${a.status}${a.note ? ` · ${a.note}` : ""}`, id: `ev${a.id}`,
-        result: a.ok ? `${a.method} ${a.path}${a.address ? ` from ${a.address}` : ""}` : "",
+        result: a.status === 202 ? "Request accepted; the result appears in its own task when the work ends" : a.ok ? `${a.method} ${a.path}${a.address ? ` from ${a.address}` : ""}` : "",
       };
     }),
   ];
@@ -865,7 +874,7 @@ async function refresh(page, auto = false) {
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
   if (page === "containers") { await load("containers", "ctTemplates", "pools", "networks"); renderContainers(); }
-  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "settingsTasks", "activity", "vms"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
+  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "settingsTasks", "activity", "vms", "replications"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();
@@ -5379,6 +5388,18 @@ handlers["source-dialog"] = async (f) => {
 
 // Map the union of source networks, then rebuild each VM's NIC array in NIC order.
 // Replication controls live outside the import-wizard diagnostic test slice.
+// What a running sync is doing, in plain words: amount, speed and time left.
+function replicationLive(j) {
+  if (!j.operation) return j.state === "failed" ? "Failed" : "";
+  const verb = j.state === "seeding" ? "Seeding" : j.operation === "sync" ? "Syncing" : j.operation[0].toUpperCase() + j.operation.slice(1);
+  if (!j.total_bytes) return `${verb} · preparing the source snapshot…`;
+  const gb = (b) => (b / 2 ** 30).toFixed(1);
+  const secs = j.run_started ? (Date.now() - Date.parse(j.run_started)) / 1000 : 0;
+  const rate = secs > 5 ? j.done_bytes / secs : 0;
+  const left = rate ? (j.total_bytes - j.done_bytes) / rate : 0;
+  const eta = !left ? "" : left > 3600 ? ` · ~${(left / 3600).toFixed(1)} h left` : ` · ~${Math.ceil(left / 60)} min left`;
+  return `${verb} ${gb(j.done_bytes)} / ${gb(j.total_bytes)} GB (${Number(j.percent).toFixed(1)}%)${rate ? ` · ${(rate / 2 ** 20).toFixed(0)} MB/s` : ""}${eta}`;
+}
 let replicationView = "cards";
 function renderReplications() {
   const box = $("#replications");
@@ -5388,7 +5409,7 @@ function renderReplications() {
     const button = (action, label, disabled = false) => `<button class="small operator-only" data-replication-id="${esc(j.id)}" data-replication-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`;
     const cycles = (j.history || []).filter(h => h.change_tracking).slice().reverse();
     const trackingHistory = cycles.length ? `<details><summary>Sync tracking history</summary>${cycles.map(h => `<p>${esc(when(h.at))} · ${esc(h.change_tracking)}${h.fallback_reason ? ` · ${esc(h.fallback_reason)}` : ""}</p>`).join("")}</details>` : "";
-    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.change_tracking || j.capability.change_tracking)}</p>${j.fallback_reason ? `<p class="hint">${esc(j.fallback_reason)}</p>` : ""}${trackingHistory}<dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status">${esc(j.error || j.operation || "")}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
+    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.change_tracking || j.capability.change_tracking)}</p>${j.fallback_reason ? `<p class="hint">${esc(j.fallback_reason)}</p>` : ""}${trackingHistory}<dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status" class="${j.state === "failed" ? "bp-alert" : ""}">${esc(j.error || replicationLive(j))}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
   }).join("") : '<p class="hint">No replications yet.</p>';
 }
 // New replication picks its source and VMs inside the wizard; a source already

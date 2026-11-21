@@ -8,6 +8,7 @@ operator recovery; they are never automatically replayed after manager takeover.
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -60,7 +61,10 @@ class ReplicationJob:
     last_sync: str | None = None
     last_point: str | None = None
     last_attempt: str | None = None
-    percent: int = 0
+    percent: float = 0
+    done_bytes: int = 0  # read/compared so far in the running sync
+    total_bytes: int = 0
+    run_started: str | None = None
     bytes_transferred: int = 0
     changed_pct: float = 0
     error: str | None = None
@@ -259,6 +263,8 @@ class ReplicationManager:
             job.operation = operation
             job.error = None
             job.percent = 0
+            job.done_bytes = job.total_bytes = 0
+            job.run_started = self.clock().isoformat()
             if state:
                 job.state = state
             if operation in ("sync", "cutover"):
@@ -268,7 +274,15 @@ class ReplicationManager:
         def run():
             try:
                 work(job)
-            except Exception:
+            except Exception as exc:
+                # The exception type and our own message only; never provider/SSH output.
+                logging.getLogger(__name__).error(
+                    "replication %s %s failed: %s: %s",
+                    job.name,
+                    operation,
+                    type(exc).__name__,
+                    str(exc)[:200] if isinstance(exc, ValueError) else "",
+                )
                 with self._lock:
                     job.state = "failed"
                     # Provider/SSH output is intentionally excluded, including passwords.
@@ -317,7 +331,8 @@ class ReplicationManager:
 
         def progress(done, total):
             with self._lock:
-                job.percent = int(done * 100 / total) if total else 0
+                job.percent = round(done * 100 / total, 1) if total else 0
+                job.done_bytes, job.total_bytes = done, total
 
         # The recoverable point precedes the transfer; completion time would
         # understate RPO by the duration of a long seed/sync.

@@ -188,6 +188,13 @@ class SnapshotSSHProvider(ChangeProvider):
             raise ValueError("ESXi SSH replication requires a numeric VM id")
         self.kind = "esxi"
         snapshots = self.command("vim-cmd", "vmsvc/snapshot.get", self.vm.ref)
+        # A run that was stopped before its cleanup leaves our own snapshot: remove it.
+        names = re.findall(r"Snapshot Name\s*:\s*(\S+)", snapshots)
+        ids = re.findall(r"Snapshot Id\s*:\s*(\d+)", snapshots)
+        if names and len(names) == len(ids) and all(n.startswith("ibhics-repl-") for n in names):
+            for snapshot_id in ids:
+                self.command("vim-cmd", "vmsvc/snapshot.remove", self.vm.ref, snapshot_id)
+            snapshots = self.command("vim-cmd", "vmsvc/snapshot.get", self.vm.ref)
         if re.search(r"Snapshot (?:Id|Name)\s*:", snapshots, re.I):
             raise ValueError("Consolidate existing ESXi snapshots before replication")
         path = unquote(vmx_ssh_url(self.source, self.vm).split(self.source.host, 1)[1])
