@@ -378,3 +378,26 @@ def test_rpo_includes_sync_duration(env):
     job = create(client)
     assert job["rpo_seconds"] == 120
     assert job["last_sync"] != job["last_point"]
+
+
+def test_create_on_a_node_that_already_has_vms(env):
+    from ibhics.hypervisor import DiskSpec, VMSpec
+
+    client, manager, runtime, now = env
+    driver = client.app.state.cluster.member("node1").driver
+    driver.create_vm(VMSpec(name="web-copy", disks=[DiskSpec(size_gb=1)]))
+    taken = client.post(
+        "/api/v1/migrate/replications",
+        json={"source": "kvm", "vm": "vm", "name": "web-copy", "schedule": {"interval_minutes": 5}},
+    )
+    assert taken.status_code == 409, taken.text
+    ok = client.post(
+        "/api/v1/migrate/replications",
+        json={
+            "source": "kvm",
+            "vm": "vm",
+            "name": "web-copy2",
+            "schedule": {"interval_minutes": 5},
+        },
+    )
+    assert ok.status_code == 202, ok.text

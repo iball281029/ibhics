@@ -452,7 +452,10 @@ class LibvirtDriver(HypervisorDriver):
             for el in attach:
                 dom.attachDeviceFlags(ET.tostring(el, encoding="unicode"), live)
             for el in update:
-                dom.updateDeviceFlags(ET.tostring(el, encoding="unicode"), live)
+                if el.tag == "interface":
+                    _move_live_nic(dom, el, live)
+                else:
+                    dom.updateDeviceFlags(ET.tostring(el, encoding="unicode"), live)
         for el, pool, volume in removed:
             if volume and id(el) not in busy:
                 self._pool(pool).storageVolLookupByName(volume).delete(0)
@@ -2316,3 +2319,28 @@ def _spec_from_xml(xml: str) -> VMSpec:
         linked_to=linked_to,
         recycled=recycled_at(root),
     )
+
+
+def _move_live_nic(dom, el, live_flag) -> None:
+    """Switch a running VM's NIC to another network, and check that it really moved.
+
+    The saved definition's element carries more than the live device accepts for a
+    change; a bare interface (MAC, network, model) is what libvirt applies live."""
+    mac = el.find("mac").get("address")
+    network = el.find("source").get("network")
+    bare = ET.Element("interface", type="network")
+    ET.SubElement(bare, "mac", address=mac)
+    ET.SubElement(bare, "source", network=network)
+    model = el.find("model")
+    ET.SubElement(bare, "model", type=model.get("type") if model is not None else "virtio")
+    dom.updateDeviceFlags(ET.tostring(bare, encoding="unicode"), live_flag)
+    now = ET.fromstring(dom.XMLDesc(0))
+    for iface in now.findall("devices/interface"):
+        found = iface.find("mac")
+        if found is not None and found.get("address") == mac:
+            if iface.find("source").get("network") != network:
+                raise InvalidState(
+                    f"NIC {mac} is saved on {network} but the running VM did not move; "
+                    "it moves at the next power off and on"
+                )
+            return

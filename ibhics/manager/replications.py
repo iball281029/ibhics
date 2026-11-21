@@ -193,7 +193,7 @@ class ReplicationManager:
         with self._lock:
             if any(j.name == name and j.state != "done" for j in self._jobs.values()):
                 raise VMExists("Replication target name already in use")
-            if any(v.name == name for v in target.driver.list_vms()):
+            if any(v.spec.name == name for v in target.driver.list_vms()):
                 raise VMExists(name)
             body["name"], body["node"] = name, target.name
             job = ReplicationJob(
