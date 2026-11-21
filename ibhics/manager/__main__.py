@@ -199,6 +199,32 @@ def main() -> None:
         p2v=P2VSessions(args.state_file.with_name("p2v.json")),
         p2v_pin=_public_key_pin(args.tls_cert),
     )
+    if args.driver == "libvirt":
+        from ..updater import ClusterUpdater
+
+        def update_inventory():
+            local_address = cluster.local_agent or (
+                "http://127.0.0.1:" + os.environ.get("IBHICS_AGENT_PORT", "8007")
+            )
+            return {
+                member.name: {
+                    "address": member.address or local_address,
+                    "token": member.agent_token or cluster._token,
+                }
+                for member in cluster.members()
+            }
+
+        def update_preflight():
+            cluster.require_quorum()
+            if any(j.state in ("queued", "running") for j in backups.jobs()):
+                raise ValueError("wait for backup/restore jobs before updating")
+            if any(j.state in ("queued", "running") for j in imports.jobs()):
+                raise ValueError("wait for imports before updating")
+            return update_inventory()
+
+        app.state.settings.updater = ClusterUpdater(
+            update_inventory(), args.node_name, update_preflight
+        )
     if leader is not None:
         from .leader import Replicator, manager_vip
 
@@ -223,6 +249,9 @@ def _state_files(args) -> list[Path]:
         args.backup_state_file,
         args.users_file,
         args.users_file.with_name("sessions.json"),
+        args.users_file.with_name("settings.json"),
+        args.users_file.with_name("users-security.json"),
+        args.users_file.with_name("approvals.json"),
         args.groups_file,
         args.migrate_state_file,
         state.with_name("replications.json"),

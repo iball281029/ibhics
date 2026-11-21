@@ -59,6 +59,7 @@ from .edge import EdgeManager
 from .errors import install_cluster_errors, install_driver_errors
 from .imports import ImportManager, upload_path
 from .migrations import MigrationManager
+from .permissions import category
 from .poollabels import PoolLabels
 from .recycle import RecycleBin
 from .schemas import (
@@ -135,6 +136,7 @@ from .schemas import (
     VMSnapshotOut,
     VMStatsOut,
 )
+from .settings import Settings
 from .usage import UsageHistory
 from .vmgroups import VMGroups
 
@@ -217,7 +219,18 @@ ADMIN_ROUTES = {
     ("POST", f"{API}/containers/{{name}}/exec"),
 }
 # Open to any signed-in user, even one who still has to replace their initial password.
-SELF_ROUTES = {f"{API}/auth/me", f"{API}/auth/logout", f"{API}/auth/password"}
+SELF_ROUTES = {
+    f"{API}/{path}"
+    for path in (
+        "auth/me",
+        "auth/logout",
+        "auth/password",
+        "auth/2fa",
+        "auth/2fa/setup",
+        "auth/2fa/confirm",
+        "auth/2fa/disable",
+    )
+}
 
 
 def required_role(method: str, route: str) -> Role:
@@ -268,11 +281,17 @@ def create_app(
     p2v=None,
     p2v_pin: str = "",
     replications=None,
+    settings: Settings | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
     if isinstance(cluster, HypervisorDriver):
         cluster = Cluster.standalone(socket.gethostname(), cluster)
+    settings = settings or Settings(
+        path=auth._state_path.with_name("settings.json") if auth and auth._state_path else None,
+        cluster_id=lambda: cluster.cluster_id,
+        node_count=lambda: len(cluster.members()),
+    )
     backups = backups or BackupManager(cluster)
     groups = groups or VMGroups()
     pool_labels = PoolLabels(pool_labels_path)
@@ -331,6 +350,7 @@ def create_app(
 
             async def schedule() -> None:
                 while True:
+                    await asyncio.to_thread(settings.check, True)
                     await asyncio.to_thread(backups.tick)
                     await asyncio.to_thread(replications.tick)
                     await asyncio.to_thread(recycle.purge_expired)
@@ -359,6 +379,7 @@ def create_app(
     app.state.migrations = migrations
     app.state.deploys = deploys
     app.state.auth = auth
+    app.state.settings = settings
     imports = imports or ImportManager(cluster)
     from .p2v import P2VError, P2VSessions
 
@@ -373,17 +394,99 @@ def create_app(
     install_driver_errors(app)
     install_cluster_errors(app)
 
-    def guard(request: Request) -> User | None:
+    from .approvals import Approvals, PendingApproval, risky
+
+    approvals = Approvals(auth) if auth else None
+    app.state.approvals = approvals
+    settings.approval_required = lambda: bool(approvals and approvals.data["enabled"])
+
+    @app.exception_handler(PendingApproval)
+    async def pending_approval(request, exc):
+        return JSONResponse(status_code=202, content=exc.item)
+
+    async def guard(request: Request) -> User | None:
         if auth is None:
             return None
-        user = auth.authenticate(session_token(request.headers, request.cookies))
+        user = approvals.execution_user(request.scope) or auth.authenticate(
+            session_token(request.headers, request.cookies)
+        )
         request.state.user = user
+        execution = request.scope.get("ibhics.approval")
+        if execution:
+            request.state.audit_note = (
+                f"approval={execution['id']} approver={execution['approver']}"
+            )
         route = request.scope["route"].path
         if user.must_change_password and route not in SELF_ROUTES:
             raise Forbidden("change your initial password first")
-        needed = required_role(request.method, route)
-        if user.role.rank < needed.rank:
-            raise Forbidden(f"this needs the {needed} role; you are {user.role}")
+        if auth.require_2fa and not user.totp_secret and route not in SELF_ROUTES:
+            raise Forbidden("2FA enrollment required; open Settings > My account")
+        if route not in SELF_ROUTES:
+            area = category(route)
+            sensitive_read = (request.method, route) in ADMIN_ROUTES
+            changes = request.method not in ("GET", "HEAD", "OPTIONS")
+            if (changes or sensitive_read) and area not in auth.permissions(user):
+                raise Forbidden(
+                    f"this needs operator/admin permission for {area}; you are {user.role}"
+                )
+            # Preserve the existing Operator boundary for backup schedule administration.
+            # A custom Backup role can be delegated separately by an administrator.
+            if (
+                user.role == Role.OPERATOR
+                and changes
+                and route.startswith(f"{API}/backup/policies")
+                and not route.endswith("/run")
+            ):
+                raise Forbidden("backup schedule administration needs the admin role")
+            # Roles, security policy and signed-file trust are reserved for actual admins.
+            admin_only = route.startswith((f"{API}/roles/", f"{API}/security/")) or route in {
+                f"{API}/settings/config",
+                f"{API}/settings/subscription",
+                f"{API}/users/{{name}}/2fa/reset",
+            }
+            if changes and admin_only and user.role != Role.ADMIN:
+                raise Forbidden("this needs the admin role")
+        approval_context = None
+        if route in (f"{API}/settings/updates/install", f"{API}/settings/updates/rollback"):
+            approval_context = settings.approval_context(rollback=route.endswith("/rollback"))
+            if execution and execution.get("context") != approval_context:
+                raise Forbidden("update package or backup changed; request a new approval")
+        approval_candidate = route.startswith(
+            (
+                f"{API}/vms/",
+                f"{API}/recycle-bin/",
+                f"{API}/backup/targets",
+                f"{API}/backup/policies",
+                f"{API}/users/",
+                f"{API}/security/",
+                f"{API}/settings/updates/install",
+                f"{API}/settings/updates/rollback",
+            )
+        )
+        if (
+            approvals.data["enabled"]
+            and approval_candidate
+            and request.method in ("POST", "PUT", "PATCH", "DELETE")
+        ):
+            raw = await request.body()
+            if len(raw) <= 65536:
+                try:
+                    body = json.loads(raw or b"{}")
+                except ValueError:
+                    body = {}
+                if not isinstance(body, dict):
+                    raise ValueError("approval request must be a JSON object")
+                if risky(request.method, route, body, auth, request.path_params):
+                    if not execution:
+                        if "password" in body:
+                            raise ValueError(
+                                "change the password separately from a risky user edit"
+                            )
+                        raise PendingApproval(
+                            approvals.create(user, request, body, approval_context)
+                        )
+            else:
+                raise ValueError("approval request exceeds size limit")
         return user
 
     from .activity import ActivityLog
@@ -508,7 +611,7 @@ def create_app(
             raise AuthError("sign-in is not enabled on this manager")
         address = request.client.host if request.client else ""
         try:
-            session = auth.login(body.username, body.password)
+            session = auth.login(body.username, body.password, body.code)
         except AuthError:
             auth.record(body.username, "LOGIN", "failed", 401, address)
             activity.add(body.username, "LOGIN", "", "failed", 401, address)
@@ -563,14 +666,20 @@ def create_app(
         return [UserOut.from_user(u) for u in users().users()]
 
     @api.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-    def add_user(body: UserIn) -> UserOut:
-        return UserOut.from_user(users().add_user(body.name, Role(body.role), body.password))
+    def add_user(body: UserIn, request: Request) -> UserOut:
+        if body.role == "admin" and request.state.user.role != "admin":
+            raise Forbidden("only admins can grant the admin role")
+        return UserOut.from_user(users().add_user(body.name, body.role, body.password))
 
     @api.patch("/users/{name}", response_model=UserOut)
     def update_user(name: str, body: UserUpdate, request: Request) -> UserOut:
+        if (
+            users().user(name).role == "admin" or body.role == "admin"
+        ) and request.state.user.role != "admin":
+            raise Forbidden("only admins can manage admin accounts")
         user = users().update_user(
             name,
-            role=Role(body.role) if body.role else None,
+            role=body.role,
             enabled=body.enabled,
             password=body.password,
             acting=acting(request),
@@ -579,6 +688,8 @@ def create_app(
 
     @api.delete("/users/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_user(name: str, request: Request) -> None:
+        if users().user(name).role == "admin" and request.state.user.role != "admin":
+            raise Forbidden("only admins can manage admin accounts")
         users().delete_user(name, acting=acting(request))
 
     @api.get("/p2v/sessions")
@@ -1756,6 +1867,8 @@ def create_app(
         ):
             # Pydantic's default errors include the rejected password or entire input body.
             return JSONResponse(status_code=422, content={"detail": "Invalid source test input"})
+        if request.url.path.startswith((f"{API}/auth/", f"{API}/users", f"{API}/settings")):
+            return JSONResponse(status_code=422, content={"detail": "Invalid request fields"})
         return await request_validation_exception_handler(request, exc)
 
     @api.post("/migrate/sources/test", response_model=SourceTestOut)
@@ -1935,7 +2048,11 @@ def create_app(
             except AuthError as exc:
                 await console.refuse(ws, str(exc))
                 return
-            if user.must_change_password or user.role.rank < Role.OPERATOR.rank:
+            if (
+                user.must_change_password
+                or "vms" not in auth.permissions(user)
+                or (auth.require_2fa and not user.totp_secret)
+            ):
                 await console.refuse(ws, "the console needs the operator role")
                 return
         try:
@@ -2161,6 +2278,9 @@ def create_app(
 
     containers_api.install(api, cluster, backups)
 
+    from . import settings_api
+
+    settings_api.install(api, settings, auth)
     app.include_router(public)
     app.include_router(api)
     app.mount("/", ConsoleFiles(directory=STATIC_DIR, html=True), name="console")
