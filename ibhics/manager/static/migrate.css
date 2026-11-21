@@ -519,3 +519,5 @@ dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:t
 .mg-replica progress { width:100%; }
 .mg-replica .toolbar { flex-wrap:wrap; gap:6px; }
 #replication-test-networks { display:grid; gap:12px; }
+#import-source-pick{display:flex;gap:12px;align-items:center;margin:0 0 10px}
+#import-source-pick[hidden]{display:none}

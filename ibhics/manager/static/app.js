@@ -5302,15 +5302,45 @@ function renderReplications() {
     return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.capability.change_tracking)}</p><dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status">${esc(j.error || j.operation || "")}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
   }).join("") : '<p class="hint">No replications yet.</p>';
 }
-$("#new-replication").onclick = () => {
-  if (!sourceVMsFor || !sourceVMs.length) {
-    selectTab("migrate-tabs", "import");
-    toast("Select a source and load its VM inventory first.");
-    return;
-  }
-  const indices = migratePicked.size ? [...migratePicked] : sourceVMs.map((v, i) => i);
-  openImportWizard(indices, true).catch(fail);
+// New replication picks its source and VMs inside the wizard; a source already
+// loaded on Import VMs (with its picked VMs) is offered first.
+$("#new-replication").onclick = async () => {
+  if (!canOperate()) return;
+  try {
+    await load("vms", "pools", "networks", "sources");
+    const ready = sourceVMsFor && sourceVMs.length;
+    const indices = ready ? (migratePicked.size ? [...migratePicked] : []) : [];
+    openDialog("import-dialog", { source: ready ? sourceVMsFor : "", vms: ready ? [...sourceVMs] : [], indices, replication: true });
+    await repSourceOptions(ready ? sourceVMsFor : "");
+  } catch (err) { fail(err); }
 };
+async function repSourceOptions(selected) {
+  const sel = $("#import-source"), live = (state.sources || []).filter((src) => !["upload", "p2v", "ova", "disk"].includes(src.type));
+  $("#import-source-pick").hidden = false;
+  sel.innerHTML = `<option value="">Choose a source…</option>` + live.map((src) => `<option value="${esc(src.name)}" ${src.name === selected ? "selected" : ""}>${esc(src.name)} · ${esc(src.type)}</option>`).join("");
+  $("#import-source-status").textContent = live.length ? "" : "Add a VMware, KVM/Proxmox or Nutanix source on the Sources tab first.";
+  if (selected) await repCheckSource(selected, false);
+}
+async function repCheckSource(name, reload = true) {
+  const status = $("#import-source-status");
+  if (!name) { Object.assign(importBatch, { source: "", vms: [], picked: new Set() }); importWiz.go(1); return; }
+  status.textContent = "Checking the source…";
+  try {
+    const cap = await api(`/migrate/sources/${enc(name)}/replication-capability`);
+    if (!cap.supported) throw new Error(cap.reason || "This source cannot replicate yet.");
+    if (reload) {
+      status.textContent = "Loading VMs…";
+      const vms = await api(`/migrate/sources/${enc(name)}/vms`);
+      Object.assign(importBatch, { source: name, vms, picked: new Set() });
+    }
+    status.textContent = `${importBatch.vms.length} VMs · change tracking: ${cap.change_tracking}`;
+  } catch (err) {
+    Object.assign(importBatch, { source: name, vms: [], picked: new Set() });
+    status.textContent = err.message;
+  }
+  importWiz.go(1);
+}
+$("#import-source").onchange = (e) => repCheckSource(e.target.value);
 $$("[data-replication-view]").forEach((b) => { b.onclick = () => {
   replicationView = b.dataset.replicationView;
   $$("[data-replication-view]").forEach((v) => v.setAttribute("aria-pressed", String(v === b)));
@@ -5581,6 +5611,7 @@ const importWiz = wizard("import-dialog", {
     const ctx = dialogContext;
     Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set(), replication: !!ctx.replication });
     $("#import-title").textContent = importBatch.replication ? "New replication" : "Migrate VMs";
+    $("#import-source-pick").hidden = !importBatch.replication;
     $("#import-final-step").textContent = importBatch.replication ? "Schedule & review" : "Summary";
     $("#replication-schedule").hidden = !importBatch.replication;
     $$("#replication-schedule input").forEach((input) => { input.disabled = !importBatch.replication; });
