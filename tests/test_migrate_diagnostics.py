@@ -401,7 +401,7 @@ const post=async (url, body) => {
   const field={dataset:{targetVm:'0',targetField:'size_gb',targetDisk:'0'},value:'10'};
   controls=[field];renderImportTargets();field.onchange();
   assert.equal(importTarget(vm1).disks[0].size_gb,10);
-  assert.match($('#import-disk-targets').innerHTML,/SOURCE \/ READ ONLY/);
+  assert.match($('#import-disk-targets').innerHTML,/TARGET \/ CURRENT VM/);
   assert.match($('#import-disk-targets').innerHTML,/mg-shrink-hint/);
   const reset={dataset:{resetVm:'0',resetField:'size_gb',resetDisk:'0'}};
   resets=[reset];renderImportTargets();reset.onclick();
