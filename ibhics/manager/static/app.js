@@ -3433,7 +3433,7 @@ function renderCluster() {
   $("#cluster-overview").innerHTML = [
     tile(online === c.members.length ? "ok" : "warn", "Online", `${online} / ${c.members.length}`, online === c.members.length ? "All servers are up" : `${c.members.length - online} offline`),
     `<div class="cl-ft ${left ? "ok" : "none"}"><small>Can go down</small><b>${left} ${left === 1 ? "server" : "servers"}</b><span>${down ? `${down} already down · design allows ${ft.n}` : ft.n ? "VMs keep running" : `Limited by ${ft.limiting.map((l) => label[l.key].toLowerCase()).join(", ")}`}</span><details><summary>Why?</summary><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b> ${esc(l.text)}</li>`).join("")}</ul></details></div>`,
-    tile(haOn ? "ok" : "warn", "Auto restart (HA)", haOn ? "On" : "Off", haOn ? `${ha.vms.length} VMs protected` : "VMs do not restart by themselves"),
+    tile(haOn ? "ok" : "warn", "Auto restart (HA)", haOn ? "On" : "Off", haOn ? `${ha.vms.length} VM${ha.vms.length === 1 ? "" : "s"} protected` : "VMs do not restart by themselves"),
   ].join("");
   $("#cluster-pairing").hidden = created;
   $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
@@ -3637,11 +3637,13 @@ async function renderNodeDetail(auto = false) {
   $("#node-subtitle").textContent = [[s.vendor, s.model].filter(Boolean).join(" "), m.local ? "runs the manager" : m.address, `ibHiCS ${s.version}`].filter(Boolean).join(" · ");
 
   const vms = state.vms.filter((v) => v.node === name);
-  const stat = (label, value, note = "") => `<div class="stat"><span>${esc(label)}</span><b>${value}</b><em>${note}</em></div>`;
+  const stat = (label, value, note = "", pct = null) => `<div class="stat">${pct == null ? "" : `<i class="nd-ring" style="--p:${Math.max(0, Math.min(100, Math.round(pct)))}"><b>${Math.round(pct)}%</b></i>`}<span>${esc(label)}</span><b>${value}</b><em>${note}</em></div>`;
+  const avatar = $("#page-node .vm-head .avatar");
+  if (avatar && typeof clusterIcon3d === "function") avatar.innerHTML = clusterIcon3d({ role: "compute", healthy: m.healthy }, "node");
   const bar = (used, total) => usageBar({ used, total, from: "of this node" });
   $("#node-stats").innerHTML = [
-    stat("CPU", `${s.cpu_percent}%`, `${bar(s.cpu_percent, 100)}${s.threads} threads · load ${s.load.map((l) => l.toFixed(2)).join(" ")}`),
-    stat("Memory", `${gbText(s.memory_used_mb)} <small>/ ${gbText(s.memory_mb)}</small>`, `${bar(s.memory_used_mb, s.memory_mb)}Used by VMs and the system`),
+    stat("CPU", `${s.cpu_percent}%`, `${s.threads} threads · load ${s.load.map((l) => l.toFixed(2)).join(" ")}`, s.cpu_percent),
+    stat("Memory", `${gbText(s.memory_used_mb)} <small>/ ${gbText(s.memory_mb)}</small>`, "Used by VMs and the system", s.memory_mb ? s.memory_used_mb / s.memory_mb * 100 : 0),
     stat("Virtual machines", `${vms.filter((v) => v.state === "running").length} <small>running of ${vms.length}</small>`,
       `${vms.reduce((n, v) => n + (v.state === "running" ? v.vcpus : 0), 0)} vCPU in use`),
     stat("Uptime", uptimeText(s.uptime_s), `Since ${new Date(Date.now() - s.uptime_s * 1000).toLocaleString()}`),
