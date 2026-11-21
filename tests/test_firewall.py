@@ -42,7 +42,7 @@ def test_vm_ends_render_by_mac_in_bridge_and_ip_everywhere():
 def test_vm_rules_resolve_and_simulate(tmp_path):
     driver = FakeDriver(demo_console=False)
     driver.create_network(NetworkSpec("db", 20))
-    web = vm(driver, "web", "52:54:00:aa:00:01")
+    vm(driver, "web", "52:54:00:aa:00:01")
     vm(driver, "db", "52:54:00:aa:00:02", "db")
     client = TestClient(create_app(driver, edge_state=tmp_path / "edge.json"))
     rules = [
