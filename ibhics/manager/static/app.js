@@ -5681,7 +5681,18 @@ function renderNetworkStudio() {
   $('#fw-ends').innerHTML = ends.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('');
   $('#nw-test-ends').innerHTML = state.vms.map(v => `<option value="${esc(v.name)}">`).join('');
   $('#nw-policy-nodes').innerHTML = ends.map(n => `<button class="nw-end ${nw.from === n.id ? 'selected' : ''} ${n.vm ? (n.vm.state === 'running' ? 'up' : 'down') : 'equipment'}" data-end="${esc(n.id)}" ${op ? '' : 'disabled'}><span>${NetworkCore.deviceIcon(n.kind,{stopped:n.vm && n.vm.state !== "running"})}</span><b>${esc(n.name)}</b>${n.vm ? `<small>${esc((state.guests[n.vm.uuid]?.ips || n.vm.ips || []).filter(ip=>NetworkCore.ipNumber(ip)!==null)[0] || "No IP")}</small>` : ""}</button>`).join('');
-  $('#nw-switch-cards').innerHTML = state.networks.map(n => `<article class="nw-panel"><h3>${esc(n.name)}</h3><div class="nw-vlan">${vlanId(n)}<small>${n.vlan ? 'TAGGED VLAN' : 'NATIVE VLAN'}</small></div><p>${state.vms.filter(v => v.nics.some(nic => nic.network === n.name)).length} virtual machines</p><small>${esc((n.nodes || [n.node || 'Local']).join(' · '))} · ${esc(n.bridge || 'br0')}</small></article>`).join('');
+  const computeCount = computeMembers().length;
+  $('#nw-switch-cards').innerHTML = state.networks.map(n => {
+    const vms = state.vms.filter(v => v.nics.some(nic => nic.network === n.name)).length;
+    const nodes = n.nodes || [n.node || 'Local'];
+    const missing = n.vlan && computeCount > nodes.length;
+    const actions = isAdmin() && n.name !== 'default' ? `<div class="nw-switch-actions">
+      ${missing ? `<button type="button" data-sw-sync="${esc(n.name)}" title="Create it on every compute node">Add to all nodes</button>` : ''}
+      <button type="button" data-sw-edit="${esc(n.name)}" ${vms ? `disabled title="Move its ${vms} VMs to another network first"` : ''}>Edit</button>
+      <button type="button" class="danger" data-sw-del="${esc(n.name)}" ${vms ? `disabled title="Move its ${vms} VMs to another network first"` : ''}>Delete</button></div>` : '';
+    const form = nw.switchEdit === n.name ? `<form class="nw-switch-form" data-sw-form="${esc(n.name)}"><label>Name<input name="name" value="${esc(n.name)}" required pattern="[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}"></label><label>VLAN ID<input name="vlan" type="number" min="1" max="4094" value="${n.vlan || ''}" required></label><div class="nw-switch-actions"><button type="submit" class="primary">Save</button><button type="button" data-sw-cancel>Cancel</button></div></form>` : '';
+    return `<article class="nw-panel"><h3>${esc(n.name)}</h3><div class="nw-vlan">${vlanId(n)}<small>${n.vlan ? 'TAGGED VLAN' : 'NATIVE VLAN'}</small></div><p>${vms} virtual machines</p><small>${esc(nodes.join(' · '))} · ${esc(n.bridge || 'br0')}${missing ? ` <b class="nw-warn">· not on every node</b>` : ''}</small>${form || actions}</article>`;
+  }).join('');
   requestAnimationFrame(nwDrawPolicy);
   nwSafeBanner();
 }
@@ -5725,6 +5736,27 @@ $('#fw-rules').addEventListener('dragend', () => { nw.dragRule=null; });
 $('#fw-rules').addEventListener('dragover', e => e.preventDefault());
 $('#fw-rules').addEventListener('drop', e => {e.preventDefault(); const card=e.target.closest('[data-rule]'); if (!card || nw.dragRule === null) return; const rules=[...nwRules()], [r]=rules.splice(nw.dragRule,1); rules.splice(+card.dataset.rule,0,r); nw.dragRule=null; nwStage(rules);});
 $('#nw-rule-view').onclick = () => {const list=$('#fw-rules').classList.toggle('list'); $('#nw-rule-view').textContent=list?'Card view':'List view';};
+$('#nw-switch-cards').addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  try {
+    if (b.dataset.swEdit) { nw.switchEdit = b.dataset.swEdit; renderPools(); }
+    else if (b.hasAttribute('data-sw-cancel')) { nw.switchEdit = ''; renderPools(); }
+    else if (b.dataset.swDel) {
+      if (!confirm(`Delete virtual switch ${b.dataset.swDel} from every node? VMs must not use it.`)) return;
+      await del(`/networks/${enc(b.dataset.swDel)}`); toast(`${b.dataset.swDel} deleted`); await refresh('network');
+    } else if (b.dataset.swSync) {
+      await post(`/networks/${enc(b.dataset.swSync)}/sync`, {}); toast(`${b.dataset.swSync} is on every node now`); await refresh('network');
+    }
+  } catch (err) { fail(err); }
+});
+$('#nw-switch-cards').addEventListener('submit', async (e) => {
+  const f = e.target.closest('[data-sw-form]'); if (!f) return; e.preventDefault();
+  const data = new FormData(f), name = f.dataset.swForm;
+  try {
+    await api(`/networks/${enc(name)}`, { method: 'PUT', body: JSON.stringify({ name: data.get('name'), vlan: Number(data.get('vlan')) }) });
+    nw.switchEdit = ''; toast(`${name} updated`); await refresh('network');
+  } catch (err) { fail(err); }
+});
 $('#nw-switch-view').onclick = () => {const list=$('#tab-net-list').classList.toggle('list'); $('#nw-switch-view').textContent=list?'Card view':'List view';};
 $('#nw-discard').onclick = () => {nw.draft=null; nw.base=null; renderNetworkStudio(); window.Network3D?.update();};
 for (const id of ['nw-rule-service','nw-test-service']) $('#'+id).innerHTML = Object.keys(nwServices).map(n => `<option>${n}</option>`).join('');

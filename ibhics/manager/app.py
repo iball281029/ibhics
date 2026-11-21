@@ -33,7 +33,15 @@ from fastapi.staticfiles import StaticFiles
 from .. import RELEASE_NAME, __version__, console
 from ..backup.targets import BackupTarget, TargetType
 from ..cluster import Cluster, NodeUnavailable, Topology
-from ..hypervisor import HypervisorDriver, InvalidState, VMExists, VMInfo, VMNotFound, VMState
+from ..hypervisor import (
+    HypervisorDriver,
+    InvalidState,
+    NetworkSpec,
+    VMExists,
+    VMInfo,
+    VMNotFound,
+    VMState,
+)
 from ..hypervisor.edge import FirewallRule, RouterSpec
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
@@ -918,6 +926,88 @@ def create_app(
         return NetworkOut(
             name=body.name, bridge=f"ibr{body.vlan}", vlan=body.vlan, nodes=[m.name for m in done]
         )
+
+    def _network_in_use(name: str) -> None:
+        for member in cluster.compute_members():
+            for vm in member.driver.list_vms():
+                if any(n.network == name for n in vm.spec.nics):
+                    raise InvalidState(
+                        f"VM {vm.spec.name!r} is on network {name!r}: move its VMs first"
+                    )
+        cfg = edge.config
+        if any(r.network == name for r in cfg.routers) or any(
+            name in (r.src, r.dst) for r in cfg.rules
+        ):
+            raise InvalidState(f"firewall rules or a router use {name!r}: change them first")
+
+    @api.put("/networks/{name}", response_model=NetworkOut)
+    def update_network(name: str, body: NetworkIn) -> NetworkOut:
+        """Rename a VLAN network or change its tag, on every node. Only while no VM, firewall
+        rule or router uses it, so nothing running loses its network."""
+        cluster.require_quorum()
+        if name == "default":
+            raise InvalidState("the default network is the LAN itself and stays")
+        _network_in_use(name)
+        members = cluster.compute_members()
+        old = {}
+        for member in members:
+            net = next((n for n in member.driver.list_networks() if n.name == name), None)
+            if net is not None:
+                old[member.name] = net
+        if not old:
+            raise InvalidState(f"no network named {name!r}")
+        previous = next(iter(old.values()))
+        removed, created = [], []
+        try:
+            for member in members:
+                if member.name in old:
+                    member.driver.delete_network(name)
+                    removed.append(member)
+            for member in members:
+                if member.name in old:
+                    member.driver.create_network(body.to_spec())
+                    created.append(member)
+        except Exception:
+            for member in created:  # put every node back as it was
+                try:
+                    member.driver.delete_network(body.name)
+                except Exception:
+                    pass
+            for member in removed:
+                try:
+                    member.driver.create_network(
+                        NetworkSpec(name=previous.name, vlan=previous.vlan)
+                    )
+                except Exception:
+                    pass
+            raise
+        return NetworkOut(
+            name=body.name,
+            bridge=f"ibr{body.vlan}",
+            vlan=body.vlan,
+            nodes=[m.name for m in created],
+        )
+
+    @api.post("/networks/{name}/sync", response_model=NetworkOut)
+    def sync_network(name: str) -> NetworkOut:
+        """Add a network to the compute nodes that miss it, so VMs can run anywhere."""
+        cluster.require_quorum()
+        have, missing, spec = [], [], None
+        for member in cluster.compute_members():
+            net = next((n for n in member.driver.list_networks() if n.name == name), None)
+            if net is None:
+                missing.append(member)
+            else:
+                have.append(member.name)
+                spec = net
+        if spec is None:
+            raise InvalidState(f"no network named {name!r}")
+        if spec.vlan is None:
+            raise InvalidState("the default network is on every node already")
+        for member in missing:
+            member.driver.create_network(NetworkSpec(name=spec.name, vlan=spec.vlan))
+            have.append(member.name)
+        return NetworkOut(name=spec.name, bridge=spec.bridge, vlan=spec.vlan, nodes=have)
 
     @api.delete("/networks/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_network(name: str) -> None:
