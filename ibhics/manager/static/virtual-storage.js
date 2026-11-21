@@ -4,7 +4,7 @@ window.VirtualStorageUI = (() => {
   let latest = null, inspected = [], receipt = null, timer = null, rendering = false;
   let desiredCacheMode = null, activeTab = "overview", replicationView = "panels";
   function selectTab(name) {
-    if (!["overview", "replication", "cache", "capacity", "files", "settings"].includes(name)) name = "overview";
+    if (!["overview", "mirror", "cache", "capacity", "files", "settings"].includes(name)) name = "overview";
     activeTab = name;
     $$("[data-vs-tab]").forEach((button) => {
       const selected = button.dataset.vsTab === name;
@@ -252,19 +252,64 @@ window.VirtualStorageUI = (() => {
   function topologyScene(data, pool) {
     const nodes = data.nodes.filter((n) => n.role === "compute");
     const witness = data.nodes.find((n) => n.role === "witness");
-    const usage = pool && Number.isFinite(pool.allocation_gb) && pool.capacity_gb > 0
+    const spec = data.created?.spec;
+    const connected = replicationConnected(data);
+    const usage = Number.isFinite(pool?.allocation_gb) && Number.isFinite(pool?.capacity_gb) && pool.capacity_gb > 0
       ? Math.max(0, Math.min(100, pool.allocation_gb / pool.capacity_gb * 100)) : null;
-    return `<div id="vs-topology" class="vs-scene ${replicationConnected(data) ? "vs-linked" : ""}">
-      <div class="vs-grid" aria-hidden="true"></div>
-      <svg viewBox="0 0 900 380" role="img" aria-label="Two data replicas connected through DRBD, with an Arbiter above and Storage VIP in the center">
-        <g class="vs-wires"><path d="M220 240H680"/><path d="M450 90V220"/></g>
-        <g class="vs-beam"><path d="M220 240H680"/></g>
-        <g class="vs-orbit"><ellipse cx="450" cy="266" rx="142" ry="51"/><ellipse cx="450" cy="278" rx="160" ry="58" stroke-dasharray="5 9"/></g>
-        <g class="vs-ring" transform="translate(450 256) scale(1 .38)"><circle r="116"/><circle class="vs-ring-used" r="116" pathLength="100" stroke-dasharray="${usage ?? 0} 100" transform="rotate(-90)"/></g>
-        ${nodes.slice(0, 2).map((n, i) => `<g transform="translate(${i ? 680 : 220} 228)" class="vs-tower"><path d="M-66-40 0-65 66-40 0-15Z"/><path d="M-66-40V42L0 68V-15ZM0-15 66-40V42L0 68"/>${[0, 20, 40].map((y) => `<path d="M-55 ${y - 22} -12 ${y - 5}M12 ${y - 5} 55 ${y - 22}"/>`).join("")}<text y="100">${esc(n.display_name || n.name)}</text><text y="121" class="vs-svg-dim">${n.healthy ? "Data node · online" : "Data node · offline"}</text></g>`).join("")}
-        <g class="vs-arbiter"><path d="m450 26 44 24-44 24-44-24Z"/><path d="m406 50 44 42 44-42"/><text x="450" y="118">${esc(witness?.display_name || witness?.name || "No Arbiter")}</text><text x="450" y="138" class="vs-svg-dim">${witness?.healthy ? "Arbiter · online · no VM data" : "Arbiter · unavailable"}</text></g>
-        <text x="450" y="211" class="vs-vip">${esc(data.created?.spec.virtual_ip || "VIP not configured")}</text><text x="450" y="235" class="vs-svg-dim">STORAGE VIP</text><text x="450" y="350">${usage == null ? "Usage not reported" : `${usage.toFixed(1)}% used`} · RF2</text>
-      </svg><p>HDD + SSD cache → LVM thin → DRBD RF2 + Arbiter → XFS → NFS / Storage VIP</p></div>`;
+    // Original ibHiCS glyphs: racks, quorum diamond, cache chip, mirror and VIP target.
+    const icons = {
+      rack: '<rect x="-20" y="-23" width="40" height="46" rx="4"/><path d="M-20-8H20M-20 8H20M-12-16h3m-3 16h3m-3 16h3M0-16h12M0 0h12M0 16h12"/>',
+      quorum: '<path d="M0-27 24-10 18 16 0 28-18 16-24-10ZM0-16 12 0 0 16-12 0ZM-7 0l5 5L9-6"/>',
+      chip: '<rect x="-19" y="-19" width="38" height="38" rx="4"/><path d="M-10-27v8M0-27v8M10-27v8M-10 19v8M0 19v8M10 19v8M-27-10h8M-27 0h8M-27 10h8M19-10h8M19 0h8M19 10h8M3-13-8 2H1l-4 11L9-3H1Z"/>',
+      mirror: '<path d="M-21-5a22 22 0 0 1 39-10M18-27v12H6M21 5a22 22 0 0 1-39 10M-18 27V15h12M-8 0H8"/>',
+      vip: '<circle r="20"/><circle r="9"/><path d="M0-29v14M0 15v14M-29 0h14M15 0h14M-20 20l-7 7M20 20l7 7"/>',
+    };
+    const health = (node) => !node ? 'unknown' : node.healthy === true ? 'ok' : node.healthy === false ? 'alert' : 'warning';
+    const status = (node) => !node ? '—' : node.healthy === true ? 'Online' : node.healthy === false ? 'Offline' : 'Check status';
+    const caches = data.cache || [];
+    const cacheError = caches.some((c) => c.error);
+    const cachePending = caches.some((c) => c.dirty_bytes > 0);
+    const cacheReported = caches.some((c) => c.mode || Number.isFinite(c.dirty_bytes));
+    const short = (value) => value.length > 24 ? `${value.slice(0, 23)}…` : value;
+    const items = [
+      ...[0, 1].map((i) => ({name: `Node${i + 1}`, detail: nodes[i]?.display_name || nodes[i]?.name || '—',
+        status: status(nodes[i]), tone: health(nodes[i]), icon: 'rack', tab: 'mirror'})),
+      {name: 'Arbiter', detail: witness?.display_name || witness?.name || '—', status: status(witness), tone: health(witness), icon: 'quorum', tab: 'mirror'},
+      {name: 'SSD cache', detail: caches.length ? `${caches.length} cache ${caches.length === 1 ? 'device' : 'devices'}` : '—',
+        status: !caches.length ? '—' : cacheError ? 'Check cache' : cachePending ? 'Pending writes' : cacheReported ? 'Active' : '—',
+        tone: !caches.length ? 'unknown' : cacheError ? 'alert' : cachePending ? 'warning' : cacheReported ? 'ok' : 'unknown', icon: 'chip', tab: 'cache'},
+      {name: 'DRBD mirror', detail: 'RF2', status: connected ? 'Connected' : spec ? data.phase === 'syncing' ? 'Syncing' : 'Disconnected' : '—',
+        tone: connected ? 'ok' : spec ? data.phase === 'syncing' ? 'warning' : 'alert' : 'unknown', icon: 'mirror', tab: 'mirror'},
+      {name: 'Storage VIP', detail: spec?.virtual_ip || '—', status: spec?.virtual_ip ? 'Configured' : '—',
+        tone: spec?.virtual_ip ? 'ok' : 'unknown', icon: 'vip', tab: 'capacity'},
+    ];
+    return `<div id="vs-topology" class="vs-scene ${connected ? 'vs-linked' : ''}">
+      <svg class="vs-hologram" viewBox="0 0 840 760" role="group" aria-label="Virtual Storage hologram. Drag the ring to rotate, or use left and right arrow keys.">
+        <defs><pattern id="vs-circuit" width="80" height="70" patternUnits="userSpaceOnUse"><path d="M20 1h40l20 34-20 34H20L0 35ZM20 1v16l20 18h40" fill="none" stroke="#3ef0ff" stroke-opacity=".07"/></pattern></defs>
+        <rect width="840" height="760" fill="url(#vs-circuit)" aria-hidden="true"/>
+        <g class="vs-ring-base" transform="translate(420 364)" aria-hidden="true">
+          <ellipse class="vs-ring-shadow" cy="18" rx="329" ry="285"/>
+          <circle r="328"/><circle r="319" class="vs-ring-ticks"/>
+          <circle r="167"/><circle r="157" class="vs-progress-track"/>
+          <circle r="157" class="vs-ring-used" pathLength="100" stroke-dasharray="${usage ?? 0} 100" transform="rotate(-90)"/>
+          <circle r="296" class="vs-beam" pathLength="360"/>
+        </g>
+        <g class="vs-ring-rotation" role="group" tabindex="0" aria-label="Rotate storage ring with left and right arrows">
+        ${items.map((item, i) => {
+          const angle = (-90 + i * 60) * Math.PI / 180;
+          return `<a id="vs-ring-${i}" href="#storage/virtual/${item.tab}" data-ring-index="${i}" class="vs-ring-node vs-tone-${item.tone}" transform="translate(${420 + Math.cos(angle) * 244} ${364 + Math.sin(angle) * 244})" aria-label="${esc(`${item.name}: ${item.detail}, ${item.status}. Open ${item.tab}`)}">
+            <circle cy="-24" r="40" class="vs-node-pad"/><g class="vs-node-icon" transform="translate(0 -24)" aria-hidden="true">${icons[item.icon]}</g>
+            <text y="33" class="vs-node-name">${item.name}</text><text y="50" class="vs-node-detail">${esc(short(item.detail))}</text><text y="66" class="vs-node-status">${item.status}</text></a>`;
+        }).join('')}</g>
+        <a id="vs-ring-core" href="#storage/virtual/capacity" class="vs-ring-core" aria-label="Virtual Storage capacity">
+          <circle cx="420" cy="364" r="143"/>
+          <text x="420" y="312" class="vs-core-brand">ibHiCS / VIRTUAL STORAGE</text>
+          <text x="420" y="339" class="vs-core-pool">${esc(short(pool?.display_name || spec?.name || '—'))}</text>
+          <text x="420" y="385" class="${usage == null ? 'vs-missing' : 'vs-core-usage'}">${usage == null ? '—' : `${usage.toFixed(1)}% used`}</text>
+          <text x="420" y="415" class="vs-node-detail">STORAGE VIP</text><text x="420" y="436" class="vs-core-vip">${esc(spec?.virtual_ip || '—')}</text>
+        </a>
+        <text x="420" y="737" class="vs-ring-hint">DRAG TO ROTATE · SELECT TO EXPLORE</text>
+      </svg></div>`;
   }
   function replicaTable(data) {
     return `<div class="vs-replica-table table-wrap"><table><thead><tr><th>Node</th><th>Role / disk</th><th>Status / quorum</th><th>Peer replication</th><th>Sync</th><th>Out of sync</th><th>Verify remaining</th></tr></thead><tbody>${data.nodes.map((n) => {
@@ -298,7 +343,7 @@ window.VirtualStorageUI = (() => {
     const capacity = `<div class="vs-capacity-layout"><article class="vs-replica">${gauge(usedPercent, "Filesystem used")}</article><div class="vs-overview">${metric("Used", pool?.allocation_gb != null ? `${num(pool.allocation_gb)} GB` : null)}${metric("Available", pool?.available_gb != null ? `${num(pool.available_gb)} GB` : null)}${metric("Total capacity", pool?.capacity_gb != null ? `${num(pool.capacity_gb)} GB` : null)}</div></div><p class="hint">Usage is the exported filesystem capacity. Thin pool utilization and growth history are not reported by the current API.</p>`;
     const panels = {
       overview: `${topologyScene(data, pool)}${summary}${pool ? `<div class="vs-overview">${metric("Used", pool.allocation_gb != null ? `${num(pool.allocation_gb)} GB` : "Not reported")}${metric("Available", pool.available_gb != null ? `${num(pool.available_gb)} GB` : "Not reported")}${metric("Shared by", pool.members.map((m) => esc(nodeName(m.node))).join(", "))}</div>` : ""}${!spec ? `<p class="hint">${prepared ? "Choose the disks on both nodes, review what will be erased, then create your shared storage." : "Prepare the storage components first, then select the data disks and optional SSD cache yourself."}</p>` : ""}`,
-      replication: replication(data),
+      mirror: replication(data),
       cache: `<h3>SSD acceleration</h3>${cacheGauges(data)}${cacheControls(data, running) || '<p class="hint">No SSD cache reported for this Virtual Storage.</p>'}`,
       capacity: `<h3>Capacity telemetry</h3>${capacity}`,
       files: `<h3>Shared filesystem</h3><p class="hint">${pool ? `Shared by ${pool.members.map((m) => esc(nodeName(m.node))).join(", ")}` : "Storage pool is not available for browsing."}</p>${pool ? '<button id="vs-browse" data-vs-browse class="primary">Browse files</button>' : ""}`,
@@ -341,11 +386,10 @@ window.VirtualStorageUI = (() => {
         ${["failed", "interrupted"].includes(data.job?.state) ? `<div class="vs-erase"><b>Operation ${esc(data.job.state)}</b><p>${esc(data.job.error)}</p><small>Inspect the recorded operation before retrying. Disk erasure is never replayed automatically.</small></div>` : ""}
         ${data.error ? `<p class="vs-erase">${esc(data.error)}</p>` : ""}
         ${workspace(data, pool, running, prepared)}`;
-      if (previousScene?.classList.contains("vs-has-webgl")) {
-        const freshScene = document.getElementById("vs-topology");
-        previousScene.querySelector("svg").replaceWith(freshScene.querySelector("svg"));
+      if (previousScene) {
+        previousScene.replaceChildren(...document.getElementById("vs-topology").childNodes);
         previousScene.classList.toggle("vs-linked", replicationConnected(data));
-        freshScene.replaceWith(previousScene);
+        document.getElementById("vs-topology").replaceWith(previousScene);
       }
       mountScene();
       if (focusId) document.getElementById(focusId)?.focus({preventScroll: true});

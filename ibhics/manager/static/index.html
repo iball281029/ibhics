@@ -287,7 +287,7 @@
       </nav>
       <section class="sheet vs-command" id="storage-panel-virtual" data-storage-panel="virtual" role="tabpanel" aria-labelledby="storage-tab-virtual">
         <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a><button id="vs-prepare" class="admin-only" disabled>Prepare storage</button><button id="vs-create" class="primary admin-only" disabled>+ Add Virtual Storage</button></div>
-        <nav id="vs-tabs" role="tablist" aria-label="Virtual Storage sections"><button id="vs-tab-overview" role="tab" aria-controls="vs-panel-overview" aria-selected="true" tabindex="0" data-vs-tab="overview">Overview</button><button id="vs-tab-replication" role="tab" aria-controls="vs-panel-replication" aria-selected="false" tabindex="-1" data-vs-tab="replication">Replication</button><button id="vs-tab-cache" role="tab" aria-controls="vs-panel-cache" aria-selected="false" tabindex="-1" data-vs-tab="cache">Cache</button><button id="vs-tab-capacity" role="tab" aria-controls="vs-panel-capacity" aria-selected="false" tabindex="-1" data-vs-tab="capacity">Capacity</button><button id="vs-tab-files" role="tab" aria-controls="vs-panel-files" aria-selected="false" tabindex="-1" data-vs-tab="files">Files</button><button id="vs-tab-settings" role="tab" aria-controls="vs-panel-settings" aria-selected="false" tabindex="-1" data-vs-tab="settings">Settings</button></nav>
+        <nav id="vs-tabs" role="tablist" aria-label="Virtual Storage sections"><button id="vs-tab-overview" role="tab" aria-controls="vs-panel-overview" aria-selected="true" tabindex="0" data-vs-tab="overview">Overview</button><button id="vs-tab-mirror" role="tab" aria-controls="vs-panel-mirror" aria-selected="false" tabindex="-1" data-vs-tab="mirror">Mirror</button><button id="vs-tab-cache" role="tab" aria-controls="vs-panel-cache" aria-selected="false" tabindex="-1" data-vs-tab="cache">Cache</button><button id="vs-tab-capacity" role="tab" aria-controls="vs-panel-capacity" aria-selected="false" tabindex="-1" data-vs-tab="capacity">Capacity</button><button id="vs-tab-files" role="tab" aria-controls="vs-panel-files" aria-selected="false" tabindex="-1" data-vs-tab="files">Files</button><button id="vs-tab-settings" role="tab" aria-controls="vs-panel-settings" aria-selected="false" tabindex="-1" data-vs-tab="settings">Settings</button></nav>
         <div id="virtual-storage-status">Checking storage readiness…</div>
       </section>
       <section class="sheet vs-command storage-collection storage-panels" id="storage-panel-local" data-storage-panel="local" role="tabpanel" aria-labelledby="storage-tab-local" hidden>
@@ -1804,6 +1804,6 @@
 <script src="fabric.js"></script>
 <script type="importmap">{"imports":{"three":"./vendor/three/three.module.min.js","three/addons/":"./vendor/three/addons/"}}</script>
 <script type="module" src="fabric3d.js"></script>
-<script type="module" src="storage-scene.js"></script>
+<script defer src="storage-scene.js"></script>
 </body>
 </html>

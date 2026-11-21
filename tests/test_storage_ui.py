@@ -93,8 +93,108 @@ assert(!html.includes('<b>Not reported</b>')); assert(!html.includes('NaN'));
 assert(!workspace({nodes:[],cache:[]},null,false,false).includes('<b>Not reported</b>'));
 assert.equal(metric('Missing',null),''); assert.equal(metric('Missing','Not reported'),'');
 assert(metric('Zero','0').includes('<b>0</b>'));
-assert(topologyScene(data,pool).includes('25.0% used'));
+const ring = topologyScene(data,pool);
+assert(ring.includes('25.0% used'));
+assert(ring.includes('stroke-dasharray="25 100"'));
+assert.equal((ring.match(/data-ring-index=/g) || []).length, 6);
+assert(ring.includes('href="#storage/virtual/mirror"'));
+assert(ring.includes('href="#storage/virtual/cache"'));
+assert(ring.includes('href="#storage/virtual/capacity"'));
+assert(html.includes('id="vs-panel-mirror"'));
+assert(!html.includes('id="vs-panel-replication"'));
+data.nodes[0].healthy = false;
+assert(topologyScene(data,pool).includes('vs-tone-alert'));
+assert(!topologyScene(data,pool).includes('vs-scene vs-linked'));
+data.cache[0].error = 'Unavailable';
+assert(topologyScene(data,pool).includes('Check cache'));
+data.cache = [{dirty_bytes:1}];
+assert(topologyScene(data,pool).includes('vs-tone-warning'));
+const missing = topologyScene({nodes:[],cache:[]},null);
+assert(missing.includes('class="vs-missing">—'));
+assert(!missing.includes('NaN'));
+assert(!missing.includes('Online'));
+pool.display_name = '<img src=x onerror=alert(1)>';
+assert(!topologyScene(data,pool).includes('<img'));
+pool.allocation_gb=200;
+assert(topologyScene(data,pool).includes('100.0% used'));
 assert(!topologyScene(data,null).includes('NaN'));
 """
     result = subprocess.run(["node", "-e", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_virtual_storage_mirror_tab_keeps_migrate_replication():
+    html = (STATIC / "index.html").read_text()
+    tree = StorageTree()
+    tree.feed(html)
+    attrs, _ = tree.elements["vs-tab-mirror"]
+    assert attrs["aria-controls"] == "vs-panel-mirror"
+    assert attrs["data-vs-tab"] == "mirror"
+    assert "vs-tab-replication" not in html
+    assert '<button data-tab="replications">Replication</button>' in html
+    assert '<script defer src="storage-scene.js"></script>' in html
+    assert '<script type="module" src="fabric3d.js"></script>' in html
+    scene = (STATIC / "storage-scene.js").read_text()
+    assert "from 'three'" not in scene
+    assert "canvas" not in scene
+
+
+def test_storage_ring_motion_and_navigation():
+    if not shutil.which("node"):
+        pytest.skip("Node.js is required for ring interaction checks")
+    code = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const listeners = {}, visibility = {}, mediaListeners = {};
+const media = {matches:false,addEventListener:(k,v)=>mediaListeners[k]=v,removeEventListener(){}};
+let pageActive = true, hidden = false, observerCallback, frames = new Map(), serial = 0;
+const classes = new Set();
+const node = {dataset:{ringIndex:'0'},setAttribute(k,v){this[k]=v;}};
+const host = {isConnected:true,classList:{toggle(k,v){v ? classes.add(k) : classes.delete(k);}},
+  closest:()=>hidden ? {} : null, querySelectorAll:()=>[node],
+  querySelector:()=>({getBoundingClientRect:()=>({left:0,top:0,width:840,height:760})}),
+  addEventListener:(k,v)=>listeners[k]=v,removeEventListener(){},
+  setPointerCapture(){},hasPointerCapture:()=>false,releasePointerCapture(){}};
+const page = {classList:{contains:()=>pageActive}};
+const document = {hidden:false,getElementById:()=>page,
+  addEventListener:(k,v)=>visibility[k]=v,removeEventListener(){}};
+const window = {};
+vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {window, document,
+  matchMedia:()=>media,MutationObserver:class {
+    constructor(fn){observerCallback=fn;}observe(){}disconnect(){}},
+  requestAnimationFrame:fn=>{frames.set(++serial,fn);return serial;},
+  cancelAnimationFrame:id=>frames.delete(id)});
+function step(now) {const jobs=[...frames.values()];frames.clear();jobs.forEach(fn=>fn(now));}
+window.StorageScene.mount(host);
+assert.equal(frames.size,1);step(100);const initial=node.transform;step(140);
+assert.notEqual(node.transform,initial);assert(!node.transform.includes('rotate'));
+listeners.pointerenter();assert.equal(frames.size,0);assert(classes.has('vs-motion-paused'));
+const target = {closest:()=>null};
+listeners.pointerdown({pointerId:1,button:0,isPrimary:true,clientX:664,clientY:364,target});
+listeners.pointermove({pointerId:1,clientX:420,clientY:608});
+assert.notEqual(node.transform,initial);
+listeners.pointerup({pointerId:1});
+let prevented=false;
+listeners.click({detail:1,preventDefault(){prevented=true;},stopPropagation(){}});
+assert(prevented); // Drag must not navigate to the icon underneath the pointer.
+prevented=false;listeners.click({detail:1,preventDefault(){prevented=true;}});assert(!prevented);
+listeners.pointerleave();assert.equal(frames.size,1);
+document.hidden=true;visibility.visibilitychange();assert.equal(frames.size,0);
+document.hidden=false;visibility.visibilitychange();assert.equal(frames.size,1);
+hidden=true;observerCallback();assert.equal(frames.size,0);
+hidden=false;pageActive=false;observerCallback();assert.equal(frames.size,0);
+pageActive=true;observerCallback();assert.equal(frames.size,1);
+media.matches=true;mediaListeners.change();assert.equal(frames.size,0);
+const still=node.transform;
+listeners.pointerdown({pointerId:2,button:0,clientX:664,clientY:364,target});
+listeners.pointermove({pointerId:2,clientX:420,clientY:608});assert.equal(node.transform,still);
+media.matches=false;mediaListeners.change();assert.equal(frames.size,1);
+window.StorageScene.mount(null);assert.equal(frames.size,0);
+"""
+    result = subprocess.run(
+        ["node", "-e", code, str(STATIC / "storage-scene.js")],
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode == 0, result.stderr

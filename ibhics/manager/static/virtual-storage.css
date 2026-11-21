@@ -51,23 +51,41 @@
 #page-storage .vs-command .vs-list .vs-replica {border-radius:0}
 #page-storage .vs-command .vs-view-switch {display:flex;gap:0}
 #page-storage .vs-command .vs-view-switch button {clip-path:none}
-.vs-scene {position:relative;isolation:isolate;perspective:900px;overflow:hidden;border:1px solid #3ef0ff33;border-radius:16px;background:radial-gradient(ellipse at 50% 64%,#0b496444,transparent 65%),#020d1c66}
-.vs-scene .vs-grid {position:absolute;inset:0;z-index:-1;transform:rotateX(62deg) scale(1.5);transform-origin:center 72%;background-image:linear-gradient(#3ef0ff16 1px,transparent 1px),linear-gradient(90deg,#3ef0ff16 1px,transparent 1px);background-size:36px 36px;mask-image:radial-gradient(ellipse,#000,transparent 70%)}
-.vs-scene svg {display:block;width:100%;max-height:440px;overflow:visible}
-.vs-scene text {text-anchor:middle;fill:#dcfaff;stroke:none;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
-.vs-scene text.vs-svg-dim {fill:#89aaca;font-size:11px}
-.vs-scene text.vs-vip {font-size:18px;fill:#fff}
-.vs-wires {stroke:#3ef0ff33;stroke-width:3;fill:none}
-.vs-beam {stroke:#89aaca66;stroke-width:2;stroke-dasharray:7 14;fill:none}
-.vs-linked .vs-beam {stroke:#3ef0ff;animation:vs-stream 2s linear infinite;filter:drop-shadow(0 0 3px #3ef0ff)}
-.vs-orbit {fill:none;stroke:#3ef0ff55;stroke-width:1.5}
-.vs-ring {fill:none;stroke:#3ef0ff22;stroke-width:9}
-.vs-ring .vs-ring-used {stroke:#b49bff;filter:drop-shadow(0 0 4px #b49bff66)}
-.vs-tower {stroke:#3ef0ff;stroke-width:1.3;fill:#0c3048;filter:drop-shadow(0 8px 10px #3ef0ff22)}
-.vs-arbiter {stroke:#b49bff;stroke-width:1.4;fill:#25284b;animation:vs-hover 5s ease-in-out infinite}
-.vs-scene p {margin:0;padding:14px 20px;border-top:1px solid #3ef0ff22;color:#89aaca;font-size:11px;line-height:1.8;text-align:center}
-@keyframes vs-stream {to{stroke-dashoffset:-42}}
-@keyframes vs-hover {50%{transform:translateY(-5px)}}
+/* Two concentric hologram rings with glyphs anchored in the annulus. */
+.vs-scene {position:relative;isolation:isolate;overflow:hidden;border:1px solid #3ef0ff33;border-radius:16px;background:radial-gradient(ellipse at center,#0c334b88,#020c18 72%);touch-action:pan-y;user-select:none}
+.vs-scene .vs-hologram {display:block;width:100%;max-width:840px;height:auto;margin:auto;cursor:grab;touch-action:none}
+.vs-scene .vs-hologram:active {cursor:grabbing}
+.vs-scene text {text-anchor:middle;fill:#dcfaff;font:14px ui-monospace,SFMono-Regular,Menlo,monospace;stroke:none;pointer-events:none}
+.vs-ring-base {fill:none;stroke:#3ef0ff;stroke-width:2;filter:drop-shadow(0 0 4px #3ef0ff55)}
+.vs-ring-base .vs-ring-shadow {stroke:#3ef0ff12;stroke-width:12}
+.vs-ring-base .vs-ring-ticks {stroke:#3ef0ff66;stroke-width:5;stroke-dasharray:2 12}
+.vs-ring-base .vs-progress-track {stroke:#3ef0ff22;stroke-width:7}
+.vs-ring-base .vs-ring-used {stroke:#7df9ff;stroke-width:7;stroke-linecap:round}
+.vs-ring-base .vs-beam {stroke:#ff637c;stroke-width:3;stroke-dasharray:1 14 1 74;stroke-linecap:round}
+.vs-linked .vs-beam {stroke:#3ef0ff;animation:vs-stream 10s linear infinite}
+@keyframes vs-stream {to {stroke-dashoffset:-360}}
+.vs-ring-node {color:#3ef0ff;text-decoration:none;cursor:pointer}
+.vs-tone-alert {color:#ff637c}
+.vs-tone-warning {color:#ffcb66}
+.vs-tone-unknown {color:#89aaca}
+.vs-node-pad {fill:#051727;stroke:currentColor;stroke-opacity:.55;stroke-width:1.5}
+.vs-node-icon {fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 3px currentColor)}
+.vs-scene .vs-node-name {font-weight:700;font-size:15px}
+.vs-scene .vs-node-detail {fill:#89aaca;font-size:11px}
+.vs-scene .vs-node-status {fill:currentColor;font-size:11px}
+.vs-ring-node:hover .vs-node-pad,.vs-ring-node:focus-visible .vs-node-pad {fill:#113249;stroke-width:3;stroke-opacity:1}
+.vs-ring-core {cursor:pointer;text-decoration:none}
+.vs-ring-core circle {fill:#041321;stroke:#3ef0ff22}
+.vs-ring-core:hover circle,.vs-ring-core:focus-visible circle {stroke:#cfffff}
+.vs-scene .vs-core-brand {font-size:11px;letter-spacing:1px;fill:#3ef0ff}
+.vs-scene .vs-core-pool {font-size:15px;font-weight:700}
+.vs-scene .vs-core-usage {font-size:28px;font-weight:700}
+.vs-scene .vs-core-vip {font-size:14px}
+.vs-scene .vs-missing {font-size:12px;fill:#89aaca}
+.vs-scene .vs-ring-hint {font-size:10px;fill:#89aaca;letter-spacing:2px}
+.vs-ring-rotation:focus-visible {outline:none}
+.vs-ring-rotation:focus-visible .vs-node-pad {stroke:#fff;stroke-width:3}
+.vs-motion-paused * {animation-play-state:paused!important}
 @media(max-width:720px) {
   #page-storage .vs-command {padding:14px}
   #page-storage .vs-command h1 {font-size:22px}
@@ -78,8 +96,6 @@
   #page-storage .vs-command .vs-overview b {font-size:13px}
   #page-storage .vs-command .vs-cache-panel {padding:14px}
   #page-storage .vs-command .vs-cache-panel select {width:100%;font-size:16px}
-  .vs-scene svg {min-width:540px}
-  .vs-scene {overflow-x:auto}
   #page-storage .vs-command .vs-replicas {grid-template-columns:minmax(0,1fr)}
 }
 @media(prefers-reduced-motion:reduce) {
@@ -142,38 +158,12 @@
 #page-storage .vs-gauge b {display:block;font-size:19px;color:#e8fbff}
 #page-storage .vs-gauge small {display:block;font-size:9px;letter-spacing:1px;margin-top:7px}
 #page-storage .vs-cache-panel {margin-top:20px}
-/* The SVG stays in the DOM and is revealed if WebGL cannot render. */
-.vs-webgl {position:relative;height:clamp(420px,42vw,560px);width:100%;overflow:hidden;background:#020c18}
-.vs-webgl canvas {display:block;width:100%;height:100%;touch-action:pan-y;cursor:grab}
-.vs-webgl canvas:active {cursor:grabbing}
-.vs-has-webgl>svg,.vs-has-webgl>.vs-grid {display:none}
-.vs-scene-labels {position:absolute;inset:0;pointer-events:none;overflow:hidden}
-.vs-scene-label {position:absolute;transform:translate(-50%,-50%);padding:7px 10px;border:1px solid #3ef0ff44;border-left:2px solid #3ef0ff;background:linear-gradient(120deg,#062136e8,#03101ce0);box-shadow:0 5px 20px #0004;color:#dffbff;white-space:nowrap;text-align:left;max-width:260px;font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
-#page-storage .vs-scene-label b {display:block;overflow:hidden;text-overflow:ellipsis;font-size:11px}
-#page-storage .vs-scene-label small {display:block;font-size:9px;color:#91bdcf}
-.vs-label-vip {border-color:#5faaff77;border-left-color:#5faaff}
-.vs-label-cache {border-left-color:#62ffc8}
-.vs-label-alert {border-left-color:#ff637c}
-#page-storage .vs-label-alert small {color:#ffa6b5}
-.vs-label-core {text-align:center;border:1px solid #3ef0ff66}
-.vs-scene-label.vs-scene-hud {left:16px!important;top:16px!important;transform:none}
-#page-storage .vs-scene-label {background:linear-gradient(120deg,#062136b8,#03101ca8);backdrop-filter:blur(3px)}
-/* Storage dialogs share the workspace palette without changing their actions. */
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) {background:radial-gradient(ellipse at top,#103649,#061525 65%);color:#cfefff;border:1px solid #3ef0ff55}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn) {background:#020d1c;color:#cfefff;border:1px solid #3ef0ff55;border-radius:4px;accent-color:#3ef0ff}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.hint,.vm-sub,small,label) {color:#89aaca}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(table,thead,tbody,tr,td,th,.vs-node,.pv-summary,.vs-review) {background:transparent;color:#cfefff;border-color:#3ef0ff33}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) .primary {background:#09607966;border-color:#3ef0ff99}
 @media(max-width:720px) {
   #page-storage .storage-heading>span {display:none}
   #page-storage #storage-tabs button {font-size:9px;letter-spacing:.5px;padding:10px 4px}
   #page-storage .storage-panels tbody {grid-template-columns:minmax(0,1fr)}
   #page-storage .vs-capacity-layout {grid-template-columns:1fr}
   #page-storage .vs-scene {overflow:hidden}
-  .vs-webgl {height:440px}
-  .vs-scene-label {padding:4px 6px;max-width:160px}
-  #page-storage .vs-scene-label b {font-size:9px}
-  #page-storage .vs-scene-label small {font-size:8px}
 }
 /* Pause the fallback's animations when a primary/subtab is hidden. */
 #page-storage [hidden] *,body.storage-document-hidden #page-storage * {animation-play-state:paused!important}
@@ -187,5 +177,4 @@
 :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.type-card:has(input:checked),.tabs button.active) {background:#3ef0ff19;border-color:#3ef0ff;color:#e8fbff}
 :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.vs-erase,#vs-review) {background:#401b2a66;border-color:#ff6b7a55;color:#ffc2cd}
 :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn):focus-visible {outline:2px solid #bffaff;outline-offset:2px}
-.vs-scene:not(.vs-linked) .vs-beam {stroke:#ff6b7a}
 @media(max-width:720px) {#page-storage .vs-scene>svg {min-width:0}}
