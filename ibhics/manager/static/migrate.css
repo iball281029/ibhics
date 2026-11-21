@@ -511,3 +511,11 @@ dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:t
 .mg-target-nic {border:1px solid #3ef0ff22;border-radius:8px;padding:8px;margin-bottom:8px}
 .mg-target-nic h5 {margin:0 0 6px}
 .mg-target-nic small {display:inline-block;margin:6px;overflow-wrap:anywhere}
+/* Replication shares the migration hologram panels and destination editor. */
+.mg-replicas { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr)); gap:16px; margin-top:16px; }
+.mg-replicas.is-list { grid-template-columns:1fr; }
+.mg-replica dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; }
+.mg-replica dd { margin:0; }
+.mg-replica progress { width:100%; }
+.mg-replica .toolbar { flex-wrap:wrap; gap:6px; }
+#replication-test-networks { display:grid; gap:12px; }

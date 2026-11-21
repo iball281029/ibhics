@@ -257,6 +257,7 @@ def create_app(
     activity=None,
     p2v=None,
     p2v_pin: str = "",
+    replications=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -321,6 +322,7 @@ def create_app(
             async def schedule() -> None:
                 while True:
                     await asyncio.to_thread(backups.tick)
+                    await asyncio.to_thread(replications.tick)
                     await asyncio.to_thread(recycle.purge_expired)
                     await asyncio.to_thread(activity.purge)
                     await asyncio.sleep(scheduler_interval)
@@ -344,6 +346,10 @@ def create_app(
     imports.p2v = p2v
     imports.migrations = migrations
     app.state.imports = imports
+    from .replications import ReplicationManager
+
+    replications = replications or ReplicationManager(imports)
+    app.state.replications = replications
     install_driver_errors(app)
     install_cluster_errors(app)
 
@@ -1725,6 +1731,10 @@ def create_app(
     @api.get("/migrate/jobs", response_model=list[ImportJobOut])
     def list_imports() -> list[ImportJobOut]:
         return [ImportJobOut(**job.__dict__) for job in imports.jobs()]
+
+    from . import replication_api
+
+    replication_api.install(api, replications)
 
     # VM console: the browser's noVNC WebSocket is relayed to the VM's VNC display, on this
     # node directly or through the agent of the VM's node.

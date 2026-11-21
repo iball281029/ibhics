@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
+const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], replications: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -469,6 +469,7 @@ const loaders = {
   sources: async () => { state.sources = await api("/migrate/sources"); },
   isos: async () => { state.isos = await api("/isos"); },
   imports: async () => { state.imports = await api("/migrate/jobs"); },
+  replications: async () => { state.replications = await api("/migrate/replications"); },
   containers: async () => { state.containers = await api("/containers"); },
   ctTemplates: async () => { if (!state.ctTemplates?.length) state.ctTemplates = await api("/containers/templates"); },
   summaries: async () => {
@@ -831,7 +832,7 @@ async function refresh(page, auto = false) {
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
-  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
+  if (page === "migrate") { await load("sources", "imports", "replications", "pools"); fillSelects(); renderSources(); renderImports(); renderReplications(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
@@ -5040,11 +5041,15 @@ function renderImports() {
       <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button>${canOperate() && ["queued", "running"].includes(j.state) ? `<button class="small danger" data-import-cancel="${esc(j.id)}">Cancel</button>` : ""}</td></tr>`).join("") : empty(7, "No imports yet");
 }
 
-async function openImportWizard(indices) {
+async function openImportWizard(indices, replication = false) {
   if (!canOperate() || !sourceVMsFor || !indices.length) return;
   const source = sourceVMsFor, vms = [...sourceVMs];
   await load("vms", "pools", "networks");
-  openDialog("import-dialog", { source, vms, indices });
+  if (replication) {
+    const cap = await api(`/migrate/sources/${enc(source)}/replication-capability`);
+    if (!cap.supported) throw new Error(cap.reason);
+  }
+  openDialog("import-dialog", { source, vms, indices, replication });
 }
 $("#migrate-selected").addEventListener("click", () => openImportWizard([...migratePicked]).catch(fail));
 $("#page-migrate").addEventListener("click", async (e) => {
@@ -5120,6 +5125,62 @@ handlers["source-dialog"] = async (f) => {
 };
 
 // Map the union of source networks, then rebuild each VM's NIC array in NIC order.
+// Replication controls live outside the import-wizard diagnostic test slice.
+let replicationView = "cards";
+function renderReplications() {
+  const box = $("#replications");
+  box.classList.toggle("is-list", replicationView === "list");
+  box.innerHTML = state.replications.length ? state.replications.map((j) => {
+    const busy = !!j.operation || ["seeding", "syncing", "cutting-over"].includes(j.state);
+    const button = (action, label, disabled = false) => `<button class="small operator-only" data-replication-id="${esc(j.id)}" data-replication-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`;
+    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.capability.change_tracking)}</p><dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status">${esc(j.error || j.operation || "")}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
+  }).join("") : '<p class="hint">No replications yet.</p>';
+}
+$("#new-replication").onclick = () => {
+  if (!sourceVMsFor || !sourceVMs.length) {
+    selectTab("migrate-tabs", "import");
+    toast("Select a source and load its VM inventory first.");
+    return;
+  }
+  const indices = migratePicked.size ? [...migratePicked] : sourceVMs.map((v, i) => i);
+  openImportWizard(indices, true).catch(fail);
+};
+$$("[data-replication-view]").forEach((b) => { b.onclick = () => {
+  replicationView = b.dataset.replicationView;
+  $$("[data-replication-view]").forEach((v) => v.setAttribute("aria-pressed", String(v === b)));
+  renderReplications();
+}; });
+$("#replications").onclick = async (e) => {
+  const b = e.target.closest("[data-replication-action]");
+  if (!b || !canOperate()) return;
+  const j = state.replications.find((job) => job.id === b.dataset.replicationId);
+  if (!j) return;
+  const action = b.dataset.replicationAction, url = `/migrate/replications/${enc(j.id)}`;
+  b.disabled = true;
+  try {
+    if (action === "cutover") openDialog("replication-cutover-dialog", j);
+    else if (action === "test-failover") {
+      await load("networks");
+      $("#replication-test-networks").innerHTML = Array.from({length: j.source_vm.nics}, (_, i) => `<label>NIC ${i + 1}<select name="network"><option value="">Disconnected (isolated)</option>${state.networks.filter((n) => !n.node || n.node === j.node).map((n) => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></label>`).join("");
+      openDialog("replication-test-dialog", j);
+    } else if (action === "pause") await patch(url, {paused: j.state !== "paused"});
+    else if (action === "delete") { if (confirm(`Delete replica data for ${j.name}? The cutover VM is kept.`)) await del(`${url}?confirm=true`); }
+    else await post(`${url}/${action}`);
+    await refresh("migrate");
+  } catch (err) { fail(err); } finally { b.disabled = false; }
+};
+handlers["replication-cutover-dialog"] = async (f, j) => {
+  if (f.get("source_powered_off") !== "on") throw new Error("Confirm that the source VM is powered off.");
+  await post(`/migrate/replications/${enc(j.id)}/cutover`, {source_powered_off: true});
+  await refresh("migrate");
+};
+handlers["replication-test-dialog"] = async (f, j) => {
+  const networks = f.getAll("network");
+  if (networks.some(Boolean) && networks.some((n) => !n)) throw new Error("Choose all test networks or leave every NIC disconnected.");
+  await post(`/migrate/replications/${enc(j.id)}/test-failover`, {networks: networks.some(Boolean) ? networks : []});
+  await refresh("migrate");
+};
+
 const importForm = $("#import-form");
 const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set() };
 function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
@@ -5258,7 +5319,7 @@ function renderImportTargets() {
         const badge = source && d.size_gb && d.size_gb !== source ? `<span class="mg-resize-badge">${d.size_gb < source ? "SHRINK" : "GROW"}</span>` : "";
         return `<div class="mg-target-disk"><h5>Disk ${i + 1} ${badge}</h5><div class="mg-target-grid">${field("Storage pool", "pool", d.pool, initialPool, (attrs) => `<select ${attrs}>${importOptions(pools.map((p) => p.name), d.pool)}</select>`, i)}${field("Size (GiB)", "size_gb", d.size_gb, source || null, (attrs) => `<input type="number" min="1" step="1" value="${d.size_gb ?? ""}" placeholder="Keep original size" ${attrs}>`, i)}</div></div>`;
       }).join("")}</div>${shrinking ? '<p class="hint mg-shrink-hint">Shrink needs used space +10% (minimum +1 GiB). Checked after conversion; filesystem support required.</p>' : ""}
-      <div class="mg-target-grid">${field("Start after import", "start", t.start, false, (attrs) => `<input type="checkbox" ${t.start ? "checked" : ""} ${attrs}>`)}${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? field("Clear hibernation", "clear_hibernation", t.clear_hibernation, false, (attrs) => `<input type="checkbox" ${t.clear_hibernation ? "checked" : ""} ${attrs}>`) : ""}</div></section></article>`;
+      <div class="mg-target-grid">${field(importBatch.replication ? "Start after cutover" : "Start after import", "start", t.start, false, (attrs) => `<input type="checkbox" ${t.start ? "checked" : ""} ${attrs}>`)}${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? field("Clear hibernation", "clear_hibernation", t.clear_hibernation, false, (attrs) => `<input type="checkbox" ${t.clear_hibernation ? "checked" : ""} ${attrs}>`) : ""}</div></section></article>`;
   }).join("");
   const save = (input, reset = false) => {
     const vm = importChosen()[Number(input.dataset[reset ? "resetVm" : "targetVm"])];
@@ -5352,7 +5413,13 @@ const importWiz = wizard("import-dialog", {
   steps: 3,
   reset() {
     const ctx = dialogContext;
-    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set() });
+    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set(), replication: !!ctx.replication });
+    $("#import-title").textContent = importBatch.replication ? "New replication" : "Migrate VMs";
+    $("#import-final-step").textContent = importBatch.replication ? "Schedule & review" : "Summary";
+    $("#replication-schedule").hidden = !importBatch.replication;
+    $$("#replication-schedule input").forEach((input) => { input.disabled = !importBatch.replication; });
+    $("#import-dialog .wiz-ok").textContent = importBatch.replication ? "Create replication" : "Start migration";
+    $("#import-power-hint").textContent = importBatch.replication ? "Source VMs may remain running while snapshots sync." : "Power off selected VMs at the source to continue.";
     $("#import-submit-status").textContent = "";
     importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
     importTargetPools();
@@ -5360,7 +5427,7 @@ const importWiz = wizard("import-dialog", {
   check(step) {
     const chosen = importChosen();
     if (!chosen.length) throw new Error("Select at least one VM.");
-    if (chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
+    if (!importBatch.replication && chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
     if (step >= 2) {
       const { invalid, insufficient } = importCapacity();
       if (invalid) throw new Error("Choose a healthy node, an available pool, and a positive whole disk size (or leave size blank to keep the original).");
@@ -5378,7 +5445,7 @@ const importWiz = wizard("import-dialog", {
   },
   show(step) {
     if (step === 1) {
-      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" ? " — power off first" : ""}</td><td>${(vm.disks_gb || []).map((g) => g ? `${g} GiB` : "Size detected after conversion").join(", ") || "Size detected after conversion"}</td></tr>`).join("");
+      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" && !importBatch.replication ? " — power off first" : ""}</td><td>${(vm.disks_gb || []).map((g) => g ? `${g} GiB` : "Size detected after conversion").join(", ") || "Size detected after conversion"}</td></tr>`).join("");
     }
     if (step === 2) {
       const source = state.sources.find((s) => s.name === importBatch.source);
@@ -5391,7 +5458,7 @@ const importWiz = wizard("import-dialog", {
       $("#import-summary").innerHTML = importChosen().map((vm) => {
         const t = importTarget(vm), r = importBatch.resources.get(vm.ref) || vm;
         return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} (${r.cpu_sockets || 1} × ${r.cpu_cores || r.vcpus}) · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicLabel(vm, i, src))} · MAC ${esc(importNicMac(vm, i))}`).join("<br>")}</p></article>`;
-      }).join("") + `<p class="hint">Keep source VMs powered off until migration completes.</p>`;
+      }).join("") + `<p class="hint">${importBatch.replication ? "Sync starts immediately. Shut down the source only when ready for cutover." : "Keep source VMs powered off until migration completes."}</p>`;
     }
   },
 });
@@ -5413,7 +5480,9 @@ handlers["import-dialog"] = async (f) => {
     try {
       await importResolveNetworks(vm);
       const t = importBatch.targets.get(vm.ref);
-      await post("/migrate/jobs", {
+      const schedule = importBatch.replication ? (f.get("replication_at") ? {at: f.get("replication_at")} : {interval_minutes: Number(f.get("replication_interval"))}) : undefined;
+      await post(importBatch.replication ? "/migrate/replications" : "/migrate/jobs", {
+        ...(schedule ? {schedule} : {}),
         cpu_sockets: (importBatch.resources.get(vm.ref) || {}).cpu_sockets || 1,
         cpu_cores: (importBatch.resources.get(vm.ref) || {}).cpu_cores || (importBatch.resources.get(vm.ref) || vm).vcpus,
         source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
@@ -5427,9 +5496,9 @@ handlers["import-dialog"] = async (f) => {
       throw err;
     }
   }
-  toast(`${chosen.length} migration jobs created.`);
+  toast(`${chosen.length} ${importBatch.replication ? "replication" : "migration"} jobs created.`);
   await refresh("migrate");
-  selectTab("migrate-tabs", "imports");
+  selectTab("migrate-tabs", importBatch.replication ? "replications" : "imports");
 };
 
 // ---------- settings ----------
