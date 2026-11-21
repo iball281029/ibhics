@@ -5647,6 +5647,40 @@ $("#routers").addEventListener("click", async (e) => {
 // Network studio: firewall drafts are independent from live state and topology drafts.
 const nw = { draft: null, base: null, busy: false, conflict: false, from: null, undo: null, applied: null, expired: false, deadline: 0, dragRule: null };
 const nwServices = { Custom: null, Web: ['tcp', '80,443'], SSH: ['tcp', '22'], RDP: ['tcp', '3389'], DNS: ['udp', '53'], 'SQL Server': ['tcp', '1433'], MySQL: ['tcp', '3306'], PostgreSQL: ['tcp', '5432'], SMB: ['tcp', '445'], Ping: ['icmp', ''] };
+// Services the user added with "+ Add service" are kept in this browser.
+const nwCustomKey = 'ibhics.fw.services';
+function nwLoadCustom() {
+  try { Object.assign(nwServices, JSON.parse(localStorage.getItem(nwCustomKey) || '{}')); } catch { /* ignore */ }
+}
+function nwSaveCustom(name, proto, ports) {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(nwCustomKey) || '{}'); } catch { /* ignore */ }
+  saved[name] = [proto, ports];
+  localStorage.setItem(nwCustomKey, JSON.stringify(saved));
+  nwServices[name] = [proto, ports];
+}
+function nwRenderServices() {
+  const picked = new Set($$('#nw-rule-services input:checked').map(b => b.value));
+  $('#nw-rule-services').innerHTML = Object.entries(nwServices).filter(([, v]) => v).map(([n, [proto, ports]]) => `<label class="nw-svc"><input type="checkbox" value="${esc(n)}" ${picked.has(n) ? 'checked' : ''}><span>${esc(n)}</span><small>${proto.toUpperCase()}${ports ? ' ' + esc(ports) : ''}</small></label>`).join('')
+    + `<button type="button" class="nw-svc nw-svc-add" id="nw-svc-add">+ Add service</button>`
+    + `<span class="nw-svc-new" id="nw-svc-new" hidden><input id="nw-svc-name" placeholder="Name, e.g. App" maxlength="24"><select id="nw-svc-proto"><option value="tcp">TCP</option><option value="udp">UDP</option></select><input id="nw-svc-ports" placeholder="8080 or 8000-8100"><button type="button" id="nw-svc-save">Add</button></span>`;
+  $('#nw-svc-add').onclick = () => { $('#nw-svc-new').hidden = false; $('#nw-svc-name').focus(); };
+  $('#nw-svc-save').onclick = () => {
+    const name = $('#nw-svc-name').value.trim(), proto = $('#nw-svc-proto').value, ports = $('#nw-svc-ports').value.trim();
+    try {
+      if (!/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,23}$/.test(name)) throw Error('Service name: letters, digits, space, _ . -');
+      if (nwServices[name] !== undefined && !JSON.parse(localStorage.getItem(nwCustomKey) || '{}')[name]) throw Error('That name is a built-in service');
+      NetworkCore.ports(ports);
+      if (!ports) throw Error('Enter a port or a range');
+      nwSaveCustom(name, proto, ports);
+      nwRenderServices();
+      const box = $$('#nw-rule-services input').find(b => b.value === name);
+      if (box) box.checked = true;
+      nwSyncServices();
+      $('#nw-test-service').innerHTML = Object.keys(nwServices).map(n => `<option>${esc(n)}</option>`).join('');
+    } catch (err) { toast(err.message, true); }
+  };
+}
 // Several picked services may mix protocols; one rule is staged per protocol.
 function nwServiceGroups() {
   const groups = {};
@@ -5786,8 +5820,9 @@ $('#nw-switch-cards').addEventListener('submit', async (e) => {
 });
 $('#nw-switch-view').onclick = () => {const list=$('#tab-net-list').classList.toggle('list'); $('#nw-switch-view').textContent=list?'Card view':'List view';};
 $('#nw-discard').onclick = () => {nw.draft=null; nw.base=null; renderNetworkStudio(); window.Network3D?.update();};
-$('#nw-rule-services').innerHTML = Object.entries(nwServices).filter(([, v]) => v).map(([n, [proto, ports]]) => `<label class="nw-svc"><input type="checkbox" value="${esc(n)}"><span>${esc(n)}</span><small>${proto.toUpperCase()}${ports ? ' ' + esc(ports) : ''}</small></label>`).join('');
-$('#nw-rule-services').onchange = nwSyncServices;
+nwLoadCustom();
+nwRenderServices();
+$('#nw-rule-services').onchange = e => { if (e.target.matches('input[type=checkbox]')) nwSyncServices(); };
 for (const id of ['nw-test-service']) $('#'+id).innerHTML = Object.keys(nwServices).map(n => `<option>${n}</option>`).join('');
 $('#nw-test-service').onchange = e => {const service=nwServices[e.target.value]; if (service) {const f=$('#nw-test-form'); f.elements.proto.value=service[0]; f.elements.port.value=service[1].split(',')[0];}};
 $('#nw-test-form').onsubmit = async e => {
