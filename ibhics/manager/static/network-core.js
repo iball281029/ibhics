@@ -135,6 +135,12 @@
         z:-depth/2+depths.slice(0,r).reduce((a,b)=>a+b+3,0)+depths[r]/2};
     });
   }
+  // Ordered membership only; CSS grid owns all dimensions and containment.
+  function topViewLayout(networks, vms, stopped = true) {
+    return [...networks].sort((a,b) => (a.name === 'default' ? -1 : b.name === 'default' ? 1 : (a.vlan || 1) - (b.vlan || 1)))
+      .map(network => ({ network, cards: vms.filter(vm => (stopped || vm.state === 'running') && vm.nics?.some(n => n.network === network.name))
+        .map(vm => ({ vm, ghost: vm.nics[0].network !== network.name })) }));
+  }
   function clampSlot(p, zone) {
     return { x: Math.max(-zone.w / 2 + 1.8, Math.min(zone.w / 2 - 1.8, p.x)), z: Math.max(-zone.d / 2 + 2.5, Math.min(zone.d / 2 - 1.8, p.z)) };
   }
@@ -151,7 +157,7 @@
     if(!vm || !target || target === `vm:${vm.name}`) return null;
     return {src:`vm:${vm.name}`,dst:target};
   }
-  const api = { detectOS, deviceIcon, deviceLegend, zoneAt, stageNicMove, draftRuleFromDrag, dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
+  const api = { topViewLayout, detectOS, deviceIcon, deviceLegend, zoneAt, stageNicMove, draftRuleFromDrag, dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
   if (typeof module !== 'undefined') module.exports = api;
   else root.NetworkCore = api;
 })(globalThis);

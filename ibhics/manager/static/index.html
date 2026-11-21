@@ -1072,7 +1072,7 @@
       <label>From <input name="src" list="fw-ends" value="any" required></label>
       <label>To <input name="dst" list="fw-ends" value="any" required></label>
       <label>Protocol <select name="proto"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP (ping)</option></select></label>
-      <label>Service preset <select id="nw-rule-service"></select></label>
+      <div class="wide nw-services"><span>Services <small>(pick one or more, or type ports below)</small></span><div id="nw-rule-services" role="group" aria-label="Services"></div><small id="nw-rule-split" class="hint" hidden></small></div>
       <label>Ports (TCP/UDP) <input name="ports" placeholder="80,443,8000-8100" pattern="[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*"></label>
       <label class="wide">Description <input name="description" maxlength="200"></label>
       <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>

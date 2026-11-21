@@ -23,6 +23,16 @@ for (const [vm,guest,expected] of [
 ]) assert.equal(core.detectOS(vm,guest),expected,JSON.stringify(vm));
 assert.equal(core.detectOS(),'other');
 console.log('Shared guest/configured OS detection checks passed');
+const topNetworks=[{name:'vlan2',vlan:2},{name:'default',vlan:1},{name:'empty',vlan:3}];
+const topVMs=Array.from({length:20},(_,i)=>({uuid:String(i),name:'long-name-'+i,state:i%4?'running':'stopped',nics:[{network:i%2?'vlan2':'default'}]}));
+topVMs[0].nics.push({network:'vlan2'},{network:'vlan2'});
+const topBefore=JSON.stringify(topVMs),topLayout=core.topViewLayout(topNetworks,topVMs);
+assert.deepEqual(topLayout.map(z=>z.network.name),['default','vlan2','empty']);
+assert.equal(topLayout.flatMap(z=>z.cards).filter(c=>!c.ghost).length,20);
+assert.equal(topLayout[1].cards.filter(c=>c.ghost).length,1,'duplicate secondary NICs produce one ghost');
+assert.equal(topLayout[2].cards.length,0);
+assert(core.topViewLayout(topNetworks,topVMs,false).flatMap(z=>z.cards).every(c=>c.vm.state==='running'));
+assert.equal(JSON.stringify(topVMs),topBefore,'layout never mutates inventory');
 const inventory = [{uuid:'a',name:'web',nics:[{network:'native'}],ips:['10.0.1.2']},{uuid:'b',name:'db',nics:[{network:'data'},{network:'native'}],ips:['10.0.2.8']}];
 const rules = [{name:'sql',action:'allow',src:'group:apps',dst:'vm:db',proto:'tcp',ports:'5432,6000-6010',enabled:true},{name:'block-data',action:'deny',src:'any',dst:'data',proto:'any',enabled:true}];
 const flow={src:'web',dst:'db',proto:'tcp',port:5432};
@@ -64,7 +74,7 @@ async function checkDiorama() {
   const fs = require('node:fs');
   const source = fs.readFileSync(require.resolve('../../ibhics/manager/static/network3d.js'), 'utf8').replace(/^import .*;$/gm, '');
   class Element {
-    constructor() { this.children=[]; this.style={}; this.hidden=false; this.checked=true; this.clientWidth=1114; this.clientHeight=700; this.width=1114; this.height=700; this.textContent=''; this.events={}; this.attributes={}; this.classes=new Set(['active']); this.classList={contains:c=>this.classes.has(c),add:c=>this.classes.add(c),remove:c=>this.classes.delete(c),toggle:c=>this.classes.has(c)?(this.classes.delete(c),false):(this.classes.add(c),true)}; }
+    constructor() { this.children=[]; this.style={setProperty(k,v){this[k]=v;}}; this.hidden=false; this.checked=true; this.clientWidth=1114; this.clientHeight=700; this.width=1114; this.height=700; this.textContent=''; this.events={}; this.attributes={}; this.classes=new Set(['active']); this.classList={contains:c=>this.classes.has(c),add:c=>this.classes.add(c),remove:c=>this.classes.delete(c),toggle:(c,force)=>{const add=force===undefined?!this.classes.has(c):force;if(add)this.classes.add(c);else this.classes.delete(c);return add;}}; }
     append(...items) { this.children.push(...items); }
     prepend(...items) { this.children.unshift(...items); }
     replaceChildren(...items) { this.children=items; }
@@ -115,8 +125,8 @@ async function checkDiorama() {
     assert.equal(Array.from(primary.el.children[0].textContent).length,24);
     assert.equal(primary.el.children[1].textContent,vms[0].ips[0]);
     assert(primary.el.title.includes(vms[0].name)&&primary.el.title.includes(vms[0].ips[1]),'tooltip preserves full details');
-    assert(snapshot.labels.some(l=>l.el.textContent==='Trunk switch (uplink)'));
-    assert(snapshot.labels.some(l=>l.el.textContent==='Internet / external router'));
+    assert(snapshot.labels.some(l=>l.el.textContent==='Trunk switch'));
+    assert(snapshot.labels.some(l=>l.el.textContent==='Internet'));
     const at=snapshot.nodes[0].position.clone().add(new THREE.Vector3(0,1.5,0)).project(snapshot.camera),event={button:0,clientX:(at.x+1)*1114/2,clientY:(1-at.y)*700/2,stopImmediatePropagation(){this.stopped=true;}};
     api.down(event);assert.equal(api.snapshot().drag,null,'view mode cannot start a VM drag');assert(event.stopped,'VM inspection cannot orbit the scene');
     api.move(event);assert.equal(snapshot.renderer.domElement.style.cursor,'');
@@ -128,7 +138,7 @@ async function checkDiorama() {
       const ps=snap.fitPoints.map(p=>p.clone().project(snap.camera));
       ps.forEach(v=>assert(Math.abs(v.x)<=.94&&Math.abs(v.y)<=.94,'all projected meshes fit'));
       const xs=ps.map(p=>(p.x+1)*w/2),ys=ps.map(p=>(1-p.y)*h/2);
-      for(const l of snap.labels.filter(l=>!l.el.hidden)){const x=parseFloat(l.el.style.left),y=parseFloat(l.el.style.top);xs.push(x,x+parseFloat(l.el.style.width));ys.push(y,y+(l.kind==='vm'?38:26));}
+      for(const l of snap.labels.filter(l=>!l.el.hidden)){const x=parseFloat(l.el.style.left),y=parseFloat(l.el.style.top);xs.push(x,x+parseFloat(l.el.style.width));ys.push(y,y+l.height);}
       const left=Math.min(...xs),right=Math.max(...xs),top=Math.min(...ys),bottom=Math.max(...ys);
       assert(Math.max((right-left)/w,(bottom-top)/h)>=.85,'scene uses at least 85% of the limiting dimension');
       assert(Math.max((right-left)/w,(bottom-top)/h)<=.90,'meshes and labels stay near the 88% fit target');
@@ -138,19 +148,72 @@ async function checkDiorama() {
 
     const vmLabels=snapshot.labels.filter(l=>l.kind==='vm');
     assert.equal(vmLabels.filter(l=>!l.el.hidden).length,vmCount,`${vlanCount} VLAN / ${vmCount} VM labels visible`);
-    const boxes=snapshot.labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.height}));
-    boxes.forEach((b,i)=>{assert(b.x>=0&&b.y>=0&&b.x+b.w<=1114&&b.y+b.h<=700);boxes.slice(i+1).forEach(c=>assert(!core.overlaps(b,c)));});
+    const assertAttached=()=>{
+      const snap=api.snapshot(),w=$('#nw-three').clientWidth,h=$('#nw-three').clientHeight;
+      snap.labels.filter(l=>l.zone&&!l.el.hidden).forEach(l=>{
+        const z=l.zone,corners=[];
+        for(const x of [z.x-z.w/2,z.x+z.w/2])for(const zz of [z.z-z.d/2,z.z+z.d/2])corners.push(new THREE.Vector3(x,.74,zz));
+        corners.sort((a,b)=>a.distanceToSquared(snap.camera.position)-b.distanceToSquared(snap.camera.position));
+        const projected=corners[0].project(snap.camera);
+        assert(Math.abs(l.anchor.x-(projected.x+1)*w/2)<.01&&Math.abs(l.anchor.y-(1-projected.y)*h/2)<.01,'VLAN caption follows the nearest zone corner');
+      });
+      snap.labels.filter(l=>l.owner&&!l.el.hidden).forEach(l=>{
+        const points=[];l.owner.updateWorldMatrix(true,true);
+        l.owner.traverse(o=>{if(!o.isMesh)return;o.geometry.computeBoundingBox();const b=o.geometry.boundingBox;
+          for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z])points.push(new THREE.Vector3(x,y,z).applyMatrix4(o.matrixWorld).project(snap.camera));
+        });
+        const xs=points.map(p=>(p.x+1)*w/2),ys=points.map(p=>(1-p.y)*h/2),anchorX=(Math.min(...xs)+Math.max(...xs))/2,anchorY=Math.max(...ys);
+        const x=parseFloat(l.el.style.left),y=parseFloat(l.el.style.top),width=parseFloat(l.el.style.width);
+        assert(Math.abs(x+width/2-anchorX)<.01,'caption centered under its own projected model');
+        assert(y>=anchorY&&y-anchorY<=6&&y-anchorY<=12,'caption within 12px below its own model anchor');
+      });
+    };
+    assertAttached();
+    // Force overlap at different camera depths and verify captions never move to avoid it.
+    const [first,second]=snapshot.nodes.filter(n=>!n.userData.ghost&&n.userData.vm.os_type==='linux'),secondOriginal=second.position.clone();
+    const viewDirection=new THREE.Vector3();snapshot.camera.getWorldDirection(viewDirection);
+    second.position.copy(first.position).addScaledVector(viewDirection,.05);
+    api.draw(1.01);assertAttached();
+    const crowded=api.snapshot().labels.filter(l=>l.owner===first||l.owner===second);
+    assert(crowded.some(l=>Number(l.el.style.opacity)<=.25),'overlap dims at least one caption');
+    assert.equal(crowded.find(l=>l.owner===second).el.style.opacity,'.25','farther device caption dims');
+    const dimmed=crowded.find(l=>Number(l.el.style.opacity)<=.25);
+    if(dimmed.kind==='vm')assert(dimmed.el.children[1].hidden,'dim caption hides IP');
+    dimmed.el.onpointerenter();api.draw(1.02);
+    assert.equal(dimmed.el.style.opacity,'1','hover restores caption');assert.equal(dimmed.el.style.zIndex,'10000');
+    dimmed.el.onpointerleave();second.position.copy(secondOriginal);
+    // Orbit and zoom without rebuilding the scene; every rendered frame reprojects labels.
+    const oldCamera=snapshot.camera.position.clone();snapshot.camera.position.add(new THREE.Vector3(8,0,-8));snapshot.controls.update();snapshot.camera.zoom=1.3;snapshot.camera.updateProjectionMatrix();
+    api.draw(1.03);assertAttached();
+    snapshot.camera.position.copy(oldCamera);snapshot.camera.zoom=1;snapshot.camera.updateProjectionMatrix();snapshot.controls.update();api.draw(1.04);
+    $('#nw-labels').checked=false;api.draw(1.05);
+    assert(api.snapshot().labels.filter(l=>!l.uuid).every(l=>l.el.hidden),'label toggle hides infrastructure and zone captions');
+    $('#nw-labels').checked=true;api.draw(1.06);
     snapshot.beams.forEach(b=>b.curve.getPoints(32).forEach(p=>assert([p.x,p.y,p.z].every(Number.isFinite))));
     assert(snapshot.particles.length>0);
     const beforeIdle=pending;api.draw(1.1);assert.equal(pending,beforeIdle,'reduced motion does not enqueue a continuous render loop');
-    api.setView('top');api.draw(2);assert.equal(snapshot.controls.enableRotate,false);assertFit();
-    assert.equal(api.snapshot().labels.filter(l=>l.kind==='vm'&&!l.el.hidden).length,vmCount,'top view keeps every VM icon visible');
-    const topBoxes=api.snapshot().labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.height}));
-    topBoxes.forEach((b,i)=>topBoxes.slice(i+1).forEach(c=>assert(!core.overlaps(b,c),'top icons and captions do not overlap')));
-    for(const label of api.snapshot().labels.filter(l=>l.kind==='vm')){
-      assert(label.icon,'each top-view VM has a shared SVG icon');
-      assert.equal(label.height,100,'top-view bounds include the icon, name and IP');
-    }
+    const rendersBeforeTop=snapshot.renderer.renders;
+    api.setView('top');api.draw(2);
+    assert.equal(api.snapshot().renderer.renders,rendersBeforeTop,'HTML top view never renders WebGL');
+    const top=$('#nw-three').children.find(c=>c.className==='nw-top-board');
+    assert(top&&!top.hidden,'top view uses a separate HTML board');
+    assert.equal(top.children[3].children.length,vlanCount);
+    const cards=top.children[3].children.flatMap(z=>z.children[1].children);
+    assert.equal(cards.filter(c=>!c.className.includes('nw-top-ghost')).length,vmCount);
+    assert.equal(cards.filter(c=>c.className.includes('nw-top-ghost')).length,1);
+    assert(cards.every(c=>!c.draggable),'view mode cannot drag cards');
+    cards[0].onclick();assert.equal(window.selected,cards[0].attributes['data-vm']);
+    data.editing=true;window.Network3D.update();
+    const topZones=()=>top.children[3].children;
+    const topCards=()=>topZones().flatMap(z=>z.children[1].children).filter(c=>c.attributes['data-vm']);
+    const multiCard=topCards().find(c=>c.attributes['data-vm']===vms[0].uuid&&!c.className.includes('nw-top-ghost'));
+    const transfer={setData(){}};multiCard.ondragstart({dataTransfer:transfer});
+    topZones()[1].ondrop({preventDefault(){}});multiCard.ondragend();
+    const topChoice=$('#nw-vm-panel').children.find(c=>c.className==='nw-nic-choice');
+    assert(topChoice,'multi-NIC chooser survives dragend');
+    const beforeTopMove=structuredClone(data.vms[0].nics);topChoice.children[1].onclick();
+    assert.equal(data.vms[0].nics[0].network,networks[1].name);assert.deepEqual(data.vms[0].nics[1],beforeTopMove[1]);
+    data.vms=structuredClone(liveVMs);data.pending=[];data.editing=false;
     api.setView('3d');api.draw(3);assert.equal(snapshot.controls.enableRotate,true);assertFit();
     $('#nw-three').clientWidth=760;$('#nw-three').clientHeight=560;api.draw(3.1);assertFit();
     $('#nw-three').clientWidth=1114;$('#nw-three').clientHeight=700;api.draw(3.2);assertFit();

@@ -149,3 +149,70 @@
 #page-network .nw-switch-form{display:grid;gap:8px;margin-top:12px}
 #page-network .nw-switch-form label{display:grid;gap:4px;font-size:11px;color:#9fd3e3}
 #page-network .nw-warn{color:#ffcb66;font-weight:600}
+
+/* Flow layout owns top-view card positions; only connectors are absolute. */
+#nw-three[data-view=top]{overflow:auto;touch-action:auto;display:flex;flex-direction:column;gap:12px;padding:14px;box-sizing:border-box}
+#nw-three[data-view=top]>canvas,#nw-three[data-view=top]>.nw-labels,#nw-three[data-view=top]>.nw-leaders,#nw-three[data-view=top]>.nw-scene-hint{display:none}
+#page-network #nw-three[data-view=top]>.nw-edit-tools,#page-network #nw-three[data-view=top]>.nw-panel-toggle,#nw-three[data-view=top]>.nw-edit-guide,#nw-three[data-view=top]>.nw-scene-legend{position:static;max-width:100%;flex:none;align-self:flex-start;margin:0;order:0}
+#nw-three[data-view=top]>.nw-edit-tools{order:-3}
+#page-network #nw-three[data-view=top]>.nw-panel-toggle{order:-2}
+#nw-three[data-view=top]>.nw-edit-guide{order:-1}
+.nw-top-board{position:relative;isolation:isolate;flex:none;min-width:0;width:100%;box-sizing:border-box}
+.nw-top-board[hidden]{display:none}
+.nw-top-infra{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.nw-top-racks{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin:22px 0 42px}
+.nw-top-racks>.nw-top-card{flex:0 1 220px}
+.nw-top-zones{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:24px;align-items:start}
+.nw-top-zone{min-width:0;border:1px solid var(--zone-color);border-radius:12px;background:#09243655;box-shadow:0 0 14px color-mix(in srgb,var(--zone-color) 12%,transparent);overflow:hidden}
+.nw-top-zone>header{position:relative;z-index:1;display:flex;align-items:center;gap:8px;padding:12px;background:#0a2035;border-bottom:1px solid var(--zone-color);border-left:5px solid var(--zone-color);color:#e1faff}
+.nw-top-zone>header strong{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.nw-top-zone>header small{flex:none;color:#9bbbd0;font-size:10px}
+.nw-top-vms{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr));grid-auto-rows:76px;gap:10px;padding:12px;min-width:0}
+#page-network .nw-top-card{position:relative;z-index:1;display:flex;align-items:center;gap:9px;min-width:0;max-width:100%;box-sizing:border-box;padding:10px;border:1px solid #3ef0ff55;border-radius:8px;background:linear-gradient(120deg,#0c2b3cf5,#061627fa);color:#dcf6ff;text-align:left;box-shadow:0 0 12px #3ef0ff12;overflow:hidden}
+.nw-top-card>div{min-width:0;flex:1}
+.nw-top-card strong,.nw-top-card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.nw-top-card small{font-size:10px;color:#91b4c8;margin-top:4px}
+.nw-top-card .nw-device-icon{width:38px;height:44px;display:block}
+.nw-top-card>span{flex:none}
+.nw-top-equipment{min-height:84px}
+.nw-top-status{font-size:10px;color:#8193a5}
+[data-state=running]>.nw-top-status{color:#6dffb3;text-shadow:0 0 8px #6dffb3}
+#page-network .nw-top-card.nw-top-ghost{border-style:dashed;align-self:center;height:48px;opacity:.7}
+.nw-top-ghost .nw-device-icon{width:26px;height:30px}
+#page-network .nw-top-card.pending{border-color:#ffcb66;border-style:dashed}
+#page-network .nw-top-card.selected{outline:2px solid #6dffb3;outline-offset:-3px}
+.nw-top-vm[draggable=true]{cursor:grab}
+.nw-top-zone.nw-top-drop{outline:2px solid #ffcb66;outline-offset:-3px}
+.nw-top-empty{color:#91b4c8;align-self:center;text-align:center;font-size:12px}
+.nw-top-no-labels .nw-top-secondary{visibility:hidden}
+.nw-top-lines{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none;overflow:hidden}
+.nw-top-lines path{fill:none;stroke-width:1.5;opacity:.6}
+.nw-top-lines .nw-top-flow{stroke-width:3;opacity:1;stroke-dasharray:2 30;filter:drop-shadow(0 0 4px currentColor);animation:nw-top-traffic 1.3s linear infinite}
+.nw-top-lines .nw-top-rule{stroke-width:1.4;opacity:.5}
+@keyframes nw-top-traffic{to{stroke-dashoffset:-64}}
+@media(prefers-reduced-motion:reduce){.nw-top-lines .nw-top-flow{animation:none;display:none}}
+@media(max-width:650px){.nw-top-infra{grid-template-columns:minmax(0,1fr);gap:16px}.nw-top-racks{margin-bottom:28px}.nw-top-zones{gap:18px}}
+
+/* 3D captions stay attached to the projected base of their own device. */
+#page-network #nw-three[data-view="3d"] .nw-label{padding:1px 4px;line-height:16px;height:20px;font-size:11px;text-align:center;background:rgba(6,24,42,.7);border-radius:3px;pointer-events:auto;}
+#page-network #nw-three[data-view="3d"] .nw-label.vm{height:32px;padding:1px 4px;line-height:14px;background:rgba(6,24,42,.7);}
+#page-network #nw-three[data-view="3d"] .nw-label.vm>span,#page-network #nw-three[data-view="3d"] .nw-label.ghost>span{display:block;font-size:11px;line-height:14px;}
+#page-network #nw-three[data-view="3d"] .nw-label.vm>small{font-size:10px;line-height:14px;}
+#page-network #nw-three[data-view="3d"] .nw-label.nw-label-dim small{display:none;}
+#page-network #nw-three[data-view="3d"] .nw-label.nw-label-active{opacity:1;z-index:10000;border-color:#cfffff;}
+#page-network #nw-three[data-view="3d"] .nw-label .nw-top-device{display:none;}
+
+#fw-dialog .nw-services{display:grid;gap:6px}
+#fw-dialog #nw-rule-services{display:flex;flex-wrap:wrap;gap:6px}
+#fw-dialog .nw-svc{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid #3ef0ff44;border-radius:16px;cursor:pointer;font-size:12px;background:#06182a}
+#fw-dialog .nw-svc input{margin:0}
+#fw-dialog .nw-svc small{color:#8fb6cb;font-size:10px}
+#fw-dialog .nw-svc:has(input:checked){border-color:#3ef0ff;background:#0c3346;box-shadow:0 0 8px #3ef0ff55}
+
+/* The 2D board replaces the 3D scene: hide the last 3D frame and its labels. */
+.nw-mode-top canvas,.nw-mode-top .nw-labels,.nw-mode-top .nw-leaders,.nw-mode-top .nw-scene-legend{display:none!important}
+
+#fw-dialog .nw-svc-add{border-style:dashed;color:#3ef0ff;background:transparent}
+#fw-dialog .nw-svc-new{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%}
+#fw-dialog .nw-svc-new input,#fw-dialog .nw-svc-new select{width:auto;min-width:0;flex:1 1 110px;padding:4px 8px;font-size:12px}
+#fw-dialog .nw-svc-new button{padding:4px 12px;font-size:12px}
