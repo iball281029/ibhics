@@ -77,3 +77,24 @@
 #nw-vm-panel .nw-edit-error{color:#ff6b7a}
 
 #nw-3d-status{font-size:11px;color:#ffdf9b;max-height:70px;overflow:auto;align-self:center}
+/* Readable topology controls and overlays. */
+#nw-three{height:max(560px,min(62vh,680px));min-height:min(62vh,680px)}
+#page-network .nw-tool-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border:1px solid #3ef0ff26;border-radius:9px}
+#page-network .nw-tool-title{font-size:11px;color:#94b9cf;margin-right:4px;text-transform:uppercase;letter-spacing:1px}
+#page-network #nw-three .nw-label{max-width:none;box-sizing:border-box}
+#page-network #nw-three .nw-label.vm{white-space:nowrap;overflow-wrap:normal}
+#page-network #nw-three .nw-label.vm>span{overflow:visible;text-overflow:clip}
+#page-network #nw-three .nw-label.ghost{height:26px;font-size:10px;border-style:dashed;background:#081e32cc;color:#a9c9d8;opacity:.8}
+#page-network #nw-three .nw-label.ghost small{display:none}
+#page-network #nw-three .nw-label.empty{border:0;background:transparent;box-shadow:none;color:#94b9cf;opacity:.55;pointer-events:none;text-align:center}
+#nw-three .nw-edit-guide{position:absolute;top:58px;left:14px;right:14px;z-index:4;display:flex;gap:12px;align-items:center;justify-content:space-between;padding:9px 12px;border:1px solid #ffcb6655;border-radius:7px;background:#102638ed;color:#ffe2a6;font-size:11px;line-height:1.5}
+#nw-three .nw-edit-guide button{padding:2px 7px;font-size:17px;flex:none}
+#nw-three .nw-scene-legend{position:absolute;left:14px;bottom:44px;z-index:3;pointer-events:none;background:#06182a99;border:1px solid #3ef0ff22;border-radius:7px;padding:7px 9px;color:#a5c5d5;font:10px/18px ui-sans-serif,system-ui,sans-serif;max-width:240px}
+#nw-three .nw-scene-legend span{display:inline-block;width:28px;color:#3ef0ff}
+#nw-three .nw-scene-legend .nw-key-zone{color:#b49bff}
+#nw-three .nw-scene-legend .nw-key-state{color:#6dffb3}
+#nw-three .nw-scene-legend .nw-key-rules{background:linear-gradient(90deg,#6dffb3 45%,#ff6b7a 55%);background-clip:text;color:transparent}
+#nw-three canvas{cursor:default}
+
+#page-network .nw-label.vm > *{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#page-network #nw-three .nw-label.vm,#page-network #nw-three .nw-label.ghost{display:block;text-align:left}

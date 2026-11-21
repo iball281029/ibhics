@@ -81,10 +81,10 @@
   function dioramaLayout(networks, vms, stopped = true) {
     const columns = Math.max(1, Math.ceil(Math.sqrt(networks.length)));
     const zones = networks.map(net => {
-      const members = vms.filter(v => v.nics?.[0]?.network === net.name && (stopped || v.state === 'running'));
+      const members = vms.filter(v => v.nics?.some(n => n.network === net.name) && (stopped || v.state === 'running'));
       const cols = Math.max(2, Math.ceil(Math.sqrt(members.length))), rows = Math.max(1, Math.ceil(members.length / cols));
       return {y: 0, w: Math.max(14, cols * 5.4 + 3), d: Math.max(12, rows * 5.4 + 5),
-        slots: members.map((v, j) => ({uuid: v.uuid, x: (j % cols - (cols - 1) / 2) * 5.4, z: -rows * 5.4 / 2 + 2.7 + Math.floor(j / cols) * 5.4 + 1}))};
+        slots: members.map((v, j) => ({uuid: v.uuid, ghost: v.nics[0].network !== net.name, x: (j % cols - (cols - 1) / 2) * 5.4, z: -rows * 5.4 / 2 + 2.7 + Math.floor(j / cols) * 5.4 + 1}))};
     });
     const widths = Array.from({length:columns}, (_,c) => Math.max(0,...zones.filter((_,i)=>i%columns===c).map(z=>z.w)));
     const depths = Array.from({length:Math.ceil(zones.length/columns)}, (_,r) => Math.max(...zones.slice(r*columns,(r+1)*columns).map(z=>z.d)));

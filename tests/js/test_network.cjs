@@ -51,6 +51,7 @@ async function checkDiorama() {
     getContext() { return {createRadialGradient:()=>({addColorStop(){}}),fillRect(){}}; }
     getBoundingClientRect() { return {left:0,top:0,width:this.clientWidth,height:this.clientHeight}; }
     setPointerCapture() {}
+    closest() { return null; }
   }
   class Renderer {
     constructor() { this.domElement=new Element(); this.ratio=1; this.renders=0; }
@@ -69,8 +70,9 @@ async function checkDiorama() {
     $('#topo-edit-tools').hidden=true;
     const networks=Array.from({length:vlanCount},(_,i)=>({name:i?'vlan-'+i:'default',vlan:i*10+1,nodes:['node-a','node-b']}));
     const vms=Array.from({length:vmCount},(_,i)=>({uuid:'vm-'+i,name:['win-app','linux-db','worker'][i%3]+'-'+i,state:i%5===4?'stopped':'running',os_type:['windows','linux','other'][i%3],node:i%2?'node-a':'node-b',nics:i===0?[{network:networks[0].name,mac:'52:54:00:00:00:01'},{network:networks[1].name,mac:'52:54:00:00:00:02'}]:[{network:networks[i%vlanCount].name}],ips:['10.0.'+(i%vlanCount)+'.'+(i+10)]}));
+    vms[0].name='db-production-service-123456789';vms[0].ips.push('10.0.11.160');
     const data={key:'test',networks,vms,stats:Object.fromEntries(vms.map(v=>[v.uuid,{net_rx_bps:150000,net_tx_bps:30000}])),groups:{members:{}},rules:[{src:'any',dst:'default',action:'deny',enabled:true}]};
-    const doc={querySelector:$,createElement:()=>new Element(),createElementNS:()=>new Element(),addEventListener(){},hidden:false};
+    const doc={querySelector:$,createElement:()=>new Element(),createElementNS:()=>new Element(),createTextNode:text=>({textContent:text}),addEventListener(){},hidden:false};
     const liveVMs=structuredClone(vms);
     const window={NetworkCore:core,NetworkUI:{getData:()=>data,selectVM:id=>{window.selected=id;},
       stageNic:(uuid,index,network)=>{data.vms=core.stageNicMove(data.vms,uuid,index,network,data.networks);data.pending=[uuid];},
@@ -78,34 +80,65 @@ async function checkDiorama() {
     }};
     const storage=new Map(),localStorage={getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)};
     let pending=0;
-    const api=new Function('THREE','OrbitControls','window','document','matchMedia','ResizeObserver','MutationObserver','devicePixelRatio','localStorage','requestAnimationFrame','cancelAnimationFrame',source+'\nreturn {draw,layout,setView,finishDrag,selectVM,up,move, snapshot:()=>({nodes,labels,beams,particles,renderer,camera,controls,scans,lamps,zones,fitPoints}),setDrag:d=>drag=d};')({...THREE,WebGLRenderer:Renderer},Controls,window,doc,()=>({matches:true,addEventListener(){}}),class {observe(){}},class {observe(){}},2,localStorage,()=>++pending,()=>{pending=0;});
+    const motion={matches:true,addEventListener(){}};
+    const api=new Function('THREE','OrbitControls','window','document','matchMedia','ResizeObserver','MutationObserver','devicePixelRatio','localStorage','requestAnimationFrame','cancelAnimationFrame',source+'\nreturn {draw,layout,setView,finishDrag,selectVM,up,move,down, snapshot:()=>({drag,nodes,labels,beams,particles,renderer,camera,controls,scans,lamps,zones,fitPoints}),setDrag:d=>drag=d};')({...THREE,WebGLRenderer:Renderer},Controls,window,doc,()=>motion,class {observe(){}},class {observe(){}},2,localStorage,()=>++pending,()=>{pending=0;});
     api.draw(1);
     let snapshot=api.snapshot();
-    assert.equal(snapshot.nodes.length,vmCount);
+    assert.equal(snapshot.nodes.filter(n=>!n.userData.ghost).length,vmCount);
+    assert.equal(snapshot.nodes.filter(n=>n.userData.ghost).length,1,'secondary NIC has a ghost');
     assert.equal(snapshot.renderer.ratio,1.5);
+    assert.equal(snapshot.controls.autoRotate,false);
+    const primary=snapshot.labels.find(l=>l.uuid===vms[0].uuid&&l.kind==='vm');
+    assert.equal(Array.from(primary.el.children[0].textContent).length,24);
+    assert.equal(primary.el.children[1].textContent,vms[0].ips[0]);
+    assert(primary.el.title.includes(vms[0].name)&&primary.el.title.includes(vms[0].ips[1]),'tooltip preserves full details');
+    assert(snapshot.labels.some(l=>l.el.textContent==='Trunk switch (uplink)'));
+    assert(snapshot.labels.some(l=>l.el.textContent==='Internet / external router'));
+    const at=snapshot.nodes[0].position.clone().add(new THREE.Vector3(0,1.5,0)).project(snapshot.camera),event={button:0,clientX:(at.x+1)*1114/2,clientY:(1-at.y)*700/2,stopImmediatePropagation(){this.stopped=true;}};
+    api.down(event);assert.equal(api.snapshot().drag,null,'view mode cannot start a VM drag');assert(event.stopped,'VM inspection cannot orbit the scene');
+    api.move(event);assert.equal(snapshot.renderer.domElement.style.cursor,'');
+    const guide=$('#nw-three').querySelector('.nw-edit-guide');assert(guide.hidden);
+    assert.equal($('.nw-view-tools').children.filter(c=>c.className==='nw-tool-group').length,2);
     assert(snapshot.camera.isOrthographicCamera);
-    const assertFit=()=>{const snap=api.snapshot();snap.fitPoints.forEach(p=>{const v=p.clone().project(snap.camera);assert(Math.abs(v.x)<=.851&&Math.abs(v.y)<=.851,'scene including label margins fits 85% of viewport');});};
+    const assertFit=()=>{
+      const snap=api.snapshot(),w=$('#nw-three').clientWidth,h=$('#nw-three').clientHeight;
+      const ps=snap.fitPoints.map(p=>p.clone().project(snap.camera));
+      ps.forEach(v=>assert(Math.abs(v.x)<=.94&&Math.abs(v.y)<=.94,'all projected meshes fit'));
+      const xs=ps.map(p=>(p.x+1)*w/2),ys=ps.map(p=>(1-p.y)*h/2);
+      for(const l of snap.labels.filter(l=>!l.el.hidden)){const x=parseFloat(l.el.style.left),y=parseFloat(l.el.style.top);xs.push(x,x+parseFloat(l.el.style.width));ys.push(y,y+(l.kind==='vm'?38:26));}
+      const left=Math.min(...xs),right=Math.max(...xs),top=Math.min(...ys),bottom=Math.max(...ys);
+      assert(Math.max((right-left)/w,(bottom-top)/h)>=.85,'scene uses at least 85% of the limiting dimension');
+      assert(Math.max((right-left)/w,(bottom-top)/h)<=.90,'meshes and labels stay near the 88% fit target');
+      assert(Math.abs((left+right)/2-w/2)<w*.03&&Math.abs((top+bottom)/2-h/2)<h*.03,'combined projection is centered');
+    };
     assertFit();
+
     const vmLabels=snapshot.labels.filter(l=>l.kind==='vm');
     assert.equal(vmLabels.filter(l=>!l.el.hidden).length,vmCount,`${vlanCount} VLAN / ${vmCount} VM labels visible`);
     const boxes=snapshot.labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.kind==='vm'?38:26}));
     boxes.forEach((b,i)=>{assert(b.x>=0&&b.y>=0&&b.x+b.w<=1114&&b.y+b.h<=700);boxes.slice(i+1).forEach(c=>assert(!core.overlaps(b,c)));});
     snapshot.beams.forEach(b=>b.curve.getPoints(32).forEach(p=>assert([p.x,p.y,p.z].every(Number.isFinite))));
     assert(snapshot.particles.length>0);
-    assert.equal(pending,1,'reduced motion does not enqueue a continuous render loop');
+    const beforeIdle=pending;api.draw(1.1);assert.equal(pending,beforeIdle,'reduced motion does not enqueue a continuous render loop');
     api.setView('top');api.draw(2);assert.equal(snapshot.controls.enableRotate,false);assertFit();
     api.setView('3d');api.draw(3);assert.equal(snapshot.controls.enableRotate,true);assertFit();
     $('#nw-three').clientWidth=760;$('#nw-three').clientHeight=560;api.draw(3.1);assertFit();
     $('#nw-three').clientWidth=1114;$('#nw-three').clientHeight=700;api.draw(3.2);assertFit();
-    $('#nw-stopped').checked=false;$('#nw-stopped').onchange();api.draw(4);snapshot=api.snapshot();assert.equal(snapshot.nodes.length,vms.filter(v=>v.state==='running').length);
-    data.stats={};window.Network3D.update();api.draw(5);assert.equal(api.snapshot().particles.length,0,'unknown traffic stays still');
+    $('#nw-stopped').checked=false;$('#nw-stopped').onchange();api.draw(4);snapshot=api.snapshot();assert.equal(snapshot.nodes.filter(n=>!n.userData.ghost).length,vms.filter(v=>v.state==='running').length);
+    const cameraBefore=api.snapshot().camera.position.clone(),targetBefore=api.snapshot().controls.target.clone();
+    motion.matches=false;const fixedNodes=api.snapshot().nodes.map(n=>n.position.clone()),fixedLamps=api.snapshot().lamps.map(n=>n.visible);
+    api.draw(1000);api.draw(2000);
+    assert(api.snapshot().camera.position.equals(cameraBefore));assert(api.snapshot().controls.target.equals(targetBefore));
+    api.snapshot().nodes.forEach((n,i)=>assert(n.position.equals(fixedNodes[i])));assert.deepEqual(api.snapshot().lamps.map(n=>n.visible),fixedLamps);
+    data.stats={};window.Network3D.update();api.draw(5);assert(api.snapshot().camera.position.equals(cameraBefore),'stats refresh preserves the view');assert.equal(api.snapshot().particles.length,0,'unknown traffic stays still');
     api.selectVM(vms[0].uuid);assert.equal(window.selected,vms[0].uuid);
     const node=api.snapshot().nodes[0],original=node.position.clone();node.position.x+=.5;api.setDrag({node,moved:true,original});api.finishDrag();
     assert.equal(JSON.parse(storage.get('test:hologram')).positions[node.userData.locationKey].x,node.position.x-node.userData.origin.x);
     // Exercise production drop handlers. A single-NIC move stages only that NIC;
     // no API is used, and the unchanged inventory remains the conflict baseline.
     data.editing=true;window.Network3D.update();api.draw(6);
-    snapshot=api.snapshot();
+    snapshot=api.snapshot();assert.equal(guide.hidden,false,'edit instructions appear only in edit mode');
+    guide.children[1].onclick();assert(guide.hidden,'edit instructions can be dismissed');
     assert.equal(snapshot.labels.filter(l=>l.kind==='shield').length,1,'one firewall shield');
     assert(snapshot.nodes.every(n=>n.position.y===.76),'all VMs stand on one floor');
     const movedNode=snapshot.nodes.find(n=>n.userData.vm.nics.length===1),oldVM=structuredClone(movedNode.userData.vm);
@@ -117,7 +150,7 @@ async function checkDiorama() {
     assert(api.snapshot().labels.find(l=>l.uuid===oldVM.uuid).el.classes.has('pending'));
     assert(api.snapshot().beams.some(b=>b.line?.material.isLineDashedMaterial),'staged cables dashed');
     // Shift-drag to a VM opens the shared rule popup with the exact endpoints.
-    snapshot=api.snapshot();const sourceNode=snapshot.nodes[0],targetNode=snapshot.nodes[1];
+    snapshot=api.snapshot();const sourceNode=snapshot.nodes[0],targetNode=snapshot.nodes.find(n=>n.userData.vm.uuid!==sourceNode.userData.vm.uuid);
     const world=targetNode.position.clone().add(new THREE.Vector3(0,1.5,0)),screen=world.project(snapshot.camera);
     api.setDrag({node:sourceNode,moved:true,rule:true,original:sourceNode.position.clone()});
     api.up({clientX:(screen.x+1)*1114/2,clientY:(1-screen.y)*700/2});
@@ -136,6 +169,9 @@ async function checkDiorama() {
     const cancelled=api.snapshot().nodes[0],before=cancelled.position.clone(),draftBefore=JSON.stringify(data.vms);
     cancelled.position.x+=10;api.setDrag({node:cancelled,moved:true,original:before});api.finishDrag(false);
     assert(cancelled.position.equals(before));assert.equal(JSON.stringify(data.vms),draftBefore);
+    data.networks.push({name:'empty',vlan:99});window.Network3D.update();api.draw(8);
+    const emptyLabel=api.snapshot().labels.find(l=>l.kind==='empty'&&l.el.textContent==='No VMs');assert(emptyLabel);assert.equal(emptyLabel.el.textContent,'No VMs');assert.equal(emptyLabel.el.hidden,false);
+    const emptyZone=api.snapshot().zones.at(-1);assert.equal(emptyLabel.position.x,emptyZone.x);assert.equal(emptyLabel.position.z,emptyZone.z);
     doc.hidden=true;const renders=api.snapshot().renderer.renders;api.draw(6);assert.equal(api.snapshot().renderer.renders,renders);
   }
   for(const vlanCount of [0,1,2,3,4,7]) {
@@ -150,7 +186,9 @@ async function checkDiorama() {
     slots.forEach((p,i)=>slots.slice(i+1).forEach(q=>assert(Math.hypot(p.x-q.x,p.z-q.z)>=5.3,'enlarged VMs do not overlap')));
   }
   const multi=[{uuid:'multi',name:'multi',state:'running',nics:[{network:'a',mac:'first'},{network:'b',mac:'second'}]}],nets=[{name:'a'},{name:'b'}];
-  assert.equal(core.dioramaLayout(nets,multi).flatMap(z=>z.slots).length,1,'multi-NIC VM has one model');
+  const multiSlots=core.dioramaLayout(nets,multi).flatMap(z=>z.slots);
+  assert.equal(multiSlots.filter(s=>!s.ghost).length,1,'one primary model');assert.equal(multiSlots.filter(s=>s.ghost).length,1,'one secondary ghost');
+  const duplicate=[{...multi[0],nics:[...multi[0].nics,{network:'b'}]}];assert.equal(core.dioramaLayout(nets,duplicate)[1].slots.length,1,'duplicate NICs in a VLAN share one ghost');
   const staged=core.stageNicMove(multi,'multi',1,'a',nets);
   assert.deepEqual(staged[0].nics,[{network:'a',mac:'first'},{network:'a',mac:'second'}]);
   assert.equal(multi[0].nics[1].network,'b');
