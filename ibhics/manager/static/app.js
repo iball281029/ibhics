@@ -2341,6 +2341,8 @@ async function topoSaveEdit() {
         const live = state.vms.find((v) => v.uuid === step.uuid), old = edit.base.vms.find((v) => v.uuid === step.uuid);
         if (!live || !topoSameNics(live.nics, old.nics)) throw new Error(`${step.name}: adapters changed outside this draft. Cancel and edit the refreshed topology.`);
         if (step.body.nics.some((n) => !edit.networks.some((net) => net.name === n.network))) throw new Error(`${step.name}: a target switch is missing.`);
+        const missing = step.body.nics.map((n) => state.networks.find((net) => net.name === n.network)).find((net) => net && net.nodes && live.node && !net.nodes.includes(live.node));
+        if (missing) throw new Error(`${step.name}: ${missing.name} is not on ${live.node}. Add it to all nodes in Virtual switches first.`);
       }
       if (step.type === "create") {
         const error = topoValidateSwitch(step.name, step.body.vlan, state.networks);
@@ -2355,7 +2357,8 @@ async function topoSaveEdit() {
         edit.base.networks.push(created);
         edit.networks = edit.networks.map((n) => n.name === step.name ? topoClone(created) : n);
       } else if (step.type === "patch") {
-        const updated = await patch(`/vms/${enc(step.uuid)}`, step.body);
+        const updated = await api(`/vms/${enc(step.uuid)}`, { method: "PATCH", body: JSON.stringify(step.body), signal: AbortSignal.timeout(90000) })
+          .catch((err) => { throw err.name === "TimeoutError" ? new Error("the node did not answer within 90 seconds") : err; });
         edit.base.vms = edit.base.vms.map((v) => v.uuid === step.uuid ? topoClone(updated) : v);
         edit.vms = edit.vms.map((v) => v.uuid === step.uuid ? topoClone(updated) : v);
       } else {
@@ -5899,6 +5902,11 @@ window.NetworkUI={getData:()=>({
   discardEdit:()=>{if(ntopo.edit?.saving)return;topoEndEdit();drawTopology();window.Network3D?.update();},
   stageNic:(uuid,index,network)=>{
     if(!canOperate()||!ntopo.edit||ntopo.edit.saving)return;
+    const vm=state.vms.find(v=>v.uuid===uuid), net=state.networks.find(n=>n.name===network);
+    if(vm&&net&&net.nodes&&vm.node&&!net.nodes.includes(vm.node)){
+      toast(`${network} is not on ${vm.node}, where ${vm.name} runs. Open Virtual switches and press "Add to all nodes" on ${network} first.`,true);
+      return;
+    }
     ntopo.edit.vms=NetworkCore.stageNicMove(ntopo.edit.vms,uuid,index,network,ntopo.edit.networks);
     drawTopology();
   },

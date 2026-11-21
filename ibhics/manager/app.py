@@ -1375,7 +1375,17 @@ def create_app(
         """Change CPU, memory, disks, NICs, boot order and options."""
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
-        return VMOut.from_info(member.driver.update_vm(uuid, body.to_edit()), member.name)
+        edit = body.to_edit()
+        if edit.nics:
+            # A NIC on a switch this node lacks fails deep in libvirt; say so plainly.
+            here = {n.name for n in member.driver.list_networks()}
+            missing = sorted({n.network for n in edit.nics} - here)
+            if missing:
+                raise InvalidState(
+                    f"network {', '.join(missing)} is not on {member.name}: "
+                    "add it to all nodes in Virtual switches first"
+                )
+        return VMOut.from_info(member.driver.update_vm(uuid, edit), member.name)
 
     @api.post("/vms/{uuid}/move-disks", response_model=VMOut)
     def move_disks(uuid: str, body: DiskMovesIn) -> VMOut:

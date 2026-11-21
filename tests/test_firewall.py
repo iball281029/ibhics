@@ -125,3 +125,15 @@ def test_network_edit_and_sync(tmp_path):
     busy = client.put("/api/v1/networks/lab2", json={"name": "lab3", "vlan": 32})
     assert busy.status_code == 409 and "move its VMs" in busy.json()["detail"]
     assert client.put("/api/v1/networks/default", json={"name": "x", "vlan": 5}).status_code == 409
+
+
+def test_nic_move_to_switch_missing_on_node(tmp_path):
+    from test_migration import Env
+
+    env = Env(tmp_path)
+    env.node1.create_network(NetworkSpec("lab", 30))  # node2 lacks it
+    client = TestClient(create_app(env.cluster, edge_state=tmp_path / "edge.json"))
+    info = vm(env.node2, "web", "52:54:00:dd:00:01")
+    resp = client.patch(f"/api/v1/vms/{info.uuid}", json={"nics": [{"network": "lab"}]})
+    assert resp.status_code == 409, resp.text
+    assert "not on node2" in resp.json()["detail"]
