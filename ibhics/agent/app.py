@@ -9,7 +9,7 @@ import hmac
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, WebSocket, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, WebSocket, status
 
 from .. import __version__, console
 from ..backup import BackupTarget, NodeBackup
@@ -69,6 +69,7 @@ def create_agent_app(
     migration_pki=None,
     replication_root: Path = Path("/var/lib/ibhics/replica-manifests"),
     replication_guard: Path = Path("/run/lock/ibhics-replication.lock"),
+    application_updater=None,
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -90,6 +91,61 @@ def create_agent_app(
     @api.get("/health")
     def health() -> dict:
         return {"name": name, "role": str(role), "version": __version__}
+
+    @api.get("/application-update")
+    def application_update_status():
+        if application_updater is None:
+            raise HTTPException(503, "application updater is not configured")
+        data = application_updater.read()
+        return {k: v for k, v in data.items() if k not in ("envelope", "wheel", "backup")}
+
+    @api.get("/application-update/cluster-jobs/{identifier}")
+    def application_cluster_job(identifier: str):
+        import json
+        import re
+
+        if application_updater is None or not re.fullmatch(r"[0-9a-f]{16}", identifier):
+            raise HTTPException(404, "job not found")
+        path = application_updater.state / "update-jobs" / (identifier + ".json")
+        if not path.exists():
+            raise HTTPException(404, "job not found")
+        return json.loads(path.read_text())
+
+    @api.post("/application-update/prepare")
+    async def application_update_prepare(request: Request):
+        if application_updater is None:
+            raise HTTPException(503, "application updater is not configured")
+        from ..manager.settings import MAX_PACKAGE
+        from ..manager.settings_api import limited_json_body
+
+        body = await limited_json_body(request, MAX_PACKAGE * 4 // 3 + 65536)
+        try:
+            package = base64.b64decode(body.get("package", ""), validate=True)
+            return await asyncio.to_thread(
+                application_updater.prepare, body.get("envelope", {}), package
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @api.post("/application-update/install", status_code=202)
+    def application_update_install(body: dict | None = None):
+        if application_updater is None:
+            raise HTTPException(503, "application updater is not configured")
+        try:
+            return application_updater.start(operation_id=(body or {}).get("operation_id"))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @api.post("/application-update/rollback", status_code=202)
+    def application_update_rollback(body: dict | None = None):
+        if application_updater is None:
+            raise HTTPException(503, "application updater is not configured")
+        try:
+            return application_updater.start(
+                rollback=True, operation_id=(body or {}).get("operation_id")
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     if migration_pki is not None and role == NodeRole.COMPUTE:
         from ..cluster.migration_pki import PKIError, schedule_activate

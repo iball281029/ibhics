@@ -68,6 +68,7 @@
   <form id="login">
     <label>Username <input name="username" autocomplete="username" required autofocus></label>
     <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+    <label>Authentication code (if enabled)<input name="code" autocomplete="one-time-code" placeholder="6-digit code or recovery code" maxlength="64"></label>
     <p id="error" role="alert"></p>
     <button>Sign in</button>
   </form>
@@ -102,7 +103,7 @@ document.getElementById("login").addEventListener("submit", async (e) => {
   const f = new FormData(e.target), button = e.submitter;
   button.disabled = true;
   try {
-    const res = await post("/auth/login", { username: f.get("username"), password: f.get("password") });
+    const res = await post("/auth/login", { username: f.get("username"), password: f.get("password"), code: f.get("code") });
     if (res.user.must_change_password) {
       current = f.get("password");
       e.target.hidden = true;

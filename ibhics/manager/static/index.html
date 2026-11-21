@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="network.css">
 <link rel="stylesheet" href="virtual-storage.css">
 <link rel="stylesheet" href="cluster.css">
+<link rel="stylesheet" href="settings.css">
 <link rel="stylesheet" href="backup.css">
 </head>
 <body class="command-workspace spatial-workspace">
@@ -829,18 +830,63 @@
 
     <section class="page" id="page-system">
       <div class="sheet">
-        <div class="page-head"><h1>Settings</h1></div>
+        <div class="page-head"><div><span class="st-eyebrow">CONTROL / SETTINGS</span><h1>Settings</h1><p class="hint">Your subscriptions, updates and account security in one place.</p></div></div>
         <div class="tabs" id="system-tabs">
-          <button data-tab="about" class="active">About</button>
+          <button data-tab="about" class="active">Overview &amp; subscriptions</button>
+          <button data-tab="updates">Updates</button>
+          <button data-tab="support">Support</button>
           <button data-tab="account">My account</button>
-          <button data-tab="users" class="admin-only">Users</button>
+          <button data-tab="users" id="settings-users-tab">Users &amp; permissions</button>
+          <button data-tab="approvals">Approvals</button>
           <button data-tab="audit" class="admin-only">Audit log</button>
         </div>
+        <div class="subpage" id="tab-approvals">
+          <h3>Two-person approval</h3>
+          <label class="inline admin-only"><input type="checkbox" id="approvals-enabled"> Require approval from another admin for risky actions</label>
+          <p class="hint">Requires two enabled admins. Requests expire after 24 hours. You cannot approve your own request.</p>
+          <button type="button" id="approvals-refresh">Refresh</button>
+          <div id="approvals-list" aria-live="polite"></div>
+        </div>
         <div class="subpage active" id="tab-about">
+          <div id="subscription-cards" class="st-grid" aria-live="polite"></div>
+          <form id="subscription-upload" class="st-panel admin-only">
+            <h3>Upload a subscription</h3><p class="hint">A signed subscription is tied to your cluster and node count. No file means no subscription.</p>
+            <label>Signed license file (JSON)<input type="file" name="license" accept=".json" required></label>
+            <button class="primary">Verify &amp; apply</button><p id="subscription-trust" class="hint"></p>
+          </form>
           <div class="toolbar"><h3>System</h3></div>
           <dl class="kv" id="about"></dl>
         </div>
+        <div class="subpage" id="tab-updates">
+          <div class="st-panel"><h3>Application updates</h3><p>Current version <b id="settings-version">—</b></p>
+          <p id="update-availability" class="hint"></p><p id="update-check-status" role="status"></p>
+          <div class="actions" data-settings-permission="updates"><button id="update-check" type="button">Check for updates</button><button id="update-install" type="button" class="primary" disabled>Install verified update</button><button id="update-rollback" type="button" disabled>Rollback to previous version</button></div>
+          <div id="update-preview"></div></div>
+          <form id="update-upload" class="st-panel" data-settings-permission="updates"><h3>Manual update</h3><p class="hint">Choose an ibHiCS wheel (up to 32 MiB) and its signed JSON manifest. Verification runs before installation is offered.</p>
+          <div class="st-grid"><label>Wheel<input name="package" type="file" accept=".whl" required></label><label>Signed manifest<input name="manifest" type="file" accept=".json" required></label></div><button>Verify package</button></form>
+          <form id="settings-config" class="st-panel admin-only"><h3>Update channel &amp; support delivery</h3>
+          <div class="st-grid"><label>Stable channel URL<input name="stable" type="url" placeholder="https://updates.example/stable.json"></label><label>Beta channel URL<input name="beta" type="url" placeholder="https://updates.example/beta.json"></label>
+          <label>Selected channel<select name="channel"><option value="stable">Stable</option><option value="beta">Beta</option></select></label>
+          <label>Support endpoint URL<input name="support_endpoint" type="url" placeholder="https://support.example/cases"></label></div>
+          <label class="inline"><input name="auto_install" type="checkbox"> Install automatically after download (off by default)</label>
+          <p class="hint">Channels are checked daily while the manager scheduler runs. An active Update subscription is required for automatic downloads. By default, downloaded updates wait for your approval. Leave the support endpoint empty to keep cases locally.</p><button class="primary">Save preferences</button></form>
+          <div class="st-panel"><h3>Update jobs</h3><p class="hint">Application only, one node at a time: standby before active. Previous versions are retained; a failed health check triggers rollback. VMs stay running and hosts are not rebooted.</p><div id="settings-update-jobs" aria-live="polite"></div></div>
+        </div>
+        <div class="subpage" id="tab-support">
+          <div class="st-panel"><h3>Open support case</h3><p id="support-reason" role="status"></p>
+          <form id="support-case"><fieldset id="support-fields" disabled><div class="st-grid"><label>Subject<input name="subject" maxlength="200" required></label><label>Severity<select name="severity"><option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="critical">Critical</option></select></label></div>
+          <label>Details<textarea name="details" rows="5" maxlength="20000" required></textarea></label>
+          <label>Diagnostic bundle (optional, up to 4 MiB)<input name="diagnostic" type="file"></label><p class="hint">Review the bundle before sharing it with support.</p><button class="primary">Open support case</button></fieldset></form><p id="support-result" role="status"></p></div>
+          <div class="st-panel admin-only"><h3>Saved cases</h3><div id="settings-cases"></div></div>
+        </div>
         <div class="subpage" id="tab-account">
+          <div class="st-panel"><h3>Two-factor authentication</h3><p id="twofa-status" role="status"></p>
+          <form id="twofa-setup"><label>Current password<input name="password" type="password" autocomplete="current-password" required></label><button>Set up authenticator</button></form>
+          <div id="twofa-enrollment" hidden><p>Enter this secret in your authenticator app, or copy the setup URI. Then enter its 6-digit code. Setup expires in 10 minutes.</p><label>Secret<input id="twofa-secret" readonly></label><label>Setup URI<textarea id="twofa-uri" readonly rows="3"></textarea></label>
+          <form id="twofa-confirm"><label>Authentication code<input name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" required></label><button class="primary">Enable 2FA</button></form></div>
+          <form id="twofa-disable" hidden><div class="st-grid"><label>Current password<input name="password" type="password" autocomplete="current-password" required></label><label>Authentication or recovery code<input name="code" autocomplete="one-time-code" required></label></div><button>Disable 2FA</button></form>
+          <div id="twofa-recovery" hidden><p>Save these 10 recovery codes somewhere private. Each code works once. They will not be shown again. Your existing sessions have ended.</p><pre id="twofa-codes"></pre><a class="btn" href="/login.html">I saved my codes — sign in</a></div>
+          <label class="inline admin-only"><input id="twofa-required" type="checkbox"> Require every user to enroll in 2FA</label></div>
           <div class="toolbar"><h3>Change my password</h3></div>
           <form class="section form-grid" id="password-form" style="max-width:760px">
             <label>Current password <input name="current" type="password" autocomplete="current-password" required></label>
@@ -850,7 +896,8 @@
           </form>
         </div>
         <div class="subpage" id="tab-users">
-          <div class="toolbar"><span class="hint"><b>Viewer</b> sees everything. <b>Operator</b> also runs VMs. <b>Admin</b> also manages nodes, storage, backup, sources and users.</span><span class="spacer"></span><button class="primary" data-open="user-dialog">+ Add user</button></div>
+          <div class="st-panel"><h3>Roles &amp; permissions</h3><p class="hint">All roles can view inventory. A checkmark allows changes in that category. Admin has full access. Built-in Operators need an Admin to change backup schedules. Channel preferences and subscription uploads are managed by Admin. Custom roles cannot grant admin or manage admin accounts.</p><div class="table-wrap" id="role-matrix"></div><form id="custom-role" class="admin-only"><label>Custom role name<input name="name" pattern="[a-z][a-z0-9_.-]{1,31}" required></label><div id="role-permissions" class="st-grid"></div><button>Save custom role</button></form></div>
+          <div class="toolbar"><span class="hint">Keep at least one enabled administrator.</span><span class="spacer"></span><button class="primary" data-open="user-dialog">+ Add user</button></div>
           <div class="table-wrap"><table>
             <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Last sign-in</th><th>Created</th><th></th></tr></thead>
             <tbody id="users"></tbody>
@@ -1819,6 +1866,7 @@
 <script src="storage-view.js"></script>
 <script src="network-core.js"></script>
 <script src="app.js"></script>
+<script src="settings.js"></script>
 <script src="virtual-storage.js"></script>
 <script src="storage-navigation.js"></script>
 <script src="spatial.js"></script>

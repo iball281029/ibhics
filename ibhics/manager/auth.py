@@ -1,12 +1,13 @@
 """Users, roles, sessions and the audit log of the manager's web console and API.
 
-Passwords are hashed with scrypt from the standard library. Sessions are random
-tokens kept in memory: a manager restart signs everyone out, which is acceptable for
-an admin console and keeps secrets off disk.
+Passwords use scrypt from the standard library. Persisted sessions contain only
+hashes of random bearer tokens. TOTP secrets and hashed recovery codes are kept in
+the private user state file and never included in API user records.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -17,10 +18,14 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import quote
+
+from .permissions import BUILTIN, CATEGORIES
+from .totp import verify_totp
 
 USERNAME_RE = re.compile(r"^[a-z][a-z0-9_.-]{1,31}$")
 MIN_PASSWORD = 8
@@ -52,12 +57,18 @@ class UserNotFound(LookupError):
 @dataclass
 class User:
     name: str
-    role: Role
+    role: Role | str
     password_hash: str
     enabled: bool = True
     must_change_password: bool = False
     created: str = ""
     last_login: str | None = None
+    totp_secret: str = field(default="", repr=False)
+    totp_pending: str = field(default="", repr=False)
+    totp_pending_until: float = 0
+    totp_last_step: int = -1
+    recovery_hashes: list[str] = field(default_factory=list, repr=False)
+    permissions: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -137,6 +148,8 @@ class Auth:
         self._failures: dict[str, list[float]] = {}
         self._audit: deque[AuditEntry] = deque(maxlen=1000)
         self._lock = threading.RLock()
+        self.custom_roles: dict[str, list[str]] = {}
+        self.require_2fa = False
 
     # Persistence
 
@@ -145,9 +158,25 @@ class Auth:
             return
         data = json.loads(self._state_path.read_text())
         with self._lock:
-            for entry in data["users"]:
-                entry["role"] = Role(entry["role"])
+            self.custom_roles = data.get("roles", {})
+            self.require_2fa = data.get("require_2fa", False)
+            security = {}
+            sidecar = self._state_path.with_name("users-security.json")
+            if sidecar.exists():
+                security = json.loads(sidecar.read_text())
+                self.custom_roles = security.get("roles", self.custom_roles)
+                self.require_2fa = security.get("require_2fa", self.require_2fa)
+            allowed = {f.name for f in fields(User)}
+            for original in data["users"]:
+                entry = {k: v for k, v in original.items() if k in allowed}
+                extra = security.get("users", {}).get(entry["name"], {})
+                # Old code may change a base role; never restore stale elevated privileges.
+                if extra.get("base_role") == entry["role"]:
+                    entry.update({k: v for k, v in extra.items() if k in allowed})
+                if entry["role"] in BUILTIN:
+                    entry["role"] = Role(entry["role"])
                 self._users[entry["name"]] = User(**entry)
+            self._sync_permissions()
             self._load_sessions()
 
     def _load_sessions(self) -> None:
@@ -186,13 +215,34 @@ class Auth:
         if not self._state_path:
             return
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._state_path.with_suffix(".tmp")
-        users = [{**asdict(u), "role": str(u.role)} for u in self._users.values()]
-        # Password hashes only, but still nobody else's business.
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump({"users": users}, f, indent=2)
-        tmp.replace(self._state_path)
+        from .settings import private_json
+
+        legacy = {
+            "name",
+            "role",
+            "password_hash",
+            "enabled",
+            "must_change_password",
+            "created",
+            "last_login",
+        }
+        users, extra = [], {}
+        for user in self._users.values():
+            record = {**asdict(user), "role": str(user.role)}
+            base = {k: v for k, v in record.items() if k in legacy}
+            base["role"] = str(user.role) if str(user.role) in BUILTIN else "viewer"
+            users.append(base)
+            extra[user.name] = {k: v for k, v in record.items() if k not in legacy}
+            extra[user.name].update(role=str(user.role), base_role=base["role"])
+        private_json(
+            self._state_path.with_name("users-security.json"),
+            {
+                "users": extra,
+                "roles": self.custom_roles,
+                "require_2fa": self.require_2fa,
+            },
+        )
+        private_json(self._state_path, {"users": users})
 
     def bootstrap(self, password: str | None = None, must_change: bool = True) -> str | None:
         """Create the first admin if there are no users. Returns the generated password
@@ -211,8 +261,37 @@ class Auth:
                 must_change_password=must_change or generated is not None,
                 created=self._stamp(),
             )
+            self._sync_permissions()
             self._save()
             return generated
+
+    # Roles are permissions to manage a category. Every role may view inventory.
+
+    def _sync_permissions(self):
+        for user in self._users.values():
+            user.permissions = sorted(
+                BUILTIN.get(str(user.role), self.custom_roles.get(str(user.role), []))
+            )
+
+    def permissions(self, user: User) -> set[str]:
+        return set(BUILTIN.get(str(user.role), self.custom_roles.get(str(user.role), [])))
+
+    def define_role(self, name: str, permissions: list[str]):
+        if not USERNAME_RE.fullmatch(name) or name in BUILTIN:
+            raise ValueError("use a unique lowercase custom role name (2-32 characters)")
+        if not set(permissions) <= set(CATEGORIES):
+            raise ValueError("unknown permission category")
+        with self._lock:
+            self.custom_roles[name] = sorted(set(permissions))
+            self._sync_permissions()
+            for user in self._users.values():
+                if user.role == name:
+                    self._end_sessions(user.name)
+            self._save()
+
+    def validate_role(self, role):
+        if role not in BUILTIN and role not in self.custom_roles:
+            raise ValueError("unknown role")
 
     # Users
 
@@ -227,11 +306,12 @@ class Auth:
             except KeyError:
                 raise UserNotFound(name) from None
 
-    def add_user(self, name: str, role: Role, password: str) -> User:
+    def add_user(self, name: str, role: Role | str, password: str) -> User:
         if not USERNAME_RE.match(name):
             raise ValueError("username: 2-32 lowercase letters, digits, '_', '.', '-'")
         check_password_rules(password, name)
         with self._lock:
+            self.validate_role(role)
             if name in self._users:
                 raise ValueError(f"user {name!r} already exists")
             user = User(
@@ -242,13 +322,14 @@ class Auth:
                 created=self._stamp(),
             )
             self._users[name] = user
+            self._sync_permissions()
             self._save()
             return user
 
     def update_user(
         self,
         name: str,
-        role: Role | None = None,
+        role: Role | str | None = None,
         enabled: bool | None = None,
         password: str | None = None,
         acting: str | None = None,
@@ -260,12 +341,17 @@ class Auth:
                 self._keep_an_admin(name)
             if name == acting and (demoting or enabled is False):
                 raise ValueError("you cannot demote or disable your own account")
+            # Validate the whole edit before changing any in-memory privileges.
+            if role is not None:
+                self.validate_role(role)
+            if password is not None:
+                check_password_rules(password, name)
             if role is not None:
                 user.role = role
+                self._sync_permissions()
             if enabled is not None:
                 user.enabled = enabled
             if password is not None:
-                check_password_rules(password, name)
                 user.password_hash = hash_password(password)
                 user.must_change_password = True
             if enabled is False or password is not None or role is not None:
@@ -305,7 +391,7 @@ class Auth:
 
     # Sessions
 
-    def login(self, name: str, password: str) -> Session:
+    def login(self, name: str, password: str, code: str = "") -> Session:
         now = self._clock()
         with self._lock:
             recent = [t for t in self._failures.get(name, []) if now - t < self._lockout]
@@ -318,6 +404,9 @@ class Auth:
                 recent.append(now)
                 self._forget_old_failures(now)
                 raise AuthError("wrong username or password")
+            if user.totp_secret and not self._second_factor(user, code):
+                recent.append(now)
+                raise AuthError("Enter a valid 6-digit authentication code or unused recovery code")
             self._failures.pop(name, None)
             user.last_login = self._stamp()
             self._drop_expired_sessions(now)
@@ -370,6 +459,95 @@ class Auth:
         for token in [t for t, s in self._sessions.items() if s.user == name]:
             del self._sessions[token]
         self._save_sessions()
+
+    # Two-factor authentication. No secret is included in UserOut or audit records.
+
+    def _reauth(self, user: User, password: str):
+        now = self._clock()
+        recent = [t for t in self._failures.get(user.name, []) if now - t < self._lockout]
+        self._failures[user.name] = recent
+        if len(recent) >= self._max_failures:
+            raise Forbidden("too many failed attempts; try again in a few minutes")
+        if not verify_password(password, user.password_hash):
+            recent.append(now)
+            raise Forbidden("current password is wrong")
+        return recent
+
+    def _second_factor(self, user: User, code: str) -> bool:
+        step = verify_totp(user.totp_secret, code, self._clock(), user.totp_last_step)
+        if step is not None:
+            user.totp_last_step = step
+            return True
+        digest = _key(code.upper().strip())
+        for stored in user.recovery_hashes:
+            if hmac.compare_digest(stored, digest):
+                user.recovery_hashes.remove(stored)
+                return True
+        return False
+
+    def setup_2fa(self, name: str, password: str) -> dict:
+        with self._lock:
+            user = self.user(name)
+            self._reauth(user, password)
+            if user.totp_secret:
+                raise ValueError("2FA is already enabled")
+            user.totp_pending = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+            user.totp_pending_until = self._clock() + 600
+            self._save()
+            uri = (
+                f"otpauth://totp/{quote('ibHiCS:' + name, safe='')}?"
+                f"secret={user.totp_pending}&issuer=ibHiCS&algorithm=SHA1&digits=6&period=30"
+            )
+            return {"secret": user.totp_pending, "uri": uri}
+
+    def confirm_2fa(self, name: str, code: str) -> list[str]:
+        with self._lock:
+            user = self.user(name)
+            recent = [t for t in self._failures.get(name, []) if self._clock() - t < self._lockout]
+            self._failures[name] = recent
+            if len(recent) >= self._max_failures:
+                raise Forbidden("too many failed attempts; try again in a few minutes")
+            step = (
+                verify_totp(user.totp_pending, code, self._clock())
+                if user.totp_pending and self._clock() <= user.totp_pending_until
+                else None
+            )
+            if step is None:
+                recent.append(self._clock())
+                raise Forbidden("invalid or expired authentication code")
+            user.totp_secret, user.totp_pending = user.totp_pending, ""
+            user.totp_last_step = step
+            codes = [secrets.token_hex(8).upper() for _ in range(10)]
+            user.recovery_hashes = [_key(code) for code in codes]
+            self._end_sessions(name)
+            self._save()
+            return codes
+
+    def disable_2fa(self, name: str, password: str, code: str):
+        with self._lock:
+            user = self.user(name)
+            recent = self._reauth(user, password)
+            if self.require_2fa:
+                raise Forbidden("2FA is required by your administrator")
+            if not user.totp_secret or not self._second_factor(user, code):
+                recent.append(self._clock())
+                raise Forbidden("invalid authentication code")
+            self.reset_2fa(name)
+
+    def reset_2fa(self, name: str):
+        with self._lock:
+            user = self.user(name)
+            user.totp_secret = user.totp_pending = ""
+            user.recovery_hashes = []
+            user.totp_last_step = -1
+            self._end_sessions(name)
+            self._save()
+
+    def enforce_2fa(self, enabled: bool):
+        with self._lock:
+            self.require_2fa = enabled
+            # Password-only sessions are immediately restricted to enrollment.
+            self._save()
 
     # Audit log
 
