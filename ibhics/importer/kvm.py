@@ -8,6 +8,7 @@ disks over SSH before virt-v2v converts them.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 import xml.etree.ElementTree as ET
@@ -35,7 +36,7 @@ def parse_qm_config(vmid: str, text: str) -> tuple[SourceVM, list[str]]:
             continue
         volumes.append(value.split(",", 1)[0])
         m = QM_SIZE.search(value)
-        sizes.append(max(1, round(float(m[1]) * UNIT[m[2]])) if m else 0)
+        sizes.append(max(1, math.ceil(float(m[1]) * UNIT[m[2]])) if m else 0)
     sockets, cores = int(conf.get("sockets", 1)), int(conf.get("cores", 1))
     vm = SourceVM(
         ref=vmid,

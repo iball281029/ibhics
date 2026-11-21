@@ -1700,27 +1700,25 @@
     <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <ol class="wiz-steps">
       <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
-      <li data-step="3"><b>3</b>Network mapping</li><li data-step="4"><b>4</b>Summary</li>
+      <li data-step="3"><b>3</b>Summary</li>
     </ol>
     <section class="wiz-page body" data-page="1">
       <p class="hint">Power off selected VMs at the source to continue.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
     </section>
     <section class="wiz-page body" data-page="2" hidden>
-      <div class="form-grid">
-        <label>Default node <select name="node" id="import-node" required></select></label>
-        <label>Default storage pool <select name="pool" id="import-pool" required></select></label>
-        <div id="import-capacity" class="wide" role="status"></div>
-        <div id="import-names" class="wide"></div>
-        <div id="import-disk-targets" class="wide"></div>
+      <div id="import-bulk" class="mg-bulk" hidden><strong>Apply to all VMs</strong>
+        <label>Node <select name="node" id="import-node"></select></label>
+        <label>Storage pool <select name="pool" id="import-pool"></select></label>
       </div>
+      <div id="import-capacity" class="mg-capacity" role="status"></div>
+      <div id="import-disk-targets"></div>
       <div class="edit-note win-note" id="import-win" hidden>
         <p>Windows: run <code>powercfg /h off</code> at the source, then shut down fully. Fast Startup can lock the disk and prevent driver installation.</p>
         <p id="import-hib">Clear hibernation is available per VM for SSH VMware / KVM only; unsaved sessions on the copy are discarded.</p>
       </div>
     </section>
-    <section class="wiz-page body" data-page="3" hidden><div id="import-nets"></div></section>
-    <section class="wiz-page body" data-page="4" hidden>
+    <section class="wiz-page body" data-page="3" hidden>
       <div id="import-summary"></div><div id="import-submit-status" role="status" aria-live="polite"></div>
     </section>
     <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" class="wiz-back">Back</button><button type="button" class="primary wiz-next">Next</button><button class="primary wiz-ok" value="ok" hidden>Start migration</button></footer>

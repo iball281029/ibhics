@@ -4625,12 +4625,12 @@ function renderMigrateSummary() {
   const members = state.cluster?.members || [];
   $("#mg-nodes").textContent = members.map((m) => m.name).join(" · ") || "No cluster nodes available";
   $("#mg-node-count").textContent = `${members.length} nodes`;
-  const f = $("#import-form").elements;
-  const pool = state.pools.find((p) => p.active && computeMembers().some((m) => m.healthy && m.name === p.node));
-  $("#mg-write").textContent = `WRITE · ${f.pool.value || pool?.name || "select storage"}`;
-  $("#mg-destination").textContent = f.node.value && f.pool.value
-    ? `to ${f.node.value} · ${f.pool.value} · network ${[...importBatch.networks.values()].join(", ") || "default"}`
-    : pool ? `Suggested: ${pool.node} · ${pool.name} · network default — confirm in wizard` : "Choose destination in the import wizard";
+  const destinations = importChosen().map((vm) => importBatch.targets.get(vm.ref)).filter(Boolean);
+  const pools = [...new Set(destinations.flatMap((t) => t.disks.length ? t.disks.map((d) => d.pool) : [t.pool]))];
+  $("#mg-write").textContent = `WRITE · ${pools.join(" · ") || "select storage"}`;
+  $("#mg-destination").textContent = destinations.length
+    ? `to ${[...new Set(destinations.map((t) => t.node))].join(" · ")} · ${pools.join(" · ")}`
+    : "Choose destination in the import wizard";
 }
 $("#source-chips").addEventListener("click", (e) => {
   const chip = e.target.closest("[data-browse-source]");
@@ -5059,113 +5059,138 @@ const importForm = $("#import-form");
 const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() };
 function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
 function importNetworkKeys(vm) {
-  return Array.from({ length: Math.max(vm.nics || 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
+  return Array.from({ length: Math.max(vm.nics ?? 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
 }
 function importTarget(vm) {
   if (!importBatch.targets.has(vm.ref)) importBatch.targets.set(vm.ref, {
-    node: importForm.elements.node.value, defaultNode: true, start: importForm.elements.start?.checked || false,
-    clear_hibernation: importForm.elements.clear_hibernation?.checked || false,
-    disks: vm.disks_gb.map((size) => ({ pool: importForm.elements.pool.value, size_gb: size || null, defaultPool: true })),
+    node: importForm.elements.node.value, originalNode: importForm.elements.node.value,
+    pool: importForm.elements.pool.value, originalPool: importForm.elements.pool.value, start: false, clear_hibernation: false,
+    disks: (vm.disks_gb || []).map((size) => ({ pool: importForm.elements.pool.value, size_gb: size || null })),
   });
   return importBatch.targets.get(vm.ref);
 }
 function importNicKey(vm, i) { return JSON.stringify([vm.ref, i]); }
 function importNicNetwork(vm, i, source) {
-  return importBatch.networks.get(importNicKey(vm, i)) || importBatch.networks.get(source) || "default";
+  const nic = importNicKey(vm, i);
+  return importBatch.networks.get(nic) ?? importBatch.networks.get(source) ?? importDefaultNetwork(vm, source);
 }
-function renderImportNets() {
-  $("#import-nets").innerHTML = importChosen().map((vm, v) => `<h4>${esc(vm.name)}</h4><table><thead><tr><th>NIC / Source network</th><th>Target virtual switch</th></tr></thead><tbody>${importNetworkKeys(vm).map((src, i) => {
-    const target = importTarget(vm);
-    const nets = state.networks.filter((n) => !n.node || n.node === target.node);
-    const selected = importNicNetwork(vm, i, src);
-    return `<tr><td>NIC ${i + 1} · ${esc(src)}</td><td><select data-import-nic="${v}:${i}" aria-label="${esc(vm.name)} NIC ${i + 1}">${nets.map((n) => `<option value="${esc(n.name)}" ${selected === n.name ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select></td></tr>`;
-  }).join("")}</tbody></table>`).join("") + `<p class="hint">Add missing virtual switches under Network first.</p>`;
-  $$("#import-nets [data-import-nic]").forEach((select) => {
-    const [v, i] = select.dataset.importNic.split(":").map(Number), vm = importChosen()[v];
-    const save = () => importBatch.networks.set(importNicKey(vm, i), select.value);
-    save(); select.onchange = save;
-  });
+function importDefaultNetwork(vm, source) {
+  const nets = state.networks.filter((n) => !n.node || n.node === importTarget(vm).node);
+  return nets.find((n) => n.name === source)?.name || nets.find((n) => n.name === "default")?.name || nets[0]?.name || "";
+}
+function importOptions(items, selected) {
+  return `<option value="" ${!selected ? "selected" : ""}>Select…</option>${selected && !items.includes(selected) ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} (unavailable)</option>` : ""}` + items.map((name) => `<option value="${esc(name)}" ${selected === name ? "selected" : ""}>${esc(name)}</option>`).join("");
 }
 function renderImportTargets() {
+  $("#import-bulk").hidden = importChosen().length < 2;
   $("#import-disk-targets").innerHTML = importChosen().map((vm, v) => {
     const t = importTarget(vm), locked = importBatch.submitted.has(vm.ref) ? "disabled" : "";
+    const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
+    importBatch.resources.set(vm.ref, r);
     const pools = state.pools.filter((p) => p.node === t.node && p.active);
-    return `<article class="mg-vm-target"><h4>${esc(vm.name)}</h4><div class="form-grid">
-      <label>Destination node<select data-target-vm="${v}" data-target-field="node" ${locked}>${computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}" ${t.node === m.name ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
-      <label class="check"><input type="checkbox" data-target-vm="${v}" data-target-field="start" ${t.start ? "checked" : ""} ${locked}>Start after import</label>
-      ${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? `<label class="check"><input type="checkbox" data-target-vm="${v}" data-target-field="clear_hibernation" ${t.clear_hibernation ? "checked" : ""} ${locked}>Clear hibernation on copied disks (SSH VMware / KVM)</label>` : ""}</div>
-      <table><thead><tr><th>Disk / Source</th><th>Storage pool</th><th>Target GiB</th><th>Change</th></tr></thead><tbody>${t.disks.map((d, i) => {
-        const source = vm.disks_gb[i], shrink = d.size_gb && source && d.size_gb < source;
-        return `<tr><td>Disk ${i + 1} · ${source || "Unknown"} GB</td><td><select data-target-vm="${v}" data-target-disk="${i}" data-target-field="pool" ${locked}>${pools.map((p) => `<option value="${esc(p.name)}" ${d.pool === p.name ? "selected" : ""}>${esc(poolText(p))}</option>`).join("")}</select></td><td><input type="number" min="1" step="1" value="${d.size_gb || ""}" placeholder="Original" data-target-vm="${v}" data-target-disk="${i}" data-target-field="size_gb" ${locked} aria-label="Disk ${i + 1} target GiB"></td><td><span class="mg-resize-badge">${shrink ? "SHRINK" : d.size_gb > source && source ? "GROW" : "Original"}</span></td></tr>`;
-      }).join("")}</tbody></table><p class="hint">Shrink requires used space +10% (at least +1 GiB), checked after conversion. NTFS, ext2/3/4 and single-volume LVM supported. XFS/btrfs/ReFS unsupported; disable BitLocker. Grow adds disk capacity; extend the guest filesystem after boot.</p></article>`;
-  }).join("");
-  $$("#import-disk-targets [data-target-field]").forEach((input) => {
-    input.onchange = () => {
-      const vm = importChosen()[Number(input.dataset.targetVm)], t = importTarget(vm), key = input.dataset.targetField;
-      if (input.dataset.targetDisk != null) t.disks[Number(input.dataset.targetDisk)][key] = key === "size_gb" ? (input.value === "" ? null : Number(input.value)) : input.value;
-      else t[key] = input.type === "checkbox" ? input.checked : input.value;
-      if (key === "pool") t.disks[Number(input.dataset.targetDisk)].defaultPool = false;
-      if (key === "node") {
-        t.defaultNode = false;
-        const pools = state.pools.filter((p) => p.node === t.node && p.active);
-        t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool)) d.pool = pools[0]?.name || ""; });
-      }
-      renderImportTargets(); importCapacity();
+    const field = (label, key, value, original, control, disk = null) => {
+      const changed = String(value ?? "") !== String(original ?? "");
+      const attrs = `data-target-vm="${v}" data-target-field="${key}" ${disk == null ? "" : `data-target-disk="${disk}"`} ${locked}`;
+      return `<div class="mg-target-field ${changed ? "is-changed" : ""}"><label>${label}${control(attrs)}</label><button type="button" class="mg-reset" data-reset-vm="${v}" data-reset-field="${key}" ${disk == null ? "" : `data-reset-disk="${disk}"`} ${!changed || locked ? "disabled" : ""} aria-label="Reset ${esc(label)}">Reset</button></div>`;
     };
-  });
+    const input = (label, key, value, original, type = "text", constraints = "") => field(label, key, value, original, (attrs) => `<input type="${type}" value="${esc(value)}" ${constraints} ${attrs}>`);
+    const initialNode = t.originalNode ?? importForm.elements.node.value;
+    const initialPool = t.originalPool ?? importForm.elements.pool.value;
+    const nicKeys = importNetworkKeys(vm);
+    const shrinking = t.disks.some((d, i) => d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i]);
+    return `<article class="mg-vm-target mg-transfer"><section class="mg-source-pane"><span class="mg-eyebrow">TARGET / CURRENT VM</span><h4>${esc(vm.name)}</h4><dl class="mg-source-specs"><div><dt>OS / firmware</dt><dd>${esc(vm.guest_os || "OS not reported")} · ${esc(vm.firmware || "Not reported")}</dd></div><div><dt>Compute</dt><dd>${vm.vcpus} vCPU · ${vm.memory_mb} MB memory</dd></div><div><dt>Power</dt><dd>${esc(vm.state || "Not reported")}</dd></div></dl><div class="mg-device-list">${nicKeys.map((net, i) => `<p>NIC ${i + 1} · ${esc(net)}${vm.macs?.[i] ? `<small>${esc(vm.macs[i])}</small>` : ""}</p>`).join("")}${(vm.disks_gb || []).map((size, i) => `<p>Disk ${i + 1} · ${size ? `${size} GiB` : "size detected after conversion"}</p>`).join("") || "<p>Disk size detected after conversion</p>"}</div></section>
+      <div class="mg-transfer-arrow" aria-hidden="true"><div class="mg-beam"><i></i><b>›</b><b>›</b><b>›</b><em>MIGRATE</em></div></div>
+      <section class="mg-target-pane"><span class="mg-eyebrow">DESTINATION / ibHiCS</span><div class="mg-target-grid">
+      ${input("VM name", "name", importBatch.names.get(vm.ref) ?? vm.name, vm.name)}
+      ${field("Node", "node", t.node, initialNode, (attrs) => `<select ${attrs}>${importOptions(computeMembers().filter((m) => m.healthy).map((m) => m.name), t.node)}</select>`)}
+      ${input("vCPU", "vcpus", r.vcpus, vm.vcpus, "number", 'min="1" max="256" step="1"')}
+      ${input("Memory (MB)", "memory_mb", r.memory_mb, vm.memory_mb, "number", 'min="128" step="1"')}
+      </div><div class="mg-target-devices">${nicKeys.map((src, i) => field(`NIC ${i + 1} · ${esc(src)}`, "network", importNicNetwork(vm, i, src), importDefaultNetwork(vm, src), (attrs) => `<select ${attrs}>${importOptions(state.networks.filter((n) => !n.node || n.node === t.node).map((n) => n.name), importNicNetwork(vm, i, src))}</select>`, i)).join("")}
+      ${!t.disks.length ? field("Storage pool", "pool", t.pool, initialPool, (attrs) => `<select ${attrs}>${importOptions(pools.map((p) => p.name), t.pool)}</select>`) : ""}
+      ${t.disks.map((d, i) => {
+        const source = vm.disks_gb[i];
+        const badge = source && d.size_gb && d.size_gb !== source ? `<span class="mg-resize-badge">${d.size_gb < source ? "SHRINK" : "GROW"}</span>` : "";
+        return `<div class="mg-target-disk"><h5>Disk ${i + 1} ${badge}</h5><div class="mg-target-grid">${field("Storage pool", "pool", d.pool, initialPool, (attrs) => `<select ${attrs}>${importOptions(pools.map((p) => p.name), d.pool)}</select>`, i)}${field("Size (GiB)", "size_gb", d.size_gb, source || null, (attrs) => `<input type="number" min="1" step="1" value="${d.size_gb ?? ""}" placeholder="Keep original size" ${attrs}>`, i)}</div></div>`;
+      }).join("")}</div>${shrinking ? '<p class="hint mg-shrink-hint">Shrink needs used space +10% (minimum +1 GiB). Checked after conversion; filesystem support required.</p>' : ""}
+      <div class="mg-target-grid">${field("Start after import", "start", t.start, false, (attrs) => `<input type="checkbox" ${t.start ? "checked" : ""} ${attrs}>`)}${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? field("Clear hibernation", "clear_hibernation", t.clear_hibernation, false, (attrs) => `<input type="checkbox" ${t.clear_hibernation ? "checked" : ""} ${attrs}>`) : ""}</div></section></article>`;
+  }).join("");
+  const save = (input, reset = false) => {
+    const vm = importChosen()[Number(input.dataset[reset ? "resetVm" : "targetVm"])];
+    if (importBatch.submitted.has(vm.ref)) return;
+    const t = importTarget(vm), key = input.dataset[reset ? "resetField" : "targetField"];
+    const disk = input.dataset[reset ? "resetDisk" : "targetDisk"];
+    let value = input.type === "checkbox" ? input.checked : input.value;
+    if (["vcpus", "memory_mb", "size_gb"].includes(key)) value = value === "" && key === "size_gb" ? null : Number(value);
+    if (reset) value = key === "name" ? vm.name : ["vcpus", "memory_mb"].includes(key) ? vm[key] : key === "node" ? t.originalNode : key === "pool" ? t.originalPool : key === "size_gb" ? vm.disks_gb[Number(disk)] || null : false;
+    if (key === "network") {
+      const nic = importNicKey(vm, Number(disk));
+      if (reset) importBatch.networks.delete(nic); else importBatch.networks.set(nic, value);
+    } else if (key === "name") importBatch.names.set(vm.ref, value);
+    else if (["vcpus", "memory_mb"].includes(key)) importBatch.resources.get(vm.ref)[key] = value;
+    else if (disk != null) t.disks[Number(disk)][key] = value;
+    else t[key] = value;
+    if (key === "node") {
+      const pools = state.pools.filter((p) => p.node === t.node && p.active);
+      t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool)) d.pool = pools[0]?.name || ""; });
+      if (!pools.some((p) => p.name === t.pool)) t.pool = pools[0]?.name || "";
+    }
+    renderImportTargets(); importCapacity(); renderMigrateSummary();
+  };
+  $$("#import-disk-targets [data-target-field]").forEach((input) => { input.onchange = () => save(input); });
+  $$("#import-disk-targets [data-reset-field]").forEach((button) => { button.onclick = () => save(button, true); });
 }
 function importCapacity() {
-  const f = importForm.elements;
-  const pool = state.pools.find((p) => p.node === f.node.value && p.name === f.pool.value && p.active);
-  const disks = importChosen().reduce((total, vm) => total + vm.disks_gb.reduce((a, b) => a + b, 0), 0);
-  let needed = disks * (["lvm", "iscsi"].includes(pool?.type) ? 2 : 1);
   let invalid = false, insufficient = false;
   const demand = new Map();
   for (const vm of importChosen()) {
-    const t = importBatch.targets.get(vm.ref);
-    if (!t) continue;
-    const scratch = t.disks[0]?.pool || f.pool.value;
+    const t = importTarget(vm);
+    const scratch = t.disks[0]?.pool || t.pool || importForm.elements.pool.value;
     const shrinking = t.disks.some((d, i) => d.size_gb && d.size_gb < vm.disks_gb[i]);
-    const add = (p, size) => { const key = JSON.stringify([t.node, p]); demand.set(key, (demand.get(key) || 0) + size); };
-    add(scratch, t.disks.reduce((sum, d, i) => sum + Math.max(d.size_gb || vm.disks_gb[i], vm.disks_gb[i]), 0) * (shrinking ? 3 : 1));
+    const add = (pool, size, unknown) => {
+      const key = JSON.stringify([t.node, pool]);
+      const entry = demand.get(key) || { size: 0, unknown: false };
+      entry.size += size; entry.unknown ||= unknown;
+      demand.set(key, entry);
+    };
+    if (!computeMembers().some((m) => m.healthy && m.name === t.node)) invalid = true;
+    add(scratch, t.disks.reduce((sum, d, i) => sum + Math.max(d.size_gb || vm.disks_gb[i] || 0, vm.disks_gb[i] || 0), 0) * (shrinking ? 3 : 1), !t.disks.length || vm.disks_gb.some((g) => !g));
     t.disks.forEach((d, i) => {
       if (d.size_gb != null && (!Number.isInteger(d.size_gb) || d.size_gb < 1)) invalid = true;
-      add(d.pool, d.size_gb || vm.disks_gb[i]);
+      add(d.pool, d.size_gb || vm.disks_gb[i] || 0, !d.size_gb && !vm.disks_gb[i]);
     });
   }
-  for (const [key, size] of demand) {
-    const [node, name] = JSON.parse(key), selected = state.pools.find((p) => p.node === node && p.name === name && p.active);
-    if (!selected) invalid = true;
-    else if (selected.available_gb < size) insufficient = true;
+  const bars = [];
+  for (const [key, entry] of demand) {
+    const [node, name] = JSON.parse(key), pool = state.pools.find((p) => p.node === node && p.name === name && p.active);
+    if (!pool) invalid = true;
+    const free = pool?.available_gb;
+    const short = Number.isFinite(free) && free < entry.size;
+    insufficient ||= short;
+    const required = entry.size ? `${entry.unknown ? "≥ " : ""}${entry.size} GiB` : "Pending detection";
+    bars.push(`<div class="mg-pool-capacity ${short || !pool ? "is-short" : ""}"><strong>${esc(node)} / ${esc(name || "Select pool")}</strong><span>${required} required · ${Number.isFinite(free) ? `${Math.floor(free)} GiB` : "Unknown"} free</span><meter min="0" max="${Math.max(free || 0, entry.size, 1)}" value="${entry.size}" aria-label="${esc(node)} / ${esc(name)} required space"></meter>${entry.unknown ? '<small>Size detected after conversion; required space may increase.</small>' : ""}</div>`);
   }
-  if (demand.size) needed = [...demand.values()].reduce((a, b) => a + b, 0);
-  const unknown = importChosen().some((v) => !v.disks_gb.length || v.disks_gb.some((g) => !g));
-  $("#import-capacity").textContent = `${disks} GB total disks; ${needed} GB required including conversion space; ${pool ? `${Math.floor(pool.available_gb)} GB free` : "select an available pool"}.${unknown ? " Warning: some disk sizes are unknown; actual space may be higher." : ""}${insufficient || (!demand.size && pool && pool.available_gb < needed) ? " Warning: insufficient free space. Choose a larger pool." : ""}`;
-  return { pool, needed, invalid, insufficient, customized: demand.size > 0 };
+  $("#import-capacity").innerHTML = bars.join("");
+  return { invalid, insufficient };
 }
 function importTargetPools() {
   const sel = importForm.elements.pool, was = sel.value;
   const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
   sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
   if (pools.some((p) => p.name === was)) sel.value = was;
-  for (const t of importBatch.targets.values()) {
-    if (!t.defaultNode) continue;
-    t.node = importForm.elements.node.value;
-    t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool) || d.defaultPool) d.pool = sel.value; });
-  }
-  if (importBatch.targets.size) renderImportTargets();
   importCapacity();
 }
-function importDefaultPool() {
-  for (const t of importBatch.targets.values()) {
-    if (t.node !== importForm.elements.node.value) continue;
-    t.disks.forEach((d) => { if (d.defaultPool) d.pool = importForm.elements.pool.value; });
+function importApplyAll() {
+  for (const vm of importChosen()) {
+    if (importBatch.submitted.has(vm.ref)) continue;
+    const t = importTarget(vm);
+    t.node = importForm.elements.node.value;
+    t.pool = importForm.elements.pool.value;
+    t.disks.forEach((d) => { d.pool = importForm.elements.pool.value; });
   }
-  if (importBatch.targets.size) renderImportTargets();
-  importCapacity();
+  renderImportTargets(); importCapacity(); renderMigrateSummary();
 }
 const importWiz = wizard("import-dialog", {
-  steps: 4,
+  steps: 3,
   reset() {
     const ctx = dialogContext;
     Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() });
@@ -5178,10 +5203,10 @@ const importWiz = wizard("import-dialog", {
     if (!chosen.length) throw new Error("Select at least one VM.");
     if (chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
     if (step >= 2) {
-      const { pool, needed, invalid, insufficient, customized } = importCapacity();
-      if (!pool) throw new Error("Choose a healthy node and an available storage pool.");
-      if (invalid) throw new Error("Choose an available pool and a positive whole target size for every disk.");
-      if (insufficient || (!customized && pool.available_gb < needed)) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      const { invalid, insufficient } = importCapacity();
+      if (invalid) throw new Error("Choose a healthy node, an available pool, and a positive whole disk size (or leave size blank to keep the original).");
+      if (insufficient) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      if (chosen.some((vm) => importNetworkKeys(vm).some((src, i) => !state.networks.some((n) => n.name === importNicNetwork(vm, i, src) && (!n.node || n.node === importTarget(vm).node))))) throw new Error("Choose an available target network for every NIC.");
       const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
       if (names.some((n) => !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters (English or Thai), digits, '-', '_' or '.'.");
       if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
@@ -5194,46 +5219,35 @@ const importWiz = wizard("import-dialog", {
   },
   show(step) {
     if (step === 1) {
-      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" ? " — power off first" : ""}</td><td>${vm.disks_gb.map((g) => g ? `${g} GB` : "Unknown").join(", ")}</td></tr>`).join("");
+      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" ? " — power off first" : ""}</td><td>${(vm.disks_gb || []).map((g) => g ? `${g} GiB` : "Size detected after conversion").join(", ") || "Size detected after conversion"}</td></tr>`).join("");
     }
     if (step === 2) {
-      $("#import-names").innerHTML = `<table><thead><tr><th>Source VM</th><th>New name</th><th>vCPU</th><th>Memory (MB)</th></tr></thead><tbody>${importChosen().map((vm, i) => {
-        const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
-        importBatch.resources.set(vm.ref, r);
-        const lock = importBatch.submitted.has(vm.ref) ? "readonly" : "";
-        return `<tr><td>${esc(vm.name)}</td><td><input data-import-name="${i}" value="${esc(importBatch.names.get(vm.ref) ?? vm.name)}" ${lock} aria-label="New name for ${esc(vm.name)}"></td><td><input data-import-cpu="${i}" type="number" min="1" max="256" value="${r.vcpus}" ${lock} aria-label="vCPU for ${esc(vm.name)}"></td><td><input data-import-memory="${i}" type="number" min="128" step="128" value="${r.memory_mb}" ${lock} aria-label="Memory for ${esc(vm.name)}"></td></tr>`;
-      }).join("")}</tbody></table>`;
-      $$("#import-names [data-import-name]").forEach((input, i) => input.addEventListener("input", () => importBatch.names.set(importChosen()[i].ref, input.value)));
-      [["cpu", "vcpus"], ["memory", "memory_mb"]].forEach(([attr, key]) => {
-        $$(`#import-names [data-import-${attr}]`).forEach((input, i) => input.addEventListener("input", () => { importBatch.resources.get(importChosen()[i].ref)[key] = Number(input.value); }));
-      });
       const source = state.sources.find((s) => s.name === importBatch.source);
       $("#import-win").hidden = !importChosen().some((v) => /windows/i.test(v.guest_os));
-      $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings.transport || "ssh") === "ssh"));
+      $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings?.transport || "ssh") === "ssh"));
       renderImportTargets();
       importCapacity();
     }
-    if (step === 3) renderImportNets();
-    if (step === 4) {
+    if (step === 3) {
       $("#import-summary").innerHTML = importChosen().map((vm) => {
         const t = importTarget(vm), r = importBatch.resources.get(vm.ref) || vm;
-        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Unknown"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>")}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicNetwork(vm, i, src))}`).join("<br>")}</p></article>`;
+        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicNetwork(vm, i, src))}`).join("<br>")}</p></article>`;
       }).join("") + `<p class="hint">Keep source VMs powered off until migration completes.</p>`;
     }
   },
 });
-$("#import-pick-vms").addEventListener("change", (e) => {
+$("#import-pick-vms").onchange = (e) => {
   const input = e.target.closest("[data-wizard-vm]");
   if (!input) return;
   const ref = importBatch.vms[Number(input.dataset.wizardVm)].ref;
   if (input.checked) importBatch.picked.add(ref); else importBatch.picked.delete(ref);
-});
-importForm.elements.node.addEventListener("change", importTargetPools);
-importForm.elements.pool.addEventListener("change", importDefaultPool);
+};
+importForm.elements.node.onchange = () => { importTargetPools(); importApplyAll(); };
+importForm.elements.pool.onchange = importApplyAll;
 
 handlers["import-dialog"] = async (f) => {
-  if (importWiz.step !== 4) throw new Error("Review the migration summary first.");
-  importWiz.check(4);
+  if (importWiz.step !== 3) throw new Error("Review the migration summary first.");
+  importWiz.check(3);
   const chosen = importChosen();
   for (const vm of chosen) {
     if (importBatch.submitted.has(vm.ref)) continue;
@@ -5241,7 +5255,7 @@ handlers["import-dialog"] = async (f) => {
       const t = importBatch.targets.get(vm.ref);
       await post("/migrate/jobs", {
         source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
-        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), start: t ? t.start : f.get("start") === "on",
+        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || t?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), start: t ? t.start : f.get("start") === "on",
         clear_hibernation: (t ? t.clear_hibernation : f.get("clear_hibernation") === "on") && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
       });
       importBatch.submitted.add(vm.ref);

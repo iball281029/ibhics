@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -247,7 +248,7 @@ def parse_vm(vm: dict, config: dict | None = None) -> SourceVM:
         if re.fullmatch(r"(ide|sata|scsi|virtio)\d+", str(key)) and "cdrom" not in str(value):
             size = re.search(r"size=(\d+(?:\.\d+)?)([KMGT])", str(value))
             unit = {"K": 1 / 1024**2, "M": 1 / 1024, "G": 1, "T": 1024}
-            disks.append(int(float(size.group(1)) * unit[size.group(2)]) if size else 0)
+            disks.append(math.ceil(float(size.group(1)) * unit[size.group(2)]) if size else 0)
     nics = [k for k in cfg if re.fullmatch(r"net\d+", str(k))]
     uefi = str(cfg.get("bios", "")).lower() in ("ovmf", "uefi") or bool(cfg.get("efidisk0"))
     status = str(cfg.get("status", "")).lower()

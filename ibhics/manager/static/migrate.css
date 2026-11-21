@@ -452,3 +452,58 @@ dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:t
 .mg-dialog .mg-vm-target table { width: 100%; }
 .mg-dialog .mg-vm-target input[type="number"] { width: 100px; }
 .mg-dialog .mg-resize-badge { font-size: .75rem; letter-spacing: .06em; color: var(--accent); }
+
+/* A single source-to-target card keeps every VM decision in context. */
+#import-dialog {width:min(1200px,96vw)}
+#import-dialog .mg-bulk {display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:10px 14px;border:1px solid #3ef0ff33;border-radius:10px}
+#import-dialog .mg-bulk[hidden] {display:none}
+.mg-bulk strong {font-size:11px;color:var(--mg-cyan,#3ef0ff)}
+.mg-bulk label {display:flex;align-items:center;gap:8px;font-size:12px}
+.mg-bulk select {max-width:220px}
+.mg-dialog .mg-transfer {display:grid;grid-template-columns:minmax(0,1fr) 110px minmax(0,1.6fr);padding:0;overflow:hidden}
+.mg-source-pane,.mg-target-pane {padding:20px;min-width:0}
+.mg-source-pane {background:linear-gradient(135deg,#3ef0ff0a,transparent);color:#acc6d6}
+.mg-source-pane h4 {margin-top:12px!important;color:#eaffff;overflow-wrap:anywhere}
+.mg-source-specs {font-size:12px;line-height:1.6}
+.mg-source-specs div {margin:12px 0}
+.mg-source-specs dt {color:var(--mg-dim);font-size:10px;text-transform:uppercase;letter-spacing:1px}
+.mg-source-specs dd {margin:0;overflow-wrap:anywhere}
+.mg-device-list {border-top:1px solid #3ef0ff22;font-size:12px;overflow-wrap:anywhere}
+.mg-device-list small {display:block;color:var(--mg-dim)}
+.mg-transfer-arrow {display:flex;justify-content:center;align-items:flex-start;min-width:110px}
+.mg-beam {position:sticky;top:38%;margin-top:120px;width:100%;height:70px;display:flex;align-items:center;justify-content:center;gap:2px}
+.mg-beam i {position:absolute;left:4px;right:4px;top:50%;height:2px;background:linear-gradient(90deg,transparent,#3ef0ff,#b46bff,transparent);background-size:200% 100%;box-shadow:0 0 12px #3ef0ff;animation:mg-beam-flow 1.4s linear infinite}
+.mg-beam b {position:relative;font-size:44px;line-height:1;color:#3ef0ff;text-shadow:0 0 8px #3ef0ff,0 0 24px #3ef0ffaa;animation:mg-chevron 1.2s ease-in-out infinite;opacity:.2}
+.mg-beam b:nth-of-type(2) {animation-delay:.2s}
+.mg-beam b:nth-of-type(3) {animation-delay:.4s}
+.mg-beam em {position:absolute;bottom:-6px;font-style:normal;font-size:9px;letter-spacing:3px;color:#3ef0ffaa}
+@keyframes mg-beam-flow {from{background-position:200% 0}to{background-position:0 0}}
+@keyframes mg-chevron {0%,100%{opacity:.15;transform:translateX(-4px)}50%{opacity:1;transform:translateX(4px)}}
+.mg-target-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.mg-target-field {position:relative;border:1px solid transparent;border-radius:8px;padding:6px;min-width:0}
+.mg-target-field.is-changed {border-color:#3ef0ff77;background:#3ef0ff08;box-shadow:inset 2px 0 #3ef0ff}
+.mg-target-field label {display:flex;flex-direction:column;gap:7px;font-size:11px;padding-right:38px;overflow-wrap:anywhere}
+.mg-target-field :is(input:not([type="checkbox"]),select) {width:100%!important;min-width:0;box-sizing:border-box}
+.mg-target-field input[type="checkbox"] {align-self:flex-start}
+#import-dialog .mg-target-field .mg-reset {position:absolute;right:4px;top:4px;padding:2px 4px;font-size:9px;min-height:0;color:#3ef0ff}
+.mg-reset:disabled {visibility:hidden}
+.mg-target-devices {margin-top:12px}
+.mg-target-disk {border-top:1px solid #3ef0ff22;margin-top:12px;padding-top:8px}
+.mg-target-disk h5 {margin:0;color:#b8d8e6;font-size:11px}
+.mg-shrink-hint {font-size:11px;color:#ffd28e}
+.mg-capacity {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.mg-pool-capacity {display:grid;flex:1 1 220px;gap:5px;padding:9px 12px;border:1px solid #3ef0ff33;border-radius:8px;font-size:11px;min-width:0}
+.mg-pool-capacity strong {overflow-wrap:anywhere;color:#bcebf1}
+.mg-pool-capacity meter {width:100%;height:6px;accent-color:#3ef0ff}
+.mg-pool-capacity small {color:var(--mg-dim)}
+.mg-pool-capacity.is-short {border-color:#ff786a;color:#ffb0a7}
+@media(max-width:760px) {
+  .mg-dialog .mg-transfer {grid-template-columns:minmax(0,1fr)}
+  .mg-transfer-arrow {height:44px}
+  .mg-beam {position:static;margin:0;height:56px;rotate:90deg}
+  .mg-source-pane,.mg-target-pane {padding:14px}
+}
+@media(max-width:440px) {.mg-target-grid {grid-template-columns:minmax(0,1fr)}}
+@media(prefers-reduced-motion:reduce) {.mg-beam i,.mg-beam b {animation:none;opacity:1}}
+
+#import-dialog .mg-eyebrow {font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:#9bdde9}

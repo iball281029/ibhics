@@ -226,14 +226,14 @@ def test_static_migrate_controls():
     js = (static / "app.js").read_text()
     assert "data-source-test=" in js
     assert "Run connection test" in js
-    assert "steps: 4," in js[js.index("const importWiz") :]
+    assert "steps: 3," in js[js.index("const importWiz") :]
 
 
 def test_network_mapping_preserves_nic_order_and_duplicate_networks():
     """Run the actual pure JS mapper without a browser or network."""
     static = Path(__file__).parents[1] / "ibhics" / "manager" / "static" / "app.js"
     js = static.read_text()
-    code = js[js.index("function importNetworkKeys(vm)") : js.index("function renderImportNets()")]
+    code = js[js.index("function importNetworkKeys(vm)") : js.index("function importOptions(")]
     code += """
 const assert = require('node:assert/strict');
 assert.deepEqual(importNetworkKeys({nics:3, networks:['LAN','WAN','LAN']}), ['LAN','WAN','LAN']);
@@ -324,12 +324,16 @@ const $ = (key) => {
                                     addEventListener:noop});
   return boxes.get(key);
 };
-const $$ = () => [];
+let controls = [], resets = [];
+const $$ = (key) => key.includes('data-target-field') ? controls
+  : key.includes('data-reset-field') ? resets : [];
 const handlers = {};
-const wizard = (id, options) => ({step:4,check:options.check,show:options.show});
-const state = {pools:[{node:'node1',name:'default',active:true,type:'dir',available_gb:100}],
-               vms:[],imports:[],networks:[],sources:[]};
+const wizard = (id, options) => ({step:3,check:options.check,show:options.show});
+const state = {pools:[{node:'node1',name:'default',active:true,type:'dir',available_gb:200}],
+               vms:[],imports:[],networks:['vs-lan','vs-wan','vm1-lan','vm1-other-lan','vm2-lan'].map(name=>({name})),sources:[]};
 const esc = s => String(s);
+const computeMembers=()=>[{name:'node1',healthy:true},{name:'node2',healthy:true}];
+const renderMigrateSummary=noop;
 let refreshes=0, tab=null;
 const refresh=async () => {refreshes++};
 const selectTab=(id, value) => {tab=value};
@@ -349,12 +353,13 @@ const post=async (url, body) => {
              disks_gb:[40],nics:1,networks:['LAN'],guest_os:'Windows 11'};
   Object.assign(importBatch,{source:'esx01',vms:[vm1,vm2],picked:new Set(['vm1','vm2'])});
   importBatch.networks=new Map([['LAN','vs-lan'],['WAN','vs-wan']]);
-  importWiz.check(4);
-  assert.match($('#import-capacity').textContent,/60 GB total disks/);
+  importWiz.check(3);
+  assert.match($('#import-capacity').innerHTML,/120 GiB required/);
   vm1.state='running';assert.throws(()=>importWiz.check(1),/Power off/);vm1.state='stopped';
   state.pools[0].available_gb=50;assert.throws(()=>importWiz.check(2),/Insufficient space/);
   state.pools[0].available_gb=100;state.pools[0].type='lvm';
-  assert.throws(()=>importWiz.check(2),/Insufficient space/);state.pools[0].type='dir';
+  assert.throws(()=>importWiz.check(2),/Insufficient space/);
+  state.pools[0].type='dir';state.pools[0].available_gb=200;
   importBatch.names.set('vm1','db1');assert.throws(()=>importWiz.check(2),/distinct/);
   importBatch.names.set('vm1','bad name');assert.throws(()=>importWiz.check(2),/VM names/);
   importBatch.names.set('vm1','existing');state.vms=[{name:'existing'}];
@@ -371,7 +376,7 @@ const post=async (url, body) => {
   assert.deepEqual(requests[0].network,['vs-wan','vs-lan','vs-lan']);
   assert.deepEqual(requests[2].network,['vs-lan']);
   assert.equal(requests[0].clear_hibernation,false);
-  assert.equal(requests[2].clear_hibernation,true);
+  assert.equal(requests[2].clear_hibernation,false);
   assert.equal(requests[0].vcpus,8);assert.equal(requests[0].memory_mb,8192);
   assert.equal(refreshes,1);assert.equal(tab,'imports');
   importBatch.submitted.clear(); requests=[];
@@ -382,7 +387,7 @@ const post=async (url, body) => {
   importBatch.networks.set(importNicKey(vm1,1),'vm1-lan');
   importBatch.networks.set(importNicKey(vm1,2),'vm1-other-lan');
   importBatch.networks.set(importNicKey(vm2,0),'vm2-lan');
-  importWiz.show(4);
+  importWiz.show(3);
   assert.match($('#import-summary').innerHTML,/node2/);
   assert.match($('#import-summary').innerHTML,/SHRINK/);
   assert.match($('#import-summary').innerHTML,/GROW/);
@@ -392,6 +397,46 @@ const post=async (url, body) => {
   assert.deepEqual(requests.map(r=>r.disks[0]),[{pool:'default',size_gb:25},{pool:'fast',size_gb:30}]);
   assert.deepEqual(requests[0].network,['vs-wan','vm1-lan','vm1-other-lan']);
   assert.deepEqual(requests[1].network,['vm2-lan']);
+  importBatch.submitted.clear();
+  const field={dataset:{targetVm:'0',targetField:'size_gb',targetDisk:'0'},value:'10'};
+  controls=[field];renderImportTargets();field.onchange();
+  assert.equal(importTarget(vm1).disks[0].size_gb,10);
+  assert.match($('#import-disk-targets').innerHTML,/SOURCE \/ READ ONLY/);
+  assert.match($('#import-disk-targets').innerHTML,/mg-shrink-hint/);
+  const reset={dataset:{resetVm:'0',resetField:'size_gb',resetDisk:'0'}};
+  resets=[reset];renderImportTargets();reset.onclick();
+  assert.equal(importTarget(vm1).disks[0].size_gb,20);
+  controls=[];resets=[];
+  const unknown={...vm1,ref:'unknown',disks_gb:[0],nics:0,networks:[]};
+  importBatch.vms=[unknown];importBatch.picked=new Set(['unknown']);
+  renderImportTargets();importCapacity();
+  assert.equal(importTarget(unknown).disks[0].size_gb,null);
+  assert.match($('#import-disk-targets').innerHTML,/size detected after conversion/);
+  assert.doesNotMatch($('#import-disk-targets').innerHTML,/mg-shrink-hint|Unknown GB/);
+  assert.match($('#import-capacity').innerHTML,/Pending detection/);
+  assert.equal($('#import-bulk').hidden,true);
+  assert.deepEqual(importNetworkKeys(unknown),[]);
+  importBatch.targets.get('unknown').disks[0].size_gb=12;
+  renderImportTargets();
+  assert.doesNotMatch($('#import-disk-targets').innerHTML,/GROW|SHRINK/);
+  unknown.disks_gb=[];importBatch.targets.delete('unknown');
+  renderImportTargets();importWiz.check(2);
+  assert.match($('#import-disk-targets').innerHTML,/Storage pool/);
+  assert.equal(importTarget(unknown).pool,'default');
+  elements.node.value='node2';elements.pool.value='fast';importApplyAll();
+  assert.equal(importTarget(unknown).node,'node2');
+  assert.equal(importTarget(unknown).pool,'fast');
+  importBatch.submitted.add('unknown');
+  elements.node.value='node1';elements.pool.value='default';importApplyAll();
+  assert.equal(importTarget(unknown).node,'node2');
+  importBatch.submitted.clear();
+  unknown.nics=1;unknown.networks=['LAN'];
+  importBatch.networks.set(importNicKey(unknown,0),'');
+  assert.throws(()=>importWiz.check(2),/available target network/);
+  importBatch.networks.delete(importNicKey(unknown,0));
+  assert.equal(importNicNetwork(unknown,0,'LAN'),'vs-lan');
+
+
 })().catch(error=>{console.error(error);process.exitCode=1});
 """
     subprocess.run(["node", "-e", prefix + js[start:end] + suffix], check=True, capture_output=True)
