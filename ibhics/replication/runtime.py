@@ -250,7 +250,44 @@ class ClusterRuntime(LocalRuntime):
         if member.local:
             local = replace(job, node=member.name)
             return super().sync(local, source, vm, progress)
-        return self._call(member, "sync", job, source=source.to_dict())
+        return self._remote_sync(member, job, source, progress)
+
+    def _remote_sync(self, member, job, source, progress, every=3.0):
+        """Run the sync on the node and relay its progress; a stop raised by the
+        progress callback (operator Pause) is passed on to the node."""
+        import threading
+
+        outcome = {}
+
+        def run():
+            try:
+                outcome["result"] = self._call(member, "sync", job, source=source.to_dict())
+            except Exception as exc:  # re-raised below in the caller's thread
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        stopped = None
+        while worker.is_alive():
+            worker.join(every)
+            if not worker.is_alive() or stopped:
+                continue
+            try:
+                state = self._call(member, "progress", job)
+                if state.get("total"):
+                    progress(state["done"], state["total"])
+            except Exception as exc:
+                if type(exc).__name__ == "SyncStopped":
+                    stopped = exc
+                    try:
+                        self._call(member, "stop", job)
+                    except Exception:
+                        pass
+        if stopped:
+            raise stopped
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["result"]
 
     def ownership(self, job):
         member = self.cluster.member(job.node)
