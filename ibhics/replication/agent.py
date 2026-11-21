@@ -14,6 +14,16 @@ from .store import operation_lock
 
 def install(api, name, driver, root: Path, guard=Path("/run/lock/ibhics-replication.lock")):
     runtime = LocalRuntime(Cluster.standalone(name, driver), root)
+    progress: dict[str, tuple[int, int]] = {}  # running syncs, read by the manager
+    stops: set[str] = set()
+
+    def report(job_id):
+        def update(done, total):
+            if job_id in stops:
+                raise RuntimeError("Replication stopped by the operator")
+            progress[job_id] = (done, total)
+
+        return update
 
     @api.post("/replications/{job_id}/{action}")
     def execute(job_id: str, action: str, body: dict):
@@ -29,6 +39,12 @@ def install(api, name, driver, root: Path, guard=Path("/run/lock/ibhics-replicat
             raise HTTPException(422, "Invalid replication job") from None
         if job.id != job_id:
             raise HTTPException(422, "Replication id mismatch")
+        if action == "progress":
+            done, total = progress.get(job_id, (0, 0))
+            return {"done": done, "total": total, "running": job_id in progress}
+        if action == "stop":
+            stops.add(job_id)
+            return {"ok": True}
         if action == "validate":
             runtime.store(job)
             return {"supported": True}
@@ -41,7 +57,13 @@ def install(api, name, driver, root: Path, guard=Path("/run/lock/ibhics-replicat
                 if action == "sync":
                     source = Source.from_dict(body["source"])
                     vm = SourceVM.from_dict(job.source_vm)
-                    return runtime.sync(job, source, vm, lambda done, total: None)
+                    stops.discard(job_id)
+                    progress[job_id] = (0, 0)
+                    try:
+                        return runtime.sync(job, source, vm, report(job_id))
+                    finally:
+                        progress.pop(job_id, None)
+                        stops.discard(job_id)
                 if action == "materialize":
                     if body.get("test") is False and body.get("source_powered_off") is not True:
                         raise ValueError("source_powered_off: true is required for cutover")
