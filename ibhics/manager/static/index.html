@@ -572,7 +572,7 @@
           <button data-tab="p2v">Physical machines</button>
         </div>
         <div class="subpage" id="tab-replications">
-          <div class="toolbar"><button id="new-replication" class="primary operator-only">New replication</button><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="Replication view"><button data-replication-view="cards" aria-pressed="true">Cards</button><button data-replication-view="list" aria-pressed="false">List</button></div></div>
+          <div class="toolbar"><button id="new-replication" class="primary operator-only">New replication</button><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="Replication view"><button type="button" data-replication-view="cards" aria-label="Card view" aria-pressed="true" title="Cards"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button><button type="button" data-replication-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button></div></div>
           <p class="hint">Choose a source and VMs under Import VMs, then create a replication. Source VMs may remain running during sync. Cutover requires shutdown confirmation.</p>
           <div id="replications" class="mg-replicas"></div>
         </div>
