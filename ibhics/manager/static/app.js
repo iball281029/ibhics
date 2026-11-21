@@ -5800,8 +5800,8 @@ $('#nw-rule-view').onclick = () => {const list=$('#fw-rules').classList.toggle('
 $('#nw-switch-cards').addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b) return;
   try {
-    if (b.dataset.swEdit) { nw.switchEdit = b.dataset.swEdit; renderPools(); }
-    else if (b.hasAttribute('data-sw-cancel')) { nw.switchEdit = ''; renderPools(); }
+    if (b.dataset.swEdit) { nw.switchEdit = b.dataset.swEdit; renderNetworkStudio(); }
+    else if (b.hasAttribute('data-sw-cancel')) { nw.switchEdit = ''; renderNetworkStudio(); }
     else if (b.dataset.swDel) {
       if (!confirm(`Delete virtual switch ${b.dataset.swDel} from every node? VMs must not use it.`)) return;
       await del(`/networks/${enc(b.dataset.swDel)}`); toast(`${b.dataset.swDel} deleted`); await refresh('network');
