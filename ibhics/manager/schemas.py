@@ -197,9 +197,19 @@ class FirewallRuleIn(BaseModel):
     proto: str = Field(default="any", pattern="^(any|tcp|udp|icmp)$")
     port: int | None = Field(default=None, ge=1, le=65535)
     enabled: bool = True
+    ports: str = Field(default="", max_length=200, description="e.g. 80,443,8000-8100")
+    description: str = Field(default="", max_length=200)
+
+
+class FirewallSimulateIn(BaseModel):
+    src: str = Field(description="a VM name or an IPv4 address")
+    dst: str = Field(description="a VM name or an IPv4 address")
+    proto: str = Field(default="tcp", pattern="^(tcp|udp|icmp)$")
+    port: int | None = Field(default=None, ge=1, le=65535)
 
 
 class EdgeOut(BaseModel):
+    pending_confirm_seconds: int | None = None
     routers: list[dict]
     rules: list[dict]
     router_node: str

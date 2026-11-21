@@ -67,6 +67,7 @@ from .schemas import (
     DiskMovesIn,
     EdgeOut,
     FirewallRuleIn,
+    FirewallSimulateIn,
     FolderIn,
     GroupMembersIn,
     GuestOut,
@@ -286,7 +287,7 @@ def create_app(
     deploys = deploys or DeployManager(cluster)
     deploys.on_done = deployed
     recycle = RecycleBin(cluster, recycle_days, forget=groups.forget)
-    edge = EdgeManager(cluster, edge_state)
+    edge = EdgeManager(cluster, edge_state, groups=groups)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -325,6 +326,11 @@ def create_app(
                     await asyncio.to_thread(replications.tick)
                     await asyncio.to_thread(recycle.purge_expired)
                     await asyncio.to_thread(activity.purge)
+                    try:
+                        # VM and group firewall rules follow moves and new addresses.
+                        await asyncio.to_thread(edge.refresh)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Firewall refresh failed")
                     await asyncio.sleep(scheduler_interval)
 
             scheduler = asyncio.create_task(schedule())
@@ -935,8 +941,18 @@ def create_app(
         return EdgeOut(**edge.remove_router(network))
 
     @api.put("/edge/rules", response_model=EdgeOut)
-    def set_rules(body: list[FirewallRuleIn]) -> EdgeOut:
-        return EdgeOut(**edge.set_rules([FirewallRule(**r.model_dump()) for r in body]))
+    def set_rules(body: list[FirewallRuleIn], safe: bool = False) -> EdgeOut:
+        rules = [FirewallRule(**r.model_dump()) for r in body]
+        return EdgeOut(**edge.set_rules(rules, safe=safe))
+
+    @api.post("/edge/confirm", response_model=EdgeOut)
+    def confirm_rules() -> EdgeOut:
+        """Keep a safe firewall change; without this it rolls back after a minute."""
+        return EdgeOut(**edge.confirm())
+
+    @api.post("/edge/simulate")
+    def simulate_flow(body: FirewallSimulateIn) -> dict:
+        return edge.simulate(body.src, body.dst, body.proto, body.port)
 
     @api.put("/edge/router-node", response_model=EdgeOut)
     def set_router_node(body: dict) -> EdgeOut:
