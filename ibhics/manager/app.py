@@ -290,7 +290,7 @@ def create_app(
     settings = settings or Settings(
         path=auth._state_path.with_name("settings.json") if auth and auth._state_path else None,
         cluster_id=lambda: cluster.cluster_id,
-        node_count=lambda: len(cluster.members()),
+        node_count=lambda: len(cluster.compute_members()),  # a witness is not a licensed node
     )
     backups = backups or BackupManager(cluster)
     groups = groups or VMGroups()
@@ -2145,6 +2145,14 @@ def create_app(
             target.path = f"{root}/backup/{target.name}"
             return
         raise InvalidState(f"no storage pool named {target.pool}")
+
+    @api.put("/backup/targets/{name}/immutability", response_model=BackupTargetOut)
+    def set_target_immutability(name: str, body: dict) -> BackupTargetOut:
+        cluster.require_quorum()
+        try:
+            return BackupTargetOut.from_target(backups.set_immutability(name, body.get("days")))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
 
     @api.delete("/backup/targets/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def remove_target(name: str) -> None:

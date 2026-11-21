@@ -152,3 +152,10 @@
 #page-cluster .cl-ha-vm span{min-width:0}
 #page-cluster .cl-ha-vm b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #page-cluster .cl-ha-vm small{font-size:11px;color:var(--cl-muted)}
+
+/* Cluster ID: premium badge */
+#page-cluster .cl-id{position:relative;display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:18px;padding:12px 14px;border-radius:12px;background:linear-gradient(#06121f,#06121f) padding-box,linear-gradient(120deg,#ffd98a,#3ef0ff,#b28cff,#ffd98a) border-box;border:1.5px solid transparent;box-shadow:0 0 22px -8px #ffd98a99,inset 0 1px #fff2;max-width:100%}
+#page-cluster .cl-id small{flex-basis:100%;font:10px ui-monospace,monospace;letter-spacing:3px;color:#ffd98a}
+#page-cluster .cl-id code{font:600 14px ui-monospace,SFMono-Regular,monospace;letter-spacing:.5px;color:#f4fbff;text-shadow:0 0 10px #3ef0ff88;overflow-wrap:anywhere}
+#page-cluster .cl-id button{border:1px solid #ffd98a88;background:#ffd98a14;color:#ffe9bd;border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer}
+#page-cluster .cl-id button:hover{background:#ffd98a2a}

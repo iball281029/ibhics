@@ -79,6 +79,36 @@ class NodeSummary:
     ipmi: dict = field(default_factory=dict)
 
 
+SERIAL_PLACEHOLDERS = {
+    "",
+    "refer to prism",
+    "to be filled by o.e.m.",
+    "default string",
+    "0123456789",
+    "not specified",
+    "none",
+    "system serial number",
+    "n/a",
+    "na",
+}
+
+
+def best_serial(system: str, board: str, chassis: str, fru: str = "") -> str:
+    """System serial, else the BMC FRU product serial, else board/chassis; board shown too."""
+    real = lambda v: v if v.strip().lower() not in SERIAL_PLACEHOLDERS else ""  # noqa: E731
+    product = next(
+        (
+            line.split(":", 1)[1].strip()
+            for line in fru.splitlines()
+            if line.strip().lower().startswith("product serial") and ":" in line
+        ),
+        "",
+    )
+    main = real(system) or real(product) or real(board) or real(chassis)
+    board = real(board) or real(chassis)
+    return f"{main} · Board {board}" if main and board and board != main else main
+
+
 def _read_ipmi(cmd: list[str]) -> tuple[int, str]:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
@@ -771,6 +801,21 @@ class LinuxHost(HostSystem):
         except OSError:
             return default
 
+    _serial_cache: str | None = None
+
+    def _serial(self, dmi: str) -> str:
+        """The chassis serial; vendors such as Nutanix leave a placeholder in DMI."""
+        if self._serial_cache is None:
+            system = self._read(dmi + "product_serial")
+            ask_bmc = self.root == Path("/") and system.lower() in SERIAL_PLACEHOLDERS
+            self._serial_cache = best_serial(
+                system,
+                self._read(dmi + "board_serial"),
+                self._read(dmi + "chassis_serial"),
+                _read_ipmi(["ipmitool", "fru"])[1] if ask_bmc else "",
+            )
+        return self._serial_cache
+
     # Summary
 
     def summary(self) -> NodeSummary:
@@ -797,7 +842,7 @@ class LinuxHost(HostSystem):
             hostname=self._read("/etc/hostname") or socket.gethostname(),
             vendor=self._read(dmi + "sys_vendor"),
             model=self._read(dmi + "product_name"),
-            serial=self._read(dmi + "product_serial"),
+            serial=self._serial(dmi),
             bios=self._read(dmi + "bios_version"),
             cpu_model=" ".join(model.split()),
             sockets=sockets,
