@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..hypervisor import DiskSpec, HypervisorDriver, NicSpec, PoolNotFound, VMInfo, VMSpec
 from .convert import FakeConverter, V2VConverter
+from .nics import validate_mac, validate_nics
 from .resize import ResizeError, resize_image
 from .sources import GIB, Source, SourceVM
 
@@ -40,9 +41,11 @@ class NodeImport:
         progress=None,
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
+        nics: list[dict] | None = None,
     ) -> VMInfo:
         """Convert first, then create the VM, so nothing half-made exists during the copy.
         The converted images wait on the target pool, not on the system disk."""
+        validate_nics(nics, vm, [n.mac for v in self._driver.list_vms() for n in v.spec.nics])
         if disks is not None:
             if len(disks) != len(vm.disks_gb):
                 raise ValueError("disks must have one entry per source disk")
@@ -86,6 +89,7 @@ class NodeImport:
                     track,
                     clear_hibernation,
                     disks,
+                    nics,
                 )
         finally:
             self.progress.pop(name, None)
@@ -122,6 +126,7 @@ class NodeImport:
         track,
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
+        nics: list[dict] | None = None,
     ) -> VMInfo:
         work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=base))
         try:
@@ -139,6 +144,27 @@ class NodeImport:
                             raise
                         except Exception:
                             raise ResizeError("Unexpected disk resize failure") from None
+            target_nics = None
+            if nics is not None:
+                target_nics = []
+                seen = {
+                    n.mac.lower() for v in self._driver.list_vms() for n in v.spec.nics if n.mac
+                }
+                for i, target in enumerate(nics):
+                    mode = target["mac_mode"]
+                    mac = (
+                        (converted.macs[i] if i < len(converted.macs) else None)
+                        if mode == "keep"
+                        else target.get("mac")
+                        if mode == "custom"
+                        else None
+                    )
+                    if mac:
+                        mac = validate_mac(mac)
+                        if mac in seen:
+                            raise ValueError("duplicate MAC address")
+                        seen.add(mac)
+                    target_nics.append(NicSpec(network=target["network"], mac=mac))
             track("Creating the VM", 96)
             spec = VMSpec(
                 name=name,
@@ -153,7 +179,9 @@ class NodeImport:
                     )
                     for i, image in enumerate(converted.images)
                 ],
-                nics=[
+                nics=target_nics
+                if target_nics is not None
+                else [
                     NicSpec(network=_network_for(network, i), mac=mac)
                     for i, mac in enumerate(
                         _pad(

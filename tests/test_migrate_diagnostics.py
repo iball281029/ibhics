@@ -236,6 +236,7 @@ def test_network_mapping_preserves_nic_order_and_duplicate_networks():
     code = js[js.index("function importNetworkKeys(vm)") : js.index("function importOptions(")]
     code += """
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto').webcrypto;
 assert.deepEqual(importNetworkKeys({nics:3, networks:['LAN','WAN','LAN']}), ['LAN','WAN','LAN']);
 assert.deepEqual(importNetworkKeys({nics:2, networks:[]}),
   ['Adapter 1 (unspecified)','Adapter 2 (unspecified)']);
@@ -314,6 +315,7 @@ def test_wizard_validation_and_partial_job_retry_with_mock_dom():
     end = js.index("// ---------- settings ----------", start)
     prefix = r"""
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto').webcrypto;
 const noop = () => {};
 const elements = {node: {value:'node1',addEventListener:noop},
                   pool: {value:'default',addEventListener:noop}};
@@ -324,8 +326,9 @@ const $ = (key) => {
                                     addEventListener:noop});
   return boxes.get(key);
 };
-let controls = [], resets = [];
-const $$ = (key) => key.includes('data-target-field') ? controls
+let controls = [], resets = [], randoms = [];
+const $$ = (key) => key.includes('data-random-mac-vm') ? randoms
+  : key.includes('data-target-field') ? controls
   : key.includes('data-reset-field') ? resets : [];
 const handlers = {};
 const wizard = (id, options) => ({step:3,check:options.check,show:options.show});
@@ -338,8 +341,18 @@ let refreshes=0, tab=null;
 const refresh=async () => {refreshes++};
 const selectTab=(id, value) => {tab=value};
 const toast=noop;
-let rejectSecond=true, requests=[];
+let rejectSecond=true, requests=[], networkRequests=[];
+let networkInventory=null;
+const api=async (url) => {
+  assert.equal(url,'/networks');return [...(networkInventory || state.networks)];
+};
 const post=async (url, body) => {
+  if (url==='/networks') {
+    networkRequests.push(body);
+    const network={...body,nodes:['node1','node2']};
+    networkInventory.push(network);
+    return network;
+  }
   requests.push(body);
   if (body.vm==='vm2' && rejectSecond) {rejectSecond=false;throw new Error('mock rejection')}
   return {id:body.vm};
@@ -375,6 +388,7 @@ const post=async (url, body) => {
   assert.deepEqual(requests.map(r=>r.vm),['vm1','vm2','vm2']);
   assert.deepEqual(requests[0].network,['vs-wan','vs-lan','vs-lan']);
   assert.deepEqual(requests[2].network,['vs-lan']);
+  assert.deepEqual(requests[0].nics,requests[0].network.map(network=>({network,mac_mode:'new',mac:null})));
   assert.equal(requests[0].clear_hibernation,false);
   assert.equal(requests[2].clear_hibernation,false);
   assert.equal(requests[0].vcpus,8);assert.equal(requests[0].memory_mb,8192);
@@ -435,6 +449,60 @@ const post=async (url, body) => {
   assert.throws(()=>importWiz.check(2),/available target network/);
   importBatch.networks.delete(importNicKey(unknown,0));
   assert.equal(importNicNetwork(unknown,0,'LAN'),'vs-lan');
+  unknown.nics=3;unknown.networks=['LAN','LAN','LAN'];
+  unknown.macs=['52:54:00:11:22:33'];
+  importBatch.nicSettings.clear();
+  assert.equal(importNicSettings(unknown,0).mac_mode,'keep');
+  assert.equal(importNicSettings(unknown,1).mac_mode,'new');
+  unknown.state='running';assert.equal(importDefaultMac(unknown,0),'new');unknown.state='stopped';
+  importNicSettings(unknown,1).mac_mode='custom';
+  importNicSettings(unknown,1).mac='bad';
+  assert.throws(()=>importWiz.check(2),/unicast/);
+  importNicSettings(unknown,1).mac='01:00:00:11:22:33';
+  assert.throws(()=>importWiz.check(2),/unicast/);
+  importNicSettings(unknown,1).mac='52:54:00:11:22:33';
+  assert.throws(()=>importWiz.check(2),/Duplicate MAC/);
+  importNicSettings(unknown,1).mac='52:54:00:aa:bb:cc';
+  state.vms=[{nics:[{mac:'52:54:00:AA:BB:CC'}]}];
+  assert.throws(()=>importWiz.check(2),/Duplicate MAC/);state.vms=[];
+  const dice={dataset:{randomMacVm:'0',randomMacNic:'2'}};
+  randoms=[dice];renderImportTargets();dice.onclick();randoms=[];
+  const generated=importNicSettings(unknown,2).mac;
+  assert.match(generated,/^52:54:00(:[0-9a-f]{2}){3}$/);
+  assert.equal(importNicSettings(unknown,2).mac_mode,'custom');
+  assert.match($('#import-disk-targets').innerHTML,new RegExp(generated));
+  const macReset={dataset:{resetVm:'0',resetField:'mac_mode',resetDisk:'2'}};
+  resets=[macReset];renderImportTargets();macReset.onclick();resets=[];
+  assert.equal(importNicSettings(unknown,2).mac_mode,'new');
+  importBatch.networks.set(importNicKey(unknown,1),'__new_vlan__');
+  importBatch.networks.set(importNicKey(unknown,2),'__new_vlan__');
+  importNicSettings(unknown,1).vlan='4095';
+  assert.throws(()=>importWiz.check(2),/VLAN ID/);
+  importNicSettings(unknown,1).vlan='20';importNicSettings(unknown,2).vlan='20';
+  renderImportTargets();
+  assert.match($('#import-disk-targets').innerHTML,/New VLAN/);
+  importWiz.show(3);
+  assert.match($('#import-summary').innerHTML,/New VLAN 20/);
+  assert.match($('#import-summary').innerHTML,/MAC 52:54:00:11:22:33/);
+  requests=[];networkInventory=[...state.networks];
+  await handlers['import-dialog'](form);
+  assert.deepEqual(networkRequests,[{name:'vlan-20',vlan:20}]);
+  assert.deepEqual(requests[0].nics,[
+    {network:'vs-lan',mac_mode:'keep',mac:null},
+    {network:'vlan-20',mac_mode:'custom',mac:'52:54:00:aa:bb:cc'},
+    {network:'vlan-20',mac_mode:'new',mac:null},
+  ]);
+  importBatch.submitted.clear();
+  importBatch.networks.set(importNicKey(unknown,1),'__new_vlan__');
+  await importResolveNetworks(unknown);
+  assert.equal(networkRequests.length,1);
+  assert.equal(importNicNetwork(unknown,1,'LAN'),'vlan-20');
+  renderImportTargets();
+  assert.match($('#import-disk-targets').innerHTML,/vlan-20 · VLAN 20/);
+  assert.match($('#import-disk-targets').innerHTML,/vs-lan · untagged/);
+  const mixed={name:'mixed',vlan:20,configurations:{node2:{vlan:null}}};
+  assert.equal(importNetworkLabel(mixed,'node2'),'mixed · untagged');
+
 
 
 })().catch(error=>{console.error(error);process.exitCode=1});

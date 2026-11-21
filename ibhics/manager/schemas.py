@@ -27,6 +27,7 @@ from ..hypervisor import (
     VMState,
 )
 from ..hypervisor.host import HostNetwork, IfaceConfig, SettingsEdit
+from ..importer.nics import validate_mac
 
 # VM names: letters (English or Thai), digits, '_', '.', '-'; see hypervisor.base.VM_NAME_RE.
 VM_NAME_PATTERN = r"^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$"
@@ -936,6 +937,7 @@ class SourceVMOut(BaseModel):
     disks_gb: list[int]
     nics: int
     networks: list[str] = []
+    macs: list[str] = []
     state: str
     guest_os: str
     notes: str = ""
@@ -946,7 +948,24 @@ class DiskTarget(BaseModel):
     size_gb: int | None = Field(default=None, ge=1)
 
 
+class NicTarget(BaseModel):
+    network: str = Field(min_length=1, max_length=128)
+    mac: str | None = None
+    mac_mode: Literal["keep", "new", "custom"] = "new"
+
+    @model_validator(mode="after")
+    def check_mac(self):
+        if self.mac is not None:
+            self.mac = validate_mac(self.mac)
+        if self.mac_mode == "custom" and not self.mac:
+            raise ValueError("custom MAC mode requires a MAC")
+        if self.mac_mode != "custom" and self.mac is not None:
+            raise ValueError("only custom MAC mode accepts an explicit MAC")
+        return self
+
+
 class ImportRequest(BaseModel):
+    nics: list[NicTarget] | None = Field(default=None, max_length=16)
     disks: list[DiskTarget] | None = None
     source: str
     vm: str = Field(description="the ref from GET /migrate/sources/{name}/vms")
@@ -966,6 +985,7 @@ class ImportRequest(BaseModel):
 
 
 class ImportJobOut(BaseModel):
+    nics: list[NicTarget] | None = Field(default=None, max_length=16)
     disks: list[DiskTarget] | None = None
     pool: str = "default"
     id: str
@@ -984,6 +1004,7 @@ class ImportJobOut(BaseModel):
 
 
 class AgentImport(BaseModel):
+    nics: list[NicTarget] | None = Field(default=None, max_length=16)
     disks: list[DiskTarget] | None = None
     source: dict
     vm: dict

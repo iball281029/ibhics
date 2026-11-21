@@ -518,6 +518,7 @@ class RemoteImport:
         progress=None,
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
+        nics: list[dict] | None = None,
     ) -> VMInfo:
         body = {
             "source": source.to_dict(),
@@ -530,6 +531,16 @@ class RemoteImport:
             "start": start,
             "clear_hibernation": clear_hibernation,
         }
+        if nics is None:
+            body["vm"].pop("macs", None)  # older agents do not know this discovery field
+        if nics is not None:
+            capabilities = self._client.request("GET", "/imports/capabilities")
+            if capabilities.status_code != 200 or not capabilities.json().get("nic_targets"):
+                raise InvalidState(
+                    f"{self._client.address}: this node agent does not support NIC targets; "
+                    "upgrade the node agent and retry"
+                )
+            body["nics"] = nics
         if disks is not None:
             nondefault = len(disks) != len(vm.disks_gb) or any(
                 (d.get("pool") or pool) != pool

@@ -507,3 +507,7 @@ dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:t
 @media(prefers-reduced-motion:reduce) {.mg-beam i,.mg-beam b {animation:none;opacity:1}}
 
 #import-dialog .mg-eyebrow {font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:#9bdde9}
+
+.mg-target-nic {border:1px solid #3ef0ff22;border-radius:8px;padding:8px;margin-bottom:8px}
+.mg-target-nic h5 {margin:0 0 6px}
+.mg-target-nic small {display:inline-block;margin:6px;overflow-wrap:anywhere}

@@ -20,6 +20,7 @@ from ..hypervisor.base import BLOCK_POOL_TYPES
 from ..importer import Source, SourceNotFound, SourceType, SourceUnavailable, SourceVM, list_vms
 from ..importer.diagnostics import test_source
 from ..importer.logs import clean_v2v_log, parse_v2v_log
+from ..importer.nics import validate_nics
 from ..importer.sources import IMAGE_SUFFIXES
 
 
@@ -38,6 +39,7 @@ class ImportJob:
     step: str = ""  # what the conversion is doing now
     percent: int | None = None
     pool: str = "default"
+    nics: list[dict] | None = None
     disks: list[dict] | None = None
     via: str = ""  # the node that converted it, when the target could not reach the source
 
@@ -118,6 +120,7 @@ class ImportManager:
         self._jobs: deque[ImportJob] = deque(maxlen=200)
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
+        self._nic_macs: dict[str, list[str]] = {}
         self.p2v = None  # P2VSessions, set by the app
         self.migrations = None  # MigrationManager, set by the app: moves relayed imports
         self._sleep = time.sleep
@@ -224,6 +227,7 @@ class ImportManager:
             raise KeyError(job_id)
         if job.state == "queued":
             job.state, job.error, job.finished = "cancelled", "cancelled", self._now()
+            self._nic_macs.pop(job.id, None)
         elif job.state == "running":
             member = self._cluster.member(job.via or job.node)
             if not member.imports.cancel(job.name):
@@ -249,6 +253,7 @@ class ImportManager:
         start: bool = False,
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
+        nics: list[dict] | None = None,
     ) -> ImportJob:
         self._cluster.require_quorum()
         source = self.source(source_name)
@@ -257,7 +262,24 @@ class ImportManager:
             raise SourceNotFound(f"{source_name}: no VM {vm_ref!r}")
         name = name or vm.name
         with self._lock:
-            taken = {v.spec.name for _, v in self._cluster.all_vms()}
+            current_vms = self._cluster.all_vms()
+            occupied = [n.mac for _, v in current_vms for n in v.spec.nics]
+            occupied += [
+                n.get("mac")
+                for j in self._jobs
+                if j.state in ("queued", "running")
+                for n in j.nics or []
+            ]
+            occupied += [
+                mac
+                for j in self._jobs
+                if j.state in ("queued", "running")
+                for mac in self._nic_macs.get(j.id, [])
+            ]
+            validate_nics(nics, vm, occupied)
+            if nics is not None:
+                nics = [dict(n) for n in nics]
+            taken = {v.spec.name for _, v in current_vms}
             taken |= {j.name for j in self._jobs if j.state in ("queued", "running")}
             if name in taken:
                 raise VMExists(f"a VM named {name!r} already exists; choose another name")
@@ -323,8 +345,14 @@ class ImportManager:
                 created=self._now(),
                 pool=pool,
                 disks=disks,
+                nics=nics,
                 via=via.name if via is not member else "",
             )
+            self._nic_macs[job.id] = [
+                vm.macs[i]
+                for i, n in enumerate(nics or [])
+                if n["mac_mode"] == "keep" and i < len(vm.macs)
+            ]
             self._jobs.append(job)
 
         def run() -> None:
@@ -341,6 +369,8 @@ class ImportManager:
                 extra = {"clear_hibernation": True} if clear_hibernation else {}
                 if disks is not None:
                     extra["disks"] = disks
+                if nics is not None:
+                    extra["nics"] = nics
                 info = via.imports.run(
                     source,
                     vm,
@@ -366,6 +396,7 @@ class ImportManager:
                 if "cancelled by the operator" in str(exc):
                     job.state = "cancelled"
             job.finished = self._now()
+            self._nic_macs.pop(job.id, None)
 
         self._executor.submit(run)
         return job

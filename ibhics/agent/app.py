@@ -527,7 +527,7 @@ def create_agent_app(
 
         @api.get("/imports/capabilities")
         def import_capabilities() -> dict:
-            return {"disk_targets": True}
+            return {"disk_targets": True, "nic_targets": True}
 
         @api.post("/imports/source-vms")
         def source_vms(body: dict) -> list[dict]:
@@ -575,6 +575,7 @@ def create_agent_app(
                 body.start,
                 clear_hibernation=body.clear_hibernation,
                 disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
+                nics=[n.model_dump() for n in body.nics] if body.nics is not None else None,
             )
             return VMOut.from_info(info)
 

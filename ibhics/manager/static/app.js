@@ -5056,10 +5056,10 @@ handlers["source-dialog"] = async (f) => {
 
 // Map the union of source networks, then rebuild each VM's NIC array in NIC order.
 const importForm = $("#import-form");
-const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() };
+const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set() };
 function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
 function importNetworkKeys(vm) {
-  return Array.from({ length: Math.max(vm.nics ?? 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
+  return Array.from({ length: Math.max(vm.nics ?? 1, vm.networks?.length || 0, vm.macs?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
 }
 function importTarget(vm) {
   if (!importBatch.targets.has(vm.ref)) importBatch.targets.set(vm.ref, {
@@ -5074,8 +5074,76 @@ function importNicNetwork(vm, i, source) {
   const nic = importNicKey(vm, i);
   return importBatch.networks.get(nic) ?? importBatch.networks.get(source) ?? importDefaultNetwork(vm, source);
 }
+function importAvailableNetworks(vm) {
+  const node = importTarget(vm).node;
+  return state.networks.filter((n) => (!n.node || n.node === node) && (!n.nodes?.length || n.nodes.includes(node)));
+}
+function importNetworkVlan(n, node) { return n.configurations?.[node] ? n.configurations[node].vlan : n.vlan; }
+function importNetworkLabel(n, node) {
+  const vlan = importNetworkVlan(n, node);
+  return `${n.name} · ${vlan ? `VLAN ${vlan}` : "untagged"}`;
+}
+function importDefaultMac(vm, i) { return vm.macs?.[i] && vm.state === "stopped" ? "keep" : "new"; }
+function importNicSettings(vm, i) {
+  const key = importNicKey(vm, i);
+  if (!importBatch.nicSettings.has(key)) importBatch.nicSettings.set(key, {mac_mode: importDefaultMac(vm, i), mac: "", vlan: ""});
+  return importBatch.nicSettings.get(key);
+}
+function importNicMac(vm, i) {
+  const n = importNicSettings(vm, i);
+  return n.mac_mode === "keep" ? vm.macs?.[i] || "Detected during conversion" : n.mac_mode === "custom" ? n.mac : "Generated on destination";
+}
+function importNetworkOptions(vm, selected) {
+  const nets = importAvailableNetworks(vm);
+  return `<option value="">Select…</option>` + (selected && selected !== "__new_vlan__" && !nets.some((n) => n.name === selected) ? `<option selected disabled value="${esc(selected)}">${esc(selected)} (unavailable)</option>` : "") + nets.map((n) => `<option value="${esc(n.name)}" ${selected === n.name ? "selected" : ""}>${esc(importNetworkLabel(n, importTarget(vm).node))}</option>`).join("") + `<option value="__new_vlan__" ${selected === "__new_vlan__" ? "selected" : ""}>New VLAN…</option>`;
+}
+function importNicLabel(vm, i, src) {
+  const name = importNicNetwork(vm, i, src), nic = importNicSettings(vm, i);
+  return name === "__new_vlan__" ? `New VLAN ${nic.vlan}` : importNetworkLabel(importAvailableNetworks(vm).find((n) => n.name === name) || {name}, importTarget(vm).node);
+}
+function importValidateNics() {
+  const seen = new Set((state.vms || []).flatMap((v) => (v.nics || v.spec?.nics || []).map((n) => n.mac?.toLowerCase()).filter(Boolean)));
+  for (const vm of importChosen()) {
+    if (importBatch.submitted.has(vm.ref)) continue;
+    importNetworkKeys(vm).forEach((src, i) => {
+      const n = importNicSettings(vm, i), net = importNicNetwork(vm, i, src);
+      if (net === "__new_vlan__") {
+        if (!Number.isInteger(Number(n.vlan)) || Number(n.vlan) < 1 || Number(n.vlan) > 4094) throw new Error("VLAN ID must be 1–4094.");
+      } else if (!importAvailableNetworks(vm).some((n) => n.name === net)) throw new Error("Choose an available target network for every NIC.");
+      if (n.mac_mode === "keep" && (!vm.macs?.[i] || vm.state !== "stopped")) throw new Error("Keep source MAC requires a known MAC and a stopped VM.");
+      if (n.mac_mode !== "new") {
+        const mac = importNicMac(vm, i).toLowerCase();
+        if (!/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac) || (parseInt(mac.slice(0, 2), 16) & 1) || mac === "00:00:00:00:00:00") throw new Error("MAC must be a nonzero unicast address in xx:xx:xx:xx:xx:xx format.");
+        if (seen.has(mac)) throw new Error("Duplicate MAC address in batch or cluster.");
+        seen.add(mac);
+      }
+    });
+  }
+}
+async function importResolveNetworks(vm) {
+  for (const [i, src] of importNetworkKeys(vm).entries()) {
+    if (importNicNetwork(vm, i, src) !== "__new_vlan__") continue;
+    const vlan = Number(importNicSettings(vm, i).vlan), node = importTarget(vm).node;
+    // Re-read before creating: another batch item or operator may already have made it.
+    state.networks = await api("/networks");
+    let existing = importAvailableNetworks(vm).find((n) => importNetworkVlan(n, node) === vlan);
+    if (!existing) {
+      const base = `vlan-${vlan}`;
+      let name = base, suffix = 2;
+      while (state.networks.some((n) => n.name === name)) name = `${base}-${suffix++}`;
+      try { existing = await post("/networks", {name, vlan}); }
+      catch (err) {
+        state.networks = await api("/networks");
+        existing = importAvailableNetworks(vm).find((n) => importNetworkVlan(n, node) === vlan);
+        if (!existing) throw err;
+      }
+      if (!state.networks.some((n) => n.name === existing.name)) state.networks.push(existing);
+    }
+    importBatch.networks.set(importNicKey(vm, i), existing.name);
+  }
+}
 function importDefaultNetwork(vm, source) {
-  const nets = state.networks.filter((n) => !n.node || n.node === importTarget(vm).node);
+  const nets = importAvailableNetworks(vm);
   return nets.find((n) => n.name === source)?.name || nets.find((n) => n.name === "default")?.name || nets[0]?.name || "";
 }
 function importOptions(items, selected) {
@@ -5105,7 +5173,15 @@ function renderImportTargets() {
       ${field("Node", "node", t.node, initialNode, (attrs) => `<select ${attrs}>${importOptions(computeMembers().filter((m) => m.healthy).map((m) => m.name), t.node)}</select>`)}
       ${input("vCPU", "vcpus", r.vcpus, vm.vcpus, "number", 'min="1" max="256" step="1"')}
       ${input("Memory (MB)", "memory_mb", r.memory_mb, vm.memory_mb, "number", 'min="128" step="1"')}
-      </div><div class="mg-target-devices">${nicKeys.map((src, i) => field(`NIC ${i + 1} · ${esc(src)}`, "network", importNicNetwork(vm, i, src), importDefaultNetwork(vm, src), (attrs) => `<select ${attrs}>${importOptions(state.networks.filter((n) => !n.node || n.node === t.node).map((n) => n.name), importNicNetwork(vm, i, src))}</select>`, i)).join("")}
+      </div><div class="mg-target-devices">${nicKeys.map((src, i) => {
+        const n = importNicSettings(vm, i), net = importNicNetwork(vm, i, src);
+        return `<div class="mg-target-nic"><h5>NIC ${i + 1} · ${esc(src)}</h5>${field("VLAN / Network", "network", net, importDefaultNetwork(vm, src), (attrs) => `<select ${attrs}>${importNetworkOptions(vm, net)}</select>`, i)}
+        ${net === "__new_vlan__" ? field("VLAN ID", "vlan", n.vlan, "", (attrs) => `<input type="number" min="1" max="4094" step="1" value="${esc(n.vlan)}" ${attrs}>`, i) : ""}
+        ${field("MAC", "mac_mode", n.mac_mode, importDefaultMac(vm, i), (attrs) => `<select ${attrs}><option value="keep" ${n.mac_mode === "keep" ? "selected" : ""} ${!vm.macs?.[i] || vm.state !== "stopped" ? "disabled" : ""}>Keep source MAC</option><option value="new" ${n.mac_mode === "new" ? "selected" : ""}>Generate new</option><option value="custom" ${n.mac_mode === "custom" ? "selected" : ""}>Custom</option></select>`, i)}
+        ${n.mac_mode === "custom" ? field("MAC address", "mac", n.mac, "", (attrs) => `<input value="${esc(n.mac)}" placeholder="52:54:00:12:34:56" ${attrs}>`, i) : `<small>${esc(importNicMac(vm, i))}</small>`}
+        <button type="button" data-random-mac-vm="${v}" data-random-mac-nic="${i}" ${locked} title="Generate and use a random MAC">🎲</button></div>`;
+      }).join("")}
+
       ${!t.disks.length ? field("Storage pool", "pool", t.pool, initialPool, (attrs) => `<select ${attrs}>${importOptions(pools.map((p) => p.name), t.pool)}</select>`) : ""}
       ${t.disks.map((d, i) => {
         const source = vm.disks_gb[i];
@@ -5122,7 +5198,10 @@ function renderImportTargets() {
     let value = input.type === "checkbox" ? input.checked : input.value;
     if (["vcpus", "memory_mb", "size_gb"].includes(key)) value = value === "" && key === "size_gb" ? null : Number(value);
     if (reset) value = key === "name" ? vm.name : ["vcpus", "memory_mb"].includes(key) ? vm[key] : key === "node" ? t.originalNode : key === "pool" ? t.originalPool : key === "size_gb" ? vm.disks_gb[Number(disk)] || null : false;
-    if (key === "network") {
+    if (["mac", "mac_mode", "vlan"].includes(key)) {
+      const n = importNicSettings(vm, Number(disk));
+      n[key] = reset ? key === "mac_mode" ? importDefaultMac(vm, Number(disk)) : "" : value;
+    } else if (key === "network") {
       const nic = importNicKey(vm, Number(disk));
       if (reset) importBatch.networks.delete(nic); else importBatch.networks.set(nic, value);
     } else if (key === "name") importBatch.names.set(vm.ref, value);
@@ -5136,6 +5215,14 @@ function renderImportTargets() {
     }
     renderImportTargets(); importCapacity(); renderMigrateSummary();
   };
+  $$("#import-disk-targets [data-random-mac-vm]").forEach((button) => { button.onclick = () => {
+    const vm = importChosen()[Number(button.dataset.randomMacVm)];
+    if (importBatch.submitted.has(vm.ref)) return;
+    const n = importNicSettings(vm, Number(button.dataset.randomMacNic));
+    n.mac_mode = "custom";
+    n.mac = "52:54:00:" + Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, "0")).join(":");
+    renderImportTargets(); renderMigrateSummary();
+  }; });
   $$("#import-disk-targets [data-target-field]").forEach((input) => { input.onchange = () => save(input); });
   $$("#import-disk-targets [data-reset-field]").forEach((button) => { button.onclick = () => save(button, true); });
 }
@@ -5193,7 +5280,7 @@ const importWiz = wizard("import-dialog", {
   steps: 3,
   reset() {
     const ctx = dialogContext;
-    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() });
+    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set() });
     $("#import-submit-status").textContent = "";
     importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
     importTargetPools();
@@ -5206,7 +5293,7 @@ const importWiz = wizard("import-dialog", {
       const { invalid, insufficient } = importCapacity();
       if (invalid) throw new Error("Choose a healthy node, an available pool, and a positive whole disk size (or leave size blank to keep the original).");
       if (insufficient) throw new Error("Insufficient space for the selected VMs and conversion files.");
-      if (chosen.some((vm) => importNetworkKeys(vm).some((src, i) => !state.networks.some((n) => n.name === importNicNetwork(vm, i, src) && (!n.node || n.node === importTarget(vm).node))))) throw new Error("Choose an available target network for every NIC.");
+      importValidateNics();
       const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
       if (names.some((n) => !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters (English or Thai), digits, '-', '_' or '.'.");
       if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
@@ -5231,7 +5318,7 @@ const importWiz = wizard("import-dialog", {
     if (step === 3) {
       $("#import-summary").innerHTML = importChosen().map((vm) => {
         const t = importTarget(vm), r = importBatch.resources.get(vm.ref) || vm;
-        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicNetwork(vm, i, src))}`).join("<br>")}</p></article>`;
+        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicLabel(vm, i, src))} · MAC ${esc(importNicMac(vm, i))}`).join("<br>")}</p></article>`;
       }).join("") + `<p class="hint">Keep source VMs powered off until migration completes.</p>`;
     }
   },
@@ -5252,10 +5339,11 @@ handlers["import-dialog"] = async (f) => {
   for (const vm of chosen) {
     if (importBatch.submitted.has(vm.ref)) continue;
     try {
+      await importResolveNetworks(vm);
       const t = importBatch.targets.get(vm.ref);
       await post("/migrate/jobs", {
         source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
-        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || t?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), start: t ? t.start : f.get("start") === "on",
+        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || t?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), nics: importNetworkKeys(vm).length ? importNetworkKeys(vm).map((k, i) => ({network: importNicNetwork(vm, i, k), mac_mode: importNicSettings(vm, i).mac_mode, mac: importNicSettings(vm, i).mac_mode === "custom" ? importNicSettings(vm, i).mac.toLowerCase() : null})) : undefined, start: t ? t.start : f.get("start") === "on",
         clear_hibernation: (t ? t.clear_hibernation : f.get("clear_hibernation") === "on") && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
       });
       importBatch.submitted.add(vm.ref);

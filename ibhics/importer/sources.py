@@ -139,6 +139,7 @@ class SourceVM:
     guest_os: str = ""
     notes: str = ""  # vmware: the VM's annotation
     vmx: str = ""  # vmware: "[datastore] folder/name.vmx"
+    macs: list[str] = field(default_factory=list)
     disk_paths: list[str] = field(default_factory=list)  # kvm: the disks' paths on the host
 
     def to_dict(self) -> dict:
@@ -276,6 +277,10 @@ def parse_vmware_xml(xml: str) -> SourceVM:
         disks_gb=[0] * len(disks),  # the ESX driver doesn't report sizes
         nics=len(root.findall("./devices/interface")),
         networks=interface_networks(root),
+        macs=[
+            iface.find("mac").get("address", "").lower() if iface.find("mac") is not None else ""
+            for iface in root.findall("devices/interface")
+        ],
         notes=(root.findtext("description", "") or "").strip(),
     )
 
