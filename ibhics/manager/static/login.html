@@ -68,7 +68,7 @@
   <form id="login">
     <label>Username <input name="username" autocomplete="username" required autofocus></label>
     <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
-    <label>Authentication code (if enabled)<input name="code" autocomplete="one-time-code" placeholder="6-digit code or recovery code" maxlength="64"></label>
+    <label id="code-row" hidden>Authentication code<input name="code" autocomplete="one-time-code" placeholder="6-digit code or recovery code" maxlength="64"></label>
     <p id="error" role="alert"></p>
     <button>Sign in</button>
   </form>
@@ -111,7 +111,13 @@ document.getElementById("login").addEventListener("submit", async (e) => {
       document.querySelector("#change input").focus();
     } else next();
   } catch (err) {
-    document.getElementById("error").textContent = err.message;
+    // Ask for the code only for accounts that turned 2FA on.
+    const row = document.getElementById("code-row");
+    if (row.hidden && /authentication code/i.test(err.message)) {
+      row.hidden = false;
+      row.querySelector("input").focus();
+      document.getElementById("error").textContent = "Enter the 6-digit code from your authenticator app.";
+    } else document.getElementById("error").textContent = err.message;
   } finally { button.disabled = false; }
 });
 

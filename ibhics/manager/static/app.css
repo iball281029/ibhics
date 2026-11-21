@@ -133,7 +133,7 @@ td.empty { padding: 44px 14px; text-align: center; color: var(--muted); }
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; background: var(--hover); color: var(--muted); white-space: nowrap; }
 .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .badge.running, .badge.online, .badge.done { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
-.badge.paused, .badge.queued, .badge.waiting { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.badge.paused, .badge.queued, .badge.waiting, .badge.accepted { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .badge.failed, .badge.offline, .badge.disabled { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
 .badge.info { color: var(--brand); background: var(--brand-soft); }
 .badge.plain::before { display: none; }

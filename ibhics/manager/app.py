@@ -419,7 +419,9 @@ def create_app(
         route = request.scope["route"].path
         if user.must_change_password and route not in SELF_ROUTES:
             raise Forbidden("change your initial password first")
-        if auth.require_2fa and not user.totp_secret and route not in SELF_ROUTES:
+        # An admin may always turn the requirement off, or nobody could undo it.
+        unlock = route == f"{API}/security/2fa" and str(user.role) == "admin"
+        if auth.require_2fa and not user.totp_secret and route not in SELF_ROUTES and not unlock:
             raise Forbidden("2FA enrollment required; open Settings > My account")
         if route not in SELF_ROUTES:
             area = category(route)
