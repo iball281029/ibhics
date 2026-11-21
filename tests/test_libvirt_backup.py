@@ -95,7 +95,16 @@ def make_driver(monkeypatch, tmp_path):
     return make
 
 
-def test_running_vm_uses_push_backup(make_driver):
+@pytest.mark.parametrize("tuned", [False, True])
+def test_running_vm_uses_push_backup(make_driver, monkeypatch, tuned):
+    if tuned:
+        monkeypatch.setattr(
+            __import__(__name__),
+            "DOMAIN_XML",
+            DOMAIN_XML.replace("<devices>", "<iothreads>1</iothreads><devices>").replace(
+                "<driver name='qemu'", "<driver cache='none' io='native' iothread='1' name='qemu'"
+            ),
+        )
     driver = make_driver(active=True)
     with driver.export_disks("u") as images:
         assert [p.name for p in images] == ["disk0.raw", "disk1.raw"]

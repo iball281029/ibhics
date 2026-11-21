@@ -89,6 +89,8 @@ def test_offline_move_to_hybrid(monkeypatch):
     first = root.find("devices/disk[@device='disk']")
     assert first.find("source").get("pool") == "hybrid01"
     assert first.find("target").get("dev") == "vda"
+    assert first.find("driver").get("iothread") == "1"
+    assert first.find("driver").get("io") == "native"
     meta = root.find(f"metadata/{{{META_NS}}}vm/{{{META_NS}}}disk")
     assert meta.get("pool") == "hybrid01" and meta.get("volume") == "npm-vm-disk0.qcow2"
 

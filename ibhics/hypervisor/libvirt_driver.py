@@ -65,10 +65,12 @@ from .domain_xml import (
     build_volume_xml,
     cdrom_element,
     disk_element,
+    disk_iothread_ids,
     file_name,
     hotplug_ready,
     make_hotplug_ready,
     nic_element,
+    normalize_disk_io,
     recycled_at,
     set_recycled_mark,
     set_template_flag,
@@ -394,7 +396,22 @@ class LibvirtDriver(HypervisorDriver):
         attach, detach, update, resize, removed, created = [], [], [], [], [], []
         try:
             if edit.disks is not None:
-                self._edit_disks(root, meta, name, current, edit, attach, detach, resize, created)
+                # A saved definition may have threads absent from the running VM.
+                threads = disk_iothread_ids(root)
+                if running:
+                    threads &= disk_iothread_ids(ET.fromstring(dom.XMLDesc(0)))
+                self._edit_disks(
+                    root,
+                    meta,
+                    name,
+                    current,
+                    edit,
+                    attach,
+                    detach,
+                    resize,
+                    created,
+                    iothread=min(threads, key=int) if threads else None,
+                )
                 removed = [(el, pool, vol) for el, pool, vol in detach if edit.delete_removed_disks]
                 detach = [el for el, _pool, _vol in detach]
             if edit.nics is not None:
@@ -443,7 +460,9 @@ class LibvirtDriver(HypervisorDriver):
             dom.setAutostart(int(edit.autostart))
         return self._info(self._lookup(uuid))
 
-    def _edit_disks(self, root, meta, name, current, edit, attach, detach, resize, created):
+    def _edit_disks(
+        self, root, meta, name, current, edit, attach, detach, resize, created, iothread=None
+    ):
         devices = root.find("devices")
         disks = devices.findall("disk[@device='disk']")
         keep = {d.index for d in edit.disks if d.index is not None}
@@ -484,7 +503,7 @@ class LibvirtDriver(HypervisorDriver):
             dev = next(f"{pre}{c}" for c in devs if f"{pre}{c}" not in used)
             used.add(dev)
             created.append(pool.createXML(build_volume_xml(name, n, disk), 0))
-            el = disk_element(disk, volume_name(name, n, disk), dev)
+            el = disk_element(disk, volume_name(name, n, disk), dev, iothread=iothread)
             devices.append(el)
             ET.SubElement(
                 meta, f"{{{META_NS}}}disk", dev=dev, pool=d.pool, volume=volume_name(name, n, disk)
@@ -527,8 +546,32 @@ class LibvirtDriver(HypervisorDriver):
             raise InvalidState("this VM is in the recycle bin: restore it first")
         self._nvram_qcow2(dom)
         self._add_tablet(dom)
-        dom.create()
+        previous = self._normalize_disk_io(dom)
+        try:
+            dom.create()
+        except libvirt.libvirtError:
+            if previous is None:
+                raise
+            # The tuned definition did not start: put the old one back and start that.
+            log.warning("start with tuned disk I/O failed; restoring the previous definition")
+            dom = self._conn.defineXML(previous)
+            dom.create()
         return self._info(dom)
+
+    def _normalize_disk_io(self, dom) -> str | None:
+        """Best effort persistent tuning, only while inactive; never edit live XML.
+        Returns the previous definition when it changed, so a failed start can undo it."""
+        if dom.isActive():
+            return None
+        try:
+            previous = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE)
+            root = ET.fromstring(previous)
+            if normalize_disk_io(root) and not dom.isActive():
+                self._conn.defineXML(ET.tostring(root, encoding="unicode"))
+                return previous
+        except Exception as exc:
+            log.warning("disk I/O tuning skipped; starting with existing definition: %s", exc)
+        return None
 
     def _add_tablet(self, dom) -> None:
         """VMs made before 1.2 (and imported ones) get the USB tablet when they start."""
@@ -786,6 +829,13 @@ class LibvirtDriver(HypervisorDriver):
                    if d.find("target").get("dev") == dev)  # fmt: skip
         bus = old.find("target").get("bus", "virtio")
         el = disk_element(DiskSpec(size_gb=1, backend=backend, pool=pool_name, bus=bus), name, dev)
+        old_driver = old.find("driver")
+        if old_driver is not None:
+            for attr in ("cache", "io", "discard", "iothread"):
+                if attr in old_driver.attrib:
+                    el.find("driver").set(attr, old_driver.get(attr))
+            for threads in old_driver.findall("iothreads"):
+                el.find("driver").append(threads)
         for keep in ("boot", "address", "serial", "iotune"):
             for child in old.findall(keep):
                 el.append(child)

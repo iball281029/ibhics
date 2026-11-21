@@ -35,6 +35,10 @@ def test_domain_basics():
 def test_disks_map_to_volumes():
     disks = ET.fromstring(build_domain_xml(spec())).findall("./devices/disk[@device='disk']")
     assert [d.find("target").get("dev") for d in disks] == ["vda", "vdb"]
+    for disk in disks:
+        assert disk.find("driver").get("io") == "native"
+        assert disk.find("driver").get("iothread") == "1"
+        assert disk.find("target").get("bus") == "virtio"
     assert disks[0].find("driver").get("type") == "qcow2"
     assert disks[0].find("source").get("volume") == "db-01-disk0.qcow2"
     assert disks[1].find("driver").get("type") == "raw"

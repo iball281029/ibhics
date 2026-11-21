@@ -73,13 +73,13 @@ def cdrom_element(iso: str | None, dev: str = "sda") -> ET.Element:
     return cdrom
 
 
-def disk_element(disk: DiskSpec, volume: str, dev: str) -> ET.Element:
+def disk_element(disk: DiskSpec, volume: str, dev: str, iothread: str | None = None) -> ET.Element:
     # Block disks name the LV itself: Debian's virt-aa-helper does not resolve
     # <source pool volume> for logical pools, so AppArmor would deny QEMU the device.
     # The domain metadata keeps which pool and volume the disk is.
     block = disk.backend == "block"
     disk_el = ET.Element("disk", type="block" if block else "volume", device="disk")
-    ET.SubElement(
+    driver = ET.SubElement(
         disk_el,
         "driver",
         name="qemu",
@@ -87,12 +87,56 @@ def disk_element(disk: DiskSpec, volume: str, dev: str) -> ET.Element:
         cache="none",
         discard="unmap",
     )
+    if disk.bus == "virtio":
+        driver.set("io", "native")
+        if iothread is not None:
+            driver.set("iothread", iothread)
     if block:
         ET.SubElement(disk_el, "source", dev=f"/dev/{vg_name(disk.pool)}/{volume}")
     else:
         ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume)
     ET.SubElement(disk_el, "target", dev=dev, bus=disk.bus)
     return disk_el
+
+
+def disk_iothread_ids(root: ET.Element) -> set[str]:
+    """Include explicit IDs and the IDs libvirt fills in up to the thread count."""
+    count = int(root.findtext("iothreads", "0"))
+    ids = {int(el.get("id")) for el in root.findall("iothreadids/iothread")}
+    candidate = 1
+    while len(ids) < count:
+        ids.add(candidate)
+        candidate += 1
+    return {str(i) for i in ids} if count > 0 else set()
+
+
+def normalize_disk_io(root: ET.Element) -> bool:
+    """Fill missing virtio disk tuning in an offline definition; keep user choices."""
+    changed = False
+    for disk in root.findall("devices/disk[@device='disk']"):
+        target, driver = disk.find("target"), disk.find("driver")
+        if (
+            target is None
+            or target.get("bus") != "virtio"
+            or driver is None
+            or driver.get("cache") != "none"
+            or driver.get("name") != "qemu"
+        ):
+            continue
+        for key, value in (("io", "native"), ("discard", "unmap")):
+            if driver.get(key) is None:
+                driver.set(key, value)
+                changed = True
+        if driver.get("iothread") is not None or driver.find("iothreads") is not None:
+            continue
+        if root.find("iothreads") is None:
+            ET.SubElement(root, "iothreads").text = "1"
+            changed = True
+        ids = disk_iothread_ids(root)
+        if ids:
+            driver.set("iothread", min(ids, key=int))
+            changed = True
+    return changed
 
 
 def nic_element(nic: NicSpec) -> ET.Element:
@@ -217,6 +261,9 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         max(MAX_VCPUS, spec.vcpus)
     )
 
+    if any(disk.bus == "virtio" for disk in spec.disks):
+        ET.SubElement(dom, "iothreads").text = "1"
+
     os_attrs = {"firmware": "efi"} if spec.firmware == Firmware.UEFI else {}
     os_el = ET.SubElement(dom, "os", **os_attrs)
     ET.SubElement(
@@ -255,7 +302,7 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         volume = volume_name(spec.name, index, disk)
         # SATA disks (older Windows with no virtio driver) come after the two CD drives.
         dev = f"vd{DISK_DEVS[index]}" if disk.bus == "virtio" else f"sd{DISK_DEVS[index + 2]}"
-        devices.append(disk_element(disk, volume, dev))
+        devices.append(disk_element(disk, volume, dev, iothread="1"))
         ET.SubElement(meta, f"{{{META_NS}}}disk", dev=dev, pool=disk.pool, volume=volume)
 
     # A CD drive is always there (empty without an ISO), so a disc such as the guest
