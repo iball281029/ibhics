@@ -131,6 +131,7 @@ class ReplicaStore:
         transferred = changed = total = done = 0
         try:
             try:
+                provider.prepare(previous.get("token"))
                 point = provider.begin()
                 if not point.disks or len(point.disks) != len(self.disk_roots):
                     raise ValueError("source disk count differs from replica targets")
@@ -235,6 +236,8 @@ class ReplicaStore:
                 for path in prepared:
                     path.unlink(missing_ok=True)
             raise
+        finally:
+            provider.finalize(self.current().get("generation") == generation)
         # Reclaim only files belonging to the superseded generation after commit.
         for old in old_disks:
             try:

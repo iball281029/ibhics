@@ -94,17 +94,23 @@ class SnapshotSSHProvider(ChangeProvider):
                 d.find("source") is None or not d.find("source").get("file")
                 for d in domain.findall("./devices/disk[@device='disk']")
             ):
-                raise ValueError("Phase 1 requires file-backed disks with internal snapshots")
+                raise ValueError(
+                    "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
+                )
         if not paths:
             raise ValueError("VM has no snapshot-capable disks")
         needed = 0
         for path in paths:
             # Do not guess snapshot paths for LVM, ZFS, RBD or raw disks.
             if not path.startswith("/") or path.startswith("/dev/"):
-                raise ValueError("Phase 1 SSH replication requires file-backed qcow2 disks")
+                raise ValueError(
+                    "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
+                )
             info = json.loads(self.command("qemu-img", "info", "-U", "--output=json", path))
             if info.get("format") != "qcow2":
-                raise ValueError("Phase 1 SSH replication requires file-backed qcow2 disks")
+                raise ValueError(
+                    "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
+                )
             needed += int(info.get("virtual-size") or 0)
         # The snapshot is exported to /var/tmp on the source host. Never fill the
         # source's filesystem: keep 10% (at least 2 GiB) free after the export.

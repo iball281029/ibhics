@@ -30,6 +30,14 @@ class ChangeProvider(ABC):
     tracking = "hash-delta"
     fallback_reason: str | None = None
 
+    def prepare(self, prev_token: str | None) -> None:
+        """Receive the committed baseline under the replica operation lock."""
+        return None
+
+    def finalize(self, committed: bool) -> None:
+        """Release tracking metadata after the manifest commit decision is known."""
+        return None
+
     @abstractmethod
     def begin(self) -> Point: ...
 
@@ -51,14 +59,18 @@ def capability(source: Source) -> dict:
     kind = source.type
     supported = kind in (SourceType.KVM, SourceType.VMWARE)
     reason = {
-        SourceType.KVM: "SSH: file-backed qcow2 internal snapshots only; block storage pending",
+        SourceType.KVM: (
+            "Libvirt NBD pull: dirty-bitmap with checkpoints; otherwise full hash scan. "
+            "raw/LVM/ZFS/RBD via full pull when supported by the host. "
+            "Proxmox without libvirt: file-backed qcow2 internal snapshots only"
+        ),
         SourceType.VMWARE: (
             "Direct ESXi: CBT when API and disk changeIds are ready, otherwise hash-delta; "
             "base flat VMDK only; pre-existing snapshots refused"
         ),
         SourceType.P2V: "Live P2V delta is not yet supported by the agent",
         SourceType.NUTANIX: "Full re-sync required; consistent snapshot provider not yet supported",
-        SourceType.SANGFOR: "Full re-sync required; consistent live export not yet supported",
+        SourceType.SANGFOR: "Existing Sangfor client exports OVA but provides no snapshot API",
     }.get(kind, "Replication is not supported for static OVA, disk or upload sources")
     if kind == SourceType.VMWARE and (source.transport != "ssh" or source.path):
         supported = False

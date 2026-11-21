@@ -10,6 +10,7 @@ from test_replication import VM, Inline, Provider
 
 from ibhics.agent.app import create_agent_app
 from ibhics.cluster import Cluster, NodeRole
+from ibhics.hypervisor import VMSpec
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.importer import Converted, Source, SourceType
 from ibhics.manager.app import create_app
@@ -62,7 +63,7 @@ def env(tmp_path, monkeypatch):
                 image.write_bytes(b"converted")
             return Converted(self.images, vm.firmware)
 
-    monkeypatch.setattr(runtime_module, "SnapshotSSHProvider", provider)
+    monkeypatch.setattr(runtime_module, "KVMPullProvider", provider)
     monkeypatch.setattr(runtime_module, "ReplicaConverter", Converter)
     return client, manager, drivers, reads
 
@@ -70,6 +71,7 @@ def env(tmp_path, monkeypatch):
 @pytest.mark.parametrize("destination", ["node1", "node2"])
 def test_relay_sync_and_test_on_destination(env, destination):
     client, manager, drivers, reads = env
+    existing = drivers[destination].create_vm(VMSpec(name="already-running-workload"))
     drivers[destination].unreachable = {"host"}
     via = "node2" if destination == "node1" else "node1"
     response = client.post(
@@ -98,13 +100,15 @@ def test_relay_sync_and_test_on_destination(env, destination):
     assert raw.read_bytes() == before
     assert drivers[via].list_vms() == []
     cleaned = client.post(url + "/test-cleanup").json()
-    assert cleaned["test_vm"] is None and drivers[destination].list_vms() == [], cleaned
+    assert cleaned["test_vm"] is None, cleaned
+    assert [v.uuid for v in drivers[destination].list_vms()] == [existing.uuid]
     done = client.post(url + "/cutover", json={"source_powered_off": True}).json()
     assert done["state"] == "done", done
     assert drivers[destination].get_vm(done["result"]).spec.nics[0].network == "default"
     assert len(reads) == 2
     assert client.delete(url + "?confirm=true").status_code == 204
     assert drivers[destination].get_vm(done["result"])
+    assert drivers[destination].get_vm(existing.uuid).spec == existing.spec
 
 
 def test_no_shared_pool_refuses_relay(env):
