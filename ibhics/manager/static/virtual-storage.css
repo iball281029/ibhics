@@ -1,0 +1,98 @@
+/* Virtual Storage command center. Geometry is SVG; no canvas or render loop. */
+#page-storage .vs-command {
+  --vs-cyan:#3ef0ff; --vs-text:#cfefff; --vs-dim:#89aaca;
+  position:relative;isolation:isolate;overflow:hidden;padding:24px;
+  color:var(--vs-text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  border:1px solid #3ef0ff33;border-radius:22px;
+  background:radial-gradient(ellipse at 50% 0,#0b3a52,#071a2c 48%,#040b17);
+  box-shadow:inset 0 0 100px #00e5ff14;
+}
+#page-storage .vs-command::before {content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:repeating-linear-gradient(0deg,#3ef0ff05 0 1px,transparent 1px 4px)}
+#page-storage .vs-command .page-head {padding:0 0 20px;margin:0;border-color:#3ef0ff22;gap:12px;flex-wrap:wrap}
+#page-storage .vs-command h1 {color:#e8fbff;font:700 26px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-shadow:0 0 18px #3ef0ff66}
+#page-storage .vs-command :is(h3,b) {color:#dffbff}
+#page-storage .vs-command h3 {font-size:13px;letter-spacing:1.5px;margin:0 0 12px}
+#page-storage .vs-command :is(.hint,.sub,small) {color:var(--vs-dim);line-height:1.7}
+#page-storage .vs-command :is(button,.btn,select) {min-height:38px;padding:9px 14px;border:1px solid #3ef0ff55;border-radius:0;background:#020a1499;color:var(--vs-text);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px;box-shadow:inset 0 0 12px #3ef0ff08}
+#page-storage .vs-command :is(button,.btn) {clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+#page-storage .vs-command :is(button,.btn):hover {border-color:#3ef0ff;background:#3ef0ff18}
+#page-storage .vs-command .primary {background:linear-gradient(120deg,#08608099,#34447c88);border-color:#3ef0ff99;color:#efffff}
+#page-storage .vs-command button:disabled {opacity:.4;cursor:not-allowed}
+#page-storage .vs-command :is(button,.btn,select,[role="tabpanel"]):focus-visible {outline:2px solid #bffaff;outline-offset:3px}
+#page-storage .vs-command select {max-width:100%;min-width:0;white-space:normal;background:#020a14;color:var(--vs-text)}
+#page-storage .vs-command select option {background:#020a14;color:#cfefff}
+#vs-tabs {display:flex;flex-wrap:wrap;gap:8px;padding:20px 0;border-bottom:1px solid #3ef0ff22;margin-bottom:20px}
+#vs-tabs button {text-transform:uppercase;letter-spacing:1.5px!important}
+#page-storage #vs-tabs [aria-selected="true"],#page-storage .vs-view-switch [aria-pressed="true"] {background:#3ef0ff20;color:#efffff;border-color:#3ef0ff;box-shadow:inset 0 -2px #3ef0ff,inset 0 0 20px #3ef0ff18}
+#virtual-storage-status {min-width:0}
+#page-storage .vs-command [hidden] {display:none!important}
+#page-storage .vs-command .vs-section-head {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:18px}
+#page-storage .vs-command .badge {display:inline-block;border:1px solid currentColor;padding:4px 10px;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#a4b7cb;background:#89aaca0c;border-radius:24px;white-space:normal}
+#page-storage .vs-command .badge.online {color:#6dffb3;background:#6dffb312}
+#page-storage .vs-command .badge.warning {color:#ffcb66;background:#ffcb6612}
+#page-storage .vs-command .badge.failed {color:#ff6b7a;background:#ff6b7a12}
+#page-storage .vs-command .vs-overview {gap:14px;margin:18px 0;grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
+#page-storage .vs-command .vs-overview>div {min-width:0;padding:18px;border:1px solid #3ef0ff33;border-radius:12px;background:linear-gradient(135deg,#10425d66,#09162b99);box-shadow:inset 0 1px #bff6ff18;overflow-wrap:anywhere}
+#page-storage .vs-command .vs-overview small {display:block;font-size:10px;letter-spacing:1px;margin-bottom:10px}
+#page-storage .vs-command .vs-overview b {display:block;font-size:17px;line-height:1.5}
+/* Explicit opaque dark backing fixes the inherited white SSD cache card. */
+#page-storage .vs-command .vs-cache-panel {background:#071a2c;border:1px solid #3ef0ff44;color:#cfefff;box-shadow:inset 0 0 40px #3ef0ff08;border-radius:12px;padding:20px}
+#page-storage .vs-command .vs-cache-panel .actions {gap:12px}
+#page-storage .vs-command .vs-erase {background:#401b2a99;border-color:#ff6b7a55;color:#ffc2cd;padding:16px;border-radius:10px}
+#page-storage .vs-command .vs-job {background:#0b3044;border:1px solid #3ef0ff55;padding:18px;border-radius:12px;margin-bottom:18px}
+#page-storage .vs-command .vs-replicas {display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+#page-storage .vs-command .vs-replica {min-width:0;border:1px solid #3ef0ff33;border-radius:12px;padding:18px;background:#020a1466}
+#page-storage .vs-command .vs-replica header {display:flex;align-items:start;justify-content:space-between;gap:12px;flex-wrap:wrap;background:none;padding:0}
+#page-storage .vs-command .vs-replica .vs-overview {grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
+#page-storage .vs-command .vs-replica .vs-overview>div {padding:10px}
+#page-storage .vs-command .vs-replica .vs-overview b {font-size:12px}
+#page-storage .vs-command .vs-peer {border-top:1px solid #3ef0ff22;padding-top:14px;margin-top:14px;overflow-wrap:anywhere;font-size:12px}
+#page-storage .vs-command .vs-replicas.vs-list {grid-template-columns:1fr}
+#page-storage .vs-command .vs-list .vs-replica {border-radius:0}
+#page-storage .vs-command .vs-view-switch {display:flex;gap:0}
+#page-storage .vs-command .vs-view-switch button {clip-path:none}
+.vs-scene {position:relative;isolation:isolate;perspective:900px;overflow:hidden;border:1px solid #3ef0ff33;border-radius:16px;background:radial-gradient(ellipse at 50% 64%,#0b496444,transparent 65%),#020d1c66}
+.vs-scene .vs-grid {position:absolute;inset:0;z-index:-1;transform:rotateX(62deg) scale(1.5);transform-origin:center 72%;background-image:linear-gradient(#3ef0ff16 1px,transparent 1px),linear-gradient(90deg,#3ef0ff16 1px,transparent 1px);background-size:36px 36px;mask-image:radial-gradient(ellipse,#000,transparent 70%)}
+.vs-scene svg {display:block;width:100%;max-height:440px;overflow:visible}
+.vs-scene text {text-anchor:middle;fill:#dcfaff;stroke:none;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}
+.vs-scene text.vs-svg-dim {fill:#89aaca;font-size:11px}
+.vs-scene text.vs-vip {font-size:18px;fill:#fff}
+.vs-wires {stroke:#3ef0ff33;stroke-width:3;fill:none}
+.vs-beam {stroke:#89aaca66;stroke-width:2;stroke-dasharray:7 14;fill:none}
+.vs-linked .vs-beam {stroke:#3ef0ff;animation:vs-stream 2s linear infinite;filter:drop-shadow(0 0 3px #3ef0ff)}
+.vs-orbit {fill:none;stroke:#3ef0ff55;stroke-width:1.5}
+.vs-ring {fill:none;stroke:#3ef0ff22;stroke-width:9}
+.vs-ring .vs-ring-used {stroke:#b49bff;filter:drop-shadow(0 0 4px #b49bff66)}
+.vs-tower {stroke:#3ef0ff;stroke-width:1.3;fill:#0c3048;filter:drop-shadow(0 8px 10px #3ef0ff22)}
+.vs-arbiter {stroke:#b49bff;stroke-width:1.4;fill:#25284b;animation:vs-hover 5s ease-in-out infinite}
+.vs-scene p {margin:0;padding:14px 20px;border-top:1px solid #3ef0ff22;color:#89aaca;font-size:11px;line-height:1.8;text-align:center}
+@keyframes vs-stream {to{stroke-dashoffset:-42}}
+@keyframes vs-hover {50%{transform:translateY(-5px)}}
+@media(max-width:720px) {
+  #page-storage .vs-command {padding:14px}
+  #page-storage .vs-command h1 {font-size:22px}
+  #vs-tabs {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+  #page-storage #vs-tabs button {padding:8px 4px;font-size:9px;letter-spacing:0!important}
+  #page-storage .vs-command .vs-overview {grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  #page-storage .vs-command .vs-overview>div {padding:12px}
+  #page-storage .vs-command .vs-overview b {font-size:13px}
+  #page-storage .vs-command .vs-cache-panel {padding:14px}
+  #page-storage .vs-command .vs-cache-panel select {width:100%;font-size:16px}
+  .vs-scene svg {min-width:540px}
+  .vs-scene {overflow-x:auto}
+  #page-storage .vs-command .vs-replicas {grid-template-columns:minmax(0,1fr)}
+}
+@media(prefers-reduced-motion:reduce) {
+  #page-storage .vs-command *,#page-storage .vs-command *::before,#page-storage .vs-command *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+/* Hidden workspaces do not spend time animating the SVG. */
+#page-storage:not(.active) .vs-command * {animation-play-state:paused}
+#page-storage .vs-command .vs-replica-table {display:none;min-width:0;max-width:100%}
+#page-storage .vs-command .vs-list .vs-replica {display:none}
+#page-storage .vs-command .vs-list .vs-replica-table {display:block}
+#page-storage .vs-command .vs-replica-table table {min-width:780px;background:#020a1466;color:#cfefff;border-collapse:collapse}
+#page-storage .vs-command .vs-replica-table :is(thead,tbody,tr,th,td) {background:transparent}
+#page-storage .vs-command .vs-replica-table :is(th,td) {padding:14px 12px;border-bottom:1px solid #3ef0ff22;text-align:left;font-size:12px}
+#page-storage .vs-command .vs-replica-table th {color:#89aaca;font-size:10px;letter-spacing:1px}
+#page-storage .vs-command .vs-replica-table tr:hover td {background:#3ef0ff08}
+#page-storage .vs-command .vs-replica-table small {display:block;margin-top:6px;font-size:10px}
