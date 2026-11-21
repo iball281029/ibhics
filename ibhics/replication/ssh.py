@@ -59,6 +59,7 @@ class SnapshotSSHProvider(ChangeProvider):
         self.ssh = ssh or SSH(source)
         self.name = "ibhics-repl-" + uuid.uuid4().hex
         self.paths: dict[str, str] = {}
+        self.descriptors: dict[str, str] = {}
         self.exports: list[str] = []
         self.export_dir: str | None = None
         self.kind = ""
@@ -93,17 +94,23 @@ class SnapshotSSHProvider(ChangeProvider):
                 d.find("source") is None or not d.find("source").get("file")
                 for d in domain.findall("./devices/disk[@device='disk']")
             ):
-                raise ValueError("Phase 1 requires file-backed disks with internal snapshots")
+                raise ValueError(
+                    "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
+                )
         if not paths:
             raise ValueError("VM has no snapshot-capable disks")
         needed = 0
         for path in paths:
             # Do not guess snapshot paths for LVM, ZFS, RBD or raw disks.
             if not path.startswith("/") or path.startswith("/dev/"):
-                raise ValueError("Phase 1 SSH replication requires file-backed qcow2 disks")
+                raise ValueError(
+                    "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
+                )
             info = json.loads(self.command("qemu-img", "info", "-U", "--output=json", path))
             if info.get("format") != "qcow2":
-                raise ValueError("Phase 1 SSH replication requires file-backed qcow2 disks")
+                raise ValueError(
+                    "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
+                )
             needed += int(info.get("virtual-size") or 0)
         # The snapshot is exported to /var/tmp on the source host. Never fill the
         # source's filesystem: keep 10% (at least 2 GiB) free after the export.
@@ -186,9 +193,11 @@ class SnapshotSSHProvider(ChangeProvider):
             remote = posixpath.normpath(posixpath.join(posixpath.dirname(descpath), flat))
             size = int(self.command("stat", "-c", "%s", remote).strip())
             self.paths[remote] = remote
+            self.descriptors[remote] = descpath
             disks.append(Disk(remote, size))
         if not disks:
             raise ValueError("ESXi VM has no flat disks")
+        self._prepare_tracking()
         self.snapshot_attempted = True
         self.command(
             "vim-cmd",
@@ -202,7 +211,13 @@ class SnapshotSSHProvider(ChangeProvider):
         self.esxi_snapshot_id = self._snapshot_id()
         if not self.esxi_snapshot_id:
             raise RuntimeError("ESXi snapshot ownership could not be verified")
-        return Point(self.name, tuple(disks))
+        return Point(self._tracking_token(disks), tuple(disks))
+
+    def _prepare_tracking(self):
+        pass
+
+    def _tracking_token(self, disks):
+        return self.name
 
     def _snapshot_id(self) -> str | None:
         text = self.command("vim-cmd", "vmsvc/snapshot.get", self.vm.ref)

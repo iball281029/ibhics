@@ -867,6 +867,7 @@ class AgentPrune(BaseModel):
 
 class LoginRequest(BaseModel):
     username: str = Field(max_length=64)
+    code: str = Field(default="", max_length=64)
     password: str = Field(max_length=256)
 
 
@@ -882,6 +883,8 @@ class UserOut(BaseModel):
     must_change_password: bool
     created: str
     last_login: str | None
+    totp_enabled: bool = False
+    permissions: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_user(cls, user) -> UserOut:
@@ -892,6 +895,8 @@ class UserOut(BaseModel):
             must_change_password=user.must_change_password,
             created=user.created,
             last_login=user.last_login,
+            totp_enabled=bool(user.totp_secret),
+            permissions=user.permissions,
         )
 
 
@@ -903,12 +908,12 @@ class LoginOut(BaseModel):
 
 class UserIn(BaseModel):
     name: str = Field(max_length=32)
-    role: str = Field(pattern=r"^(viewer|operator|admin)$")
+    role: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,31}$")
     password: str = Field(max_length=256)
 
 
 class UserUpdate(BaseModel):
-    role: str | None = Field(default=None, pattern=r"^(viewer|operator|admin)$")
+    role: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_.-]{1,31}$")
     enabled: bool | None = None
     password: str | None = Field(default=None, max_length=256)
 

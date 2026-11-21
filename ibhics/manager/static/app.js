@@ -11,15 +11,21 @@ function toLogin() {
   return new Promise(() => {}); // the page is going away
 }
 
+class ApprovalPending extends Error {}
+
 async function api(path, opts = {}) {
   const r = await fetch(`/api/v1${path}`, { headers: { "Content-Type": "application/json" }, ...opts });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     const detail = Array.isArray(body.detail) ? body.detail.map((d) => `${(d.loc || []).filter((x) => x !== "body").join(".") || "request"}: ${d.msg}`).join("; ") : body.detail;
+    if (r.status === 401 && $("#twofa-recovery") && !$("#twofa-recovery").hidden) throw new Error("Save your recovery codes, then sign in again.");
     if (r.status === 401 || (r.status === 403 && /initial password/.test(detail || ""))) return toLogin();
     throw new Error(detail || r.statusText);
   }
-  return r.status === 204 ? null : r.json();
+  if (r.status === 204) return null;
+  const result = await r.json();
+  if (result?.approval_request_id) throw new ApprovalPending(`${result.detail} (${result.approval_request_id})`);
+  return result;
 }
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body ?? {}) });
 const patch = (path, body) => api(path, { method: "PATCH", body: JSON.stringify(body ?? {}) });
@@ -33,7 +39,7 @@ function toast(text, error = false) {
   $("#toast").append(el);
   setTimeout(() => el.remove(), error ? 7000 : 3500);
 }
-const fail = (err) => toast(err.message || String(err), true);
+const fail = (err) => toast(err.message || String(err), !(err instanceof ApprovalPending));
 
 const size = (bytes) => {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -70,7 +76,8 @@ const JOB_STATE = { skipped: "Skipped", queued: "Queued", running: "Running", do
 // Jobs that can be stopped from the Tasks page, and the API call that stops them.
 const CANCEL_PATH = { Import: (id) => `/migrate/jobs/${enc(id)}/cancel`, "Live migration": (id) => `/migrations/${enc(id)}/cancel`, Move: (id) => `/migrations/${enc(id)}/cancel` };
 const isAdmin = () => !state.me || state.me.role === "admin";
-const canOperate = () => !state.me || state.me.role !== "viewer";
+const canManage = (category) => !state.me || state.me.role === "admin" || (state.me.permissions || []).includes(category);
+const canOperate = () => canManage(({storage:"storage",network:"network",backup:"backup",migrate:"replication",cluster:"cluster",node:"cluster"})[currentPage()] || "vms");
 const JOB_KINDS = { verify: "Boot verification", recovery: "Recovery", synthetic_full: "Synthetic full", backup_copy: "Backup copy", archive: "Archive", backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
@@ -177,6 +184,11 @@ $("#logout").addEventListener("click", async () => {
 
 async function loadMe() {
   state.me = await api("/auth/me");
+  state.security = state.me ? await api("/auth/2fa") : null;
+  if (state.security?.required && !state.security.enabled) {
+    location.hash = "system";
+    selectTab("system-tabs", "account");
+  }
   $("#whoami").textContent = state.me ? state.me.name : "local";
   document.body.classList.toggle("can-admin", isAdmin());
   document.body.classList.toggle("can-operate", canOperate());
@@ -236,7 +248,8 @@ const vmFromHash = () => decodeURIComponent(location.hash.slice(4));
 
 function show() {
   setRailExpanded(false);
-  const page = currentPage();
+  const page = state.security?.required && !state.security.enabled ? "system" : currentPage();
+  document.body.classList.toggle("can-operate", canOperate());
   if (location.hash === "#nodes") history.replaceState(null, "", "#cluster");
   if (page !== "network" && ntopo.edit) {
     if (ntopo.edit.saving) { location.hash = "network"; toast("Wait for topology saving to finish.", true); return; }
@@ -479,7 +492,11 @@ const loaders = {
       api(`/nodes/${enc(m.name)}/summary`).then((s) => [m.name, s]).catch(() => null)));
     state.summaries = Object.fromEntries(got.filter(Boolean));
   },
-  users: async () => { state.users = isAdmin() && state.me ? await api("/users") : []; },
+  settingsTasks: async () => {
+    state.applicationJobs = (await api("/settings")).jobs || [];
+    state.approvalJobs = state.me ? (await api("/approvals")).requests : [];
+  },
+  users: async () => { state.users = canManage("users") && state.me ? await api("/users") : []; },
 };
 const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
 
@@ -489,6 +506,8 @@ const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
 // VM moves. Running ones show their current step and how far along they are.
 function allTasks() {
   const tasks = [
+    ...(state.applicationJobs || []).map(j => ({kind:"Application " + j.kind, title:j.id, id:j.id, sub:(j.nodes || []).join(" → "), state:j.state, step:j.detail, created:j.created, error:j.state === "failed" || j.state === "interrupted" ? j.detail : ""})),
+    ...(state.approvalJobs || []).map(j => ({kind:"Approval", title:j.path, id:j.id, sub:`Requested by ${j.requester}${j.approver ? " · reviewed by " + j.approver : ""}`, state:j.state === "pending" ? "queued" : j.state === "executed" ? "done" : j.state, step:j.state === "pending" ? "รออนุมัติจาก admin อีกคน" : j.state, created:j.created})),
     ...state.imports.map((j) => ({
       kind: "Import", title: j.name, sub: `from ${j.source} to ${j.node}`, state: j.state,
       step: j.step, percent: j.percent, created: j.created, finished: j.finished, error: j.error, log: j.id, id: j.id, result: j.result,
@@ -815,17 +834,23 @@ document.addEventListener("click", (e) => {
 setInterval(async () => {
   if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
   try {
-    await load("imports", "jobs", "moves", "deploys"); renderTasks();
+    await load("imports", "jobs", "moves", "deploys", "settingsTasks"); renderTasks();
     if (currentPage() === "tasks") renderTaskPage();
   } catch { /* next tick */ }
 }, 3000);
 
 async function refresh(page, auto = false) {
+  if ($("#twofa-recovery") && !$("#twofa-recovery").hidden) return;
   if (auto && document.querySelector("details.more[open]")) return;
   if (page === "network" && auto && (nw.busy || nwPointerFrom || window.Network3D?.dragging())) return;
   if (page === "network" && ((ntopo.edit && (auto || ntopo.edit.saving)) || (auto && (ntopo.drag || ntopo.changing)))) return;
+  if (state.security?.required && !state.security.enabled) {
+    selectTab("system-tabs", "account");
+    await renderAccountSecurity();
+    return;
+  }
   await loadCluster();
-  await load("imports", "jobs", "moves", "deploys").then(renderTasks).catch(() => {});
+  await load("imports", "jobs", "moves", "deploys", "settingsTasks").then(renderTasks).catch(() => {});
   if (page === "fabric") { await load("vms", "pools", "networks", "stats", "summaries", "groups"); window.FabricMap?.render(); }
   if (page === "home") { await load("vms", "pools", "targets", "policies", "jobs", "moves", "imports", "users", "summaries"); await loadHomeHistory(); renderHome(); }
   if (page === "compute") { await load("vms", "guests", "stats", "groups", "networks", "pools", "targets", "moves", "recycle"); if (!auto || !document.querySelector("details.more[open]")) { renderVMs(); renderMoves(); } }
@@ -840,7 +865,7 @@ async function refresh(page, auto = false) {
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
   if (page === "containers") { await load("containers", "ctTemplates", "pools", "networks"); renderContainers(); }
-  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "activity", "vms"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
+  if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "settingsTasks", "activity", "vms"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
   fillSelects();
@@ -5358,7 +5383,9 @@ function renderReplications() {
   box.innerHTML = state.replications.length ? state.replications.map((j) => {
     const busy = !!j.operation || ["seeding", "syncing", "cutting-over"].includes(j.state);
     const button = (action, label, disabled = false) => `<button class="small operator-only" data-replication-id="${esc(j.id)}" data-replication-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`;
-    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.capability.change_tracking)}</p><dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status">${esc(j.error || j.operation || "")}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
+    const cycles = (j.history || []).filter(h => h.change_tracking).slice().reverse();
+    const trackingHistory = cycles.length ? `<details><summary>Sync tracking history</summary>${cycles.map(h => `<p>${esc(when(h.at))} · ${esc(h.change_tracking)}${h.fallback_reason ? ` · ${esc(h.fallback_reason)}` : ""}</p>`).join("")}</details>` : "";
+    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.change_tracking || j.capability.change_tracking)}</p>${j.fallback_reason ? `<p class="hint">${esc(j.fallback_reason)}</p>` : ""}${trackingHistory}<dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status">${esc(j.error || j.operation || "")}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
   }).join("") : '<p class="hint">No replications yet.</p>';
 }
 // New replication picks its source and VMs inside the wizard; a source already
@@ -5772,6 +5799,7 @@ async function renderSystem() {
     ["License", 'GNU AGPLv3 · <a href="https://github.com/iball281029/ibhics" target="_blank">Source code</a>'],
   ];
   $("#about").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${k === "License" ? v : esc(v)}</dd>`).join("");
+  await renderSettings();
   renderUsers();
   if (isAdmin() && state.me) await renderAudit();
 }
@@ -5780,14 +5808,15 @@ function renderUsers() {
   const me = state.me?.name;
   $("#users").innerHTML = state.users.length ? state.users.map((u) => `<tr>
     <td><div class="name-cell">${avatar("i-user")}<div><span class="vm-name">${esc(u.name)}</span>${u.name === me ? '<span class="vm-sub">you</span>' : ""}</div></div></td>
-    <td><select data-role="${esc(u.name)}" style="width:auto" ${u.name === me ? "disabled" : ""}>
-      ${["viewer", "operator", "admin"].map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r[0].toUpperCase() + r.slice(1)}</option>`).join("")}
+    <td><select data-role="${esc(u.name)}" style="width:auto" ${u.name === me || (u.role === "admin" && !isAdmin()) ? "disabled" : ""}>
+      ${Object.keys(state.settingsRoles || {viewer:[], operator:[], admin:[]}).map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r[0].toUpperCase() + r.slice(1)}</option>`).join("")}
     </select></td>
     <td><span class="badge ${u.enabled ? "online" : "disabled"}">${u.enabled ? (u.must_change_password ? "Must set password" : "Active") : "Disabled"}</span></td>
     <td>${esc(u.last_login ? when(u.last_login) : "never")}</td>
     <td>${esc(when(u.created))}</td>
-    <td><div class="actions">${u.name === me ? "" : `
+    <td><div class="actions">${u.name === me || (u.role === "admin" && !isAdmin()) ? "" : `
       <button class="small" data-user-reset="${esc(u.name)}">Reset password</button>
+      ${isAdmin() && u.totp_enabled ? `<button class="small" data-user-twofa="${esc(u.name)}">Reset 2FA</button>` : ""}
       <button class="small" data-user-toggle="${esc(u.name)}" data-enabled="${u.enabled}">${u.enabled ? "Disable" : "Enable"}</button>
       <button class="small danger" data-user-del="${esc(u.name)}">Delete</button>`}</div></td>
   </tr>`).join("") : empty(6, state.me ? "No users" : "Sign-in is off on this manager");
@@ -5811,7 +5840,10 @@ $("#users").addEventListener("change", async (e) => {
 $("#users").addEventListener("click", async (e) => {
   const d = e.target.closest("button")?.dataset || {};
   try {
-    if (d.userReset) {
+    if (d.userTwofa) {
+      openTwofaReset(d.userTwofa);
+      return;
+    } else if (d.userReset) {
       const pw = prompt(`New temporary password for ${d.userReset} (8+ characters). They must change it at sign-in.`);
       if (!pw) return;
       await patch(`/users/${enc(d.userReset)}`, { password: pw });
@@ -5845,7 +5877,7 @@ $("#password-form").addEventListener("submit", async (e) => {
 
 // ---------- start ----------
 
-loadMe().then(show).catch(fail);
+window.addEventListener("DOMContentLoaded", () => loadMe().then(show).catch(fail), { once: true });
 setInterval(() => {
   if (!document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);

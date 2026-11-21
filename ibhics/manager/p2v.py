@@ -64,11 +64,20 @@ class P2VSessions:
     def __init__(self, state_path: Path | None = None, clock=time.time) -> None:
         self._path = state_path
         self._clock = clock
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._rounds = {}
         self._sessions: dict[str, Session] = {}
         if state_path and state_path.exists():
             for data in json.loads(state_path.read_text()):
-                self._sessions[data["id"]] = Session(**data)
+                session = Session(**data)
+                if session.state == "importing":
+                    session.state = "ready"  # the previous process no longer holds readers
+                manifest = Path(session.folder) / "replica" / "metadata" / "current.json"
+                if session.state in ("waiting", "ready") and manifest.exists():
+                    # Manifest publication remains authoritative after a process crash.
+                    session.machine = json.loads(json.loads(manifest.read_text())["token"])
+                    session.state = "ready"
+                self._sessions[session.id] = session
 
     def _save(self) -> None:
         if not self._path:
@@ -113,26 +122,105 @@ class P2VSessions:
     def delete(self, sid: str) -> None:
         with self._lock:
             session = self._sessions.pop(sid, None)
+            self._rounds.pop(sid, None)
             self._save()
         if session:
             shutil.rmtree(session.folder, ignore_errors=True)
 
     # Agent side: every call carries the session's token
 
-    def authorize(self, sid: str, token: str) -> Session:
+    def authorize(self, sid: str, token: str, *, replicate=False) -> Session:
         with self._lock:
             session = self._sessions.get(sid)
         if session is None or not hmac.compare_digest(session.token_hash, _hash(token or "")):
             raise PermissionError("unknown session or wrong token")
-        if session.state not in ("waiting", "uploading"):
+        allowed = ("waiting", "ready") if replicate else ("waiting", "uploading")
+        if session.state not in allowed:
             raise PermissionError("this session no longer accepts uploads")
         if self._clock() - session.created > SESSION_TTL_S:
             raise PermissionError("this session has expired; open a new one")
         return session
 
+    def delta_begin(self, session: Session, data: dict) -> dict:
+        from ..replication.p2v import PushRound, session_store
+
+        try:
+            machine = validate_inventory(data.get("machine"))
+        except (ValueError, TypeError, AttributeError):
+            raise P2VError("invalid machine inventory") from None
+        if len({d["name"] for d in machine["disks"]}) != len(machine["disks"]):
+            raise P2VError("duplicate disk names")
+        with self._lock:
+            if session.state not in ("waiting", "ready"):
+                raise P2VError("session is not available for replication")
+            store = session_store(session.folder, machine)
+            try:
+                pending = PushRound(session.folder, machine, data.get("hashes"), store.current())
+            except ValueError as exc:
+                raise P2VError(str(exc)) from None
+            old = self._rounds.pop(session.id, None)
+            if old:
+                old.discard()
+            self._rounds[session.id] = pending
+            return {"round": pending.id, "chunk_size": store.chunk, "needed": pending.needed}
+
+    def _round(self, session, round_id):
+        if session.state not in ("waiting", "ready"):
+            raise P2VError("session is not available for replication")
+        pending = self._rounds.get(session.id)
+        if pending is None or not hmac.compare_digest(pending.id, round_id):
+            raise P2VError("unknown or superseded round; begin again")
+        return pending
+
+    def delta_chunk(self, session, round_id, index, chunk, data):
+        with self._lock:
+            try:
+                self._round(session, round_id).upload(index, chunk, data)
+            except ValueError as exc:
+                raise P2VError(str(exc)) from None
+
+    def delta_commit(self, session, round_id):
+        from ..replication.p2v import session_store
+
+        with self._lock:
+            pending = self._round(session, round_id)
+            store = session_store(session.folder, pending.machine)
+            if store.current().get("generation") != pending.baseline:
+                raise P2VError("baseline changed; begin again")
+            try:
+                manifest = store.sync(pending)
+            except ValueError as exc:
+                raise P2VError(str(exc)) from None
+            session.machine = pending.machine
+            session.state = "ready"
+            session.received = {
+                str(i): d["size_bytes"] for i, d in enumerate(pending.machine["disks"])
+            }
+            self._save()
+            pending.discard()
+            del self._rounds[session.id]
+            return manifest
+
+    def claim_import(self, sid):
+        """Pin the current generation by rejecting pushes while conversion reads it."""
+        with self._lock:
+            session = self._sessions[sid]
+            if session.state != "ready" or sid in self._rounds:
+                raise P2VError("finish the replication round before importing this session")
+            vm = source_vm(session)
+            session.state = "importing"
+            try:
+                self._save()
+            except BaseException:
+                session.state = "ready"
+                raise
+            return vm
+
     def inventory(self, session: Session, data: dict) -> dict:
         machine = validate_inventory(data)
         with self._lock:
+            if session.id in self._rounds:
+                raise P2VError("a delta round is active")
             session.machine, session.state, session.received = machine, "uploading", {}
             self._save()
         return machine
@@ -242,8 +330,12 @@ def source_vm(session: Session):
     """The machine as a Migrate source VM (its disks are raw files in the pool)."""
     from ..hypervisor.base import Firmware
     from ..importer.sources import GIB, SourceVM
+    from ..replication.p2v import session_store
 
     m = session.machine
+    manifest = session_store(session.folder, m).current()
+    if manifest:
+        m = json.loads(manifest["token"])
     return SourceVM(
         ref=session.id,
         name=m["hostname"],
@@ -255,5 +347,7 @@ def source_vm(session: Session):
         state="running",  # the physical machine keeps its MACs: the VM gets new ones
         guest_os=m.get("os", ""),
         notes=f"P2V session {session.id}",
-        disk_paths=[str(Path(session.folder) / f"disk{i}.raw") for i in range(len(m["disks"]))],
+        disk_paths=[d["path"] for d in manifest["disks"]]
+        if manifest
+        else [str(Path(session.folder) / f"disk{i}.raw") for i in range(len(m["disks"]))],
     )

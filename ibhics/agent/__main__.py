@@ -52,6 +52,8 @@ def main() -> None:
         from ..cluster.migration_pki import MigrationPKI
 
         migration_pki = MigrationPKI()
+    from ..updater import NodeApplicationUpdater
+
     app = create_agent_app(
         args.name,
         role,
@@ -60,6 +62,9 @@ def main() -> None:
         backups,
         pool_labels_path=Path("/var/lib/ibhics/pool-labels.json"),
         migration_pki=migration_pki,
+        application_updater=NodeApplicationUpdater(role=str(role))
+        if args.driver == "libvirt"
+        else None,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
