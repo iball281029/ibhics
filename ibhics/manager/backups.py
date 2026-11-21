@@ -177,6 +177,16 @@ class BackupManager:
             self._save()
         return target
 
+    def set_immutability(self, name: str, days: int) -> BackupTarget:
+        """Lock period for new restore points; points already locked keep their date."""
+        if type(days) is not int or not 0 <= days <= 36500:
+            raise ValueError("immutability days must be 0-36500")
+        with self._lock:
+            target = self.target(name)
+            target.immutability_days = days
+            self._save()
+        return target
+
     def remove_target(self, name: str) -> None:
         """Forget the target. Backups already on it stay where they are."""
         with self._lock:

@@ -29,8 +29,8 @@ class SSH:
         source.validate()
         self.source, self.run = source, run
 
-    def command(self, command: str, binary: bool = False):
-        argv = [
+    def argv(self, command: str) -> list[str]:
+        return [
             "ssh",
             "-i",
             str(SSH_KEY),
@@ -44,6 +44,18 @@ class SSH:
             f"root@{self.source.host}",
             command,
         ]
+
+    def stream(self, command: str):
+        """A long-running remote command whose stdout is read as it arrives."""
+        try:
+            return subprocess.Popen(
+                self.argv(command), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+        except OSError:
+            raise RuntimeError("Replication SSH command could not start") from None
+
+    def command(self, command: str, binary: bool = False):
+        argv = self.argv(command)
         try:
             result = self.run(argv, capture_output=True, timeout=3600)
         except (OSError, subprocess.SubprocessError):
@@ -232,7 +244,37 @@ class SnapshotSSHProvider(ChangeProvider):
                 return match[1]
         return None
 
+    HASH_BATCH = 256  # chunks hashed per SSH call (1 GiB): one call, not one per chunk
+    STREAM_GAP = 16  # chunks skipped inside an open stream before a new one is started
+
     def hash(self, disk: Disk, offset: int, length: int) -> str | None:
+        from .store import CHUNK
+
+        cache = self.__dict__.setdefault("_hashes", {})
+        if (disk.key, offset) not in cache:
+            first = offset // CHUNK
+            last = min(first + self.HASH_BATCH, -(-disk.size // CHUNK))
+            path = shlex.quote(self.paths[disk.key])
+            loop = (
+                f"i={first}; while [ $i -lt {last} ]; do "
+                f"dd if={path} bs={CHUNK} skip=$i count=1 2>/dev/null | sha256sum; "
+                "i=$((i+1)); done"
+            )
+            try:
+                lines = str(self.ssh.command(loop)).split("\n")
+            except Exception:  # no shell loop here: hash chunk by chunk as before
+                lines = []
+            cache.clear()  # keep memory flat: only the current batch
+            for n, line in enumerate(lines[: last - first]):
+                digest = line.split()[0] if line.split() else ""
+                if re.fullmatch(r"[0-9a-f]{64}", digest):
+                    cache[(disk.key, (first + n) * CHUNK)] = digest
+            if (disk.key, offset) in cache:
+                return cache[(disk.key, offset)]
+            return self._hash_one(disk, offset, length)
+        return cache[(disk.key, offset)]
+
+    def _hash_one(self, disk: Disk, offset: int, length: int) -> str | None:
         # BusyBox dd is supported on ESXi. Offsets are chunk aligned; final count is
         # allowed to exceed EOF. sha256sum absence falls back to a binary read.
         command = self._dd(disk, offset, length)
@@ -262,12 +304,50 @@ class SnapshotSSHProvider(ChangeProvider):
         )
 
     def read(self, disk: Disk, offset: int, length: int) -> bytes:
-        data = self.ssh.command(self._dd(disk, offset, length), binary=True)
+        """Read through one streaming dd per run of nearby chunks instead of one SSH each."""
+        from .store import CHUNK
+
+        if not hasattr(self.ssh, "stream") or offset % CHUNK:
+            data = self.ssh.command(self._dd(disk, offset, length), binary=True)
+        else:
+            data = b""
+            for _attempt in range(3):
+                stream = self.__dict__.get("_stream")
+                if not (
+                    stream
+                    and stream[0] == disk.key
+                    and 0 <= offset - stream[1] <= self.STREAM_GAP * CHUNK
+                    and stream[2].poll() is None
+                ):
+                    self._close_stream()
+                    path = shlex.quote(self.paths[disk.key])
+                    proc = self.ssh.stream(
+                        f"dd if={path} bs={CHUNK} skip={offset // CHUNK} 2>/dev/null"
+                    )
+                    stream = self._stream = [disk.key, offset, proc]
+                proc = stream[2]
+                while stream[1] < offset:  # skip unchanged chunks inside the stream
+                    gap = proc.stdout.read(min(CHUNK, offset - stream[1]))
+                    if not gap:
+                        break
+                    stream[1] += len(gap)
+                data = proc.stdout.read(length) if stream[1] == offset else b""
+                stream[1] += len(data)
+                if len(data) == length:
+                    break
+                self._close_stream()  # broken stream: start again at this offset
         if len(data) != length:
             raise ValueError("short source snapshot read")
         return data
 
+    def _close_stream(self) -> None:
+        stream = self.__dict__.pop("_stream", None)
+        if stream:
+            stream[2].kill()
+            stream[2].wait()
+
     def end(self) -> None:
+        self._close_stream()
         errors = []
         for export in self.exports:
             try:

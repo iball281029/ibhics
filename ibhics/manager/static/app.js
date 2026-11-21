@@ -3355,6 +3355,9 @@ function clusterHAStatus(ha) {
 }
 
 // Isometric 3D server (or witness shield on a pedestal) for the heartbeat map.
+// Cluster ID as shown and licensed: IBHX- and the UUID in upper-case groups of four.
+const formatClusterId = (id) => `IBHX-${String(id || "").replace(/-/g, "").toUpperCase().match(/.{1,4}/g)?.join("-") || ""}`;
+
 function clusterIcon3d(m, i) {
   const up = m.healthy, g = `cl3d${i}`;
   const [hi, lo, side, dark, glow] = up ? ["#9ffaff", "#2bb6d6", "#0f5a78", "#08304a", "#3ef0ff"] : ["#ffb3bd", "#c8485c", "#6a2232", "#3a1220", "#ff6b81"];
@@ -3465,7 +3468,7 @@ function renderCluster() {
     // Online links carry a heartbeat pulse from the cluster core to the node.
     return `<path class="cl-link ${m.healthy ? "up" : "down"}" d="${d}"/>${m.healthy ? `<circle class="cl-pulse" r="3"><animateMotion dur="2.4s" begin="${(i * 0.4).toFixed(1)}s" repeatCount="indefinite" path="${d}"/></circle>` : ""}`;
   }).join("") + `<circle class="cl-core" cx="450" cy="12" r="5"/>`;
-  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Working" : "! Stopped"}</h2><p>${online} of ${c.members.length} online</p>${c.cluster_id ? `<div class="cl-id"><small>CLUSTER ID</small><code>${esc(c.cluster_id)}</code><button id="cluster-copy-id" type="button" title="Copy cluster ID" aria-label="Copy cluster ID">⧉ Copy</button></div>` : ""}</div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
+  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Working" : "! Stopped"}</h2><p>${online} of ${c.members.length} online</p>${c.cluster_id ? `<div class="cl-id"><small>CLUSTER ID</small><code>${esc(formatClusterId(c.cluster_id))}</code><button id="cluster-copy-id" type="button" title="Copy cluster ID" aria-label="Copy cluster ID">⧉ Copy</button></div>` : ""}</div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
     const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
     return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon3d(m, i)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.healthy ? (m.role === "compute" ? "Server" : "Witness") : "Offline"}</small></div>`;
   }).join("")}</div>`;
@@ -3504,7 +3507,7 @@ $("#page-cluster").addEventListener("click", async (e) => {
     $$("[data-cl-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === view)));
   }
   if (e.target.closest("#cluster-copy-id")) {
-    try { await navigator.clipboard.writeText(state.cluster.cluster_id); toast("Cluster ID copied"); } catch (err) { fail(err); }
+    try { await navigator.clipboard.writeText(formatClusterId(state.cluster.cluster_id)); toast("Cluster ID copied"); } catch (err) { fail(err); }
   }
 });
 
@@ -4488,7 +4491,7 @@ function renderTargets() {
   $("#targets").innerHTML = state.targets.map(t => {
     const usage = protection.usage.get(t.name) || [], known = usage.length && usage.every(u => u.used_bytes != null && u.free_bytes != null && !u.error);
     const used = usage.reduce((n,u)=>n+(u.used_bytes||0),0), free = usage.reduce((n,u)=>n+(u.free_bytes||0),0), pct = used+free ? Math.round(used/(used+free)*100) : 0;
-    return `<article class="bp-card"><div class="bp-card-head"><h3>${esc(t.name)}</h3><span class="badge info">${esc(TARGET_TYPES[t.type] || t.type)}</span></div><p>${esc(t.source)}</p><div class="bp-meter"><span style="width:${known ? pct : 0}%"></span></div><p>${known ? `${size(used)} used · ${size(free)} free` : "Capacity unavailable"}</p><p>🔒 ${t.settings.immutability_days || 0} days immutability</p><small>${t.settings.immutability_days ? "Native lock checked per point; soft lock warning appears on unsupported storage." : "New points are not locked."}</small><p class="${usage.some(u=>u.error) ? "bp-alert" : ""}">${esc(usage.find(u=>u.error)?.error || (t.on_demand ? "Attached during jobs" : "Always attached"))}</p><div class="actions">${isAdmin() ? `<button class="small danger" data-target="${esc(t.name)}">Remove</button>` : ""}</div></article>`;
+    return `<article class="bp-card"><div class="bp-card-head"><h3>${esc(t.name)}</h3><span class="badge info">${esc(TARGET_TYPES[t.type] || t.type)}</span></div><p>${esc(t.source)}</p><div class="bp-meter"><span style="width:${known ? pct : 0}%"></span></div><p>${known ? `${size(used)} used · ${size(free)} free` : "Capacity unavailable"}</p><p>🔒 ${t.settings.immutability_days || 0} days immutability</p><small>Immutability locks each new restore point for this many days. A locked point cannot be deleted or changed by anyone, admins and ransomware included. ${t.settings.immutability_days ? "" : "0 = not locked."}</small><button class="small operator-only" data-immutability="${esc(t.name)}" data-days="${Number(t.settings.immutability_days || 0)}">Edit lock days</button><p class="${usage.some(u=>u.error) ? "bp-alert" : ""}">${esc(usage.find(u=>u.error)?.error || (t.on_demand ? "Attached during jobs" : "Always attached"))}</p><div class="actions">${isAdmin() ? `<button class="small danger" data-target="${esc(t.name)}">Remove</button>` : ""}</div></article>`;
   }).join("") || `<p class="hint">Add a repository to start protecting VMs.</p>`;
 }
 function renderProtectionTimeline(backups) {
@@ -6508,5 +6511,18 @@ $("#jobs").addEventListener("click", async (event) => {
     $("#backup-report-json").href = `/api/v1/backup/jobs/${enc(report.job_id)}/report?format=json`;
     $("#backup-report-json").download = `backup-job-${report.job_id}.json`;
     $("#backup-report-dialog").showModal();
+  } catch (err) { fail(err); }
+});
+
+// Backup repository: edit how long new restore points stay locked.
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-immutability]");
+  if (!b) return;
+  const days = prompt(`Lock new restore points on ${b.dataset.immutability} for how many days? (0 = no lock)\nPoints already locked stay locked until their date.`, b.dataset.days);
+  if (days === null) return;
+  try {
+    await api(`/backup/targets/${enc(b.dataset.immutability)}/immutability`, { method: "PUT", body: JSON.stringify({ days: Number(days) }) });
+    toast(`Immutability set to ${Number(days)} days`);
+    refresh(currentPage());
   } catch (err) { fail(err); }
 });

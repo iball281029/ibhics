@@ -82,6 +82,14 @@ def fetch_bytes(url: str, limit: int = MAX_PACKAGE) -> bytes:
         return b"".join(chunks)
 
 
+def cluster_key(value: str) -> str:
+    """Compare cluster IDs in either form: the UUID or IBHX-XXXX-... shown on the page."""
+    text = str(value).strip().lower()
+    if text.startswith("ibhx-"):
+        text = text[5:]
+    return text.replace("-", "")
+
+
 class NodeUpdater(Protocol):
     """Implementations must only stop/start ibHiCS services; never VMs or hosts.
 
@@ -166,17 +174,23 @@ class Settings:
             return None
         try:
             payload = self.verify(self.data["license"])
-            for key in ("customer", "cluster_id", "update_until", "support_until", "nodes"):
+            for key in ("customer", "cluster_id", "nodes"):
                 if key not in payload:
                     raise ValueError("license field missing")
+            # A license may sell Update, Support or both.
+            if "update_until" not in payload and "support_until" not in payload:
+                raise ValueError("license has no subscription")
             if not isinstance(payload["customer"], str) or not payload["customer"].strip():
                 raise ValueError("customer is required")
-            if not self.cluster_id() or payload["cluster_id"] != self.cluster_id():
+            if not self.cluster_id() or cluster_key(payload["cluster_id"]) != cluster_key(
+                self.cluster_id()
+            ):
                 raise ValueError("license belongs to a different or uninitialized cluster")
             if type(payload["nodes"]) is not int or payload["nodes"] < self.node_count():
                 raise ValueError("license does not cover this cluster's nodes")
-            date.fromisoformat(payload["update_until"])
-            date.fromisoformat(payload["support_until"])
+            for key in ("update_until", "support_until"):
+                if key in payload:
+                    date.fromisoformat(payload[key])
             return payload
         except (ValueError, TypeError):
             return None
@@ -185,7 +199,7 @@ class Settings:
         payload = self.license()
         result = {"customer": payload["customer"] if payload else None}
         for kind in ("update", "support"):
-            until = payload[f"{kind}_until"] if payload else None
+            until = payload.get(f"{kind}_until") if payload else None
             days = (date.fromisoformat(until) - self.today()).days if until else None
             result[kind] = {
                 "status": "None" if days is None else "Active" if days >= 0 else "Expired",
@@ -280,7 +294,9 @@ class Settings:
             released = date.fromisoformat(manifest.get("released", ""))
         except (TypeError, ValueError):
             raise ValueError("release date must use YYYY-MM-DD") from None
-        if released > self.today() or released > date.fromisoformat(payload["update_until"]):
+        if released > self.today() or released > date.fromisoformat(
+            payload.get("update_until") or "0001-01-01"
+        ):
             raise Forbidden("This release is outside the Update subscription period")
 
     def stage(self, envelope: dict, package: bytes) -> dict:
