@@ -48,20 +48,53 @@
     const occupied = [...obstacles], out = [];
     for (const p of points) {
       let box = null;
-      for (const radius of [16, 40, 68, 100, 140, 180]) {
-        for (const [dx, dy] of [[1,-1],[-1,-1],[1,1],[-1,1],[0,-1],[0,1]]) {
-          const candidate = { x: p.x + (dx < 0 ? -p.w - radius : dx ? radius : -p.w / 2), y: p.y + (dy < 0 ? -p.h - radius : radius), w: p.w, h: p.h };
-          if (candidate.x < 4 || candidate.y < 4 || candidate.x + p.w > width - 4 || candidate.y + p.h > height - 4 || occupied.some(b => overlaps(candidate, b))) continue;
-          box = candidate; break;
+      // Search near the front anchor first, then expand in small steps. Sparse
+      // six-direction placement left avoidable holes in a 20-VM isometric scene.
+      for (let radius = 12; radius <= 240 && !box; radius += 12) {
+        for (const dy of [1, -1]) {
+          for (const dx of [0, .5, -.5, 1, -1]) {
+            const candidate = { x: p.x - p.w / 2 + dx * radius, y: p.y + dy * radius - (dy < 0 ? p.h : 0), w: p.w, h: p.h };
+            if (candidate.x < 4 || candidate.y < 4 || candidate.x + p.w > width - 4 || candidate.y + p.h > height - 4 || occupied.some(b => overlaps(candidate, b))) continue;
+            box = candidate; break;
+          }
+          if (box) break;
         }
-        if (box) break;
+      }
+      if (!box) {
+        let nearest = Infinity;
+        for (let y = 4; y + p.h <= height - 4; y += 12) {
+          for (let x = 4; x + p.w <= width - 4; x += 12) {
+            const distance = (x + p.w / 2 - p.x) ** 2 + (y - p.y) ** 2;
+            if (distance >= nearest) continue;
+            const candidate = {x, y, w: p.w, h: p.h};
+            if (occupied.some(b => overlaps(candidate, b))) continue;
+            box = candidate; nearest = distance;
+          }
+        }
       }
       if (box) occupied.push(box);
       out.push({ ...p, box }); // Secondary labels are hidden when no free space remains.
     }
     return out;
   }
-  const api = { ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
+  // Layout is shared with the scene and fixture checks. Reserve a rear service lane.
+  function dioramaLayout(networks, vms, stopped = true) {
+    const maximum = Math.max(1, ...networks.map(n => vms.filter(v => v.nics.some(nic => nic.network === n.name) && (stopped || v.state === 'running')).length));
+    const cols = Math.max(2, Math.ceil(Math.sqrt(maximum))), rows = Math.ceil(maximum / cols);
+    const racks = new Set(networks.flatMap(n => n.nodes || []));
+    vms.forEach(v => { if (v.node) racks.add(v.node); });
+    const w = Math.max(14, cols * 3.8 + 3, racks.size * 2 + 7), d = Math.max(11, rows * 3.8 + 6);
+    return networks.map((net, i) => ({
+      x: networks.length <= 3 ? -i * (w + 2) * .78 : (i % 3) * (w + 3),
+      y: networks.length <= 3 ? i * 2.5 : 0,
+      z: networks.length <= 3 ? -i * 1.8 : Math.floor(i / 3) * (d + 3), w, d,
+      slots: vms.filter(v => v.nics.some(n => n.network === net.name) && (stopped || v.state === 'running')).map((v, j) => ({uuid: v.uuid, x: (j % cols - (cols - 1) / 2) * 3.8, z: -d / 2 + 5 + Math.floor(j / cols) * 3.8}))
+    }));
+  }
+  function clampSlot(p, layer) {
+    return { x: Math.max(-layer.w / 2 + 1.2, Math.min(layer.w / 2 - 1.2, p.x)), z: Math.max(-layer.d / 2 + 4.5, Math.min(layer.d / 2 - 1.2, p.z)) };
+  }
+  const api = { dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
   if (typeof module !== 'undefined') module.exports = api;
   else root.NetworkCore = api;
 })(globalThis);

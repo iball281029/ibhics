@@ -51,3 +51,19 @@
 #fw-dialog{border:1px solid #3ef0ff66;background:#071a2c;color:#d5f2ff}#fw-dialog input,#fw-dialog select{background:#031323;color:#d5f2ff;border-color:#3ef0ff44}
 @media(max-width:1100px){#page-network .nw-scene-layout{grid-template-columns:1fr}#nw-three{height:540px}#nw-test-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){#page-network>.sheet{padding:12px}#net-tabs{gap:6px}#net-tabs button{padding:10px;font-size:12px}#nw-three{height:480px}#nw-test-form{grid-template-columns:1fr}.nw-rule{gap:12px;padding:12px}.nw-rule .actions{width:100%}}
+/* Diorama overrides are restricted to the topology viewport. */
+#nw-three{height:clamp(560px,72vh,840px);min-height:560px;background:radial-gradient(ellipse at 55% 65%,#12435b88,transparent 62%),linear-gradient(155deg,#0b203a,#020916 75%);border-radius:20px;box-shadow:inset 0 0 70px #040b19}
+#page-network #nw-three .nw-panel-toggle{position:absolute;top:14px;right:14px;z-index:4;padding:8px 12px;font-size:11px;background:#081e32e8}
+#page-network .nw-scene-layout.nw-panel-closed{grid-template-columns:minmax(0,1fr)}
+#nw-three-wrap.nw-panel-closed>#nw-vm-panel{display:none}
+#page-network .nw-label.vm{height:38px;line-height:15px;white-space:normal;padding:3px 8px;font-size:11px;border-left:2px solid #6dffb3;background:linear-gradient(110deg,#0c2b3cf2,#061627f5);border-radius:5px;max-width:190px;overflow-wrap:anywhere}
+#page-network .nw-label.vlan{border-left:3px solid #3ef0ff;color:#e1faff;background:#0b2439ed;font-weight:700;letter-spacing:.3px;max-width:210px}
+#page-network .nw-label.equipment,#page-network .nw-label.shield{height:26px;font-size:10px;opacity:1;color:#b4dcf5;pointer-events:none;background:#081b2cdd}
+#page-network .nw-label.shield{color:#c9b4ff;border-color:#b49bff66}
+#nw-three .nw-scene-hint{bottom:14px;font-size:10px;letter-spacing:.3px;color:#8caec4}
+#nw-three .nw-leaders line{stroke:#80cde4;opacity:.35}
+@media(max-width:650px){#nw-three{height:600px;min-height:560px}#nw-three .nw-scene-hint{max-width:260px}}
+#page-network .nw-label.vm>span,#page-network .nw-label.vm>small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:15px}
+#page-network .nw-label.vm>small{color:#8fb6cb;font-size:10px}
+#page-network .nw-label.vm[data-state=stopped],#page-network .nw-label.vm[data-state=shutoff]{border-left-color:#768da7;color:#a7b9cc}
+#page-network .nw-label.vm[data-state=paused]{border-left-color:#ffcb66}
