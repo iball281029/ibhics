@@ -174,7 +174,15 @@ class ReplicaStore:
                                     start < offset + length and start + size > offset
                                     for start, size in hints
                                 )
-                                digest = prior if untouched else provider.hash(disk, offset, length)
+                                # Nothing to compare with on a first copy: read straight through
+                                # (one stream) and hash here, instead of asking the source.
+                                digest = (
+                                    prior
+                                    if untouched
+                                    else provider.hash(disk, offset, length)
+                                    if compatible or not getattr(provider, "seed_by_reading", False)
+                                    else None
+                                )
                                 zero_hash = hashlib.sha256(bytes(length)).hexdigest()
                                 data = None
                                 if digest is None or (digest != prior and digest != zero_hash):

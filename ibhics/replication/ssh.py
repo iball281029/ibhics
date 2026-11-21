@@ -251,6 +251,7 @@ class SnapshotSSHProvider(ChangeProvider):
                 return match[1]
         return None
 
+    seed_by_reading = True  # a first copy streams the disk instead of hashing remotely
     HASH_BATCH = 256  # chunks hashed per SSH call (1 GiB): one call, not one per chunk
     STREAM_GAP = 16  # chunks skipped inside an open stream before a new one is started
 
