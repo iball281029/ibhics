@@ -141,3 +141,11 @@
 #nw-three .nw-scene-legend.folded{padding:0;background:none;border:0}
 #nw-three .nw-scene-legend.folded>*:not(.nw-legend-toggle){display:none}
 #page-network #nw-three .nw-legend-toggle{display:block;margin:0 0 4px;padding:3px 9px;font-size:11px;background:#06182acc;border:1px solid #3ef0ff44;color:#9fe9f5;border-radius:5px;cursor:pointer}
+
+#page-network .nw-switch-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+#page-network .nw-switch-actions button{padding:5px 10px;font-size:11px}
+#page-network .nw-switch-actions button.danger{color:#ff8a96;border-color:#ff6b7a66}
+#page-network .nw-switch-actions button:disabled{opacity:.4;cursor:not-allowed}
+#page-network .nw-switch-form{display:grid;gap:8px;margin-top:12px}
+#page-network .nw-switch-form label{display:grid;gap:4px;font-size:11px;color:#9fd3e3}
+#page-network .nw-warn{color:#ffcb66;font-weight:600}

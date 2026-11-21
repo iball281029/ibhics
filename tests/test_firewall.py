@@ -105,3 +105,23 @@ def test_refresh_follows_new_vms():
     vm(driver, "app", "52:54:00:bb:00:01")
     assert edge.refresh() is True
     assert "mac:52:54:00:bb:00:01" in driver.edge[0]["rules"][0]["dst_match"]
+
+
+def test_network_edit_and_sync(tmp_path):
+    from test_migration import Env
+
+    env = Env(tmp_path)
+    env.node1.create_network(NetworkSpec("lab", 30))  # only on one node
+    client = TestClient(create_app(env.cluster, edge_state=tmp_path / "edge.json"))
+    synced = client.post("/api/v1/networks/lab/sync")
+    assert synced.status_code == 200, synced.text
+    assert sorted(synced.json()["nodes"]) == ["node1", "node2"]
+    moved = client.put("/api/v1/networks/lab", json={"name": "lab2", "vlan": 31})
+    assert moved.status_code == 200, moved.text
+    for node in (env.node1, env.node2):
+        assert {(n.name, n.vlan) for n in node.list_networks()} >= {("lab2", 31)}
+        assert "lab" not in {n.name for n in node.list_networks()}
+    vm(env.node2, "web", "52:54:00:cc:00:01", "lab2")
+    busy = client.put("/api/v1/networks/lab2", json={"name": "lab3", "vlan": 32})
+    assert busy.status_code == 409 and "move its VMs" in busy.json()["detail"]
+    assert client.put("/api/v1/networks/default", json={"name": "x", "vlan": 5}).status_code == 409
