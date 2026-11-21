@@ -4394,10 +4394,21 @@ async function protectionOverview() {
   const usage = [...protection.usage.values()].flat(), used = usage.reduce((n,u) => n + (u.used_bytes || 0), 0), free = protectionFreeSpace(usage);
   const known = usage.length && usage.every(u => u.used_bytes != null && u.free_bytes != null && !u.error);
   const pts = protection.points;
-  $("#protection-overview").innerHTML = `<div class="bp-coverage"><div class="bp-ring" style="--coverage:${pct}%" role="img" aria-label="${pct}% of VMs have an enabled schedule"><b>${pct}%</b></div><div><h2>Protection overview</h2><strong>${covered} / ${vms.length} VMs scheduled</strong><small>${vms.length - covered ? `${vms.length - covered} need a schedule` : vms.length ? "Every VM has an enabled schedule" : "No VMs yet"}</small><small>Schedule coverage · boot evidence is shown separately</small></div></div>
-    <div class="bp-stat"><small>Latest backup</small><b class="${jobs[0]?.state === "failed" ? "bp-alert" : ""}">${jobs[0] ? jobs[0].state === "done" ? "Successful" : "Failed" : "No runs yet"}</b><span>${esc(jobs[0] ? `${jobs[0].vm} · ${when(jobs[0].finished)}` : "Create a schedule to begin")}</span><small>Next run (browser time estimate)</small><span>${next ? esc(when(next.toISOString())) : "No enabled schedule"}</span></div>
-    <div class="bp-stat"><small>Restore point evidence${protection.errors.length ? " · partial" : ""}</small><div class="bp-counts"><span><b>${pts.filter(b=>b.verified === "passed").length}</b>verified</span><span><b>${pts.filter(b=>b.suspicious).length}</b>suspicious</span><span><b>${pts.filter(pointLocked).length}</b>immutable</span></div><span>${pts.length} restore points${protection.errors.length ? ` · unavailable: ${esc(protection.errors.join(", "))}` : " across repositories"}</span></div>
-    <div class="bp-stat"><small>Repository space</small><b>${known ? size(free) : "Unknown / partial"}</b><span>${known ? "free" : "Capacity unavailable for some targets"}</span><span>${size(used)} measured used</span></div>`;
+  const last = jobs[0], lastOk = last && last.state === "done";
+  const verified = pts.filter(b => b.verified === "passed").length, locked = pts.filter(pointLocked).length, alerts = pts.filter(b => b.suspicious).length;
+  const cap = used + (free || 0), usedPct = known && cap ? Math.round(used / cap * 100) : 0;
+  const icon = (d) => `<svg class="bp-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+  const tile = (cls, title, ico, body) => `<div class="bp-holo ${cls}"><i class="bp-corner"></i><small>${ico}${title}</small>${body}</div>`;
+  $("#protection-overview").innerHTML = [
+    tile(pct === 100 ? "ok" : "warn", "Protected VMs", icon("M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z"),
+      `<div class="bp-ring" style="--coverage:${pct}%" role="img" aria-label="${pct}% of VMs have an enabled schedule"><b>${pct}%</b></div><span>${covered} of ${vms.length} VMs</span>`),
+    tile(!last ? "idle" : lastOk ? "ok" : "bad", "Last backup", icon("M12 4a8 8 0 1 0 8 8M12 8v4l3 2"),
+      `<b class="bp-big">${!last ? "—" : lastOk ? "✓ OK" : "✕ Failed"}</b><span>${esc(last ? when(last.finished) : "No runs yet")}</span><span class="bp-dim">Next: ${next ? esc(when(next.toISOString())) : "not scheduled"}</span>`),
+    tile(alerts ? "bad" : "ok", "Recovery proof", icon("M4 12l5 5L20 6"),
+      `<div class="bp-trio"><span><b>${verified}</b>Boot tested</span><span><b>${locked}</b>Locked</span><span class="${alerts ? "bp-alert" : ""}"><b>${alerts}</b>Alerts</span></div><span class="bp-dim">${pts.length} restore points${protection.errors.length ? " · some repositories unavailable" : ""}</span>`),
+    tile(known ? "ok" : "idle", "Repository space", icon("M4 6h16v4H4zM4 14h16v4H4z"),
+      `<b class="bp-big">${known ? size(free) : "—"}</b><span>${known ? "free" : "Unknown"}</span><div class="bp-bar"><i style="width:${usedPct}%"></i></div>`),
+  ].join("");
   renderTargets();
 }
 function renderTargets() {
