@@ -7,6 +7,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from concurrent.futures import Executor, ThreadPoolExecutor
@@ -55,8 +56,15 @@ class Policy:
     archive_keep_weekly: int = 4
     archive_keep_monthly: int = 12
     archive_keep_yearly: int = 3
+    verify_after_backup: bool = False
+    verify_pool: str | None = None
+    verify_timeout: int = 300
 
     def validate(self) -> None:
+        if not 1 <= self.verify_timeout <= 3600:
+            raise ValueError("Verification timeout must be 1 through 3600 seconds")
+        if self.verify_after_backup and not self.verify_pool:
+            raise ValueError("Choose a pool for isolated boot verification")
         if self.mode not in ("incremental", "active_full"):
             raise ValueError("Unknown backup mode")
         for day in (self.full_weekday, self.synthetic_weekday, self.archive_weekday):
@@ -140,6 +148,7 @@ class BackupManager:
         self._ids = itertools.count(1)
         self._lock = threading.RLock()
         self._maintenance: dict[str, str] = {}
+        self._verify_lock = threading.Lock()
         # One backup or snapshot task at a time per VM: QEMU takes one state change at a time.
         self._vm_locks: dict[str, threading.Lock] = {}
         # A SAN LUN or USB disk holds an ordinary filesystem that only one node may mount
@@ -399,7 +408,40 @@ class BackupManager:
                         p.keep_monthly if p else 0,
                         p.keep_yearly if p else 0,
                     )
-                job.step, job.percent = "Complete", 100
+                if p and p.verify_after_backup:
+                    job.step = "Waiting for isolated boot verification"
+                    with self._verify_lock:
+                        verification = self._new_job(
+                            "verify", target.name, vm_name, member.name, policy
+                        )
+                        verification.state = "running"
+                        try:
+                            result = member.backups.verify(
+                                target, info.id, p.verify_pool, p.verify_timeout
+                            )
+                            job.report["verification"] = result
+                            job.report["verified"] = result["verified"]
+                            verification.report = result
+                            verification.state = {
+                                "passed": "done",
+                                "failed": "failed",
+                                "skipped": "skipped",
+                            }[result["verified"]]
+                            verification.error = (
+                                None if verification.state == "done" else result["reason"]
+                            )
+                            verification.result = info.id
+                        except Exception as exc:
+                            verification.state, verification.error = "failed", str(exc)
+                            job.report["verification"] = {"verified": "failed", "reason": str(exc)}
+                        finally:
+                            verification.finished = self._clock().isoformat()
+                job.step = (
+                    "Complete — suspicious data change; review restore point"
+                    if info.suspicious
+                    else "Complete"
+                )
+                job.percent = 100
                 with self._lock:
                     self._save()
             return info.id
@@ -445,7 +487,12 @@ class BackupManager:
                     if dest
                     else (member.backups.synthetic_full(target, backup_id))
                 )
-                job.step, job.percent = "Complete", 100
+                job.step = (
+                    "Complete — suspicious data change; review restore point"
+                    if info.suspicious
+                    else "Complete"
+                )
+                job.percent = 100
                 job.report = asdict(info)
                 return info.id
 
@@ -460,6 +507,8 @@ class BackupManager:
         node: str | None = None,
         pool: str | None = None,
         source_node: str | None = None,
+        *,
+        recovery: bool = False,
     ) -> Job:
         target = self.target(target_name)
         vm_name, _ = parse_id(backup_id)
@@ -475,11 +524,25 @@ class BackupManager:
             if not source_node:
                 raise ValueError("say which node holds this backup (source_node)")
             member = self._cluster.member(source_node)
-        job = self._new_job("restore", target_name, new_name, member.name, None)
+        job = self._new_job(
+            "recovery" if recovery else "restore", target_name, new_name, member.name, None
+        )
 
         def work() -> str:
             with self._using(target, wait=True):
-                return member.backups.restore(target, backup_id, name, pool).uuid
+                started = time.monotonic()
+                job.step = "Reconstructing deduplicated disks into pool"
+                vm = member.backups.restore(target, backup_id, name, pool)
+                if recovery:
+                    member.driver.start_vm(vm.uuid)
+                    job.report = {
+                        "recovery_mode": "full_restore_then_boot",
+                        "instant": False,
+                        "finalize_required": False,
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                        "reason": "Chunk repository requires full reconstruction before boot",
+                    }
+                return vm.uuid
 
         self._submit(job, work)
         return job
@@ -575,6 +638,30 @@ class BackupManager:
         if errors and not result:
             raise errors[0]
         return result
+
+    def usage(self, target_name):
+        target = self.target(target_name)
+        members = self._cluster.compute_members()
+        results = []
+        for member in members[:1] if target.shared else members:
+            try:
+                results.append({"node": member.name, **member.backups.usage(target)})
+            except (NodeUnavailable, TargetUnavailable, OSError) as exc:
+                results.append({"node": member.name, "error": str(exc)})
+        return results
+
+    def evidence(self, target_name, backup_id, node=None):
+        target = self.target(target_name)
+        if target.shared:
+            members = self._cluster.compute_members()
+            if not members:
+                raise NodeUnavailable("no compute node is available")
+            member = members[0]
+        else:
+            if not node:
+                raise ValueError("say which node holds this backup (node)")
+            member = self._cluster.member(node)
+        return member.backups.evidence(target, backup_id)
 
     def delete_backup(self, target_name: str, backup_id: str, node: str | None = None) -> None:
         target = self.target(target_name)

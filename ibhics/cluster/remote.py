@@ -437,6 +437,20 @@ class RemoteBackup:
         body = {"target": target.to_dict(), "backup_id": backup_id, "name": name, "pool": pool}
         return info_from_json(self._call("/backups/restore", body).json())
 
+    def verify(self, target, backup_id, pool, timeout=300):
+        return self._call(
+            "/backups/verify",
+            {"target": target.to_dict(), "backup_id": backup_id, "pool": pool, "timeout": timeout},
+        ).json()
+
+    def usage(self, target):
+        return self._call("/backups/usage", {"target": target.to_dict()}).json()
+
+    def evidence(self, target, backup_id):
+        return self._call(
+            "/backups/evidence", {"target": target.to_dict(), "backup_id": backup_id}
+        ).json()
+
     def delete(self, target: BackupTarget, backup_id: str) -> int:
         body = {"target": target.to_dict(), "backup_id": backup_id}
         return self._call("/backups/delete", body).json()["freed_chunks"]

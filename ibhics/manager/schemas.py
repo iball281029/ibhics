@@ -671,6 +671,7 @@ class BackupTargetIn(BaseModel):
     prefix: str = "ibhics"
     storage_class: Literal["STANDARD", "STANDARD_IA", "ONEZONE_IA", "GLACIER_IR"] = "STANDARD"
     compression: Literal["fast", "balanced", "maximum"] = "balanced"
+    immutability_days: int = Field(default=0, ge=0, le=36500)
     pool: str | None = Field(
         default=None, pattern=NAME_PATTERN, description="local: keep backups in this storage pool"
     )
@@ -709,7 +710,7 @@ class BackupTargetOut(BaseModel):
 
     @classmethod
     def from_target(cls, target: BackupTarget) -> BackupTargetOut:
-        fields = (*TARGET_FIELDS[target.type], "compression")
+        fields = (*TARGET_FIELDS[target.type], "compression", "immutability_days")
         settings = {k: v for k, v in target.public_dict().items() if k in fields and v}
         return cls(
             name=target.name,
@@ -736,6 +737,12 @@ class BackupOut(BaseModel):
     new_data_bytes: int = 0
     dedup_saved_bytes: int = 0
     compression: str = "legacy-zlib"
+    verified: Literal["passed", "failed", "skipped"] = "skipped"
+    verification: dict | None = None
+    immutable_until: str | None = None
+    lock_status: str = "none"
+    suspicious: bool = False
+    anomaly_reason: str = ""
     node: str | None = None  # set for local targets: the node that holds the backup
 
     @classmethod
@@ -783,6 +790,9 @@ class PolicyIn(BaseModel):
     archive_keep_weekly: int = Field(default=4, ge=0, le=520)
     archive_keep_monthly: int = Field(default=12, ge=0, le=120)
     archive_keep_yearly: int = Field(default=3, ge=0, le=100)
+    verify_after_backup: bool = False
+    verify_pool: str | None = Field(default=None, pattern=NAME_PATTERN)
+    verify_timeout: int = Field(default=300, ge=1, le=3600)
 
 
 class PolicyOut(PolicyIn):
@@ -832,6 +842,10 @@ class AgentRestore(BaseModel):
     backup_id: str
     name: str | None = Field(default=None, pattern=VM_NAME_PATTERN)
     pool: str | None = None
+
+
+class AgentVerify(AgentRestore):
+    timeout: int = Field(default=300, ge=1, le=3600)
 
 
 class AgentBackupDelete(BaseModel):

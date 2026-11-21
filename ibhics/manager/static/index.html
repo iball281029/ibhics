@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="network.css">
 <link rel="stylesheet" href="virtual-storage.css">
 <link rel="stylesheet" href="cluster.css">
+<link rel="stylesheet" href="backup.css">
 </head>
 <body class="command-workspace spatial-workspace">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -537,9 +538,11 @@
     </section>
 
     <section class="page" id="page-backup">
-      <div class="sheet">
-        <div class="page-head"><h1>Backup</h1><span class="sub">Incremental, deduplicated backups to local disk, NAS, SAN, USB or S3</span>
+      <div class="sheet bp-command">
+        <div class="page-head"><div><div class="bp-eyebrow">DATA PROTECTION / RECOVER WITH EVIDENCE</div><h1>Data protection</h1><span class="sub">Protect every VM. Know what you can recover.</span></div>
           <span class="spacer"></span><button class="primary operator-only" data-open="restore-dialog">Restore VM</button></div>
+        <section class="bp-overview" aria-label="Protection overview" id="protection-overview" aria-live="polite"><p>Loading protection overview…</p></section>
+        <div class="bp-features"><span>✓ Isolated boot verification</span><span>🔒 Retention locks + change alerts</span><span>↗ Recovery to storage pool <small>Full restore before boot</small></span></div>
         <div class="tabs" id="backup-tabs">
           <button data-tab="backups" class="active">Restore points</button>
           <button data-tab="policies">Schedules</button>
@@ -550,9 +553,10 @@
         <div class="subpage active" id="tab-backups">
           <div class="toolbar">
             <label style="display:flex;align-items:center;gap:8px">Repository <select id="browse-target" class="target-list" style="width:auto"></select></label>
-            <span class="spacer"></span><button id="refresh-backups">Refresh</button>
+            <span class="spacer"></span><div class="bp-views" role="group" aria-label="Restore point view"><button data-bp-view="timeline" aria-pressed="true">Timeline</button><button data-bp-view="list" aria-pressed="false">List</button></div><button id="refresh-backups">Refresh</button>
           </div>
-          <div class="table-wrap"><table>
+          <div class="bp-workspace"><div id="backup-timeline" class="bp-timeline"></div><aside id="backup-detail" class="bp-detail" aria-label="Restore point details" hidden></aside></div>
+          <div class="table-wrap" id="backup-list" hidden><table>
             <thead><tr><th>VM</th><th>Created</th><th>Node</th><th>Size</th><th>New data</th><th></th></tr></thead>
             <tbody id="backups"></tbody>
           </table></div>
@@ -566,17 +570,11 @@
         </div>
         <div class="subpage" id="tab-policies">
           <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="policy-dialog">+ New schedule</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Name</th><th>Target</th><th>When</th><th>VMs</th><th>Keep</th><th>Last run</th><th></th></tr></thead>
-            <tbody id="policies"></tbody>
-          </table></div>
+          <div id="policies" class="bp-cards"></div>
         </div>
         <div class="subpage" id="tab-targets">
           <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="target-dialog">+ Add repository</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Name</th><th>Type</th><th>Location</th><th>Connection</th><th></th></tr></thead>
-            <tbody id="targets"></tbody>
-          </table></div>
+          <div id="targets" class="bp-cards"></div>
         </div>
         <div class="subpage" id="tab-jobs">
           <div class="table-wrap" style="margin-top:8px"><table>
@@ -1323,6 +1321,7 @@
     <div class="body form-grid">
       <p class="hint wide" data-ctx="backupAfter">No backup repository yet: choose where backups are kept. "Storage pool" sets aside space in a pool you already have; a NAS (NFS / SMB) or S3 keeps them off the node. The backup starts as soon as the repository is added.</p>
       <label>Name <input name="name" required placeholder="nas-backup"></label>
+      <label>Immutability days <input name="immutability_days" type="number" min="0" max="36500" value="0"><small>0 = unlocked. Locked points cannot be deleted, even by admins. Native lock is checked after writing; unsupported targets use a soft lock.</small></label>
       <label>Type
         <select name="type" data-switch>
           <option value="pool">Storage pool (set aside space)</option>
@@ -1394,6 +1393,11 @@
           <label class="inline unit"><input name="keep_last" type="number" min="1" max="1000" value="7"> latest backups of each VM</label>
         </div>
         <p class="hint pol-keep" style="padding:0;margin-top:8px"></p>
+        <div class="bp-verify-options">
+          <label class="inline"><input type="checkbox" name="verify_after_backup"> Verify after backup</label>
+          <p class="hint">Boot a temporary VM with no network adapters. A guest agent ping proves it started. Runs on the backup node, one verification at a time.</p>
+          <div class="form-grid"><label>Verification pool <input name="verify_pool" placeholder="default"></label><label>Boot timeout (seconds) <input name="verify_timeout" type="number" min="1" max="3600" value="300"></label></div>
+        </div>
         <details class="backup-advanced"><summary>Backup method, full backups and long-term retention</summary>
           <div class="form-grid">
             <label>Backup method <select name="backup_mode"><option value="incremental">Incremental with CBT (full when needed)</option><option value="active_full">Active full every run</option></select></label>

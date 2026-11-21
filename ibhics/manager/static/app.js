@@ -66,12 +66,12 @@ const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + wi
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
-const JOB_STATE = { queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
+const JOB_STATE = { skipped: "Skipped", queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
 // Jobs that can be stopped from the Tasks page, and the API call that stops them.
 const CANCEL_PATH = { Import: (id) => `/migrate/jobs/${enc(id)}/cancel`, "Live migration": (id) => `/migrations/${enc(id)}/cancel`, Move: (id) => `/migrations/${enc(id)}/cancel` };
 const isAdmin = () => !state.me || state.me.role === "admin";
 const canOperate = () => !state.me || state.me.role !== "viewer";
-const JOB_KINDS = { synthetic_full: "Synthetic full", backup_copy: "Backup copy", archive: "Archive", backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
+const JOB_KINDS = { verify: "Boot verification", recovery: "Recovery", synthetic_full: "Synthetic full", backup_copy: "Backup copy", archive: "Archive", backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
@@ -834,7 +834,7 @@ async function refresh(page, auto = false) {
   if (page === "network") { await load("vms", "networks", "edge", "groups", "guests", "stats"); renderNetworks(); renderEdge(); await renderTopology(); window.Network3D?.update(); }
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
-  if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
+  if (page === "backup") { await load("vms", "targets", "policies", "jobs"); fillSelects(); renderPolicies(); renderJobs(); await protectionOverview(); await renderBackups(); await renderAllSnapshots(); }
   if (page === "migrate") { await load("sources", "imports", "replications", "pools"); fillSelects(); renderSources(); renderImports(); renderReplications(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
@@ -4322,55 +4322,110 @@ const binNote = () => (state.recycle.days ? ` It goes to the recycle bin for ${s
 
 // ---------- backup ----------
 
+const protection = { points: [], usage: new Map(), errors: [], view: "timeline", selected: null, request: 0 };
+const pointLocked = b => b.immutable_until && new Date(b.immutable_until) > new Date();
+function protectionBadges(b) {
+  return `<div class="bp-badges"><span class="badge ${b.verified === "passed" ? "done" : b.verified === "failed" ? "failed" : "plain"}">${b.verified === "passed" ? "✓ Boot verified" : b.verified === "failed" ? "Boot check failed" : "Boot not verified"}</span>${pointLocked(b) ? `<span class="badge waiting" title="${esc(when(b.immutable_until))}">🔒 Immutable · ${esc(b.lock_status === "native" ? "native" : "soft lock")}</span>` : ""}${b.suspicious ? `<span class="badge failed" title="${esc(b.anomaly_reason)}">⚠ Suspicious changes</span>` : ""}</div>`;
+}
+function protectionNext(p) {
+  if (!p.enabled) return null;
+  const now = new Date();
+  if (p.every_hours) return p.last_run ? new Date(Math.max(+now, +new Date(p.last_run) + p.every_hours * 3600000)) : now;
+  const next = new Date(), [h, m] = p.at.split(":").map(Number);
+  next.setHours(h, m, 0, 0);
+  if (+next < +now) next.setDate(next.getDate() + 1);
+  return next;
+}
+function protectionFreeSpace(usage) {
+  const scopes = new Map();
+  for (const u of usage) {
+    const key = `${u.node}/${u.capacity_scope}`;
+    const group = scopes.get(key) || {physical:Infinity, quota:0, unbounded:false};
+    group.physical = Math.min(group.physical, u.filesystem_free_bytes ?? u.free_bytes ?? 0);
+    group.quota += u.free_bytes || 0;
+    group.unbounded ||= !u.quota_bytes;
+    scopes.set(key, group);
+  }
+  return [...scopes.values()].reduce((sum,g)=>sum+Math.min(g.physical,g.unbounded ? Infinity : g.quota),0);
+}
+async function protectionOverview() {
+  const rows = await Promise.all(state.targets.map(async t => {
+    const [points, usage] = await Promise.allSettled([api(`/backup/targets/${enc(t.name)}/backups`), api(`/backup/targets/${enc(t.name)}/usage`)]);
+    return { t, points, usage };
+  }));
+  protection.points = rows.flatMap(r => r.points.status === "fulfilled" ? r.points.value.map(b => ({...b, target:r.t.name})) : []);
+  protection.usage = new Map(rows.map(r => [r.t.name, r.usage.status === "fulfilled" ? r.usage.value : [{error:r.usage.reason.message}]]));
+  protection.errors = rows.filter(r => r.points.status === "rejected").map(r => r.t.name);
+  const vms = state.vms.filter(v => !v.recycled && !v.template), policies = state.policies.filter(p => p.enabled);
+  const covered = vms.filter(v => policies.some(p => !p.vms.length || p.vms.includes(v.name))).length;
+  const pct = vms.length ? Math.round(covered / vms.length * 100) : 0;
+  const jobs = state.jobs.filter(j => j.kind === "backup" && ["done", "failed"].includes(j.state)).sort((a,b) => String(b.finished).localeCompare(String(a.finished)));
+  const next = policies.map(protectionNext).filter(Boolean).sort((a,b) => a-b)[0];
+  const usage = [...protection.usage.values()].flat(), used = usage.reduce((n,u) => n + (u.used_bytes || 0), 0), free = protectionFreeSpace(usage);
+  const known = usage.length && usage.every(u => u.used_bytes != null && u.free_bytes != null && !u.error);
+  const pts = protection.points;
+  $("#protection-overview").innerHTML = `<div class="bp-coverage"><div class="bp-ring" style="--coverage:${pct}%" role="img" aria-label="${pct}% of VMs have an enabled schedule"><b>${pct}%</b></div><div><h2>Protection overview</h2><strong>${covered} / ${vms.length} VMs scheduled</strong><small>${vms.length - covered ? `${vms.length - covered} need a schedule` : vms.length ? "Every VM has an enabled schedule" : "No VMs yet"}</small><small>Schedule coverage · boot evidence is shown separately</small></div></div>
+    <div class="bp-stat"><small>Latest backup</small><b class="${jobs[0]?.state === "failed" ? "bp-alert" : ""}">${jobs[0] ? jobs[0].state === "done" ? "Successful" : "Failed" : "No runs yet"}</b><span>${esc(jobs[0] ? `${jobs[0].vm} · ${when(jobs[0].finished)}` : "Create a schedule to begin")}</span><small>Next run (browser time estimate)</small><span>${next ? esc(when(next.toISOString())) : "No enabled schedule"}</span></div>
+    <div class="bp-stat"><small>Restore point evidence${protection.errors.length ? " · partial" : ""}</small><div class="bp-counts"><span><b>${pts.filter(b=>b.verified === "passed").length}</b>verified</span><span><b>${pts.filter(b=>b.suspicious).length}</b>suspicious</span><span><b>${pts.filter(pointLocked).length}</b>immutable</span></div><span>${pts.length} restore points${protection.errors.length ? ` · unavailable: ${esc(protection.errors.join(", "))}` : " across repositories"}</span></div>
+    <div class="bp-stat"><small>Repository space</small><b>${known ? size(free) : "Unknown / partial"}</b><span>${known ? "free" : "Capacity unavailable for some targets"}</span><span>${size(used)} measured used</span></div>`;
+  renderTargets();
+}
 function renderTargets() {
-  const admin = isAdmin();
-  $("#targets").innerHTML = state.targets.length ? state.targets.map((t) => `<tr>
-    <td><div class="name-cell">${avatar("i-backup")}<span class="vm-name">${esc(t.name)}</span></div></td>
-    <td><span class="badge info plain">${esc(TARGET_TYPES[t.type] || t.type)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${esc(t.source)}</td>
-    <td>${t.on_demand ? '<span class="badge waiting">Attached only during jobs</span>' : '<span class="badge online">Always available</span>'}</td>
-    <td><div class="actions">${admin ? `<button class="small danger" data-target="${esc(t.name)}">Remove</button>` : ""}</div></td>
-  </tr>`).join("") : empty(5, "No backup repositories. Add one to start protecting VMs.");
+  $("#targets").innerHTML = state.targets.map(t => {
+    const usage = protection.usage.get(t.name) || [], known = usage.length && usage.every(u => u.used_bytes != null && u.free_bytes != null && !u.error);
+    const used = usage.reduce((n,u)=>n+(u.used_bytes||0),0), free = usage.reduce((n,u)=>n+(u.free_bytes||0),0), pct = used+free ? Math.round(used/(used+free)*100) : 0;
+    return `<article class="bp-card"><div class="bp-card-head"><h3>${esc(t.name)}</h3><span class="badge info">${esc(TARGET_TYPES[t.type] || t.type)}</span></div><p>${esc(t.source)}</p><div class="bp-meter"><span style="width:${known ? pct : 0}%"></span></div><p>${known ? `${size(used)} used · ${size(free)} free` : "Capacity unavailable"}</p><p>🔒 ${t.settings.immutability_days || 0} days immutability</p><small>${t.settings.immutability_days ? "Native lock checked per point; soft lock warning appears on unsupported storage." : "New points are not locked."}</small><p class="${usage.some(u=>u.error) ? "bp-alert" : ""}">${esc(usage.find(u=>u.error)?.error || (t.on_demand ? "Attached during jobs" : "Always attached"))}</p><div class="actions">${isAdmin() ? `<button class="small danger" data-target="${esc(t.name)}">Remove</button>` : ""}</div></article>`;
+  }).join("") || `<p class="hint">Add a repository to start protecting VMs.</p>`;
+}
+function renderProtectionTimeline(backups) {
+  const groups = new Map();
+  backups.forEach(b => { if (!groups.has(b.vm_uuid)) groups.set(b.vm_uuid, []); groups.get(b.vm_uuid).push(b); });
+  $("#backup-timeline").innerHTML = [...groups.values()].map(points => `<article class="bp-lane"><div class="bp-card-head"><h3>${esc(points[0].vm_name)}</h3><small>${points.length} restore points</small></div><div class="bp-track">${points.map(b=>`<button class="bp-point ${b.suspicious ? "suspicious" : b.verified === "passed" ? "verified" : ""}" data-bp-point="${esc(b.id)}" data-node="${esc(b.node || "")}" aria-label="${esc(`${b.vm_name}, ${when(b.created)}, ${b.verified}, ${pointLocked(b) ? "immutable" : "unlocked"}, ${b.suspicious ? "suspicious" : "no anomaly flag"}`)}"><span class="bp-orb">${b.suspicious ? "⚠" : b.verified === "passed" ? "✓" : "●"}</span><time>${esc(when(b.created))}</time><small>${pointLocked(b) ? "🔒 " : ""}${esc(b.node || "shared")} · ${size(b.size_bytes)}</small></button>`).join("")}</div></article>`).join("") || `<p class="hint">No restore points on this repository yet.</p>`;
+}
+function protectionDetail(b) {
+  protection.selected = b;
+  const el = $("#backup-detail"); el.hidden = false;
+  el.innerHTML = `<div class="bp-card-head"><h3>${esc(b.vm_name)}</h3><button data-bp-close aria-label="Close restore point details">×</button></div><p>${esc(when(b.created))}</p>${protectionBadges(b)}<dl><dt>Logical size</dt><dd>${size(b.size_bytes)}</dd><dt>New stored data</dt><dd>${size(b.stored_bytes)}</dd><dt>Verification</dt><dd>${esc(b.verification?.reason || "No boot verification has run")}</dd>${b.verification?.screenshot_error ? `<dt>Screenshot</dt><dd>${esc(b.verification.screenshot_error)}</dd>` : ""}<dt>Locked until</dt><dd>${esc(when(b.immutable_until))}</dd><dt>Change analysis</dt><dd>${esc(b.anomaly_reason || "No anomaly flag. This does not prove the data is safe.")}</dd></dl>${pointLocked(b) && b.lock_status !== "native" ? '<p class="bp-alert">Soft lock: API deletion is blocked. Host root and storage administrators can still alter data.</p>' : ""}<div class="actions">${canOperate() ? `<button class="primary" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button><button data-bp-recover>Recover &amp; power on</button>` : ""}${b.verification?.screenshot_path ? '<button data-bp-evidence>View boot screenshot</button>' : ""}</div><p class="hint">Instant recovery is unavailable for dedup chunks. Recovery reconstructs all disks into the pool, then powers on. Actual duration appears in Jobs. No live finalize is needed.</p><div id="bp-evidence"></div>`;
 }
 
 async function renderBackups() {
   const target = $("#browse-target").value || state.targets[0]?.name;
   const tbody = $("#backups");
-  if (!target) { tbody.innerHTML = empty(6, "Add a backup repository first"); return; }
+  if (!target) { tbody.innerHTML = empty(6, "Add a backup repository first"); $("#backup-timeline").textContent = "Add a backup repository first"; $("#backup-detail").hidden = true; return; }
   const op = canOperate(), admin = isAdmin();
+  const request = ++protection.request;
   try {
     const backups = await api(`/backup/targets/${enc(target)}/backups`);
+    if (request !== protection.request) return;
+    protection.current = backups;
+    renderProtectionTimeline(backups);
     tbody.innerHTML = backups.length ? backups.slice().reverse().map((b) => `<tr>
       <td class="vm-name">${esc(b.vm_name)}<span class="backup-kind" title="${esc(b.note || "")}">${esc(({full:"Full",incremental:"Incremental (CBT)",synthetic_full:"Synthetic full",copy:"Backup copy",archive:"Archive"})[b.kind] || "Full")}</span></td>
-      <td>${esc(when(b.created))}</td>
+      <td><button class="small" data-bp-point="${esc(b.id)}" data-node="${esc(b.node || "")}">${esc(when(b.created))}</button>${protectionBadges(b)}</td>
       <td>${esc(b.node || "shared")}</td>
       <td>${size(b.size_bytes)}</td>
       <td>${size(b.stored_bytes)}</td>
       <td><div class="actions">
         ${op ? `<button class="small" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button>` : ""}
         ${op ? `<button class="small" data-backup-op="${esc(b.id)}" data-node="${esc(b.node || "")}">Synthetic / Copy</button>` : ""}
-        ${admin ? `<button class="small danger" data-backup-del="${esc(b.id)}" data-node="${esc(b.node || "")}">Delete</button>` : ""}
+        ${admin ? `<button ${pointLocked(b) ? 'disabled title="Immutable points cannot be deleted during retention"' : ""} class="small danger" data-backup-del="${esc(b.id)}" data-node="${esc(b.node || "")}">Delete</button>` : ""}
       </div></td>
     </tr>`).join("") : empty(6, "No restore points on this target yet");
   } catch (err) {
+    if (request !== protection.request) return;
+    $("#backup-detail").hidden = true;
+    protection.current = [];
     tbody.innerHTML = empty(6, err.message);
+    $("#backup-timeline").textContent = err.message;
   }
 }
 
 function renderPolicies() {
-  const admin = isAdmin(), op = canOperate();
-  $("#policies").innerHTML = state.policies.length ? state.policies.map((p) => `<tr>
-    <td class="vm-name">${esc(p.name)}${p.enabled ? "" : ' <span class="badge plain">Disabled</span>'}</td>
-    <td>${esc(p.target)}</td>
-    <td>${p.at ? `Daily at ${esc(p.at)}` : `Every ${p.every_hours} h`}</td>
-    <td>${p.vms.length ? esc(p.vms.join(", ")) : "All VMs"}</td>
-    <td>${p.keep_last}</td>
-    <td>${esc(when(p.last_run))}</td>
-    <td><div class="actions">
-      ${op ? `<button class="small" data-policy-run="${esc(p.name)}">Run now</button>` : ""}
-      ${admin ? `<button class="small" data-policy-edit="${esc(p.name)}">Edit</button><button class="small danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}
-    </div></td>
-  </tr>`).join("") : empty(7, "No schedules yet");
+  $("#policies").innerHTML = state.policies.map(p => {
+    const jobs = state.jobs.filter(j => j.policy === p.name && j.kind === "backup").sort((a,b)=>String(a.created).localeCompare(String(b.created))).slice(-14);
+    const dots = Array.from({length:14-jobs.length},()=>'<span class="bp-history-dot empty" title="No recorded run" aria-label="No recorded run"></span>').join("") + jobs.map(j => `<span class="bp-history-dot ${esc(j.state)}" title="${esc(`${j.vm} · ${when(j.created)} · ${j.state}${j.error ? ` · ${j.error}` : ""}`)}" aria-label="${esc(`${j.vm}: ${j.state}`)}">${j.report?.verification?.verified === "passed" ? "✓" : ""}</span>`).join("");
+    return `<article class="bp-card"><div class="bp-card-head"><h3>${esc(p.name)}</h3><span class="badge ${p.enabled ? "online" : "plain"}">${p.enabled ? "Enabled" : "Disabled"}</span></div><p class="bp-schedule-time">${p.at ? `Daily · ${esc(p.at)}` : `Every ${p.every_hours} hours`}</p><p>${p.vms.length ? esc(p.vms.join(", ")) : "Every VM, including new ones"}</p><small>${esc(p.target)} · Keep ${p.keep_last} recent + GFS</small><div class="bp-history" aria-label="Last 14 VM backup jobs">${dots}</div><small>Last 14 VM runs · green success / red failed / grey no run</small><p>${p.verify_after_backup ? `✓ Verify after backup · ${esc(p.verify_pool)} · ${p.verify_timeout}s` : "Boot verification is off"}</p><div class="actions">${canOperate() ? `<button data-policy-run="${esc(p.name)}">Run now</button>` : ""}${isAdmin() ? `<button data-policy-edit="${esc(p.name)}">Edit</button><button class="danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}</div></article>`;
+  }).join("") || `<p class="hint">No schedules yet. Create one to protect VMs automatically.</p>`;
 }
 
 function renderJobs() {
@@ -4382,12 +4437,39 @@ function renderJobs() {
     <td>${esc(j.node || "")}</td>
     <td>${esc(when(j.created))}</td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.error || j.result || "")}</td>
+    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.error || j.step || j.result || "")}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
   </tr>`).join("") : empty(7, "No jobs yet");
 }
 
-$("#browse-target").addEventListener("change", () => renderBackups());
-$("#refresh-backups").addEventListener("click", () => renderBackups());
+$("#browse-target").addEventListener("change", () => { protection.selected = null; $("#backup-detail").hidden = true; renderBackups(); });
+$("#refresh-backups").addEventListener("click", async () => { await protectionOverview(); await renderBackups(); });
+
+$("#page-backup").addEventListener("click", async e => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  const d = btn.dataset;
+  if (d.bpView) {
+    protection.view = d.bpView;
+    $("#backup-list").hidden = d.bpView !== "list";
+    $("#backup-timeline").hidden = d.bpView !== "timeline";
+    $$('[data-bp-view]').forEach(b=>b.setAttribute("aria-pressed",String(b === btn)));
+  }
+  if (d.bpClose != null) $("#backup-detail").hidden = true;
+  if (d.bpPoint) { const b = protection.current?.find(p=>p.id === d.bpPoint && (p.node || "") === (d.node || "")); if (b) protectionDetail(b); }
+  if (d.bpRecover != null && protection.selected) {
+    const b = protection.selected;
+    openDialog("restore-dialog", {target:$("#browse-target").value, id:b.id, sourceNode:b.node, recovery:true}, {name:`${b.vm_name}-recovery`});
+    toast("Recovery will fully restore disks, then power on with the saved network configuration.");
+  }
+  if (d.bpEvidence != null && protection.selected) {
+    try {
+      const b = protection.selected, target = $("#browse-target").value;
+      const data = await api(`/backup/targets/${enc(target)}/backups/${enc(b.id)}/evidence${b.node ? `?node=${enc(b.node)}` : ""}`);
+      if (protection.selected !== b) return;
+      if (data.mime === "image/png") $("#bp-evidence").innerHTML = `<img alt="Console captured during isolated boot verification" src="data:image/png;base64,${esc(data.data)}">`;
+      else $("#bp-evidence").innerHTML = `<a download="boot-console.ppm" href="data:image/x-portable-pixmap;base64,${esc(data.data)}">Download console screenshot (PPM)</a>`;
+    } catch (err) { fail(err); }
+  }
+});
 
 $("#page-backup").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-target], button[data-policy-run], button[data-policy-edit], button[data-policy-del], button[data-restore], button[data-backup-del], button[data-backup-op]");
@@ -4431,7 +4513,7 @@ handlers["target-dialog"] = async (f, ctx) => {
     pool: [], local: ["path"], nfs: ["host", "export"], smb: ["host", "share", "username", "password"],
     usb: ["device"], iscsi: ["host", "iqn"], fc: ["device"], s3: ["endpoint", "bucket", "access_key", "secret_key", "storage_class"],
   };
-  const body = { name: f.get("name"), type: f.get("type"), compression: f.get("compression") || "balanced" };
+  const body = { name: f.get("name"), type: f.get("type"), compression: f.get("compression") || "balanced", immutability_days: Number(f.get("immutability_days")) };
   for (const key of FIELDS[body.type]) if (f.get(key)) body[key] = f.get(key);
   if (body.type === "pool") Object.assign(body, { type: "local", pool: f.get("pool"), quota_gb: Number(f.get("quota_gb")) });
   if (body.type === "iscsi") body.lun = Number(f.get("lun"));
@@ -4509,6 +4591,9 @@ const policyWiz = wizard("policy-dialog", {
         if (policy[key] != null) f[key].value = policy[key];
       }
       f.enabled.checked = policy.enabled;
+      f.verify_after_backup.checked = policy.verify_after_backup;
+      f.verify_pool.value = policy.verify_pool || "";
+      f.verify_timeout.value = policy.verify_timeout || 300;
     }
     syncPresets(polForm);
     polSchedule();
@@ -4521,6 +4606,7 @@ const policyWiz = wizard("policy-dialog", {
     if (step === 2) {
       if (f.mode.value === "at" && !/^\d\d:\d\d$/.test(f.at.value)) throw new Error("Pick a time of day.");
       if (f.mode.value === "every" && !(Number(f.every_hours.value) >= 1 && Number(f.every_hours.value) <= 168)) throw new Error("Hours must be 1 to 168.");
+      if (f.verify_after_backup.checked && !f.verify_pool.value.trim()) throw new Error("Choose a pool on the backup node for isolated verification.");
       if (!(Number(f.keep_last.value) >= 1)) throw new Error("Keep at least 1 backup.");
     }
     if (step === 3) {
@@ -4558,6 +4644,7 @@ const policyWiz = wizard("policy-dialog", {
       const rows = [["VMs", vms], ["Status", f.enabled.checked ? "Enabled" : "Disabled"], ["When", esc(polText())], ["Keep", `${esc(f.keep_last.value)} latest of each VM`],
         ["Target", esc($('input[name="target"]:checked', polForm)?.value || "")],
         ["Method", f.backup_mode.value === "active_full" ? "Active full" : "Incremental with safe full fallback"],
+        ["Boot verification", f.verify_after_backup.checked ? `Isolated boot on ${esc(f.verify_pool.value)} · ${esc(f.verify_timeout.value)} seconds` : "Disabled"],
         ["Synthetic full", f.synthetic_weekday.selectedOptions[0].textContent],
         ["Long-term", `${esc(f.keep_weekly.value)} weekly / ${esc(f.keep_monthly.value)} monthly / ${esc(f.keep_yearly.value)} yearly`],
         ["Secondary copy", esc(f.copy_target.value || "Disabled")], ["Archive", esc(f.archive_target.value || "Disabled")]];
@@ -4590,6 +4677,9 @@ handlers["policy-dialog"] = async (f, ctx) => {
     vms: polScope() === "all" ? [] : [...polWiz.picked],
     keep_last: Number(f.get("keep_last")),
   };
+  body.verify_after_backup = f.get("verify_after_backup") === "on";
+  body.verify_pool = f.get("verify_pool") || null;
+  body.verify_timeout = Number(f.get("verify_timeout"));
   body.mode = f.get("backup_mode");
   for (const key of ["full_weekday", "synthetic_weekday"]) body[key] = f.get(key) === "" ? null : Number(f.get(key));
   for (const key of ["keep_weekly", "keep_monthly", "keep_yearly", "copy_keep_last", "archive_weekday", "archive_keep_weekly", "archive_keep_monthly", "archive_keep_yearly"]) body[key] = Number(f.get(key));
@@ -4609,7 +4699,7 @@ handlers["policy-dialog"] = async (f, ctx) => {
 // its own name (only when the original is gone). Restore buttons on a restore point
 // open it at the last step with that point chosen.
 const rsForm = $("#restore-form");
-const rs = { points: [], vm: null, point: null, nameTouched: false };
+const rs = { points: [], vm: null, point: null, nameTouched: false, recovery: false };
 const rsKey = (p) => `${p.target}/${p.id}`;
 function rsVmGone(name) { return !state.vms.some((v) => v.name === name); }
 async function rsLoad() {
@@ -4655,17 +4745,20 @@ function rsAs() {
   }
   const rows = [["VM", esc(rs.vm)], ["Restore point", `${esc(when(rs.point.created))} on ${esc(rs.point.target)}`],
     ["Restore as", esc(f.name.value)], ["Node", esc(f.node.value || "Automatic")], ["Storage", esc(f.pool.value || "Same as the original VM")]];
+  if (rs.recovery) rows.push(["Recovery method", "Full disk restore before power on. Saved network adapters are connected. Actual duration is recorded in Jobs."]);
   $(".wiz-summary", rsForm).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
 const restoreWiz = wizard("restore-dialog", {
   reset() {
     const ctx = dialogContext || {};
-    Object.assign(rs, { vm: null, point: null, nameTouched: false });
+    Object.assign(rs, { vm: null, point: null, nameTouched: false, recovery: Boolean(ctx.recovery) });
+    $("#restore-dialog header h3").textContent = rs.recovery ? "Recover and power on" : "Restore VM";
+    $(".wiz-ok", rsForm).textContent = rs.recovery ? "Recover and power on" : "Restore";
     $(".rs-search", rsForm).value = "";
     $(".rs-vms", rsForm).innerHTML = empty(5, "Looking for restore points...");
     Promise.all([load("vms", "targets"), rsLoad()]).then(() => {
       if (ctx.id) {
-        const p = rs.points.find((x) => x.id === ctx.id && (!ctx.target || x.target === ctx.target));
+        const p = rs.points.find((x) => x.id === ctx.id && (!ctx.target || x.target === ctx.target) && (!ctx.sourceNode || x.node === ctx.sourceNode));
         if (p) { rs.vm = p.vm_name; rs.point = p; restoreWiz.go(3); return; }
       }
       rsRenderVms();
@@ -4705,11 +4798,11 @@ const restoreWiz = wizard("restore-dialog", {
   rsForm.elements.name.addEventListener("input", () => { rs.nameTouched = true; rsAs(); });
 }
 
-handlers["restore-dialog"] = async (f) => {
+handlers["restore-dialog"] = async (f, ctx) => {
   restoreWiz.check(3);
   const p = rs.point;
   const body = { name: f.get("name") || null, node: f.get("node") || null, pool: f.get("pool") || null, source_node: p.node || null };
-  await post(`/backup/targets/${enc(p.target)}/backups/${enc(p.id)}/restore`, body);
+  await post(`/backup/targets/${enc(p.target)}/backups/${enc(p.id)}/${ctx?.recovery ? "recover" : "restore"}`, body);
   toast(`Restoring ${body.name}. Progress is under Backup → Jobs.`);
   await refresh(currentPage());
 };
