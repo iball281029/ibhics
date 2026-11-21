@@ -12,6 +12,7 @@ from ..importer.resize import resize_image
 from ..importer.sources import SourceType
 from .bitmap import KVMPullProvider
 from .cbt import ESXiCBTProvider
+from .nutanix import NutanixSnapshotProvider
 from .store import ReplicaStore, durable_json, operation_lock
 
 
@@ -43,7 +44,13 @@ class LocalRuntime:
         return ReplicaStore(roots[0].parent / "metadata", roots)
 
     def sync(self, job, source, vm, progress):
-        provider = ESXiCBTProvider if source.type == SourceType.VMWARE else KVMPullProvider
+        provider = {
+            SourceType.VMWARE: ESXiCBTProvider,
+            SourceType.KVM: KVMPullProvider,
+            SourceType.NUTANIX: NutanixSnapshotProvider,
+        }.get(source.type)
+        if provider is None:
+            raise ValueError("No replication provider for this source")
         return self.store(job).sync(provider(source, vm), progress)
 
     def ownership(self, job):

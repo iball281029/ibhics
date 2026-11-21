@@ -8,6 +8,7 @@ deleted again, also when the copy fails. Nothing else on the cluster changes.
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -68,12 +69,20 @@ class Prism:
                 raise NutanixError("Prism did not finish the disk export in time")
             self._sleep(3)
 
-    def export_disk(self, disk_uuid: str, target: Path, progress=None) -> Path:
+    def export_disk(
+        self,
+        disk_uuid: str,
+        target: Path,
+        progress=None,
+        *,
+        prefix=TEMP_PREFIX,
+        strict_cleanup=False,
+    ) -> Path:
         """Download one VM disk to `target` through a temporary image."""
         body = {
             "metadata": {"kind": "image"},
             "spec": {
-                "name": TEMP_PREFIX + disk_uuid[:13],
+                "name": prefix + disk_uuid[:13],
                 "description": "Temporary copy for an ibHiCS import; deleted afterwards",
                 "resources": {
                     "image_type": "DISK_IMAGE",
@@ -81,14 +90,19 @@ class Prism:
                 },
             },
         }
-        created = self._call("POST", "/images", json=body)
-        image = created.get("metadata", {}).get("uuid", "")
-        task = created.get("status", {}).get("execution_context", {}).get("task_uuid")
-        if not image:
-            raise NutanixError("Prism did not return the temporary image")
+        image = str(uuid.uuid4()) if strict_cleanup else ""
+        if strict_cleanup:
+            # Know the cleanup identity even if the create request times out.
+            body["metadata"]["uuid"] = image
         try:
-            if task:
-                self.wait(task)
+            created = self._call("POST", "/images", json=body)
+            returned = created.get("metadata", {}).get("uuid", "")
+            if strict_cleanup and returned != image:
+                raise NutanixError("Prism did not honor the temporary image UUID")
+            image = returned or image
+            if not image:
+                raise NutanixError("Prism did not return the temporary image")
+            self.wait_operation(created)
             with self._http.stream("GET", f"{API}/images/{image}/file") as resp:
                 if resp.status_code >= 400:
                     raise NutanixError(f"Prism refused the image download ({resp.status_code})")
@@ -103,9 +117,51 @@ class Prism:
             return target
         finally:
             try:
-                self._call("DELETE", f"/images/{image}")
+                if image:
+                    if strict_cleanup:
+                        self.delete_temporary("images", image)
+                    else:
+                        self._call("DELETE", f"/images/{image}")
             except Exception:
+                if strict_cleanup:
+                    raise NutanixError("Temporary replication image cleanup failed") from None
                 pass  # left as ibhics-export-…; the operator can delete it in Prism
+
+    def delete_temporary(self, kind: str, identity: str) -> None:
+        """404 is clean after a partial create; wait for asynchronous deletion."""
+        response = self._http.request("DELETE", f"{API}/{kind}/{identity}")
+        if response.status_code == 404:
+            return
+        if response.status_code >= 400:
+            raise NutanixError("Prism refused temporary entity cleanup")
+        self.wait_operation(response.json() if response.content else {})
+        deadline = time.monotonic() + 300
+        while True:
+            result = self._http.request("GET", f"{API}/{kind}/{identity}")
+            if result.status_code == 404:
+                return
+            if result.status_code >= 400 or time.monotonic() > deadline:
+                raise NutanixError("Prism did not confirm temporary entity deletion")
+            self._sleep(3)
+
+    def wait_entity(self, kind: str, identity: str, timeout_s=3600) -> dict:
+        """Some snapshot intents have no task reference; poll their entity state."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            entity = self._call("GET", f"/{kind}/{identity}")
+            state = entity.get("status", {}).get("state")
+            if state == "COMPLETE":
+                return entity
+            if state in ("ERROR", "FAILED") or time.monotonic() > deadline:
+                raise NutanixError("Prism temporary entity did not become ready")
+            self._sleep(3)
+
+    def wait_operation(self, response: dict) -> None:
+        """Wait for v3 intent responses (task UUID may be a scalar or list)."""
+        tasks = response.get("status", {}).get("execution_context", {}).get("task_uuid")
+        tasks = tasks or response.get("task_uuid") or []
+        for task in tasks if isinstance(tasks, list) else [tasks]:
+            self.wait(task)
 
 
 def parse_vm(entity: dict) -> SourceVM:

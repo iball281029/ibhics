@@ -444,9 +444,9 @@ def create_app(
 
     # P2V agent uploads: no console session, the session's one-time token instead.
 
-    def p2v_session(sid: str, token: str):
+    def p2v_session(sid: str, token: str, *, replicate=False):
         try:
-            return p2v.authorize(sid, token)
+            return p2v.authorize(sid, token, replicate=replicate)
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from None
 
@@ -489,6 +489,36 @@ def create_app(
             return p2v.finish(p2v_session(sid, x_p2v_token)).public()
         except P2VError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    @public.post("/p2v/upload/{sid}/delta/begin")
+    def p2v_delta_begin(sid: str, body: dict, x_p2v_token: str = Header(default="")):
+        try:
+            return p2v.delta_begin(p2v_session(sid, x_p2v_token, replicate=True), body)
+        except P2VError as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @public.put("/p2v/upload/{sid}/delta/{round_id}/disks/{index}/chunks/{chunk}")
+    async def p2v_delta_chunk(sid: str, round_id: str, index: int, chunk: int, request: Request):
+        from ..replication.store import CHUNK
+
+        session = p2v_session(sid, request.headers.get("x-p2v-token", ""), replicate=True)
+        data = bytearray()
+        async for part in request.stream():
+            if len(data) + len(part) > CHUNK:
+                raise HTTPException(413, "chunk exceeds 4 MiB")
+            data.extend(part)
+        try:
+            await asyncio.to_thread(p2v.delta_chunk, session, round_id, index, chunk, data)
+        except P2VError as exc:
+            raise HTTPException(422, str(exc)) from None
+        return {"bytes": len(data)}
+
+    @public.post("/p2v/upload/{sid}/delta/{round_id}/commit")
+    def p2v_delta_commit(sid: str, round_id: str, x_p2v_token: str = Header(default="")):
+        try:
+            return p2v.delta_commit(p2v_session(sid, x_p2v_token, replicate=True), round_id)
+        except P2VError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     @public.get("/health")
     def health() -> dict:

@@ -283,11 +283,21 @@ def test_invalid_schedule(schedule):
 @pytest.mark.parametrize("kind", list(SourceType))
 def test_capabilities_are_explicit(kind):
     cap = capability(Source("src", kind))
-    assert cap["change_tracking"] in {"cbt", "dirty-bitmap", "crt", "rct", "hash-delta", "full"}
+    assert cap["change_tracking"] in {
+        "cbt",
+        "dirty-bitmap",
+        "crt",
+        "rct",
+        "hash-delta",
+        "full",
+        "full-diff",
+    }
     assert isinstance(cap["live"], bool)
     if kind in {SourceType.DISK, SourceType.OVA, SourceType.UPLOAD, SourceType.P2V}:
         assert not cap["supported"] and not cap["live"]
-    if kind in {SourceType.NUTANIX, SourceType.SANGFOR}:
+    if kind == SourceType.NUTANIX:
+        assert cap["change_tracking"] == "full-diff" and cap["supported"]
+    if kind == SourceType.SANGFOR:
         assert cap["change_tracking"] == "full" and not cap["supported"]
 
 

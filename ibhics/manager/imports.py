@@ -370,6 +370,7 @@ class ImportManager:
             if job.state == "cancelled":
                 return
             job.state = "running"
+            p2v_claimed = False
 
             def progress(step: str, percent: int | None) -> None:
                 if via is not member and step:
@@ -377,6 +378,10 @@ class ImportManager:
                 job.step, job.percent = step, percent
 
             try:
+                import_vm = vm
+                if source.type == SourceType.P2V and self.p2v is not None:
+                    import_vm = self.p2v.claim_import(vm.ref)
+                    p2v_claimed = True
                 extra = {"clear_hibernation": True} if clear_hibernation else {}
                 if disks is not None:
                     extra["disks"] = disks
@@ -386,7 +391,7 @@ class ImportManager:
                     extra.update(cpu_sockets=cpu_sockets, cpu_cores=cpu_cores)
                 info = via.imports.run(
                     source,
-                    vm,
+                    import_vm,
                     name,
                     pool,
                     network,
@@ -405,6 +410,8 @@ class ImportManager:
                 if source.type == SourceType.P2V and self.p2v is not None:
                     self.p2v.delete(vm.ref)  # the VM has its converted copies now
             except Exception as exc:  # recorded on the job; nobody else is waiting
+                if p2v_claimed:
+                    self.p2v.mark(vm.ref, "ready")
                 job.error, job.state = f"{type(exc).__name__}: {exc}", "failed"
                 if "cancelled by the operator" in str(exc):
                     job.state = "cancelled"

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -146,6 +147,7 @@ func run(input *bufio.Reader) error {
 	options.StringVar(&flags.Token, "token", "", "P2V session token (keep private)")
 	options.StringVar(&flags.Pin, "pin", "", "base64 SHA256 of manager SPKI")
 	yes := options.Bool("yes", false, "skip copy confirmation")
+	replicate := options.Bool("replicate", false, "send a 4 MiB hash delta round")
 	if err := options.Parse(os.Args[1:]); err != nil { return err }
 	if len(options.Args()) != 0 { return errors.New("unexpected positional arguments") }
 	if errors.Is(err, errNoTrailer) { c = flags }
@@ -159,6 +161,18 @@ func run(input *bufio.Reader) error {
 		answer, _ := input.ReadString('\n')
 		if !strings.EqualFold(strings.TrimSpace(answer), "y") { return errors.New("copy cancelled") }
 	}
+	if *replicate {
+        var sources []io.ReaderAt
+        for _, d := range m.Disks {
+            f, err := os.Open(`\\.\`+d.Name)
+            if err != nil { return errors.New("cannot open replication disk") }
+            defer f.Close()
+            sources = append(sources, f)
+        }
+        if err := replicateDisks(client, c, m, sources); err != nil { return err }
+        fmt.Println("Replication round committed. Run --replicate again for the next delta.")
+        return nil
+    }
 	body, err := json.Marshal(m); if err != nil { return err }
 	if err = send(client, c, "POST", "/inventory", bytes.NewReader(body), false); err != nil { return err }
 	for i, d := range m.Disks {
