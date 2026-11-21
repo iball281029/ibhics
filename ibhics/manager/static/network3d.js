@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const $ = s => document.querySelector(s), core = window.NetworkCore;
 const host = $('#nw-three'), motion = matchMedia('(prefers-reduced-motion: reduce)');
 let selectedVM=null, editMode=false, zones=[], zoneNetworks=[], rulePreview=null;
-let lastLabelLayout=0, lamps=[], scans=[], equipment=[], fitAspect=0, fitPoints=[], editHintDismissed=false;
+let hoveredObject=null, lamps=[], scans=[], equipment=[], fitAspect=0, fitPoints=[], editHintDismissed=false;
 const bounds=new THREE.Box3(), unitBox=new THREE.BoxGeometry(1,1,1), unitSphere=new THREE.SphereGeometry(1,12,8), edgeCache=new Map(), materialCache=new Set(), fills=new Map();
 const glowCanvas=document.createElement('canvas');glowCanvas.width=glowCanvas.height=64;
 const ctx=glowCanvas.getContext('2d'), gradient=ctx.createRadialGradient(32,32,0,32,32,32);
@@ -13,8 +13,7 @@ const glowTexture=new THREE.CanvasTexture(glowCanvas);
 let renderer, scene, camera, controls, frame = 0, nodes = [], labels = [], beams = [], particles = [], key = '', prefs = {}, mode = '3d', drag = null, hover = null;
 const ray = new THREE.Raycaster(), pointer = new THREE.Vector2(), plane = new THREE.Plane(), intersection = new THREE.Vector3();
 const overlay = document.createElement('div'); overlay.className = 'nw-labels';
-const leaders = document.createElementNS('http://www.w3.org/2000/svg','svg'); leaders.classList.add('nw-leaders');
-host.append(leaders, overlay);
+host.append(overlay);
 // The top view has its own DOM layout and never renders a Three.js scene.
 const topBoard=document.createElement('div');topBoard.className='nw-top-board';topBoard.hidden=true;host.append(topBoard);
 let topDrag=null,topFrame=0,topRefs=null;
@@ -101,6 +100,7 @@ function ensure() {
     controls.addEventListener('change',wake);
     renderer.domElement.addEventListener('pointerdown',down,true);
     renderer.domElement.addEventListener('pointermove',move);
+    renderer.domElement.addEventListener('pointerleave',()=>{hover=null;hoveredObject=null;wake();});
     renderer.domElement.addEventListener('pointerup',up);
     renderer.domElement.addEventListener('pointercancel',()=>{finishDrag(false);update();wake();});
     renderer.domElement.addEventListener('lostpointercapture',()=>{if(drag){finishDrag(false);update();wake();}});
@@ -153,7 +153,7 @@ function deviceDecal(parent,kind,x,y,z,size,stopped=false,symbolOnly=false){
   const material=new THREE.MeshBasicMaterial({map:deviceTexture(kind,stopped,symbolOnly),transparent:true,opacity:stopped ? .5 : 1,depthWrite:false,side:THREE.DoubleSide});
   const mesh=new THREE.Mesh(new THREE.PlaneGeometry(size,size),material);mesh.position.set(x,y,z);parent.add(mesh);return mesh;
 }
-function labelHeight(l){return mode==='top'&&l.icon?(l.kind==='vm'||l.kind==='ghost'?100:112):l.kind==='vm'?38:26;}
+function labelHeight(l){return l.kind==='vm'?32:20;}
 function vmModel(vm,position,ghost=false){
   const g=new THREE.Group();g.position.copy(position);const stopped=vm.state!=='running',color=stopped?'#768da7':'#6dffb3',os=core.detectOS(vm);
   if(os==='windows'){
@@ -168,7 +168,7 @@ function vmModel(vm,position,ghost=false){
   }
   if(!ghost)halo(g,color,0,.45,0,2.8);g.scale.setScalar(ghost ? .95 : 1.8);scene.add(g);return g;
 }
-function selectVM(uuid){selectedVM=uuid;$('#nw-three-wrap').classList.remove('nw-panel-closed');const button=host.querySelector('.nw-panel-toggle');button.textContent='Hide details';button.setAttribute('aria-expanded','true');window.NetworkUI.selectVM(uuid);
+function selectVM(uuid){selectedVM=uuid;wake();$('#nw-three-wrap').classList.remove('nw-panel-closed');const button=host.querySelector('.nw-panel-toggle');button.textContent='Hide details';button.setAttribute('aria-expanded','true');window.NetworkUI.selectVM(uuid);
   const data=window.NetworkUI.getData(),vm=data.vms.find(v=>v.uuid===uuid);if(!vm)return;
   const panel=$('#nw-vm-panel');
   if(editMode){
@@ -180,12 +180,14 @@ function selectVM(uuid){selectedVM=uuid;$('#nw-three-wrap').classList.remove('nw
   const apply=document.createElement('button');apply.id='nw-3d-policy-apply';apply.textContent='Apply firewall draft (safe apply)';apply.disabled=data.canApplyFirewall===false;apply.onclick=()=>window.NetworkUI.applyRules?.();panel.append(apply);
 }
 function addLabel(text,position,kind,uuid=null,owner=null) {
-  const el=document.createElement('button');el.className=`nw-label ${kind}`;el.textContent=text;el.title=text;el.setAttribute('aria-label',text);if(kind==='vm'||kind==='ghost'){if(owner)el.setAttribute('data-state',owner.userData.vm.state);const [name,...ip]=text.split(' · ');el.replaceChildren();const strong=document.createElement('span'),small=document.createElement('small');strong.textContent=name;small.textContent=ip.join(' · ')||(owner?.userData.vm.ips?.[0]||'No IP');el.append(strong,small);}
-  if(owner){el.title=[owner.userData.vm.name,...(owner.userData.ghost?['Also connected to '+owner.userData.net]:[]),...(owner.userData.vm.ips||[]),...owner.userData.vm.nics.map(n=>n.network)].join(' · ');el.setAttribute('aria-label',el.title);}
-  if(uuid)el.onclick=()=>selectVM(uuid);else el.disabled=true;
+  const el=document.createElement('button');el.className=`nw-label ${kind}`;el.textContent=text;el.title=text;el.setAttribute('aria-label',text);if(kind==='vm'||kind==='ghost'){if(owner?.userData.vm)el.setAttribute('data-state',owner.userData.vm.state);const [name,...ip]=text.split(' · ');el.replaceChildren();const strong=document.createElement('span'),small=document.createElement('small');strong.textContent=name;small.textContent=ip.join(' · ')||(owner?.userData.vm.ips?.[0]||'No IP');el.append(strong,small);}
+  if(owner?.userData.vm){el.title=[owner.userData.vm.name,...(owner.userData.ghost?['Also connected to '+owner.userData.net]:[]),...(owner.userData.vm.ips||[]),...owner.userData.vm.nics.map(n=>n.network)].join(' · ');el.setAttribute('aria-label',el.title);}
+  if(uuid)el.onclick=()=>selectVM(uuid);
+  el.onpointerenter=el.onfocus=()=>{hoveredObject=owner;wake();};
+  el.onpointerleave=el.onblur=()=>{hoveredObject=null;wake();};
   let icon=null;
-  const device=owner?core.detectOS(owner.userData.vm):kind==='shield'?'firewall':kind==='external'?'internet':kind==='equipment'?(text.startsWith('ibHiCS')?'node':'switch'):null;
-  if(device){icon=document.createElement('span');icon.className='nw-top-device';icon.innerHTML=core.deviceIcon(device,{stopped:owner&&owner.userData.vm.state!=='running'});el.append(icon);}
+  const device=owner?.userData.vm?core.detectOS(owner.userData.vm):kind==='shield'?'firewall':kind==='external'?'internet':kind==='equipment'?(text.startsWith('Node:')?'node':'switch'):null;
+  if(device){icon=document.createElement('span');icon.className='nw-top-device';icon.innerHTML=core.deviceIcon(device,{stopped:owner?.userData.vm&&owner.userData.vm.state!=='running'});el.append(icon);}
   overlay.append(el);labels.push({el,position,kind,uuid,owner,icon});
 }
 // Project each object's bounds independently to avoid an oversized world-axis box.
@@ -215,7 +217,6 @@ function fit(){
     const shift=new THREE.Vector3(((left+right)/2-w/2)*(camera.right-camera.left)/w,(h/2-(top+bottom)/2)*(camera.top-camera.bottom)/h,0).applyQuaternion(camera.quaternion);
     camera.position.add(shift);controls.target.add(shift);camera.updateMatrixWorld();camera.left*=scale;camera.right*=scale;camera.top*=scale;camera.bottom*=scale;camera.updateProjectionMatrix();
   }
-  lastLabelLayout=0;
 }
 function reset(){if(mode==='top'){host.scrollTop=0;host.scrollLeft=0;return;}if(!camera)return;const center=bounds.isEmpty()?new THREE.Vector3():bounds.getCenter(new THREE.Vector3());camera.up.set(0,1,0);camera.zoom=1;controls.target.copy(center);camera.position.copy(center).add(mode==='top'?new THREE.Vector3(0,100,.001):new THREE.Vector3(58,58,58));controls.enableRotate=mode!=='top';if(mode==='top')camera.up.set(0,0,-1);controls.update();fit();wake();}
 function colors() {
@@ -232,7 +233,7 @@ function update() {
   if(mode==='top'){renderTop(data);return;}
   const shared=new Set([unitBox,unitSphere,...edgeCache.values()]),disposed=new Set();
   scene.traverse(o=>{if(o.geometry&&!shared.has(o.geometry)&&!disposed.has(o.geometry)){o.geometry.dispose();disposed.add(o.geometry);}if(o.material&&!materialCache.has(o.material)){o.material.dispose();}});scene.clear();materialCache.forEach(m=>m.dispose());materialCache.clear();fills.clear();
-  overlay.replaceChildren();leaders.replaceChildren();nodes=[];labels=[];beams=[];particles=[];lamps=[];scans=[];equipment=[];fitPoints=[];bounds.makeEmpty();
+  overlay.replaceChildren();nodes=[];labels=[];beams=[];particles=[];lamps=[];scans=[];equipment=[];fitPoints=[];bounds.makeEmpty();
   const networks=[...data.networks].sort((a,b)=>(a.name==='default'?-1:b.name==='default'?1:(a.vlan||1)-(b.vlan||1)));
   const positions=new Map(), layerMap=new Map(), layers=core.dioramaLayout(networks,data.vms,$('#nw-stopped').checked);
   zones=layers;zoneNetworks=networks;
@@ -248,15 +249,15 @@ function update() {
     bounds.set(new THREE.Vector3(minX,-.7,minZ),new THREE.Vector3(maxX,6,maxZ));
   }
   const trunk=new THREE.Vector3(serviceX,.79,1.5);
-  switchModel(scene,'#3ef0ff',serviceX,1.5);addLabel('Trunk switch (uplink)',trunk.clone().add(new THREE.Vector3(0,1,0)),'equipment');
-  names.forEach((name,j)=>{const z=-2-j*3.4;rack(scene,'#3ef0ff',serviceX,z);addLabel('ibHiCS node: '+name,new THREE.Vector3(serviceX,3.7,z),'equipment');cable(new THREE.Vector3(serviceX,.79,z),trunk,'#3ef0ff');bounds.expandByPoint(new THREE.Vector3(serviceX,4,z-2));});
+  const switchGroup=new THREE.Group();scene.add(switchGroup);switchModel(switchGroup,'#3ef0ff',serviceX,1.5);addLabel('Trunk switch',trunk,'equipment',null,switchGroup);
+  names.forEach((name,j)=>{const z=-2-j*3.4;const rackGroup=new THREE.Group();scene.add(rackGroup);rack(rackGroup,'#3ef0ff',serviceX,z);addLabel('Node: '+name,new THREE.Vector3(serviceX,3.7,z),'equipment',null,rackGroup);cable(new THREE.Vector3(serviceX,.79,z),trunk,'#3ef0ff');bounds.expandByPoint(new THREE.Vector3(serviceX,4,z-2));});
   layers.forEach((layer,i)=>{
     const net=networks[i],color=prefs.colors?.[net.name]||palette[i%palette.length],origin=new THREE.Vector3(layer.x,0,layer.z),group=new THREE.Group();group.position.copy(origin);scene.add(group);layerMap.set(net.name,origin);
     // Flat translucent zone with a rounded luminous outline on the shared slab.
     const shape=roundedPlate(layer.w,layer.d);modelPart(group,shape,color,0,.72,0,1,.015,1,.10);
     const outline=new THREE.EdgesGeometry(shape),rim=new THREE.LineSegments(outline,new THREE.LineBasicMaterial({color,transparent:true,opacity:.85}));rim.scale.y=.015;rim.position.y=.72;group.add(rim);
     const grid=new THREE.GridHelper(1,12,color,color);grid.scale.set(layer.w,1,layer.d);grid.position.y=.74;grid.material.transparent=true;grid.material.opacity=.10;group.add(grid);
-    addLabel(net.name+' · VLAN '+(net.vlan||1),origin.clone().add(new THREE.Vector3(-layer.w/2+2,.8,-layer.d/2+1)),'vlan');
+    addLabel(net.name+' · VLAN '+(net.vlan||1),origin.clone().add(new THREE.Vector3(-layer.w/2+2,.8,-layer.d/2+1)),'vlan');labels.at(-1).zone=layer;
     if(!layer.slots.length)addLabel(data.vms.some(v=>v.nics.some(n=>n.network===net.name))?'No running VMs':'No VMs',origin.clone().setY(.8),'empty');
     layer.slots.forEach(slot=>{
       const vm=data.vms.find(v=>v.uuid===slot.uuid),locationKey=vm.uuid+':'+net.name,local=core.clampSlot(prefs.positions?.[locationKey]||slot,layer),position=origin.clone().add(new THREE.Vector3(local.x,.76,local.z)),model=vmModel(vm,position,slot.ghost);
@@ -274,11 +275,13 @@ function update() {
   });
   if(layers.length){
     const shield=new THREE.Shape();shield.moveTo(-.65,.65);shield.lineTo(0,.9);shield.lineTo(.65,.65);shield.lineTo(.55,-.2);shield.quadraticCurveTo(.3,-.65,0,-.9);shield.quadraticCurveTo(-.3,-.65,-.55,-.2);shield.closePath();
-    const mesh=modelPart(scene,new THREE.ExtrudeGeometry(shield,{depth:.12,bevelEnabled:false}),'#b49bff',serviceX,4,1.5);mesh.rotation.y=Math.PI/4;equipment.push(mesh);const badge=deviceDecal(scene,'firewall',serviceX,4,1.62,1.5);badge.rotation.y=Math.PI/4;
-    addLabel('Firewall · '+data.rules.length+' rules',new THREE.Vector3(serviceX,5.2,1.5),'shield');
+    const shieldGroup=new THREE.Group();scene.add(shieldGroup);
+    const mesh=modelPart(shieldGroup,new THREE.ExtrudeGeometry(shield,{depth:.12,bevelEnabled:false}),'#b49bff',serviceX,4,1.5);mesh.rotation.y=Math.PI/4;equipment.push(mesh);const badge=deviceDecal(shieldGroup,'firewall',serviceX,4,1.62,1.5);badge.rotation.y=Math.PI/4;
+    addLabel('Firewall · '+data.rules.length,new THREE.Vector3(serviceX,5.2,1.5),'shield',null,shieldGroup);
     const external=new THREE.Vector3(serviceX,5,minZ+1);
-    const globe=modelPart(scene,unitSphere,'#70dfff',external.x,external.y,external.z,1.3,1.3,1.3,.18);globe.userData.endpoint='any';equipment.push(globe);deviceDecal(scene,'internet',external.x,external.y,external.z+1.32,1.9);globe.add(new THREE.LineSegments(new THREE.WireframeGeometry(unitSphere),new THREE.LineBasicMaterial({color:'#70dfff',transparent:true,opacity:.4})));halo(scene,'#45e5ff',external.x,external.y,external.z,6);
-    addLabel('Internet / external router',external.clone().add(new THREE.Vector3(0,1.7,0)),'external');bounds.expandByPoint(external.clone().addScalar(2));
+    const globeGroup=new THREE.Group();scene.add(globeGroup);
+    const globe=modelPart(globeGroup,unitSphere,'#70dfff',external.x,external.y,external.z,1.3,1.3,1.3,.18);globe.userData.endpoint='any';equipment.push(globe);deviceDecal(globeGroup,'internet',external.x,external.y,external.z+1.32,1.9);globe.add(new THREE.LineSegments(new THREE.WireframeGeometry(unitSphere),new THREE.LineBasicMaterial({color:'#70dfff',transparent:true,opacity:.4})));halo(scene,'#45e5ff',external.x,external.y,external.z,6);
+    addLabel('Internet',external,'external',null,globeGroup);bounds.expandByPoint(external.clone().addScalar(2));
     cable(trunk,external,'#70dfff');
     if($('#nw-lines').checked){const ends=end=>{if(end==='any')return [external];if(layerMap.has(end))return [layerMap.get(end).clone().add(new THREE.Vector3(0,2,0))];return data.vms.filter(v=>core.matches(end,{vm:v,ips:v.ips||[],networks:v.nics.map(n=>n.network)},data.groups.members)).flatMap(v=>positions.get(v.uuid)?.slice(0,1)||[]);};
       for(const rule of data.rules)for(const a of ends(rule.src))for(const b of ends(rule.dst)){if(a.distanceTo(b)<.1)continue;const from=a.clone().add(new THREE.Vector3(0,1.5,0)),to=b.clone().add(new THREE.Vector3(0,1.5,0)),mid=from.clone().lerp(to,.5);mid.y+=3;const curve=new THREE.QuadraticBezierCurve3(from,mid,to);tube(curve,rule.action==='allow'?'#6dffb3':'#ff6b7a',rule.enabled===false?.16:.6,.035);beams.push({curve,rule:true});}
@@ -289,27 +292,45 @@ function update() {
   syncEditToolbar();if(selectedVM&&data.vms.some(v=>v.uuid===selectedVM))selectVM(selectedVM);colors();const signature=JSON.stringify(layers.map(l=>[l.x,l.y,l.z,l.w,l.d]));if(signature!==update.signature){update.signature=signature;reset();}wake();
 }
 function project(p,w,h){const v=p.clone().project(camera);return {x:(v.x+1)*w/2,y:(1-v.y)*h/2,visible:v.z>-1&&v.z<1};}
+// Project mesh corners only: glow sprites and cables are not part of a device's base.
+function modelScreenBox(model,w,h){
+  const points=[];
+  model.traverse(o=>{if(!o.isMesh)return;o.geometry.computeBoundingBox();const b=o.geometry.boundingBox;if(!b||b.isEmpty())return;
+    for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z])points.push(project(new THREE.Vector3(x,y,z).applyMatrix4(o.matrixWorld),w,h));
+  });
+  const xs=points.map(p=>p.x),ys=points.map(p=>p.y);
+  return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys),visible:points.some(p=>p.visible)};
+}
 function layout(w,h) {
-  host.setAttribute('data-view',mode);labels.forEach(l=>{l.height=labelHeight(l);l.el.style.height=l.height+'px';});
-  scene.updateMatrixWorld();const obstacles=[{x:8,y:8,w:editMode?310:90,h:38},{x:w-136,y:8,w:128,h:38},{x:8,y:h-34,w:w-16,h:26},{x:10,y:h-44-(host.querySelector('.nw-scene-legend').offsetHeight||124),w:host.querySelector('.nw-scene-legend').offsetWidth||244,h:host.querySelector('.nw-scene-legend').offsetHeight||124}];
-  if(editMode&&!editHintDismissed)obstacles.push({x:12,y:55,w:w-24,h:64});
-  for(const n of mode==='top'?[]:[...nodes,...equipment]){const b=new THREE.Box3();n.traverse(o=>{if(o.isMesh){o.geometry.computeBoundingBox();b.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));}});const points=[];for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z])points.push(project(new THREE.Vector3(x,y,z),w,h));const xs=points.map(p=>p.x),ys=points.map(p=>p.y);obstacles.push({x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)});}
-  for(const b of mode==='top'?[]:beams)for(const p of b.curve.getPoints(32)){const v=project(p,w,h);if(v.visible)obstacles.push({x:v.x-2,y:v.y-2,w:4,h:4});}
-  const front=new THREE.Vector3().subVectors(camera.position,controls.target);front.y=0;front.normalize().multiplyScalar(2.5);
-  const points=labels.filter(l=>$('#nw-labels').checked || l.uuid===hover).map(l=>{
-    const p=project(l.owner?l.owner.position.clone().add(mode==='top'?new THREE.Vector3():front):l.position,w,h);if(mode==='top'&&l.icon)p.y-=labelHeight(l)/2+12;const lines=l.kind==='vm'?[[l.el.children[0].textContent,11],[l.el.children[1].textContent,10]]:[[l.el.textContent,12]];
-    const width=Math.max(mode==='top'&&l.icon?112:0,...lines.map(([text,size])=>{ctx.font=`${size}px monospace`;return (ctx.measureText?ctx.measureText(text).width:text.length*7.4)+24;}));
-    return {...p,w:Math.min(w-8,Math.max(90,width)),h:labelHeight(l),l};
-  }).filter(p=>p.visible);
-  points.sort((a,b)=>(b.l.uuid===hover)-(a.l.uuid===hover) || (b.l.kind==='vm')-(a.l.kind==='vm'));
-  labels.forEach(l=>l.el.hidden=true);leaders.replaceChildren();
-  const empties=points.filter(p=>p.l.kind==='empty').map(p=>({...p,box:{x:p.x-p.w/2,y:p.y-p.h/2,w:p.w,h:p.h}}));
-  const insetX=w*.06,insetY=h*.06,shift=b=>({...b,x:b.x-insetX,y:b.y-insetY});
-  const placed=core.placeLabels(points.filter(p=>p.l.kind!=='empty').map(shift),w*.88,h*.88,[...obstacles,...empties.map(p=>p.box)].map(shift)).map(p=>({...p,x:p.x+insetX,y:p.y+insetY,box:p.box?{...p.box,x:p.box.x+insetX,y:p.box.y+insetY}:null}));
-  for(const p of [...empties,...placed]){
-    if(!p.box)continue;const {l,box}=p;l.el.hidden=false;l.el.style.width=`${box.w}px`;l.el.style.left=`${box.x}px`;l.el.style.top=`${box.y}px`;
-    if(l.kind==='empty')continue;
-    const line=document.createElementNS(leaders.namespaceURI,'line');line.setAttribute('x1',p.x);line.setAttribute('y1',p.y);line.setAttribute('x2',box.x+box.w/2);line.setAttribute('y2',box.y+box.h/2);leaders.append(line);
+  host.setAttribute('data-view',mode);scene.updateMatrixWorld();camera.updateMatrixWorld();
+  const models=labels.filter(l=>l.owner).map(l=>({l,box:modelScreenBox(l.owner,w,h)}));
+  const points=[];
+  for(const l of labels){
+    l.el.hidden=true;
+    if(!$('#nw-labels').checked&&(!l.uuid||l.uuid!==hover)&&(!l.owner||l.owner!==hoveredObject))continue;
+    let anchor=project(l.position,w,h),depth=-l.position.clone().applyMatrix4(camera.matrixWorldInverse).z;
+    if(l.owner){
+      const box=models.find(m=>m.l===l).box;
+      anchor={x:box.x+box.w/2,y:box.y+box.h,visible:box.visible};
+      depth=-new THREE.Box3().setFromObject(l.owner).getCenter(new THREE.Vector3()).applyMatrix4(camera.matrixWorldInverse).z;
+    }else if(l.zone){
+      const z=l.zone,corners=[];
+      for(const x of [z.x-z.w/2,z.x+z.w/2])for(const zz of [z.z-z.d/2,z.z+z.d/2])corners.push(new THREE.Vector3(x,.74,zz));
+      corners.sort((a,b)=>a.distanceToSquared(camera.position)-b.distanceToSquared(camera.position));anchor=project(corners[0],w,h);depth=-corners[0].clone().applyMatrix4(camera.matrixWorldInverse).z;
+    }
+    l.anchor=anchor;if(!anchor.visible)continue;
+    const lines=l.kind==='vm'||l.kind==='ghost'?[[l.el.children[0].textContent,11],...(l.kind==='vm'?[[l.el.children[1].textContent,10]]:[])]:[[l.el.textContent,11]];
+    const width=Math.max(40,...lines.map(([text,size])=>{ctx.font=`${size}px monospace`;return (ctx.measureText?ctx.measureText(text).width:text.length*size*.62)+10;}));
+    const box={x:anchor.x-width/2,y:anchor.y+3,w:width,h:labelHeight(l)};
+    points.push({l,box,depth,active:!!l.owner&&(l.owner===hoveredObject||!!l.uuid&&(l.uuid===hover||l.uuid===selectedVM))});
+  }
+  for(const p of points){
+    const {l,box}=p;
+    const dim=!p.active&&(points.some(q=>q!==p&&core.overlaps(box,q.box)&&(q.active||q.depth<p.depth||q.depth===p.depth&&points.indexOf(q)<points.indexOf(p)))||models.some(m=>m.l!==l&&core.overlaps(box,m.box)));
+    l.el.hidden=false;l.height=box.h;l.el.classList.toggle('nw-label-dim',dim);l.el.classList.toggle('nw-label-active',p.active);
+    l.el.style.opacity=dim?'.25':'1';l.el.style.zIndex=p.active?'10000':String(1+points.filter(q=>q.depth>p.depth).length);
+    l.el.style.width=`${box.w}px`;l.el.style.height=`${box.h}px`;l.el.style.left=`${box.x}px`;l.el.style.top=`${box.y}px`;
+    if(l.kind==='vm')l.el.children[1].hidden=dim;
   }
 }
 function draw(time=0) {
@@ -318,10 +339,10 @@ function draw(time=0) {
   if(renderer.domElement.width!==Math.round(w*renderer.getPixelRatio())||renderer.domElement.height!==Math.round(h*renderer.getPixelRatio()))renderer.setSize(w,h,false);
   if(Math.abs(fitAspect-w/h)>.001)fit();
   for(const p of particles){p.mesh.visible=$('#nw-traffic').checked;if(p.mesh.visible)p.mesh.position.copy(p.curve.getPoint(motion.matches?p.offset:(time/1000*p.speed+p.offset)%1));}
-  renderer.render(scene,camera);if(!lastLabelLayout){layout(w,h);lastLabelLayout=time || 1;}
+  renderer.render(scene,camera);layout(w,h);
   if(!motion.matches&&$('#nw-traffic').checked&&particles.length)frame=requestAnimationFrame(draw);
 }
-function wake(){if(mode==='top'){scheduleTopLines();return;}lastLabelLayout=0;if(active()&&!frame)frame=requestAnimationFrame(draw);else if(!active()&&frame){cancelAnimationFrame(frame);frame=0;}}
+function wake(){if(mode==='top'){scheduleTopLines();return;}if(active()&&!frame)frame=requestAnimationFrame(draw);else if(!active()&&frame){cancelAnimationFrame(frame);frame=0;}}
 function pick(event){const r=renderer.domElement.getBoundingClientRect();pointer.set((event.clientX-r.left)/r.width*2-1,-(event.clientY-r.top)/r.height*2+1);ray.setFromCamera(pointer,camera);let hit=ray.intersectObjects(nodes,true).find(h=>h.object.isMesh);if(!hit)return;let node=hit.object;while(node&&!node.userData.vm)node=node.parent;return node;}
 function editToolbar(){
   const bar=document.createElement('div');bar.className='nw-edit-tools';
@@ -351,7 +372,7 @@ function targetAt(e){
   if(!floorPoint(e))return null;const i=core.zoneAt(zones,intersection);return i<0?null:zoneNetworks[i].name;
 }
 function down(e){if(e.button!==0)return;const node=pick(e);if(!node)return;e.stopImmediatePropagation?.();if(!editMode || window.NetworkUI.getData().saving)return;controls.enabled=false;drag={node,x:e.clientX,y:e.clientY,moved:false,rule:e.shiftKey,original:node.position.clone()};renderer.domElement.setPointerCapture(e.pointerId);}
-function move(e){if(!drag){const node=pick(e),next=node?.userData.vm.uuid || null;renderer.domElement.style.cursor=node&&editMode?'grab':'';if(next!==hover){hover=next;wake();}return;}
+function move(e){if(!drag){const node=pick(e),next=node?.userData.vm.uuid || null;const hit=ray.intersectObjects(equipment,true)[0]?.object;const object=node||labels.find(l=>l.owner&&hit&&l.owner.getObjectById(hit.id))?.owner||null;if(object!==hoveredObject){hoveredObject=object;wake();}renderer.domElement.style.cursor=node&&editMode?'grab':'';if(next!==hover){hover=next;wake();}return;}
   if(Math.hypot(e.clientX-drag.x,e.clientY-drag.y)<5 && !drag.moved)return;
   drag.moved=true;
   if(floorPoint(e)){
@@ -382,7 +403,7 @@ function up(e){if(!drag)return;const {node,moved,rule}=drag;
 }
 rendererClickSetup();
 function rendererClickSetup(){document.addEventListener('keydown',e=>{if(e.key==='Escape'&&drag){finishDrag(false);update();wake();}});host.addEventListener('click',e=>{if(!editMode&&renderer&&e.target===renderer.domElement){const node=pick(e);if(node)selectVM(node.userData.vm.uuid);}});}
-function setView(next){if(drag)finishDrag(false);if(ntopoEditing()&&!editMode)return;mode=next;$('#nw-legacy').hidden=next!=='edit';$('#nw-three-wrap').hidden=next==='edit';$('#nw-view-3d').setAttribute('aria-pressed',String(next==='3d'));$('#nw-view-top').setAttribute('aria-pressed',String(next==='top'));$('#nw-view-edit').setAttribute('aria-pressed',String(next==='edit'));host.setAttribute('data-view',next);topBoard.hidden=next!=='top';if(next!=='edit'){if(next==='3d')ensure();update();reset();}else window.drawTopology?.();wake();}
+function setView(next){host.classList.toggle('nw-mode-top',next==='top');if(drag)finishDrag(false);if(ntopoEditing()&&!editMode)return;mode=next;$('#nw-legacy').hidden=next!=='edit';$('#nw-three-wrap').hidden=next==='edit';$('#nw-view-3d').setAttribute('aria-pressed',String(next==='3d'));$('#nw-view-top').setAttribute('aria-pressed',String(next==='top'));$('#nw-view-edit').setAttribute('aria-pressed',String(next==='edit'));host.setAttribute('data-view',next);topBoard.hidden=next!=='top';if(next!=='edit'){if(next==='3d')ensure();update();reset();}else window.drawTopology?.();wake();}
 function ntopoEditing(){if(!editMode&&$('#topo-edit-tools').hidden===false){window.alert('Save or cancel the topology draft before switching views.');return true;}return false;}
 $('#nw-view-3d').onclick=()=>setView('3d');$('#nw-view-top').onclick=()=>setView('top');$('#nw-view-edit').onclick=()=>setView('edit');$('#nw-reset').onclick=reset;
 for(const id of ['nw-labels','nw-traffic','nw-lines','nw-stopped'])$('#'+id).onchange=()=>{update();fit();wake();};

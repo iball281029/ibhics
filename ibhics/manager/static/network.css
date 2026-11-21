@@ -192,3 +192,22 @@
 @keyframes nw-top-traffic{to{stroke-dashoffset:-64}}
 @media(prefers-reduced-motion:reduce){.nw-top-lines .nw-top-flow{animation:none;display:none}}
 @media(max-width:650px){.nw-top-infra{grid-template-columns:minmax(0,1fr);gap:16px}.nw-top-racks{margin-bottom:28px}.nw-top-zones{gap:18px}}
+
+/* 3D captions stay attached to the projected base of their own device. */
+#page-network #nw-three[data-view="3d"] .nw-label{padding:1px 4px;line-height:16px;height:20px;font-size:11px;text-align:center;background:rgba(6,24,42,.7);border-radius:3px;pointer-events:auto;}
+#page-network #nw-three[data-view="3d"] .nw-label.vm{height:32px;padding:1px 4px;line-height:14px;background:rgba(6,24,42,.7);}
+#page-network #nw-three[data-view="3d"] .nw-label.vm>span,#page-network #nw-three[data-view="3d"] .nw-label.ghost>span{display:block;font-size:11px;line-height:14px;}
+#page-network #nw-three[data-view="3d"] .nw-label.vm>small{font-size:10px;line-height:14px;}
+#page-network #nw-three[data-view="3d"] .nw-label.nw-label-dim small{display:none;}
+#page-network #nw-three[data-view="3d"] .nw-label.nw-label-active{opacity:1;z-index:10000;border-color:#cfffff;}
+#page-network #nw-three[data-view="3d"] .nw-label .nw-top-device{display:none;}
+
+#fw-dialog .nw-services{display:grid;gap:6px}
+#fw-dialog #nw-rule-services{display:flex;flex-wrap:wrap;gap:6px}
+#fw-dialog .nw-svc{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid #3ef0ff44;border-radius:16px;cursor:pointer;font-size:12px;background:#06182a}
+#fw-dialog .nw-svc input{margin:0}
+#fw-dialog .nw-svc small{color:#8fb6cb;font-size:10px}
+#fw-dialog .nw-svc:has(input:checked){border-color:#3ef0ff;background:#0c3346;box-shadow:0 0 8px #3ef0ff55}
+
+/* The 2D board replaces the 3D scene: hide the last 3D frame and its labels. */
+.nw-mode-top canvas,.nw-mode-top .nw-labels,.nw-mode-top .nw-leaders,.nw-mode-top .nw-scene-legend{display:none!important}
