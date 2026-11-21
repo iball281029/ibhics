@@ -832,7 +832,7 @@ async function refresh(page, auto = false) {
   if (page === "vm") { await load("vms", "groups", "pools", "targets", "jobs", "moves", "imports", "guests", "stats", "recycle"); await renderVMDetail(); }
   if (page === "storage") { await load("pools", "vms", "isos"); renderPools(); renderIsos(); await renderVirtualStorage(); }
   if (page === "network") { await load("vms", "networks", "edge", "groups", "guests", "stats"); renderNetworks(); renderEdge(); await renderTopology(); window.Network3D?.update(); }
-  if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
+  if (page === "cluster") { await load("vms", "summaries", "pools"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("vms", "targets", "policies", "jobs"); fillSelects(); renderPolicies(); renderJobs(); await protectionOverview(); await renderBackups(); await renderAllSnapshots(); }
   if (page === "migrate") { await load("sources", "imports", "replications", "pools"); fillSelects(); renderSources(); renderImports(); renderReplications(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
@@ -3361,6 +3361,32 @@ function nodeRows(c, admin) {
   }).join("");
 }
 
+// How many servers may fail while the cluster keeps running its VMs: the smallest of
+// what quorum, the number of data copies and the spare RAM allow.
+function clusterFaultTolerance(c, pools, vms, hosts) {
+  const compute = c.members.filter((m) => m.role === "compute"), voters = c.members.length;
+  const limits = [];
+  const quorum = Math.floor((voters - 1) / 2);
+  limits.push({ key: "quorum", n: quorum, text: voters === 2 ? "2 votes: losing either one stops quorum. Add a witness." : `${voters} votes: a majority (${Math.floor(voters / 2) + 1}) must stay online` });
+  limits.push({ key: "nodes", n: Math.max(0, compute.length - 1), text: `${compute.length} compute node${compute.length === 1 ? "" : "s"}: one must keep running the VMs` });
+  const vstore = pools.some((p) => p.shared && (p.name === "virtualstorage" || /virtual storage/i.test(p.display_name || "")));
+  const shared = pools.some((p) => p.shared);
+  const copies = vstore ? 2 : shared ? Infinity : 1;
+  limits.push({ key: "data", n: copies === Infinity ? Infinity : copies - 1, text: vstore ? "Virtual Storage keeps 2 copies of every disk" : shared ? "Shared storage (outside the nodes) holds the disks" : "Local disks only: VMs on a failed node stop until it returns" });
+  const sizes = compute.map((m) => Number(hosts[m.name]?.memory_mb) || 0);
+  const known = sizes.filter(Boolean);
+  if (known.length) {
+    const avg = known.reduce((a, b) => a + b, 0) / known.length;
+    const ram = sizes.map((x) => x || avg).sort((a, b) => b - a);
+    const need = vms.filter((v) => v.state === "running").reduce((a, v) => a + (Number(v.memory_mb) || 0), 0);
+    let fit = 0;
+    while (fit < ram.length - 1 && ram.slice(fit + 1).reduce((a, b) => a + b, 0) >= need) fit += 1;
+    limits.push({ key: "ram", n: fit, text: `Running VMs need ${gbText(need)} RAM; the nodes left after ${fit === 1 ? "the largest fails" : fit ? `the ${fit} largest fail` : "a failure"} ${fit ? "can hold it" : "cannot hold it"}` });
+  }
+  const n = Math.min(...limits.map((l) => l.n));
+  return { n, limits, limiting: limits.filter((l) => l.n === n) };
+}
+
 function renderCluster() {
   const c = state.cluster, local = c.members.find((m) => m.local), created = Boolean(c.cluster_id) || c.members.length > 1;
   const online = c.members.filter((m) => m.healthy).length, compute = computeMembers().length;
@@ -3389,7 +3415,11 @@ function renderCluster() {
     summary("Quorum & topology", c.quorum ? "✓ Quorum OK" : "! Quorum lost", esc(topology)),
     summary("HA restart", esc(clusterHAStatus(state.clusterHA)), "Restarts protected VMs after node failure"),
     summary("Members", `${c.members.length}`, `${compute} compute · ${witnesses} witness${witnesses === 1 ? "" : "es"}`),
-  ].join("");
+  ].join("") + (() => {
+    const ft = clusterFaultTolerance(c, state.pools || [], state.vms || [], state.hosts || {});
+    const label = { quorum: "Quorum", nodes: "Compute nodes", data: "Data copies", ram: "Spare RAM" };
+    return `<div class="cl-ft ${ft.n ? "ok" : "none"}"><div class="cl-ft-n"><small>Servers that can fail</small><b>${ft.n}</b><span>${ft.n ? `The VMs keep running if ${ft.n === 1 ? "any 1 server goes" : `any ${ft.n} servers go`} down` : "A server failure stops VMs or the cluster"}</span></div><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b><span>${esc(l.text)}</span></li>`).join("")}</ul></div>`;
+  })();
   $("#cluster-pairing").hidden = created;
   $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
   $("#cluster-members").innerHTML = nodeRows(c, isAdmin()) + (created && isAdmin() ? '<button class="cl-add" data-open="node-dialog"><span>+</span><b>Add a node</b><small>Connect a compute server or witness</small></button>' : "");
