@@ -568,7 +568,13 @@
           <button data-tab="import" class="active">Import VMs</button>
           <button data-tab="sources">Sources</button>
           <button data-tab="imports">Jobs</button>
+          <button data-tab="replications">Replication</button>
           <button data-tab="p2v">Physical machines</button>
+        </div>
+        <div class="subpage" id="tab-replications">
+          <div class="toolbar"><button id="new-replication" class="primary operator-only">New replication</button><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="Replication view"><button data-replication-view="cards" aria-pressed="true">Cards</button><button data-replication-view="list" aria-pressed="false">List</button></div></div>
+          <p class="hint">Choose a source and VMs under Import VMs, then create a replication. Source VMs may remain running during sync. Cutover requires shutdown confirmation.</p>
+          <div id="replications" class="mg-replicas"></div>
         </div>
         <div class="subpage active" id="tab-import">
 <div class="mg-flow">
@@ -1697,13 +1703,13 @@
 
 <dialog id="import-dialog" class="wizard migrate-wizard mg-dialog">
   <form method="dialog" id="import-form">
-    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
+    <header><h3 id="import-title">Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <ol class="wiz-steps">
       <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
-      <li data-step="3"><b>3</b>Summary</li>
+      <li data-step="3"><b>3</b><span id="import-final-step">Summary</span></li>
     </ol>
     <section class="wiz-page body" data-page="1">
-      <p class="hint">Power off selected VMs at the source to continue.</p>
+      <p class="hint" id="import-power-hint">Power off selected VMs at the source to continue.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
     </section>
     <section class="wiz-page body" data-page="2" hidden>
@@ -1719,11 +1725,15 @@
       </div>
     </section>
     <section class="wiz-page body" data-page="3" hidden>
+      <div id="replication-schedule" class="form-grid" hidden><label>Interval (minutes)<input name="replication_interval" type="number" min="1" max="525600" step="1" value="15"></label><label>Or daily at (local manager time)<input name="replication_at" type="time"></label><p class="hint">A daily time overrides the interval. A consistent seed starts immediately.</p></div>
       <div id="import-summary"></div><div id="import-submit-status" role="status" aria-live="polite"></div>
     </section>
     <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" class="wiz-back">Back</button><button type="button" class="primary wiz-next">Next</button><button class="primary wiz-ok" value="ok" hidden>Start migration</button></footer>
   </form>
 </dialog>
+
+<dialog id="replication-cutover-dialog"><form method="dialog"><header><h3>Cutover replication</h3><button value="cancel" formnovalidate>×</button></header><div class="body"><p>Shut down the source VM fully before continuing. Final sync and driver conversion run before the destination VM is created.</p><label><input name="source_powered_off" type="checkbox" required> I confirm the source VM is powered off and will remain off.</label></div><footer><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="danger">Confirm cutover</button></footer></form></dialog>
+<dialog id="replication-test-dialog"><form method="dialog"><header><h3>Test failover</h3><button value="cancel" formnovalidate>×</button></header><div class="body"><p>Boot an independent copy. Leave all NICs disconnected for an isolated test.</p><div id="replication-test-networks"></div></div><footer><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Start test</button></footer></form></dialog>
 
 <dialog id="user-dialog">
   <form method="dialog" id="user-form">

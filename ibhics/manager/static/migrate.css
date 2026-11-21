@@ -507,3 +507,12 @@ dialog.mg-dialog .table-wrap {max-width:100%;overflow:auto;border:0;background:t
 @media(prefers-reduced-motion:reduce) {.mg-beam i,.mg-beam b {animation:none;opacity:1}}
 
 #import-dialog .mg-eyebrow {font:10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:#9bdde9}
+
+/* Replication shares the migration hologram panels and destination editor. */
+.mg-replicas { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr)); gap:16px; margin-top:16px; }
+.mg-replicas.is-list { grid-template-columns:1fr; }
+.mg-replica dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; }
+.mg-replica dd { margin:0; }
+.mg-replica progress { width:100%; }
+.mg-replica .toolbar { flex-wrap:wrap; gap:6px; }
+#replication-test-networks { display:grid; gap:12px; }

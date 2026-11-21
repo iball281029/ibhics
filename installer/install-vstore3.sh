@@ -16,6 +16,13 @@ if pgrep -x virt-v2v >/dev/null && [[ ${IBHICS_UPGRADE_FORCE:-} != 1 ]]; then
     echo "A VM import (virt-v2v) is running on this node; upgrade after it finishes" >&2
     exit 3
 fi
+# Replication workers hold a shared lock through snapshot cleanup and commit.
+# Keep this exclusive lock until the upgrade exits to close the check/start race.
+exec 9>/run/lock/ibhics-replication.lock
+if ! flock -n -x 9; then
+    echo "VM replication is active; upgrade after sync/conversion finishes" >&2
+    exit 3
+fi
 backup=/opt/ibhics/vstore3.26-backup-$(date +%Y%m%d-%H%M%S)
 mkdir -m 700 "$backup"
 cp -a "$venv" "$backup/venv"

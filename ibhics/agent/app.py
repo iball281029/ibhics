@@ -66,6 +66,8 @@ def create_agent_app(
     pool_labels_path: Path | None = None,
     storage_root: Path = Path("/var/lib/ibhics/virtual-storage"),
     migration_pki=None,
+    replication_root: Path = Path("/var/lib/ibhics/replica-manifests"),
+    replication_guard: Path = Path("/run/lock/ibhics-replication.lock"),
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -515,6 +517,9 @@ def create_agent_app(
                 )
             }
 
+        from ..replication import agent as replication_agent
+
+        replication_agent.install(api, name, driver, replication_root, replication_guard)
         imports = imports or NodeImport(driver)
 
         def read_source(body: dict) -> Source:
