@@ -797,6 +797,10 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @api.get("/nodes/{name}/hardware-capabilities")
+    def hardware_capabilities(name: str) -> dict:
+        return cluster.member(name).driver.hardware_capabilities()
+
     @api.get("/nodes/{name}/host", response_model=HostOut)
     def node_host(name: str) -> HostOut:
         return HostOut.from_info(cluster.member(name).driver.host_info())
@@ -1683,6 +1687,8 @@ def create_app(
             clear_hibernation=body.clear_hibernation,
             disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
             nics=[n.model_dump() for n in body.nics] if body.nics is not None else None,
+            cpu_sockets=body.cpu_sockets,
+            cpu_cores=body.cpu_cores,
         )
         return ImportJobOut(**job.__dict__)
 

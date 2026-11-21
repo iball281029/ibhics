@@ -140,6 +140,8 @@ class SourceVM:
     notes: str = ""  # vmware: the VM's annotation
     vmx: str = ""  # vmware: "[datastore] folder/name.vmx"
     macs: list[str] = field(default_factory=list)
+    sockets: int | None = None
+    cores_per_socket: int | None = None
     disk_paths: list[str] = field(default_factory=list)  # kvm: the disks' paths on the host
 
     def to_dict(self) -> dict:
@@ -272,6 +274,13 @@ def parse_vmware_xml(xml: str) -> SourceVM:
         ref=name,
         name=name,
         vcpus=int(root.findtext("vcpu", "1")),
+        sockets=int(root.find("cpu/topology").get("sockets", "1"))
+        if root.find("cpu/topology") is not None
+        else None,
+        cores_per_socket=int(root.find("cpu/topology").get("cores", "1"))
+        * int(root.find("cpu/topology").get("threads", "1"))
+        if root.find("cpu/topology") is not None
+        else None,
         memory_mb=kib // 1024,
         firmware=Firmware.UEFI if efi else Firmware.BIOS,
         disks_gb=[0] * len(disks),  # the ESX driver doesn't report sizes

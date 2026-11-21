@@ -153,6 +153,10 @@ def create_agent_app(
 
     if role == NodeRole.COMPUTE:
 
+        @api.get("/hardware-capabilities")
+        def hardware_capabilities() -> dict:
+            return driver.hardware_capabilities()
+
         @api.get("/host", response_model=HostOut)
         def host() -> HostOut:
             return HostOut.from_info(driver.host_info())
@@ -527,7 +531,7 @@ def create_agent_app(
 
         @api.get("/imports/capabilities")
         def import_capabilities() -> dict:
-            return {"disk_targets": True, "nic_targets": True}
+            return {"disk_targets": True, "nic_targets": True, "cpu_topology": True}
 
         @api.post("/imports/source-vms")
         def source_vms(body: dict) -> list[dict]:
@@ -576,6 +580,8 @@ def create_agent_app(
                 clear_hibernation=body.clear_hibernation,
                 disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
                 nics=[n.model_dump() for n in body.nics] if body.nics is not None else None,
+                cpu_sockets=body.cpu_sockets,
+                cpu_cores=body.cpu_cores,
             )
             return VMOut.from_info(info)
 

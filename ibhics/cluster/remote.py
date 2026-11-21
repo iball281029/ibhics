@@ -92,6 +92,12 @@ class RemoteDriver(HypervisorDriver):
     def __init__(self, client: AgentClient) -> None:
         self._client = client
 
+    def hardware_capabilities(self) -> dict:
+        response = self._client.request("GET", "/hardware-capabilities")
+        if response.status_code == 404:
+            return super().hardware_capabilities()
+        return self._ok(response).json()
+
     def host_info(self) -> HostInfo:
         return HostInfo(**self._ok(self._client.request("GET", "/host")).json())
 
@@ -519,6 +525,8 @@ class RemoteImport:
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
         nics: list[dict] | None = None,
+        cpu_sockets: int | None = None,
+        cpu_cores: int | None = None,
     ) -> VMInfo:
         body = {
             "source": source.to_dict(),
@@ -531,6 +539,15 @@ class RemoteImport:
             "start": start,
             "clear_hibernation": clear_hibernation,
         }
+        body["vm"].pop("sockets", None)
+        body["vm"].pop("cores_per_socket", None)
+        if cpu_sockets is not None or cpu_cores is not None:
+            capabilities = self._client.request("GET", "/imports/capabilities")
+            if capabilities.status_code != 200 or not capabilities.json().get("cpu_topology"):
+                raise InvalidState(
+                    "this node agent does not support CPU topology; upgrade the node agent"
+                )
+            body.update(cpu_sockets=cpu_sockets, cpu_cores=cpu_cores)
         if nics is None:
             body["vm"].pop("macs", None)  # older agents do not know this discovery field
         if nics is not None:

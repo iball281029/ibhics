@@ -329,6 +329,7 @@ document.addEventListener("click", (e) => {
   const form = b.closest("form");
   form.elements[b.closest(".chips").dataset.target].value = b.dataset.v;
   syncPresets(form);
+  form.elements[b.closest(".chips").dataset.target].dispatchEvent(new Event("input", { bubbles: true }));
 });
 document.addEventListener("input", (e) => { if (e.target.form && $(".chips.presets", e.target.form)) syncPresets(e.target.form); });
 
@@ -1748,6 +1749,11 @@ handlers["deploy-dialog"] = async (f, ctx) => {
 
 // ---------- edit VM ----------
 // A list of the VM's parts on the left, the selected part's settings on the right.
+const VM_ADVANCED_DEFAULTS = { cpu_mode: "default", mouse: "tablet", keymap: "default", boot_menu_seconds: 0, restart_on_crash: true, ballooning: true, serial_port: true, usb_controller: false, tpm: false };
+function hardwareFormValues(f) {
+  return Object.fromEntries(Object.entries(VM_ADVANCED_DEFAULTS).map(([key, value]) => [key,
+    typeof value === "boolean" ? f.get(key) === "on" : typeof value === "number" ? Number(f.get(key)) : f.get(key) || value]));
+}
 let editing = null;
 const BOOT_NAMES = { hd: "Hard disk", cdrom: "CD/DVD", network: "Network (PXE)" };
 
@@ -1756,6 +1762,9 @@ async function openEdit(uuid) {
   editing = {
     vm,
     vcpus: vm.vcpus,
+    cpu_sockets: vm.cpu_sockets || 1,
+    cpu_cores: vm.cpu_cores || vm.vcpus,
+    topologyChanged: false,
     memory_mb: vm.memory_mb,
     disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool, bus: d.bus })),
     nics: vm.nics.map((n) => ({ mac: n.mac, network: n.network, model: n.model || "virtio" })),
@@ -1767,11 +1776,18 @@ async function openEdit(uuid) {
   };
   openDialog("edit-dialog", { uuid }, { os_type: vm.os_type, description: vm.description });
   $("#edit-form").elements.autostart.checked = vm.autostart;
+  for (const [key, fallback] of Object.entries(VM_ADVANCED_DEFAULTS)) {
+    const input = $("#edit-form").elements[key];
+    if (typeof fallback === "boolean") input.checked = vm[key] ?? fallback;
+    else input.value = vm[key] ?? fallback;
+  }
+  $("#edit-machine").textContent = vm.machine_type || "q35";
+  await updateHardwareCapabilities($("#edit-form"), vm.node);
   $("#edit-title").textContent = `Edit virtual machine (${vm.name})`;
-  $("#edit-firmware").textContent = vm.firmware === "uefi" ? "UEFI" : "BIOS";
+  $("#edit-firmware").textContent = (vm.firmware === "uefi" ? "UEFI" : "BIOS") + (vm.secure_boot ? " · Secure Boot" : "");
   const note = $("#edit-note");
   note.hidden = vm.state !== "running";
-  note.textContent = "This VM is running. Disks, network adapters, the CD and more vCPUs (up to 32) or memory (in 128 MB steps, up to 512 GB) change now. Fewer vCPUs or less memory and the boot order apply after it is shut down and powered on again. A VM made before hot-add support needs one restart after its first CPU or memory change.";
+  note.textContent = "This VM is running. CPU topology and advanced hardware require shutdown. Disks, network adapters, the CD and more vCPUs without a fixed topology (up to 32) or memory (in 128 MB steps, up to 512 GB) change now. Fewer vCPUs or less memory and the boot order apply after it is shut down and powered on again. A VM made before hot-add support needs one restart after its first CPU or memory change.";
   selectTab("edit-tabs", "edit-hw");
   renderEdit();
 }
@@ -1801,8 +1817,11 @@ function renderEdit() {
     pane.innerHTML = `<h4>Display</h4><label>Display adapter <select data-set="video">${Object.entries(VIDEO_NAMES).map(([k, v]) => `<option value="${k}" ${k === e.video ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <p class="hint">VirtIO GPU suits Linux and Windows 10/Server 2016 and later. Older Windows (Server 2012 R2 and before, 7, 8.1) shows a black or slow screen with it: use Standard VGA. Applies after a restart.</p>`;
   } else if (s === "cpu") {
-    pane.innerHTML = `<h4>Processor</h4><label>vCPU <input type="number" min="1" max="256" value="${e.vcpus}" data-set="vcpus"></label>
-      <p class="hint">Host CPU model is passed through (host-model), so the VM can still live-migrate between nodes.</p>`;
+    pane.innerHTML = `<h4>Processor</h4>
+      <label>Sockets <input type="number" min="1" max="256" value="${e.cpu_sockets}" data-set="cpu_sockets"></label>
+      <label>Cores per socket <input type="number" min="1" max="256" value="${e.cpu_cores}" data-set="cpu_cores"></label>
+      <label>Total vCPU <input value="${e.vcpus}" readonly></label>
+      <p class="hint">Topology changes require a stopped VM. A fixed topology uses all configured CPUs; CPU hot-add remains available for existing VMs without a fixed topology.</p>`;
   } else if (s === "mem") {
     pane.innerHTML = `<h4>Memory</h4><label>Memory (GB) <input type="number" min="0.25" step="0.25" value="${e.memory_mb / 1024}" data-set="memory_gb"></label>`;
   } else if (s.startsWith("disk")) {
@@ -1861,7 +1880,11 @@ function renderEdit() {
   form.addEventListener("change", (ev) => {
     const t = ev.target, e = editing;
     if (!e) return;
-    if (t.dataset.set === "vcpus") e.vcpus = Number(t.value);
+    if (["cpu_sockets", "cpu_cores"].includes(t.dataset.set)) {
+      e[t.dataset.set] = Number(t.value);
+      e.vcpus = e.cpu_sockets * e.cpu_cores;
+      e.topologyChanged = true;
+    }
     if (t.dataset.set === "memory_gb") e.memory_mb = Math.round(Number(t.value) * 1024);
     if (t.dataset.set === "iso") e.iso = t.value;
     if (t.dataset.set === "video") e.video = t.value;
@@ -1870,7 +1893,7 @@ function renderEdit() {
     if (t.dataset.boot) {
       e.boot = $$("#edit-boot select").map((sel) => sel.value).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
     }
-    if (!t.dataset.boot && t.name !== "autostart" && t.name !== "os_type" && t.name !== "description") renderEdit();
+    if (!t.name && !t.dataset.boot && t.name !== "autostart" && t.name !== "os_type" && t.name !== "description") renderEdit();
   });
 }
 
@@ -1884,6 +1907,9 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
     os_type: f.get("os_type"), description: f.get("description"),
     vcpus: e.vcpus, memory_mb: e.memory_mb, boot: e.boot.length ? e.boot : ["hd"],
     autostart: f.get("autostart") === "on", video: e.video,
+    ...hardwareFormValues(f),
+    ...($("#edit-form").elements.tpm.disabled ? { tpm: e.vm.tpm || false } : {}),
+    ...(e.topologyChanged ? { cpu_sockets: e.cpu_sockets, cpu_cores: e.cpu_cores } : {}),
     disks: e.disks.map((d) => (d.index == null ? { size_gb: d.size_gb, pool: d.pool } : { index: d.index, size_gb: d.size_gb })),
     nics: e.nics.map((n) => (n.mac ? { mac: n.mac, network: n.network, model: n.model } : { network: n.network, model: n.model })),
     delete_removed_disks: deleteDisks,
@@ -1901,9 +1927,12 @@ const vmWiz = wizard("vm-dialog", {
     const f = $("#vm-form");
     $$(".vm-disk:not(:first-child)", f).forEach((d) => d.parentNode.removeChild(d));
     f.elements.vcpus.value = 2;
+    f.elements.cpu_sockets.value = 1;
+    f.elements.cpu_cores.value = 2;
     f.elements.memory_gb.value = 4;
     f.elements.disk_gb.value = 60;
     vmWizOs(f);
+    updateHardwareCapabilities(f, f.elements.node.value);
     syncPresets(f);
   },
   check(step) {
@@ -1911,6 +1940,8 @@ const vmWiz = wizard("vm-dialog", {
     if (step === 1 && !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the VM with letters (English or Thai), digits, '-', '_' or '.' (no spaces).");
     if (step === 1 && state.vms.some((v) => v.name === f.name.value)) throw new Error(`A VM named ${f.name.value} already exists.`);
     if (step === 2) {
+      f.vcpus.value = Number(f.cpu_sockets.value) * Number(f.cpu_cores.value);
+      if (!Number.isInteger(Number(f.vcpus.value)) || Number(f.vcpus.value) > 256) throw new Error("CPU total must be an integer between 1 and 256.");
       if (!(Number(f.vcpus.value) >= 1)) throw new Error("Give the VM at least 1 vCPU.");
       if (!(Number(f.memory_gb.value) >= 0.25)) throw new Error("Give the VM at least 0.25 GB of memory.");
       if ($$(".vm-disk", $("#vm-form")).some((d) => !(Number($("input", d).value) >= 1) || !$("select", d).value)) throw new Error("Each disk needs a size and a storage pool.");
@@ -1986,7 +2017,13 @@ handlers["vm-dialog"] = async (f) => {
   const { legacy, nic } = osProfile(f.get("os_family"), (f.get("os_type") || "").toLowerCase());
   const body = {
     name: f.get("name"),
-    vcpus: Number(f.get("vcpus")),
+    vcpus: Number(f.get("cpu_sockets")) * Number(f.get("cpu_cores")),
+    cpu_sockets: Number(f.get("cpu_sockets")), cpu_cores: Number(f.get("cpu_cores")),
+    ...hardwareFormValues(f),
+    machine_type: f.get("machine_type") || "q35",
+    secure_boot: f.get("secure_boot") === "on",
+    autostart: f.get("autostart") === "on",
+    boot: f.get("boot_first") === "auto" ? null : [f.get("boot_first"), ...["hd", "cdrom", "network"].filter((d) => d !== f.get("boot_first"))],
     memory_mb: Math.round(Number(f.get("memory_gb")) * 1024),
     firmware: f.get("firmware"),
     os_type: f.get("os_type").trim() || (f.get("os_family") === "windows" ? "Windows" : ""),
@@ -1994,7 +2031,7 @@ handlers["vm-dialog"] = async (f) => {
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default", bus: legacy ? "sata" : "virtio" })),
     nics: [{ network: f.get("network") || "default", model: nic }],
     node: f.get("node") || null,
-    video: legacy ? "vga" : "virtio",
+    video: f.get("video") && f.get("video") !== "auto" ? f.get("video") : legacy ? "vga" : "virtio",
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);
@@ -2008,6 +2045,34 @@ handlers["vm-dialog"] = async (f) => {
   }
   if (currentPage() === "compute") await refresh("compute"); else location.hash = "compute";
 };
+
+$("#vm-form").addEventListener("input", () => {
+  const f = $("#vm-form").elements;
+  f.vcpus.value = Number(f.cpu_sockets.value) * Number(f.cpu_cores.value);
+});
+$("#vm-form").addEventListener("change", () => {
+  const f = $("#vm-form").elements;
+  f.vcpus.value = Number(f.cpu_sockets.value) * Number(f.cpu_cores.value);
+});
+
+async function updateHardwareCapabilities(form, node) {
+  const request = (form.hardwareCapsRequest || 0) + 1;
+  form.hardwareCapsRequest = request;
+  let caps = {};
+  if (node) { try { caps = await api(`/nodes/${encodeURIComponent(node)}/hardware-capabilities`); } catch (_) {} }
+  if (form.hardwareCapsRequest !== request) return;
+  for (const key of ["tpm", "secure_boot"]) {
+    const input = form.elements[key];
+    if (!input) continue;
+    input.disabled = !caps[key];
+    // Keep an existing TPM checked so saving unrelated settings does not remove it.
+    if (input.disabled && form.id !== "edit-form") input.checked = false;
+  }
+  const thai = form.elements.keymap.querySelector('option[value="th"]');
+  thai.disabled = !(caps.keymaps || []).includes("th");
+  $$(".hw-cap-hint", form).forEach((hint) => { hint.textContent = !node ? "Select a node to enable TPM or Secure Boot." : `TPM: ${caps.tpm ? "swtpm available" : "swtpm unavailable"}. Secure Boot: ${caps.secure_boot ? "firmware available" : "enrolled-key OVMF unavailable"}.`; });
+}
+$("#vm-form").elements.node.addEventListener("change", () => updateHardwareCapabilities($("#vm-form"), $("#vm-form").elements.node.value));
 
 // Back up a VM now. With no backup target yet, ask where backups go first (a local
 // folder on the node by default), then start the backup straight away.
@@ -5154,6 +5219,9 @@ function renderImportTargets() {
   $("#import-disk-targets").innerHTML = importChosen().map((vm, v) => {
     const t = importTarget(vm), locked = importBatch.submitted.has(vm.ref) ? "disabled" : "";
     const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
+    r.cpu_sockets ??= vm.sockets && vm.cores_per_socket && vm.sockets * vm.cores_per_socket === vm.vcpus ? vm.sockets : 1;
+    r.cpu_cores ??= r.vcpus / r.cpu_sockets;
+    r.vcpus = r.cpu_sockets * r.cpu_cores;
     importBatch.resources.set(vm.ref, r);
     const pools = state.pools.filter((p) => p.node === t.node && p.active);
     const field = (label, key, value, original, control, disk = null) => {
@@ -5171,7 +5239,9 @@ function renderImportTargets() {
       <section class="mg-target-pane"><span class="mg-eyebrow">DESTINATION / ibHiCS</span><div class="mg-target-grid">
       ${input("VM name", "name", importBatch.names.get(vm.ref) ?? vm.name, vm.name)}
       ${field("Node", "node", t.node, initialNode, (attrs) => `<select ${attrs}>${importOptions(computeMembers().filter((m) => m.healthy).map((m) => m.name), t.node)}</select>`)}
-      ${input("vCPU", "vcpus", r.vcpus, vm.vcpus, "number", 'min="1" max="256" step="1"')}
+      <label>Total vCPU <input type="number" value="${r.vcpus}" readonly></label>
+      ${input("Sockets", "cpu_sockets", r.cpu_sockets, vm.sockets || 1, "number", 'min="1" max="256" step="1"')}
+      ${input("Cores per socket", "cpu_cores", r.cpu_cores, vm.cores_per_socket || vm.vcpus, "number", 'min="1" max="256" step="1"')}
       ${input("Memory (MB)", "memory_mb", r.memory_mb, vm.memory_mb, "number", 'min="128" step="1"')}
       </div><div class="mg-target-devices">${nicKeys.map((src, i) => {
         const n = importNicSettings(vm, i), net = importNicNetwork(vm, i, src);
@@ -5196,8 +5266,10 @@ function renderImportTargets() {
     const t = importTarget(vm), key = input.dataset[reset ? "resetField" : "targetField"];
     const disk = input.dataset[reset ? "resetDisk" : "targetDisk"];
     let value = input.type === "checkbox" ? input.checked : input.value;
-    if (["vcpus", "memory_mb", "size_gb"].includes(key)) value = value === "" && key === "size_gb" ? null : Number(value);
+    if (["vcpus", "cpu_sockets", "cpu_cores", "memory_mb", "size_gb"].includes(key)) value = value === "" && key === "size_gb" ? null : Number(value);
     if (reset) value = key === "name" ? vm.name : ["vcpus", "memory_mb"].includes(key) ? vm[key] : key === "node" ? t.originalNode : key === "pool" ? t.originalPool : key === "size_gb" ? vm.disks_gb[Number(disk)] || null : false;
+    if (reset && key === "cpu_sockets") value = vm.sockets || 1;
+    if (reset && key === "cpu_cores") value = vm.cores_per_socket || vm.vcpus;
     if (["mac", "mac_mode", "vlan"].includes(key)) {
       const n = importNicSettings(vm, Number(disk));
       n[key] = reset ? key === "mac_mode" ? importDefaultMac(vm, Number(disk)) : "" : value;
@@ -5205,7 +5277,7 @@ function renderImportTargets() {
       const nic = importNicKey(vm, Number(disk));
       if (reset) importBatch.networks.delete(nic); else importBatch.networks.set(nic, value);
     } else if (key === "name") importBatch.names.set(vm.ref, value);
-    else if (["vcpus", "memory_mb"].includes(key)) importBatch.resources.get(vm.ref)[key] = value;
+    else if (["vcpus", "cpu_sockets", "cpu_cores", "memory_mb"].includes(key)) importBatch.resources.get(vm.ref)[key] = value;
     else if (disk != null) t.disks[Number(disk)][key] = value;
     else t[key] = value;
     if (key === "node") {
@@ -5299,7 +5371,7 @@ const importWiz = wizard("import-dialog", {
       if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
       if (chosen.some((v) => {
         const r = importBatch.resources.get(v.ref) || v;
-        return !Number.isInteger(r.vcpus) || r.vcpus < 1 || r.vcpus > 256 || !Number.isInteger(r.memory_mb) || r.memory_mb < 128;
+        return (r.cpu_sockets != null && (!Number.isInteger(r.cpu_sockets) || r.cpu_sockets < 1)) || (r.cpu_cores != null && (!Number.isInteger(r.cpu_cores) || r.cpu_cores < 1)) || !Number.isInteger(r.vcpus) || r.vcpus < 1 || r.vcpus > 256 || !Number.isInteger(r.memory_mb) || r.memory_mb < 128;
       })) throw new Error("Choose 1–256 vCPUs and at least 128 MB memory per VM.");
       if (chosen.some((v, i) => !importBatch.submitted.has(v.ref) && (state.vms.some((vm) => vm.name === names[i]) || state.imports.some((j) => j.name === names[i] && ["queued", "running"].includes(j.state))))) throw new Error("A target name already exists or has a pending migration. Choose another name.");
     }
@@ -5318,7 +5390,7 @@ const importWiz = wizard("import-dialog", {
     if (step === 3) {
       $("#import-summary").innerHTML = importChosen().map((vm) => {
         const t = importTarget(vm), r = importBatch.resources.get(vm.ref) || vm;
-        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicLabel(vm, i, src))} · MAC ${esc(importNicMac(vm, i))}`).join("<br>")}</p></article>`;
+        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} (${r.cpu_sockets || 1} × ${r.cpu_cores || r.vcpus}) · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicLabel(vm, i, src))} · MAC ${esc(importNicMac(vm, i))}`).join("<br>")}</p></article>`;
       }).join("") + `<p class="hint">Keep source VMs powered off until migration completes.</p>`;
     }
   },
@@ -5342,6 +5414,8 @@ handlers["import-dialog"] = async (f) => {
       await importResolveNetworks(vm);
       const t = importBatch.targets.get(vm.ref);
       await post("/migrate/jobs", {
+        cpu_sockets: (importBatch.resources.get(vm.ref) || {}).cpu_sockets || 1,
+        cpu_cores: (importBatch.resources.get(vm.ref) || {}).cpu_cores || (importBatch.resources.get(vm.ref) || vm).vcpus,
         source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
         node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || t?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), nics: importNetworkKeys(vm).length ? importNetworkKeys(vm).map((k, i) => ({network: importNicNetwork(vm, i, k), mac_mode: importNicSettings(vm, i).mac_mode, mac: importNicSettings(vm, i).mac_mode === "custom" ? importNicSettings(vm, i).mac.toLowerCase() : null})) : undefined, start: t ? t.start : f.get("start") === "on",
         clear_hibernation: (t ? t.clear_hibernation : f.get("clear_hibernation") === "on") && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,

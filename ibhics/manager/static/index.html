@@ -867,8 +867,10 @@
         <div class="hw-rows">
           <div class="hw-row">
             <div class="hw-head"><svg><use href="#i-cpu"/></svg><b>CPU</b></div>
-            <div class="chips presets" data-target="vcpus"><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="4">4</button><button type="button" data-v="8">8</button><button type="button" data-v="16">16</button></div>
-            <label class="inline unit"><input name="vcpus" type="number" min="1" max="256" value="2"> vCPU</label>
+            <div class="chips presets" data-target="cpu_cores"><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="4">4</button><button type="button" data-v="8">8</button><button type="button" data-v="16">16</button></div>
+            <label>Sockets <input name="cpu_sockets" type="number" min="1" max="256" value="1"></label>
+            <label>Cores per socket <input name="cpu_cores" type="number" min="1" max="256" value="2"></label>
+            <label class="inline unit"><input name="vcpus" type="number" value="2" readonly> total vCPU</label>
           </div>
           <div class="hw-row">
             <div class="hw-head"><svg><use href="#i-mem"/></svg><b>Memory</b></div>
@@ -886,6 +888,23 @@
             <div class="hw-head"><svg><use href="#i-nic"/></svg><b>Network</b></div>
             <select name="network" class="net-list"><option value="default">default</option></select>
           </div>
+          <details class="wide"><summary>Console and advanced hardware</summary><div class="form-grid"><label>CPU mode <select name="cpu_mode"><option value="default">Default (host-model)</option><option value="host-passthrough">Use CPU from host</option></select></label>
+<label>Mouse <select name="mouse"><option value="tablet">USB tablet</option><option value="ps2">PS/2 mouse</option></select></label>
+<label>Console keyboard <select name="keymap"><option value="default">default</option><option value="en-us">en-us</option><option value="en-gb">en-gb</option><option value="de">de</option><option value="fr">fr</option><option value="es">es</option><option value="it">it</option><option value="ja">ja</option><option value="th" disabled>th (requires node keymap)</option></select></label>
+<label>Boot menu delay (seconds) <input name="boot_menu_seconds" type="number" min="0" max="60" value="0"></label>
+<label class="check"><input type="checkbox" name="restart_on_crash" checked> Restart after a crash</label>
+<label class="check"><input type="checkbox" name="ballooning" checked> Memory ballooning</label>
+<label class="check"><input type="checkbox" name="serial_port" checked> Serial console (PTY)</label>
+<label class="check"><input type="checkbox" name="usb_controller"> USB 3 controller</label>
+<label class="check"><input type="checkbox" name="tpm" disabled> TPM 2.0</label><span class="hint hw-cap-hint">Select a node to check swtpm and firmware support.</span>
+<p class="hint wide">CPU mode, console and advanced hardware changes require a stopped VM. Host CPU mode requires compatible destination CPUs for migration.</p>
+<label class="check"><input type="checkbox" name="secure_boot" disabled> Secure Boot (UEFI / Q35)</label>
+<label>Machine type <select name="machine_type"><option value="q35">Q35</option><option value="i440fx">i440fx</option></select></label>
+<label>Display adapter <select name="video"><option value="auto">OS default</option><option value="virtio">VirtIO GPU</option><option value="vga">Standard VGA</option><option value="qxl">QXL</option><option value="cirrus">Cirrus</option></select></label>
+<p class="hint wide">If the console stays blank, try another display adapter after shutting down the VM.</p>
+<label>First boot device <select name="boot_first"><option value="auto">Automatic</option><option value="hd">Disk</option><option value="cdrom">CD/DVD</option><option value="network">Network</option></select></label>
+<label class="check"><input name="autostart" type="checkbox"> Power on when the node starts</label>
+</div></details>
           <div class="hw-row">
             <div class="hw-head"><svg><use href="#i-system"/></svg><b>Firmware</b></div>
             <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
@@ -955,6 +974,17 @@
         <div class="opt-row"><span>Boot order</span><div class="boot-order" id="edit-boot"></div></div>
         <div class="opt-row"><span>Start with the node</span><label class="check"><input type="checkbox" name="autostart"> Power on this VM when its node starts</label></div>
         <div class="opt-row"><span>Firmware</span><b id="edit-firmware"></b></div>
+        <div class="opt-row"><span>Machine type</span><b id="edit-machine"></b></div>
+        <details><summary>Console and advanced hardware</summary><div class="form-grid"><label>CPU mode <select name="cpu_mode"><option value="default">Default (host-model)</option><option value="host-passthrough">Use CPU from host</option></select></label>
+<label>Mouse <select name="mouse"><option value="tablet">USB tablet</option><option value="ps2">PS/2 mouse</option></select></label>
+<label>Console keyboard <select name="keymap"><option value="default">default</option><option value="en-us">en-us</option><option value="en-gb">en-gb</option><option value="de">de</option><option value="fr">fr</option><option value="es">es</option><option value="it">it</option><option value="ja">ja</option><option value="th" disabled>th (requires node keymap)</option></select></label>
+<label>Boot menu delay (seconds) <input name="boot_menu_seconds" type="number" min="0" max="60" value="0"></label>
+<label class="check"><input type="checkbox" name="restart_on_crash" checked> Restart after a crash</label>
+<label class="check"><input type="checkbox" name="ballooning" checked> Memory ballooning</label>
+<label class="check"><input type="checkbox" name="serial_port" checked> Serial console (PTY)</label>
+<label class="check"><input type="checkbox" name="usb_controller"> USB 3 controller</label>
+<label class="check"><input type="checkbox" name="tpm" disabled> TPM 2.0</label><span class="hint hw-cap-hint">Select a node to check swtpm and firmware support.</span>
+<p class="hint wide">CPU mode, console and advanced hardware changes require a stopped VM. Host CPU mode requires compatible destination CPUs for migration.</p></div></details>
       </div>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save</button></footer>

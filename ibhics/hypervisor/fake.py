@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from . import customize
 from .base import (
+    ADVANCED_FIELDS,
     VM_NAME_RE,
     CloneSpec,
     DiskSpec,
@@ -94,6 +95,7 @@ class FakeDriver(HypervisorDriver):
 
     def create_vm(self, spec: VMSpec) -> VMInfo:
         spec.validate()
+        self.validate_hardware(spec)
         with self._lock:
             if any(vm.spec.name == spec.name for vm in self._vms.values()):
                 raise VMExists(f"VM named {spec.name!r} already exists")
@@ -121,7 +123,15 @@ class FakeDriver(HypervisorDriver):
         with self._lock:
             vm = self._get(uuid)
             new = edit.apply_to(vm.spec)
+            self.validate_hardware(new, vm.spec)
             running = vm.state == VMState.RUNNING
+            if running and (
+                any(getattr(new, k) != getattr(vm.spec, k) for k in ADVANCED_FIELDS)
+                or (new.cpu_sockets is not None and new.vcpus != vm.spec.vcpus)
+            ):
+                raise InvalidState(
+                    "shut down the VM before changing CPU topology or advanced hardware"
+                )
             # Like libvirt: CPUs and memory can grow while the VM runs (hot-add).
             grows = vm.spec.vcpus <= new.vcpus <= 32 and vm.spec.memory_mb <= new.memory_mb
             key = (lambda sp: (sp.boot, sp.video)) if grows else _restart_key

@@ -42,6 +42,8 @@ class NodeImport:
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
         nics: list[dict] | None = None,
+        cpu_sockets: int | None = None,
+        cpu_cores: int | None = None,
     ) -> VMInfo:
         """Convert first, then create the VM, so nothing half-made exists during the copy.
         The converted images wait on the target pool, not on the system disk."""
@@ -90,6 +92,8 @@ class NodeImport:
                     clear_hibernation,
                     disks,
                     nics,
+                    cpu_sockets,
+                    cpu_cores,
                 )
         finally:
             self.progress.pop(name, None)
@@ -127,6 +131,8 @@ class NodeImport:
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
         nics: list[dict] | None = None,
+        cpu_sockets: int | None = None,
+        cpu_cores: int | None = None,
     ) -> VMInfo:
         work = Path(tempfile.mkdtemp(prefix=f"import-{name}-", dir=base))
         try:
@@ -168,7 +174,9 @@ class NodeImport:
             track("Creating the VM", 96)
             spec = VMSpec(
                 name=name,
-                vcpus=vcpus or vm.vcpus,
+                cpu_sockets=cpu_sockets,
+                cpu_cores=cpu_cores,
+                vcpus=vcpus or (cpu_sockets * cpu_cores if cpu_sockets and cpu_cores else vm.vcpus),
                 memory_mb=memory_mb or vm.memory_mb,
                 firmware=converted.firmware,
                 disks=[

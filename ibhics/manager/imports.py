@@ -254,7 +254,18 @@ class ImportManager:
         clear_hibernation: bool = False,
         disks: list[dict] | None = None,
         nics: list[dict] | None = None,
+        cpu_sockets: int | None = None,
+        cpu_cores: int | None = None,
     ) -> ImportJob:
+        if cpu_sockets is not None or cpu_cores is not None:
+            from ..hypervisor import VMSpec
+
+            VMSpec(
+                name=name or "import",
+                vcpus=vcpus or (cpu_sockets or 1) * (cpu_cores or 1),
+                cpu_sockets=cpu_sockets,
+                cpu_cores=cpu_cores,
+            ).validate()
         self._cluster.require_quorum()
         source = self.source(source_name)
         vm = next((v for v in self.source_vms(source_name) if v.ref == vm_ref), None)
@@ -371,6 +382,8 @@ class ImportManager:
                     extra["disks"] = disks
                 if nics is not None:
                     extra["nics"] = nics
+                if cpu_sockets is not None or cpu_cores is not None:
+                    extra.update(cpu_sockets=cpu_sockets, cpu_cores=cpu_cores)
                 info = via.imports.run(
                     source,
                     vm,

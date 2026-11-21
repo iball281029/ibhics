@@ -123,6 +123,8 @@ def parse_vm(entity: dict) -> SourceVM:
         ref=entity.get("metadata", {}).get("uuid", ""),
         name=spec.get("name", ""),
         vcpus=max(1, int(res.get("num_sockets", 1)) * int(res.get("num_vcpus_per_socket", 1))),
+        sockets=max(1, int(res.get("num_sockets", 1))),
+        cores_per_socket=max(1, int(res.get("num_vcpus_per_socket", 1))),
         memory_mb=int(res.get("memory_size_mib", 1024)),
         firmware=Firmware.UEFI if boot in ("UEFI", "SECURE_BOOT") else Firmware.BIOS,
         disks_gb=[-(-int(d.get("disk_size_bytes", 0)) // GIB) for d in disks],

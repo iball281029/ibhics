@@ -22,6 +22,7 @@ from xml.sax.saxutils import escape as xml_escape
 
 from . import customize, edge, hybrid, terminal, vmstats
 from .base import (
+    ADVANCED_FIELDS,
     VIDEO_MODELS,
     VM_NAME_RE,
     CloneSpec,
@@ -59,6 +60,7 @@ from .domain_xml import (
     MEMORY_SLOTS,
     META_NS,
     NAME_NS,
+    apply_hardware_xml,
     build_domain_xml,
     build_volume_xml,
     cdrom_element,
@@ -211,8 +213,43 @@ class LibvirtDriver(HypervisorDriver):
     def get_vm(self, uuid: str) -> VMInfo:
         return self._info(self._lookup(uuid))
 
+    def hardware_capabilities(self) -> dict:
+        import json
+
+        caps = super().hardware_capabilities()
+        caps["tpm"] = shutil.which("swtpm") is not None
+        for folder in ("/usr/share/qemu/firmware", "/etc/qemu/firmware"):
+            for descriptor in Path(folder).glob("*.json"):
+                try:
+                    data = json.loads(descriptor.read_text())
+                    features = data.get("features", [])
+                    mapping = data.get("mapping", {})
+                    executable = mapping.get("executable", {}).get("filename", "")
+                    template = mapping.get("nvram-template", {}).get("filename", "")
+                    x86_q35 = any(
+                        t.get("architecture") == "x86_64"
+                        and any("q35" in m for m in t.get("machines", []))
+                        for t in data.get("targets", [])
+                    )
+                    if (
+                        x86_q35
+                        and {"secure-boot", "enrolled-keys"} <= set(features)
+                        and Path(executable).is_file()
+                        and Path(template).is_file()
+                    ):
+                        caps["secure_boot"] = True
+                except (OSError, ValueError, TypeError, AttributeError):
+                    continue
+        if any(
+            (Path(folder) / "th").is_file()
+            for folder in ("/usr/share/qemu/keymaps", "/usr/share/kvm/keymaps")
+        ):
+            caps["keymaps"].append("th")
+        return caps
+
     def create_vm(self, spec: VMSpec) -> VMInfo:
         spec.validate()
+        self.validate_hardware(spec)
         spec.linked_to = ""  # new disks are never overlays; only clone_vm makes those
         try:
             self._conn.lookupByName(spec.name)
@@ -232,6 +269,8 @@ class LibvirtDriver(HypervisorDriver):
             for vol in created:
                 vol.delete(0)
             raise
+        if spec.autostart:
+            dom.setAutostart(1)
         return self._info(dom)
 
     def insert_cdrom(self, uuid: str, iso: str | None) -> VMInfo:
@@ -259,6 +298,12 @@ class LibvirtDriver(HypervisorDriver):
         current = self._info(dom)
         new = edit.apply_to(current.spec)
         running = dom.isActive()
+        self.validate_hardware(new, current.spec)
+        advanced_changed = any(getattr(new, k) != getattr(current.spec, k) for k in ADVANCED_FIELDS)
+        if running and (
+            advanced_changed or (new.cpu_sockets is not None and new.vcpus != current.spec.vcpus)
+        ):
+            raise InvalidState("shut down the VM before changing CPU topology or advanced hardware")
         root = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
         name = root.findtext("name")
 
@@ -296,7 +341,9 @@ class LibvirtDriver(HypervisorDriver):
                 max_mb = _kib(root.find("maxMemory")) // 1024
                 if new.memory_mb <= max_mb:
                     hot_mb = grow
-        if cpu_mem_changed and not hotplug_ready(root):  # room for next time
+        if (
+            cpu_mem_changed and new.cpu_sockets is None and not hotplug_ready(root)
+        ):  # room for next time
             make_hotplug_ready(root, new.vcpus, new.memory_mb)
         vcpu_el = root.find("vcpu")
         if hot_cpus or not running or new.vcpus < current.spec.vcpus or not hotplug_ready(root):
@@ -336,6 +383,13 @@ class LibvirtDriver(HypervisorDriver):
             for dev in new.boot:
                 ET.SubElement(os_el, "boot", dev=dev)
 
+        if advanced_changed or (new.cpu_sockets is not None and cpu_mem_changed):
+            changed = tuple(
+                k for k in ADVANCED_FIELDS if getattr(new, k) != getattr(current.spec, k)
+            )
+            if new.cpu_sockets is not None and cpu_mem_changed:
+                changed += ("cpu_sockets", "cpu_cores")
+            apply_hardware_xml(root, new, changed)
         devices = root.find("devices")
         attach, detach, update, resize, removed, created = [], [], [], [], [], []
         try:
@@ -2115,6 +2169,19 @@ def disk_source(root, disk) -> tuple[str, str]:
     return "", ""
 
 
+def _current_topology(root) -> tuple[int | None, int | None]:
+    topology = root.find("cpu/topology")
+    vcpu = root.find("vcpu")
+    if topology is None or vcpu is None:
+        return None, None
+    sockets = int(topology.get("sockets", "1"))
+    cores = int(topology.get("cores", "1")) * int(topology.get("threads", "1"))
+    # Existing domains may describe maximum capacity with fewer CPUs online. Keep
+    # their XML intact on unrelated edits rather than inventing a current topology.
+    current = int(vcpu.get("current") or vcpu.text or "1")
+    return (sockets, cores) if sockets * cores == current else (None, None)
+
+
 def _spec_from_xml(xml: str) -> VMSpec:
     root = ET.fromstring(xml)
     memory = root.find("memory")
@@ -2158,6 +2225,30 @@ def _spec_from_xml(xml: str) -> VMSpec:
     return VMSpec(
         name=root.findtext(f"metadata/{{{NAME_NS}}}name") or root.findtext("name", ""),
         video=_video_of(root),
+        secure_boot=root.find("os/firmware/feature[@name='secure-boot'][@enabled='yes']")
+        is not None
+        or (root.find("os/loader") is not None and root.find("os/loader").get("secure") == "yes"),
+        tpm=root.find("devices/tpm/backend[@type='emulator'][@version='2.0']") is not None,
+        cpu_sockets=_current_topology(root)[0],
+        cpu_cores=_current_topology(root)[1],
+        cpu_mode="host-passthrough"
+        if root.find("cpu") is not None and root.find("cpu").get("mode") == "host-passthrough"
+        else "default",
+        mouse="tablet" if root.find("devices/input[@type='tablet']") is not None else "ps2",
+        keymap=root.find("devices/graphics[@type='vnc']").get("keymap", "default")
+        if root.find("devices/graphics[@type='vnc']") is not None
+        else "default",
+        boot_menu_seconds=int(root.find("os/bootmenu").get("timeout", "0")) // 1000
+        if root.find("os/bootmenu") is not None
+        else 0,
+        restart_on_crash=root.findtext("on_crash", "restart") == "restart",
+        ballooning=root.find("devices/memballoon") is not None
+        and root.find("devices/memballoon").get("model") != "none",
+        serial_port=root.find("devices/serial") is not None,
+        usb_controller=root.find("devices/controller[@type='usb'][@model='qemu-xhci']") is not None,
+        machine_type="q35"
+        if root.find("os/type") is None or "q35" in root.find("os/type").get("machine", "q35")
+        else "i440fx",
         vcpus=int(
             (root.find("vcpu").get("current") if root.find("vcpu") is not None else None)
             or root.findtext("vcpu", "1")

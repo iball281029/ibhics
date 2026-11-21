@@ -378,7 +378,7 @@ const post=async (url, body) => {
   importBatch.names.set('vm1','existing');state.vms=[{name:'existing'}];
   assert.throws(()=>importWiz.check(2),/already exists/);state.vms=[];
   importBatch.names.set('vm1','renamed');
-  importBatch.resources.set('vm1',{vcpus:8,memory_mb:8192});
+  importBatch.resources.set('vm1',{vcpus:8,cpu_sockets:2,cpu_cores:4,memory_mb:8192});
   const form=new Map([['node','node1'],['pool','default'],['clear_hibernation','on']]);
   await assert.rejects(handlers['import-dialog'](form),/mock rejection/);
   assert.deepEqual([...importBatch.submitted],['vm1']);
@@ -392,6 +392,7 @@ const post=async (url, body) => {
   assert.equal(requests[0].clear_hibernation,false);
   assert.equal(requests[2].clear_hibernation,false);
   assert.equal(requests[0].vcpus,8);assert.equal(requests[0].memory_mb,8192);
+  assert.equal(requests[0].cpu_sockets,2);assert.equal(requests[0].cpu_cores,4);
   assert.equal(refreshes,1);assert.equal(tab,'imports');
   importBatch.submitted.clear(); requests=[];
   state.pools[0].available_gb=1000;
