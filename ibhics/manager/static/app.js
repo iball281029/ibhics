@@ -3399,29 +3399,27 @@ function renderCluster() {
   $("#cluster-empty").hidden = created;
   $("#cluster-hero").hidden = !created;
   $("#cluster-overview").hidden = !created;
-  $("#cluster-guide").textContent = !created ? "Start here, or join an existing cluster below." : compute === 2 && !witnesses ? "2 nodes need an independent witness for resilient quorum. Add a node and choose Witness." : "Create cluster → Add nodes · Check quorum before managing workloads.";
+  $("#cluster-guide").textContent = !created ? "Start here, or join an existing cluster below." : compute === 2 && !witnesses ? "2 nodes need an independent witness for resilient quorum. Add a node and choose Witness." : "All servers in this cluster at a glance.";
   const rows = Math.ceil(c.members.length / 3), height = rows * 170 + 25;
   const links = c.members.map((m, i) => {
     const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
     const x = (i % 3 + .5) * 900 / count, y = row * 170 + 65;
     return `<path class="cl-link ${m.healthy ? "up" : "down"}" d="M450 12 V${row * 170 + 25} H${x} V${y}"/>`;
   }).join("");
-  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Quorum OK" : "! Quorum lost"}</h2><p>${online}/${c.members.length} online</p><small>${c.quorum ? "Enough votes to keep the cluster working." : "Not enough votes. Check offline members."}</small><span class="cl-legend">Cyan · online link / Red · offline link</span></div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
+  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Working" : "! Stopped"}</h2><p>${online} of ${c.members.length} online</p></div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
     const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
-    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon(m)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.role === "compute" ? "Compute" : "Arbiter"} · ${m.healthy ? "Online" : "Offline"}</small></div>`;
+    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon(m)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.healthy ? (m.role === "compute" ? "Server" : "Witness") : "Offline"}</small></div>`;
   }).join("")}</div>`;
-  const summary = (label, value, note) => `<div><small>${label}</small><b>${value}</b><span>${note}</span></div>`;
+  const ft = clusterFaultTolerance(c, state.pools || [], state.vms || [], state.hosts || {});
+  const label = { quorum: "Votes", nodes: "Servers", data: "Data copies", ram: "Memory" };
+  const down = c.members.length - online, left = Math.max(0, ft.n - down);
+  const ha = state.clusterHA, haOn = ha && ha.available;
+  const tile = (cls, title, value, note) => `<div class="${cls}"><small>${title}</small><b>${value}</b><span>${note}</span></div>`;
   $("#cluster-overview").innerHTML = [
-    summary("Cluster", esc(c.name || "Cluster"), c.cluster_id ? `<button class="cl-copy" id="cluster-copy-id" title="Copy full cluster ID" aria-label="Copy full cluster ID">${esc(c.cluster_id.slice(0, 8))}… ⧉</button>` : "ID unavailable"),
-    summary("Management node", esc(local ? nodeLabel(local.name) : "Unavailable"), "Runs this manager"),
-    summary("Quorum & topology", c.quorum ? "✓ Quorum OK" : "! Quorum lost", esc(topology)),
-    summary("HA restart", esc(clusterHAStatus(state.clusterHA)), "Restarts protected VMs after node failure"),
-    summary("Members", `${c.members.length}`, `${compute} compute · ${witnesses} witness${witnesses === 1 ? "" : "es"}`),
-  ].join("") + (() => {
-    const ft = clusterFaultTolerance(c, state.pools || [], state.vms || [], state.hosts || {});
-    const label = { quorum: "Quorum", nodes: "Compute nodes", data: "Data copies", ram: "Spare RAM" };
-    return `<div class="cl-ft ${ft.n ? "ok" : "none"}"><div class="cl-ft-n"><small>Servers that can fail</small><b>${ft.n}</b><span>${ft.n ? `The VMs keep running if ${ft.n === 1 ? "any 1 server goes" : `any ${ft.n} servers go`} down` : "A server failure stops VMs or the cluster"}</span></div><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b><span>${esc(l.text)}</span></li>`).join("")}</ul></div>`;
-  })();
+    tile(online === c.members.length ? "ok" : "warn", "Online", `${online} / ${c.members.length}`, online === c.members.length ? "All servers are up" : `${c.members.length - online} offline`),
+    `<div class="cl-ft ${left ? "ok" : "none"}"><small>Can go down</small><b>${left} ${left === 1 ? "server" : "servers"}</b><span>${down ? `${down} already down · design allows ${ft.n}` : ft.n ? "VMs keep running" : `Limited by ${ft.limiting.map((l) => label[l.key].toLowerCase()).join(", ")}`}</span><details><summary>Why?</summary><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b> ${esc(l.text)}</li>`).join("")}</ul></details></div>`,
+    tile(haOn ? "ok" : "warn", "Auto restart (HA)", haOn ? "On" : "Off", haOn ? `${ha.vms.length} VMs protected` : "VMs do not restart by themselves"),
+  ].join("");
   $("#cluster-pairing").hidden = created;
   $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
   $("#cluster-members").innerHTML = nodeRows(c, isAdmin()) + (created && isAdmin() ? '<button class="cl-add" data-open="node-dialog"><span>+</span><b>Add a node</b><small>Connect a compute server or witness</small></button>' : "");
