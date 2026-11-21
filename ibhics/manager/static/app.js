@@ -3329,6 +3329,19 @@ function clusterHAStatus(ha) {
   return ha.available ? `On · ${ha.vms.length} protected VMs` : "Unavailable on this manager";
 }
 
+// Isometric 3D server (or witness shield on a pedestal) for the heartbeat map.
+function clusterIcon3d(m, i) {
+  const up = m.healthy, g = `cl3d${i}`;
+  const [hi, lo, side, dark, glow] = up ? ["#9ffaff", "#2bb6d6", "#0f5a78", "#08304a", "#3ef0ff"] : ["#ffb3bd", "#c8485c", "#6a2232", "#3a1220", "#ff6b81"];
+  const defs = `<defs><linearGradient id="${g}t" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${hi}"/><stop offset="1" stop-color="${lo}"/></linearGradient><linearGradient id="${g}l" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${side}"/><stop offset="1" stop-color="${dark}"/></linearGradient><linearGradient id="${g}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${dark}"/><stop offset="1" stop-color="#030c16"/></linearGradient></defs>`;
+  const edge = `stroke="${glow}" stroke-width="1" stroke-linejoin="round"`;
+  if (m.role === "compute") {
+    const slots = [0, 1, 2, 3].map((k) => `<path d="M45 ${46 + k * 10}l21-9.8" stroke="${glow}" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"/><circle class="cl-led" style="animation-delay:${(k * 0.35).toFixed(2)}s" cx="16" cy="${31 + k * 10}" r="1.8" fill="${up ? "#5ff7d2" : "#ff6b81"}"/>`).join("");
+    return `<svg class="cl-3d" viewBox="0 0 80 90" aria-hidden="true">${defs}<polygon points="10,20 40,34 40,84 10,70" fill="url(#${g}l)" ${edge}/><polygon points="40,34 70,20 70,70 40,84" fill="url(#${g}r)" ${edge}/><polygon points="40,6 70,20 40,34 10,20" fill="url(#${g}t)" ${edge}/>${slots}</svg>`;
+  }
+  return `<svg class="cl-3d" viewBox="0 0 80 90" aria-hidden="true">${defs}<polygon points="12,66 40,79 40,87 12,74" fill="url(#${g}l)" ${edge}/><polygon points="40,79 68,66 68,74 40,87" fill="url(#${g}r)" ${edge}/><polygon points="40,53 68,66 40,79 12,66" fill="url(#${g}t)" fill-opacity=".55" ${edge}/><g class="cl-float-shield"><path d="M40 6l20 8-3 20-17 14-17-14-3-20z" fill="url(#${g}t)" ${edge}/><path d="M40 6l20 8-3 20-17 14z" fill="#000" fill-opacity=".25"/><path d="m31 25 6 6 12-12" fill="none" stroke="#04202e" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
+}
+
 function clusterIcon(m) {
   if (m.role === "compute" && typeof NetworkCore !== "undefined") return NetworkCore.deviceIcon("node", { stopped: !m.healthy });
   return `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${m.role === "compute" ? '<rect x="17" y="6" width="30" height="50" rx="3"/><path d="M23 17h18M23 28h18M23 39h18M23 50h18"/>' : '<path d="m32 6 22 10-4 25-18 17-18-17-4-25Z"/><path d="m22 31 7 7 14-15"/>'}</svg>`;
@@ -3410,7 +3423,7 @@ function renderCluster() {
   }).join("") + `<circle class="cl-core" cx="450" cy="12" r="5"/>`;
   $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Working" : "! Stopped"}</h2><p>${online} of ${c.members.length} online</p></div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
     const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
-    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon(m)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.healthy ? (m.role === "compute" ? "Server" : "Witness") : "Offline"}</small></div>`;
+    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon3d(m, i)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.healthy ? (m.role === "compute" ? "Server" : "Witness") : "Offline"}</small></div>`;
   }).join("")}</div>`;
   const ft = clusterFaultTolerance(c, state.pools || [], state.vms || [], state.hosts || {});
   const label = { quorum: "Votes", nodes: "Servers", data: "Data copies", ram: "Memory" };

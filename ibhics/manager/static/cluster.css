@@ -123,3 +123,14 @@
 #page-cluster .cl-map-node.down::before{background:radial-gradient(closest-side,#ff4d6d44,transparent);border-color:#ff708655}
 @keyframes cl-float{50%{transform:translateY(-5px)}}
 @media(prefers-reduced-motion:reduce){#page-cluster :is(.cl-core,.cl-map::before,.cl-map-node>svg){animation:none}#page-cluster .cl-pulse{display:none}}
+
+/* 3D isometric icons in the heartbeat map */
+#page-cluster .cl-map-node>svg.cl-3d{width:76px;height:86px;background:none;border-radius:0;box-shadow:none;filter:drop-shadow(0 0 10px #3ef0ff66) drop-shadow(0 8px 10px #0008)}
+#page-cluster .cl-map-node.down>svg.cl-3d{filter:drop-shadow(0 0 10px #ff4d6d55) drop-shadow(0 8px 10px #0008)}
+#page-cluster .cl-map-node>b{margin-top:6px}
+#page-cluster .cl-map-node::before{top:calc(50% - 4px)}
+#page-cluster .cl-led{animation:cl-led 1.4s steps(2,jump-none) infinite}
+#page-cluster .down .cl-led{animation:none;opacity:.6}
+@keyframes cl-led{50%{opacity:.2}}
+#page-cluster .cl-float-shield{animation:cl-float 4s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){#page-cluster :is(.cl-led,.cl-float-shield){animation:none}}
