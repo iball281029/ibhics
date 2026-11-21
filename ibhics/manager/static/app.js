@@ -3374,6 +3374,25 @@ function nodeRows(c, admin) {
   }).join("");
 }
 
+// HA restart, chosen on the Cluster page with one switch per VM.
+let clusterHAOpen = false;
+const clusterHAVMs = () => (state.vms || []).filter((v) => !v.template && !v.recycled);
+function renderClusterHA() {
+  const box = $("#cluster-ha");
+  if (!box) return;
+  const ha = state.clusterHA, on = new Set((ha?.vms || []).map((v) => v.uuid)), vms = clusterHAVMs();
+  box.hidden = !clusterHAOpen || !ha?.available;
+  if (box.hidden) return;
+  box.innerHTML = `<div class="cl-ha-head"><b>Auto restart (HA)</b><span>Switch on the VMs that must keep running. If their server fails, they start on another server.</span><button type="button" data-ha-all="1">Protect all</button><button type="button" data-ha-all="0">Turn all off</button></div><div class="cl-ha-list">${vms.map((v) => `<label class="cl-ha-vm ${on.has(v.uuid) ? "on" : ""}"><input type="checkbox" data-ha-vm="${esc(v.uuid)}" ${on.has(v.uuid) ? "checked" : ""}><i></i><span><b>${esc(v.name)}</b><small>${esc(nodeLabel(v.node || ""))} · ${gbText(v.memory_mb || 0)}</small></span></label>`).join("") || '<p class="hint">No VMs yet.</p>'}</div>`;
+}
+async function setClusterHA(uuids, enabled) {
+  for (const uuid of uuids) await api(`/vms/${enc(uuid)}/ha`, { method: "PUT", body: JSON.stringify({ enabled }) });
+  state.clusterHA = await api("/ha");
+  state.ha = new Set((state.clusterHA?.vms || []).map((v) => v.uuid));
+  toast(`HA restart ${enabled ? "on" : "off"} for ${uuids.length} VM${uuids.length === 1 ? "" : "s"}`);
+  renderCluster();
+}
+
 // How many servers may fail while the cluster keeps running its VMs: the smallest of
 // what quorum, the number of data copies and the spare RAM allow.
 function clusterFaultTolerance(c, pools, vms, hosts) {
@@ -3433,15 +3452,27 @@ function renderCluster() {
   $("#cluster-overview").innerHTML = [
     tile(online === c.members.length ? "ok" : "warn", "Online", `${online} / ${c.members.length}`, online === c.members.length ? "All servers are up" : `${c.members.length - online} offline`),
     `<div class="cl-ft ${left ? "ok" : "none"}"><small>Can go down</small><b>${left} ${left === 1 ? "server" : "servers"}</b><span>${down ? `${down} already down · design allows ${ft.n}` : ft.n ? "VMs keep running" : `Limited by ${ft.limiting.map((l) => label[l.key].toLowerCase()).join(", ")}`}</span><details><summary>Why?</summary><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b> ${esc(l.text)}</li>`).join("")}</ul></details></div>`,
-    tile(haOn ? "ok" : "warn", "Auto restart (HA)", haOn ? "On" : "Off", haOn ? `${ha.vms.length} VM${ha.vms.length === 1 ? "" : "s"} protected` : "VMs do not restart by themselves"),
+    tile(haOn && ha.vms.length ? "ok" : "warn", "Auto restart (HA)", haOn ? `${ha.vms.length} / ${clusterHAVMs().length}` : "Off", haOn ? `VMs restart on another server if theirs fails${typeof canOperate !== "function" || canOperate() ? '<button class="cl-ha-open" type="button">Choose VMs</button>' : ""}` : "Unavailable on this manager"),
   ].join("");
+  renderClusterHA();
   $("#cluster-pairing").hidden = created;
   $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
   $("#cluster-members").innerHTML = nodeRows(c, isAdmin()) + (created && isAdmin() ? '<button class="cl-add" data-open="node-dialog"><span>+</span><b>Add a node</b><small>Connect a compute server or witness</small></button>' : "");
   for (const m of c.members.filter((m) => m.role === "compute")) void loadHardwareBadge(m.name);
 }
 
+$("#page-cluster").addEventListener("change", (e) => {
+  const box = e.target.closest("[data-ha-vm]");
+  if (box) setClusterHA([box.dataset.haVm], box.checked).catch((err) => { box.checked = !box.checked; fail(err); });
+});
 $("#page-cluster").addEventListener("click", async (e) => {
+  if (e.target.closest(".cl-ha-open")) { clusterHAOpen = !clusterHAOpen; renderClusterHA(); return; }
+  const all = e.target.closest("[data-ha-all]");
+  if (all) {
+    const want = all.dataset.haAll === "1", on = new Set((state.clusterHA?.vms || []).map((v) => v.uuid));
+    setClusterHA(clusterHAVMs().filter((v) => on.has(v.uuid) !== want).map((v) => v.uuid), want).catch(fail);
+    return;
+  }
   const view = e.target.closest("[data-cl-view]");
   if (view) {
     $("#cluster-members").classList.toggle("cl-list", view.dataset.clView === "list");
