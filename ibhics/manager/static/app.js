@@ -3329,6 +3329,19 @@ function clusterHAStatus(ha) {
   return ha.available ? `On · ${ha.vms.length} protected VMs` : "Unavailable on this manager";
 }
 
+// Isometric 3D server (or witness shield on a pedestal) for the heartbeat map.
+function clusterIcon3d(m, i) {
+  const up = m.healthy, g = `cl3d${i}`;
+  const [hi, lo, side, dark, glow] = up ? ["#9ffaff", "#2bb6d6", "#0f5a78", "#08304a", "#3ef0ff"] : ["#ffb3bd", "#c8485c", "#6a2232", "#3a1220", "#ff6b81"];
+  const defs = `<defs><linearGradient id="${g}t" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${hi}"/><stop offset="1" stop-color="${lo}"/></linearGradient><linearGradient id="${g}l" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${side}"/><stop offset="1" stop-color="${dark}"/></linearGradient><linearGradient id="${g}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${dark}"/><stop offset="1" stop-color="#030c16"/></linearGradient></defs>`;
+  const edge = `stroke="${glow}" stroke-width="1" stroke-linejoin="round"`;
+  if (m.role === "compute") {
+    const slots = [0, 1, 2, 3].map((k) => `<path d="M45 ${46 + k * 10}l21-9.8" stroke="${glow}" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"/><circle class="cl-led" style="animation-delay:${(k * 0.35).toFixed(2)}s" cx="16" cy="${31 + k * 10}" r="1.8" fill="${up ? "#5ff7d2" : "#ff6b81"}"/>`).join("");
+    return `<svg class="cl-3d" viewBox="0 0 80 90" aria-hidden="true">${defs}<polygon points="10,20 40,34 40,84 10,70" fill="url(#${g}l)" ${edge}/><polygon points="40,34 70,20 70,70 40,84" fill="url(#${g}r)" ${edge}/><polygon points="40,6 70,20 40,34 10,20" fill="url(#${g}t)" ${edge}/>${slots}</svg>`;
+  }
+  return `<svg class="cl-3d" viewBox="0 0 80 90" aria-hidden="true">${defs}<polygon points="12,66 40,79 40,87 12,74" fill="url(#${g}l)" ${edge}/><polygon points="40,79 68,66 68,74 40,87" fill="url(#${g}r)" ${edge}/><polygon points="40,53 68,66 40,79 12,66" fill="url(#${g}t)" fill-opacity=".55" ${edge}/><g class="cl-float-shield"><path d="M40 6l20 8-3 20-17 14-17-14-3-20z" fill="url(#${g}t)" ${edge}/><path d="M40 6l20 8-3 20-17 14z" fill="#000" fill-opacity=".25"/><path d="m31 25 6 6 12-12" fill="none" stroke="#04202e" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></g></svg>`;
+}
+
 function clusterIcon(m) {
   if (m.role === "compute" && typeof NetworkCore !== "undefined") return NetworkCore.deviceIcon("node", { stopped: !m.healthy });
   return `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">${m.role === "compute" ? '<rect x="17" y="6" width="30" height="50" rx="3"/><path d="M23 17h18M23 28h18M23 39h18M23 50h18"/>' : '<path d="m32 6 22 10-4 25-18 17-18-17-4-25Z"/><path d="m22 31 7 7 14-15"/>'}</svg>`;
@@ -3369,8 +3382,10 @@ function clusterFaultTolerance(c, pools, vms, hosts) {
   const quorum = Math.floor((voters - 1) / 2);
   limits.push({ key: "quorum", n: quorum, text: voters === 2 ? "2 votes: losing either one stops quorum. Add a witness." : `${voters} votes: a majority (${Math.floor(voters / 2) + 1}) must stay online` });
   limits.push({ key: "nodes", n: Math.max(0, compute.length - 1), text: `${compute.length} compute node${compute.length === 1 ? "" : "s"}: one must keep running the VMs` });
-  const vstore = pools.some((p) => p.shared && (p.name === "virtualstorage" || /virtual storage/i.test(p.display_name || "")));
-  const shared = pools.some((p) => p.shared);
+  // /pools lists each node's pools; a pool is shared when every compute node has it.
+  const onAll = (p) => compute.every((m) => pools.some((q) => q.name === p.name && q.node === m.name));
+  const vstore = pools.some((p) => p.name === "virtualstorage" || /gateway-exports/.test(p.source || "") || /virtual storage/i.test(p.display_name || ""));
+  const shared = pools.some((p) => p.shared || (compute.length > 1 && ["nfs", "iscsi"].includes(p.type) && onAll(p)));
   const copies = vstore ? 2 : shared ? Infinity : 1;
   limits.push({ key: "data", n: copies === Infinity ? Infinity : copies - 1, text: vstore ? "Virtual Storage keeps 2 copies of every disk" : shared ? "Shared storage (outside the nodes) holds the disks" : "Local disks only: VMs on a failed node stop until it returns" });
   const sizes = compute.map((m) => Number(hosts[m.name]?.memory_mb) || 0);
@@ -3397,29 +3412,29 @@ function renderCluster() {
   $("#cluster-empty").hidden = created;
   $("#cluster-hero").hidden = !created;
   $("#cluster-overview").hidden = !created;
-  $("#cluster-guide").textContent = !created ? "Start here, or join an existing cluster below." : compute === 2 && !witnesses ? "2 nodes need an independent witness for resilient quorum. Add a node and choose Witness." : "Create cluster → Add nodes · Check quorum before managing workloads.";
+  $("#cluster-guide").textContent = !created ? "Start here, or join an existing cluster below." : compute === 2 && !witnesses ? "2 nodes need an independent witness for resilient quorum. Add a node and choose Witness." : "All servers in this cluster at a glance.";
   const rows = Math.ceil(c.members.length / 3), height = rows * 170 + 25;
   const links = c.members.map((m, i) => {
     const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
     const x = (i % 3 + .5) * 900 / count, y = row * 170 + 65;
-    return `<path class="cl-link ${m.healthy ? "up" : "down"}" d="M450 12 V${row * 170 + 25} H${x} V${y}"/>`;
-  }).join("");
-  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Quorum OK" : "! Quorum lost"}</h2><p>${online}/${c.members.length} online</p><small>${c.quorum ? "Enough votes to keep the cluster working." : "Not enough votes. Check offline members."}</small><span class="cl-legend">Cyan · online link / Red · offline link</span></div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
+    const d = `M450 12 V${row * 170 + 25} H${x} V${y}`;
+    // Online links carry a heartbeat pulse from the cluster core to the node.
+    return `<path class="cl-link ${m.healthy ? "up" : "down"}" d="${d}"/>${m.healthy ? `<circle class="cl-pulse" r="3"><animateMotion dur="2.4s" begin="${(i * 0.4).toFixed(1)}s" repeatCount="indefinite" path="${d}"/></circle>` : ""}`;
+  }).join("") + `<circle class="cl-core" cx="450" cy="12" r="5"/>`;
+  $("#cluster-hero").innerHTML = `<div class="cl-quorum ${c.quorum ? "up" : "down"}"><span class="cl-eyebrow">CLUSTER HEARTBEAT</span><h2>${c.quorum ? "✓ Working" : "! Stopped"}</h2><p>${online} of ${c.members.length} online</p></div><div class="cl-map" style="--cl-rows:${rows}"><svg class="cl-links" viewBox="0 0 900 ${height}" preserveAspectRatio="none" aria-hidden="true">${links}</svg>${c.members.map((m, i) => {
     const row = Math.floor(i / 3), count = Math.min(3, c.members.length - row * 3);
-    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon(m)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.role === "compute" ? "Compute" : "Arbiter"} · ${m.healthy ? "Online" : "Offline"}</small></div>`;
+    return `<div class="cl-map-node ${m.healthy ? "up" : "down"}" style="grid-row:${row + 1};grid-column:span ${6 / count}">${clusterIcon3d(m, i)}<b title="${esc(nodeLabel(m.name))}">${esc(nodeLabel(m.name))}</b><small>${m.healthy ? (m.role === "compute" ? "Server" : "Witness") : "Offline"}</small></div>`;
   }).join("")}</div>`;
-  const summary = (label, value, note) => `<div><small>${label}</small><b>${value}</b><span>${note}</span></div>`;
+  const ft = clusterFaultTolerance(c, state.pools || [], state.vms || [], state.hosts || {});
+  const label = { quorum: "Votes", nodes: "Servers", data: "Data copies", ram: "Memory" };
+  const down = c.members.length - online, left = Math.max(0, ft.n - down);
+  const ha = state.clusterHA, haOn = ha && ha.available;
+  const tile = (cls, title, value, note) => `<div class="${cls}"><small>${title}</small><b>${value}</b><span>${note}</span></div>`;
   $("#cluster-overview").innerHTML = [
-    summary("Cluster", esc(c.name || "Cluster"), c.cluster_id ? `<button class="cl-copy" id="cluster-copy-id" title="Copy full cluster ID" aria-label="Copy full cluster ID">${esc(c.cluster_id.slice(0, 8))}… ⧉</button>` : "ID unavailable"),
-    summary("Management node", esc(local ? nodeLabel(local.name) : "Unavailable"), "Runs this manager"),
-    summary("Quorum & topology", c.quorum ? "✓ Quorum OK" : "! Quorum lost", esc(topology)),
-    summary("HA restart", esc(clusterHAStatus(state.clusterHA)), "Restarts protected VMs after node failure"),
-    summary("Members", `${c.members.length}`, `${compute} compute · ${witnesses} witness${witnesses === 1 ? "" : "es"}`),
-  ].join("") + (() => {
-    const ft = clusterFaultTolerance(c, state.pools || [], state.vms || [], state.hosts || {});
-    const label = { quorum: "Quorum", nodes: "Compute nodes", data: "Data copies", ram: "Spare RAM" };
-    return `<div class="cl-ft ${ft.n ? "ok" : "none"}"><div class="cl-ft-n"><small>Servers that can fail</small><b>${ft.n}</b><span>${ft.n ? `The VMs keep running if ${ft.n === 1 ? "any 1 server goes" : `any ${ft.n} servers go`} down` : "A server failure stops VMs or the cluster"}</span></div><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b><span>${esc(l.text)}</span></li>`).join("")}</ul></div>`;
-  })();
+    tile(online === c.members.length ? "ok" : "warn", "Online", `${online} / ${c.members.length}`, online === c.members.length ? "All servers are up" : `${c.members.length - online} offline`),
+    `<div class="cl-ft ${left ? "ok" : "none"}"><small>Can go down</small><b>${left} ${left === 1 ? "server" : "servers"}</b><span>${down ? `${down} already down · design allows ${ft.n}` : ft.n ? "VMs keep running" : `Limited by ${ft.limiting.map((l) => label[l.key].toLowerCase()).join(", ")}`}</span><details><summary>Why?</summary><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b> ${esc(l.text)}</li>`).join("")}</ul></details></div>`,
+    tile(haOn ? "ok" : "warn", "Auto restart (HA)", haOn ? "On" : "Off", haOn ? `${ha.vms.length} VMs protected` : "VMs do not restart by themselves"),
+  ].join("");
   $("#cluster-pairing").hidden = created;
   $("#cluster-pairing-address").textContent = `Node ID: ${local?.name || ""} · Agent: http://${location.hostname}:8007`;
   $("#cluster-members").innerHTML = nodeRows(c, isAdmin()) + (created && isAdmin() ? '<button class="cl-add" data-open="node-dialog"><span>+</span><b>Add a node</b><small>Connect a compute server or witness</small></button>' : "");
@@ -4394,10 +4409,21 @@ async function protectionOverview() {
   const usage = [...protection.usage.values()].flat(), used = usage.reduce((n,u) => n + (u.used_bytes || 0), 0), free = protectionFreeSpace(usage);
   const known = usage.length && usage.every(u => u.used_bytes != null && u.free_bytes != null && !u.error);
   const pts = protection.points;
-  $("#protection-overview").innerHTML = `<div class="bp-coverage"><div class="bp-ring" style="--coverage:${pct}%" role="img" aria-label="${pct}% of VMs have an enabled schedule"><b>${pct}%</b></div><div><h2>Protection overview</h2><strong>${covered} / ${vms.length} VMs scheduled</strong><small>${vms.length - covered ? `${vms.length - covered} need a schedule` : vms.length ? "Every VM has an enabled schedule" : "No VMs yet"}</small><small>Schedule coverage · boot evidence is shown separately</small></div></div>
-    <div class="bp-stat"><small>Latest backup</small><b class="${jobs[0]?.state === "failed" ? "bp-alert" : ""}">${jobs[0] ? jobs[0].state === "done" ? "Successful" : "Failed" : "No runs yet"}</b><span>${esc(jobs[0] ? `${jobs[0].vm} · ${when(jobs[0].finished)}` : "Create a schedule to begin")}</span><small>Next run (browser time estimate)</small><span>${next ? esc(when(next.toISOString())) : "No enabled schedule"}</span></div>
-    <div class="bp-stat"><small>Restore point evidence${protection.errors.length ? " · partial" : ""}</small><div class="bp-counts"><span><b>${pts.filter(b=>b.verified === "passed").length}</b>verified</span><span><b>${pts.filter(b=>b.suspicious).length}</b>suspicious</span><span><b>${pts.filter(pointLocked).length}</b>immutable</span></div><span>${pts.length} restore points${protection.errors.length ? ` · unavailable: ${esc(protection.errors.join(", "))}` : " across repositories"}</span></div>
-    <div class="bp-stat"><small>Repository space</small><b>${known ? size(free) : "Unknown / partial"}</b><span>${known ? "free" : "Capacity unavailable for some targets"}</span><span>${size(used)} measured used</span></div>`;
+  const last = jobs[0], lastOk = last && last.state === "done";
+  const verified = pts.filter(b => b.verified === "passed").length, locked = pts.filter(pointLocked).length, alerts = pts.filter(b => b.suspicious).length;
+  const cap = used + (free || 0), usedPct = known && cap ? Math.round(used / cap * 100) : 0;
+  const icon = (d) => `<svg class="bp-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
+  const tile = (cls, title, ico, body) => `<div class="bp-holo ${cls}"><i class="bp-corner"></i><small>${ico}${title}</small>${body}</div>`;
+  $("#protection-overview").innerHTML = [
+    tile(pct === 100 ? "ok" : "warn", "Protected VMs", icon("M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z"),
+      `<div class="bp-ring" style="--coverage:${pct}%" role="img" aria-label="${pct}% of VMs have an enabled schedule"><b>${pct}%</b></div><span>${covered} of ${vms.length} VMs</span>`),
+    tile(!last ? "idle" : lastOk ? "ok" : "bad", "Last backup", icon("M12 4a8 8 0 1 0 8 8M12 8v4l3 2"),
+      `<b class="bp-big">${!last ? "—" : lastOk ? "✓ OK" : "✕ Failed"}</b><span>${esc(last ? when(last.finished) : "No runs yet")}</span><span class="bp-dim">Next: ${next ? esc(when(next.toISOString())) : "not scheduled"}</span>`),
+    tile(alerts ? "bad" : "ok", "Recovery proof", icon("M4 12l5 5L20 6"),
+      `<div class="bp-trio"><span><b>${verified}</b>Boot tested</span><span><b>${locked}</b>Locked</span><span class="${alerts ? "bp-alert" : ""}"><b>${alerts}</b>Alerts</span></div><span class="bp-dim">${pts.length} restore points${protection.errors.length ? " · some repositories unavailable" : ""}</span>`),
+    tile(known ? "ok" : "idle", "Repository space", icon("M4 6h16v4H4zM4 14h16v4H4z"),
+      `<b class="bp-big">${known ? size(free) : "—"}</b><span>${known ? "free" : "Unknown"}</span><div class="bp-bar"><i style="width:${usedPct}%"></i></div>`),
+  ].join("");
   renderTargets();
 }
 function renderTargets() {
