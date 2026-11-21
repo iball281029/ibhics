@@ -77,24 +77,43 @@
     }
     return out;
   }
-  // Layout is shared with the scene and fixture checks. Reserve a rear service lane.
+  // One floor, variable sized VLAN zones, with a central equipment aisle.
   function dioramaLayout(networks, vms, stopped = true) {
-    const maximum = Math.max(1, ...networks.map(n => vms.filter(v => v.nics.some(nic => nic.network === n.name) && (stopped || v.state === 'running')).length));
-    const cols = Math.max(2, Math.ceil(Math.sqrt(maximum))), rows = Math.ceil(maximum / cols);
-    const racks = new Set(networks.flatMap(n => n.nodes || []));
-    vms.forEach(v => { if (v.node) racks.add(v.node); });
-    const w = Math.max(14, cols * 3.8 + 3, racks.size * 2 + 7), d = Math.max(11, rows * 3.8 + 6);
-    return networks.map((net, i) => ({
-      x: networks.length <= 3 ? -i * (w + 2) * .78 : (i % 3) * (w + 3),
-      y: networks.length <= 3 ? i * 2.5 : 0,
-      z: networks.length <= 3 ? -i * 1.8 : Math.floor(i / 3) * (d + 3), w, d,
-      slots: vms.filter(v => v.nics.some(n => n.network === net.name) && (stopped || v.state === 'running')).map((v, j) => ({uuid: v.uuid, x: (j % cols - (cols - 1) / 2) * 3.8, z: -d / 2 + 5 + Math.floor(j / cols) * 3.8}))
-    }));
+    const columns = Math.max(1, Math.ceil(Math.sqrt(networks.length)));
+    const zones = networks.map(net => {
+      const members = vms.filter(v => v.nics?.[0]?.network === net.name && (stopped || v.state === 'running'));
+      const cols = Math.max(2, Math.ceil(Math.sqrt(members.length))), rows = Math.max(1, Math.ceil(members.length / cols));
+      return {y: 0, w: Math.max(14, cols * 5.4 + 3), d: Math.max(12, rows * 5.4 + 5),
+        slots: members.map((v, j) => ({uuid: v.uuid, x: (j % cols - (cols - 1) / 2) * 5.4, z: -rows * 5.4 / 2 + 2.7 + Math.floor(j / cols) * 5.4 + 1}))};
+    });
+    const widths = Array.from({length:columns}, (_,c) => Math.max(0,...zones.filter((_,i)=>i%columns===c).map(z=>z.w)));
+    const depths = Array.from({length:Math.ceil(zones.length/columns)}, (_,r) => Math.max(...zones.slice(r*columns,(r+1)*columns).map(z=>z.d)));
+    const aisle = Math.max(9, new Set([...networks.flatMap(n=>n.nodes||[n.node].filter(Boolean)), ...vms.map(v=>v.node).filter(Boolean)]).size * 2 + 3);
+    const total = widths.reduce((a,b)=>a+b,0) + Math.max(0,columns-1)*3 + aisle;
+    const depth = depths.reduce((a,b)=>a+b,0) + Math.max(0,depths.length-1)*3;
+    return zones.map((zone,i)=>{
+      const c=i%columns,r=Math.floor(i/columns), split=Math.floor(columns/2);
+      return {...zone,x:-total/2+widths.slice(0,c).reduce((a,b)=>a+b+3,0)+widths[c]/2+(c>=split?aisle:0),
+        z:-depth/2+depths.slice(0,r).reduce((a,b)=>a+b+3,0)+depths[r]/2};
+    });
   }
-  function clampSlot(p, layer) {
-    return { x: Math.max(-layer.w / 2 + 1.2, Math.min(layer.w / 2 - 1.2, p.x)), z: Math.max(-layer.d / 2 + 4.5, Math.min(layer.d / 2 - 1.2, p.z)) };
+  function clampSlot(p, zone) {
+    return { x: Math.max(-zone.w / 2 + 1.8, Math.min(zone.w / 2 - 1.8, p.x)), z: Math.max(-zone.d / 2 + 2.5, Math.min(zone.d / 2 - 1.8, p.z)) };
   }
-  const api = { dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
+  function zoneAt(zones, point) {
+    return zones.findIndex(z=>Math.abs(point.x-z.x)<=z.w/2 && Math.abs(point.z-z.z)<=z.d/2);
+  }
+  function stageNicMove(vms, uuid, index, network, networks) {
+    const vm=vms.find(v=>v.uuid===uuid);
+    if(!vm || !Number.isInteger(index) || !vm.nics[index]) throw Error('Select an existing NIC');
+    if(!networks.some(n=>n.name===network)) throw Error('Target network no longer exists');
+    return vms.map(v=>v.uuid===uuid?{...v,nics:v.nics.map((n,i)=>i===index?{...n,network}:{...n})}:v);
+  }
+  function draftRuleFromDrag(vm, target) {
+    if(!vm || !target || target === `vm:${vm.name}`) return null;
+    return {src:`vm:${vm.name}`,dst:target};
+  }
+  const api = { zoneAt, stageNicMove, draftRuleFromDrag, dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
   if (typeof module !== 'undefined') module.exports = api;
   else root.NetworkCore = api;
 })(globalThis);

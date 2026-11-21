@@ -67,3 +67,13 @@
 #page-network .nw-label.vm>small{color:#8fb6cb;font-size:10px}
 #page-network .nw-label.vm[data-state=stopped],#page-network .nw-label.vm[data-state=shutoff]{border-left-color:#768da7;color:#a7b9cc}
 #page-network .nw-label.vm[data-state=paused]{border-left-color:#ffcb66}
+
+#nw-three .nw-edit-tools{position:absolute;top:14px;left:14px;z-index:4;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 160px)}
+#nw-three .nw-edit-tools button{padding:8px 12px;font-size:11px;background:#081e32ee}
+#page-network .nw-label.vm.pending{border-color:#ffcb66;border-style:dashed;color:#ffdf9b}
+#nw-vm-panel label{display:flex;flex-direction:column;align-items:stretch;margin:12px 0}
+#nw-vm-panel .nw-nic-choice{border:1px dashed #ffcb66;border-radius:8px;padding:10px}
+#nw-vm-panel .nw-nic-choice button{display:block;margin:8px 0;width:100%}
+#nw-vm-panel .nw-edit-error{color:#ff6b7a}
+
+#nw-3d-status{font-size:11px;color:#ffdf9b;max-height:70px;overflow:auto;align-self:center}

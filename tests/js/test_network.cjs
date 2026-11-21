@@ -34,7 +34,7 @@ assert(crowded.some(p=>!p.box));
 console.log('Network simulation and 5–20 VM label collision checks passed');
 
 // Execute the production scene with real Three.js geometry/projection, replacing
-// only WebGL and DOM APIs. This catches crowded labels in the actual terrace,
+// only WebGL and DOM APIs. This catches crowded labels in the actual single floor,
 // rather than checking an unrelated grid of screen coordinates.
 async function checkDiorama() {
   const THREE = await import('../../ibhics/manager/static/vendor/three/three.module.min.js');
@@ -68,18 +68,24 @@ async function checkDiorama() {
     const elements=new Map(), $=s=>{if(!elements.has(s))elements.set(s,new Element());return elements.get(s);};
     $('#topo-edit-tools').hidden=true;
     const networks=Array.from({length:vlanCount},(_,i)=>({name:i?'vlan-'+i:'default',vlan:i*10+1,nodes:['node-a','node-b']}));
-    const vms=Array.from({length:vmCount},(_,i)=>({uuid:'vm-'+i,name:['win-app','linux-db','worker'][i%3]+'-'+i,state:i%5===4?'stopped':'running',os_type:['windows','linux','other'][i%3],node:i%2?'node-a':'node-b',nics:[{network:networks[i%vlanCount].name}],ips:['10.0.'+(i%vlanCount)+'.'+(i+10)]}));
+    const vms=Array.from({length:vmCount},(_,i)=>({uuid:'vm-'+i,name:['win-app','linux-db','worker'][i%3]+'-'+i,state:i%5===4?'stopped':'running',os_type:['windows','linux','other'][i%3],node:i%2?'node-a':'node-b',nics:i===0?[{network:networks[0].name,mac:'52:54:00:00:00:01'},{network:networks[1].name,mac:'52:54:00:00:00:02'}]:[{network:networks[i%vlanCount].name}],ips:['10.0.'+(i%vlanCount)+'.'+(i+10)]}));
     const data={key:'test',networks,vms,stats:Object.fromEntries(vms.map(v=>[v.uuid,{net_rx_bps:150000,net_tx_bps:30000}])),groups:{members:{}},rules:[{src:'any',dst:'default',action:'deny',enabled:true}]};
     const doc={querySelector:$,createElement:()=>new Element(),createElementNS:()=>new Element(),addEventListener(){},hidden:false};
-    const window={NetworkCore:core,NetworkUI:{getData:()=>data,selectVM:id=>{window.selected=id;}}};
+    const liveVMs=structuredClone(vms);
+    const window={NetworkCore:core,NetworkUI:{getData:()=>data,selectVM:id=>{window.selected=id;},
+      stageNic:(uuid,index,network)=>{data.vms=core.stageNicMove(data.vms,uuid,index,network,data.networks);data.pending=[uuid];},
+      openRule:(src,dst)=>{window.ruleDraft={src,dst};}
+    }};
     const storage=new Map(),localStorage={getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)};
     let pending=0;
-    const api=new Function('THREE','OrbitControls','window','document','matchMedia','ResizeObserver','MutationObserver','devicePixelRatio','localStorage','requestAnimationFrame','cancelAnimationFrame',source+'\nreturn {draw,layout,setView,finishDrag,selectVM, snapshot:()=>({nodes,labels,beams,particles,renderer,camera,controls,scans,lamps}),setDrag:d=>drag=d};')({...THREE,WebGLRenderer:Renderer},Controls,window,doc,()=>({matches:true,addEventListener(){}}),class {observe(){}},class {observe(){}},2,localStorage,()=>++pending,()=>{pending=0;});
+    const api=new Function('THREE','OrbitControls','window','document','matchMedia','ResizeObserver','MutationObserver','devicePixelRatio','localStorage','requestAnimationFrame','cancelAnimationFrame',source+'\nreturn {draw,layout,setView,finishDrag,selectVM,up,move, snapshot:()=>({nodes,labels,beams,particles,renderer,camera,controls,scans,lamps,zones,fitPoints}),setDrag:d=>drag=d};')({...THREE,WebGLRenderer:Renderer},Controls,window,doc,()=>({matches:true,addEventListener(){}}),class {observe(){}},class {observe(){}},2,localStorage,()=>++pending,()=>{pending=0;});
     api.draw(1);
     let snapshot=api.snapshot();
     assert.equal(snapshot.nodes.length,vmCount);
     assert.equal(snapshot.renderer.ratio,1.5);
     assert(snapshot.camera.isOrthographicCamera);
+    const assertFit=()=>{const snap=api.snapshot();snap.fitPoints.forEach(p=>{const v=p.clone().project(snap.camera);assert(Math.abs(v.x)<=.851&&Math.abs(v.y)<=.851,'scene including label margins fits 85% of viewport');});};
+    assertFit();
     const vmLabels=snapshot.labels.filter(l=>l.kind==='vm');
     assert.equal(vmLabels.filter(l=>!l.el.hidden).length,vmCount,`${vlanCount} VLAN / ${vmCount} VM labels visible`);
     const boxes=snapshot.labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.kind==='vm'?38:26}));
@@ -87,13 +93,49 @@ async function checkDiorama() {
     snapshot.beams.forEach(b=>b.curve.getPoints(32).forEach(p=>assert([p.x,p.y,p.z].every(Number.isFinite))));
     assert(snapshot.particles.length>0);
     assert.equal(pending,1,'reduced motion does not enqueue a continuous render loop');
-    api.setView('top');api.draw(2);assert.equal(snapshot.controls.enableRotate,false);
-    api.setView('3d');api.draw(3);assert.equal(snapshot.controls.enableRotate,true);
+    api.setView('top');api.draw(2);assert.equal(snapshot.controls.enableRotate,false);assertFit();
+    api.setView('3d');api.draw(3);assert.equal(snapshot.controls.enableRotate,true);assertFit();
+    $('#nw-three').clientWidth=760;$('#nw-three').clientHeight=560;api.draw(3.1);assertFit();
+    $('#nw-three').clientWidth=1114;$('#nw-three').clientHeight=700;api.draw(3.2);assertFit();
     $('#nw-stopped').checked=false;$('#nw-stopped').onchange();api.draw(4);snapshot=api.snapshot();assert.equal(snapshot.nodes.length,vms.filter(v=>v.state==='running').length);
     data.stats={};window.Network3D.update();api.draw(5);assert.equal(api.snapshot().particles.length,0,'unknown traffic stays still');
     api.selectVM(vms[0].uuid);assert.equal(window.selected,vms[0].uuid);
     const node=api.snapshot().nodes[0],original=node.position.clone();node.position.x+=.5;api.setDrag({node,moved:true,original});api.finishDrag();
     assert.equal(JSON.parse(storage.get('test:hologram')).positions[node.userData.locationKey].x,node.position.x-node.userData.origin.x);
+    // Exercise production drop handlers. A single-NIC move stages only that NIC;
+    // no API is used, and the unchanged inventory remains the conflict baseline.
+    data.editing=true;window.Network3D.update();api.draw(6);
+    snapshot=api.snapshot();
+    assert.equal(snapshot.labels.filter(l=>l.kind==='shield').length,1,'one firewall shield');
+    assert(snapshot.nodes.every(n=>n.position.y===.76),'all VMs stand on one floor');
+    const movedNode=snapshot.nodes.find(n=>n.userData.vm.nics.length===1),oldVM=structuredClone(movedNode.userData.vm);
+    const other=snapshot.zones.findIndex((z,i)=>networks[i].name!==movedNode.userData.net),zone=snapshot.zones[other];
+    const start=movedNode.position.clone();movedNode.position.set(zone.x,.76,zone.z);
+    api.setDrag({node:movedNode,moved:true,original:start});api.up({});api.draw(7);
+    assert.equal(data.vms.find(v=>v.uuid===oldVM.uuid).nics[0].network,networks[other].name);
+    assert.equal(liveVMs.find(v=>v.uuid===oldVM.uuid).nics[0].network,oldVM.nics[0].network,'live state untouched');
+    assert(api.snapshot().labels.find(l=>l.uuid===oldVM.uuid).el.classes.has('pending'));
+    assert(api.snapshot().beams.some(b=>b.line?.material.isLineDashedMaterial),'staged cables dashed');
+    // Shift-drag to a VM opens the shared rule popup with the exact endpoints.
+    snapshot=api.snapshot();const sourceNode=snapshot.nodes[0],targetNode=snapshot.nodes[1];
+    const world=targetNode.position.clone().add(new THREE.Vector3(0,1.5,0)),screen=world.project(snapshot.camera);
+    api.setDrag({node:sourceNode,moved:true,rule:true,original:sourceNode.position.clone()});
+    api.up({clientX:(screen.x+1)*1114/2,clientY:(1-screen.y)*700/2});
+    assert.deepEqual(window.ruleDraft,{src:'vm:'+sourceNode.userData.vm.name,dst:'vm:'+targetNode.userData.vm.name});
+    // A multi-NIC drop must ask which adapter before mutating the draft.
+    snapshot=api.snapshot();const multiNode=snapshot.nodes.find(n=>n.userData.vm.nics.length===2),multiBefore=structuredClone(multiNode.userData.vm.nics);
+    const otherZone=snapshot.zones.findIndex((z,i)=>networks[i].name!==multiNode.userData.net),drop=snapshot.zones[otherZone];
+    const multiStart=multiNode.position.clone();multiNode.position.set(drop.x,.76,drop.z);
+    api.setDrag({node:multiNode,moved:true,original:multiStart});api.up({});
+    assert.deepEqual(data.vms.find(v=>v.uuid===multiNode.userData.vm.uuid).nics,multiBefore);
+    const choice=$('#nw-vm-panel').children.find(c=>c.className==='nw-nic-choice');assert(choice,'NIC chooser remains visible after drop');
+    choice.children[1].onclick();
+    const afterMulti=data.vms.find(v=>v.uuid===multiNode.userData.vm.uuid).nics;
+    assert.equal(afterMulti[0].network,networks[otherZone].name);assert.equal(afterMulti[0].mac,multiBefore[0].mac);assert.deepEqual(afterMulti[1],multiBefore[1]);
+    // Cancelling a gesture never changes the staged adapter or stored position.
+    const cancelled=api.snapshot().nodes[0],before=cancelled.position.clone(),draftBefore=JSON.stringify(data.vms);
+    cancelled.position.x+=10;api.setDrag({node:cancelled,moved:true,original:before});api.finishDrag(false);
+    assert(cancelled.position.equals(before));assert.equal(JSON.stringify(data.vms),draftBefore);
     doc.hidden=true;const renders=api.snapshot().renderer.renders;api.draw(6);assert.equal(api.snapshot().renderer.renders,renders);
   }
   for(const vlanCount of [0,1,2,3,4,7]) {
@@ -102,8 +144,52 @@ async function checkDiorama() {
     const layers=core.dioramaLayout(networks,vms);
     assert.equal(layers.length,vlanCount);
     layers.forEach(l=>l.slots.forEach(p=>assert.deepEqual(core.clampSlot(p,l),{x:p.x,z:p.z})));
-    if(vlanCount>3)assert(layers.every(l=>l.y===0),'large fabrics use side-by-side platforms');
+    assert(layers.every(l=>l.y===0),'all VLAN counts use a single floor');
+    layers.forEach((l,i)=>layers.slice(i+1).forEach(q=>assert(Math.abs(l.x-q.x)>=(l.w+q.w)/2 || Math.abs(l.z-q.z)>=(l.d+q.d)/2,'zones do not overlap')));
+    const slots=layers.flatMap(l=>l.slots.map(p=>({x:l.x+p.x,z:l.z+p.z})));
+    slots.forEach((p,i)=>slots.slice(i+1).forEach(q=>assert(Math.hypot(p.x-q.x,p.z-q.z)>=5.3,'enlarged VMs do not overlap')));
   }
-  console.log('Production diorama: 2 VLAN / 5 VM and 3 VLAN / 20 VM geometry, labels, views, traffic, persistence and idle checks passed');
+  const multi=[{uuid:'multi',name:'multi',state:'running',nics:[{network:'a',mac:'first'},{network:'b',mac:'second'}]}],nets=[{name:'a'},{name:'b'}];
+  assert.equal(core.dioramaLayout(nets,multi).flatMap(z=>z.slots).length,1,'multi-NIC VM has one model');
+  const staged=core.stageNicMove(multi,'multi',1,'a',nets);
+  assert.deepEqual(staged[0].nics,[{network:'a',mac:'first'},{network:'a',mac:'second'}]);
+  assert.equal(multi[0].nics[1].network,'b');
+  assert.throws(()=>core.stageNicMove(multi,'multi',2,'a',nets));
+  assert.throws(()=>core.stageNicMove(multi,'multi',0,'missing',nets));
+  assert.deepEqual(core.draftRuleFromDrag(multi[0],'b'),{src:'vm:multi',dst:'b'});
+  assert.deepEqual(core.draftRuleFromDrag(multi[0],'any'),{src:'vm:multi',dst:'any'});
+  assert.equal(core.draftRuleFromDrag(multi[0],'vm:multi'),null);
+  console.log('Production diorama: 2 VLAN / 5 VM and 3 VLAN / 20 VM single-floor geometry, labels, staged single/multi-NIC drops, policy drag, views, traffic, persistence and idle checks passed');
 }
 checkDiorama().catch(e=>{console.error(e);process.exitCode=1;});
+
+// Run the production adapter with local transaction mocks: Save must use the
+// existing 2D editor, and policy gestures must open the existing draft dialog.
+async function checkSharedEditor() {
+  const fs=require('node:fs'),source=fs.readFileSync(require.resolve('../../ibhics/manager/static/app.js'),'utf8');
+  const adapter=source.slice(source.indexOf('window.NetworkUI={'),source.indexOf('// Terminal (v0.8)'));
+  const live={networks:[{name:'a'},{name:'b'}],vms:[{uuid:'one',name:'one',nics:[{network:'a',mac:'identity'}]}],guests:{},stats:{},groups:{members:{}}};
+  const ntopo={edit:null},nw={draft:null},calls=[];
+  let allowed=true;
+  const window={Network3D:{update:()=>calls.push('update')}};
+  const elements={'#nw-apply':{click:()=>calls.push('safe apply button')}};
+  const topoStartEdit=()=>{if(allowed)ntopo.edit={base:structuredClone(live),vms:structuredClone(live.vms),networks:structuredClone(live.networks)};};
+  const topoSaveEdit=async()=>{calls.push('2D Save');live.vms=structuredClone(ntopo.edit.vms);ntopo.edit=null;};
+  const topoPlan=(_base,draft)=>draft.vms.filter((v,i)=>JSON.stringify(v.nics)!==JSON.stringify(live.vms[i].nics)).map(v=>({type:'patch',uuid:v.uuid}));
+  new Function('window','state','ntopo','nw','NetworkCore','topoData','nwRules','topoLayoutKey','canOperate','topoPlan','topoStartEdit','topoSaveEdit','topoEndEdit','drawTopology','nwOpenRule','$',adapter)(
+    window,live,ntopo,nw,core,()=>ntopo.edit||live,()=>[],()=> 'test',()=>allowed,topoPlan,topoStartEdit,topoSaveEdit,()=>{ntopo.edit=null;},()=>calls.push('draw'),(src,dst)=>{nw.draft={src,dst};},s=>elements[s]);
+  const ui=window.NetworkUI;
+  ui.beginEdit();ui.stageNic('one',0,'b');
+  assert.equal(live.vms[0].nics[0].network,'a');
+  assert.equal(ui.getData().vms[0].nics[0].network,'b');assert.deepEqual(ui.getData().pending,['one']);
+  ui.discardEdit();assert.equal(ui.getData().vms[0].nics[0].network,'a');
+  ui.beginEdit();ui.stageNic('one',0,'b');await ui.saveEdit();
+  assert.equal(live.vms[0].nics[0].network,'b');assert(calls.includes('2D Save'));
+  ui.openRule('vm:one','any');assert.deepEqual(nw.draft,{src:'vm:one',dst:'any'});
+  ui.applyRules();assert(calls.includes('safe apply button'));
+  ui.beginEdit();allowed=false;ui.stageNic('one',0,'a');assert.equal(ui.getData().vms[0].nics[0].network,'b','viewers cannot stage');
+  allowed=true;ntopo.edit.saving=true;ui.stageNic('one',0,'a');ui.discardEdit();assert(ntopo.edit,'saving draft cannot be discarded');
+  assert.equal(ui.getData().vms[0].nics[0].network,'b');
+  console.log('Shared 2D NIC draft: staging, discard, Save delegation, permissions and policy safe-apply routing passed');
+}
+checkSharedEditor().catch(e=>{console.error(e);process.exitCode=1;});

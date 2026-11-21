@@ -5786,8 +5786,28 @@ $('#nw-revert').onclick=async()=>{
 setInterval(()=>{nwSafeBanner();if(nw.deadline && nw.deadline<=Date.now() && !nw.busy){nw.deadline=0;nw.expired=true;nw.undo=null;nw.applied=null;load('edge').then(()=>{renderEdge();window.Network3D?.update();}).catch(fail);}},1000);
 window.addEventListener('resize',nwDrawPolicy);
 window.addEventListener('beforeunload',e=>{if(nw.draft){e.preventDefault();e.returnValue='';}});
-window.NetworkUI={getData:()=>({networks:state.networks,vms:nwInventory(),rules:nwRules(),groups:state.groups,stats:state.stats,key:topoLayoutKey()}),selectVM:uuid=>{
-  const v=nwInventory().find(v=>v.uuid===uuid);if(!v)return;
+// The hologram shares the topology transaction and Policy studio draft.
+window.NetworkUI={getData:()=>({
+    networks:topoData().networks,
+    vms:topoData().vms.map(v=>({...v,ips:(state.guests[v.uuid]?.ips||[]).filter(ip=>NetworkCore.ipNumber(ip)!==null)})),
+    rules:nwRules(),groups:state.groups,stats:state.stats,key:topoLayoutKey(),
+    editing:!!ntopo.edit,saving:!!ntopo.edit?.saving,canEdit:canOperate(),
+    canApplyFirewall:canOperate()&&!!nw.draft&&!nw.busy&&!nw.conflict&&!nw.deadline,
+    pending:ntopo.edit?topoPlan(ntopo.edit.base,ntopo.edit).filter(s=>s.type==='patch').map(s=>s.uuid):[],
+    editError:ntopo.edit?.error||''
+  }),
+  beginEdit:topoStartEdit,
+  saveEdit:async()=>{await topoSaveEdit();window.Network3D?.update();},
+  discardEdit:()=>{if(ntopo.edit?.saving)return;topoEndEdit();drawTopology();window.Network3D?.update();},
+  stageNic:(uuid,index,network)=>{
+    if(!canOperate()||!ntopo.edit||ntopo.edit.saving)return;
+    ntopo.edit.vms=NetworkCore.stageNicMove(ntopo.edit.vms,uuid,index,network,ntopo.edit.networks);
+    drawTopology();
+  },
+  openRule:nwOpenRule,
+  applyRules:()=>$('#nw-apply').click(),
+  selectVM:uuid=>{
+  const v=window.NetworkUI.getData().vms.find(v=>v.uuid===uuid);if(!v)return;
   $('#nw-vm-panel').innerHTML=`<h3>${esc(v.name)}</h3><p>${esc(v.state)} · ${esc(v.node || '')}</p><p>${esc(v.nics.map(n=>n.network).join(' · '))}</p><p>${esc(v.ips.join(', ') || 'No guest IP reported')}</p><h3>Related policy</h3>${nwRules().filter(r=>NetworkCore.matches(r.src,NetworkCore.endpoint(v.name,nwInventory()),state.groups.members)||NetworkCore.matches(r.dst,NetworkCore.endpoint(v.name,nwInventory()),state.groups.members)).map(r=>`<p>${esc(r.name)} · ${esc(r.action)}</p>`).join('') || '<p>No matching endpoint rules</p>'}<button id="nw-vm-test">Test connection</button><div id="nw-layer-colors"></div>`;
   $('#nw-vm-test').onclick=()=>{selectTab('net-tabs','net-fw');$('#nw-test-form').elements.src.value=v.name;$('#nw-test-form').elements.dst.focus();};window.Network3D?.colors();
 }};
