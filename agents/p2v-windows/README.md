@@ -34,6 +34,18 @@ Disk reads use buffered Windows handles with sector-multiple offsets and lengths
 in chunks up to 4 MiB (including 4Kn disks). The agent never writes source disks.
 There is no resume or automatic retry; interrupted copies need to be started again.
 
+Pass `--replicate` to send a repeatable delta round instead of a one-shot upload.
+The OS-independent protocol in `delta.go` hashes each 4 MiB chunk with SHA256,
+posts inventory and hash lists to `/api/v1/p2v/upload/{sid}/delta/begin`, uploads
+only requested chunks, and commits the round through the manager's ReplicaStore.
+An incomplete round leaves the previous generation intact. A second full hash
+pass rejects changes to skipped chunks before commit. These are still live disk
+reads without VSS; the repository has no VSS implementation to reuse. Keep
+writers quiesced. Reuse the same session and embedded credentials for later rounds
+within its 24-hour TTL. Import consumes the session and its replica; scheduled
+pull replication and token renewal are not implemented for physical machines.
+Run `go test ./...` and `go vet ./...` to check the protocol without Windows.
+
 The manager only stores the session token's SHA256 hash. The create response
 returns the original token once (`agent_token`); the UI holds it in memory and
 sends it in `X-P2V-Token` to the authenticated GET
