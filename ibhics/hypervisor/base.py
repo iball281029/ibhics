@@ -850,6 +850,13 @@ class HypervisorDriver(abc.ABC):
         """VMStats for every running VM on this node, keyed by uuid."""
         return {}
 
+    def backup_boot_ready(self, uuid: str) -> bool:
+        """A responding guest agent proves more than the VM's running state."""
+        raise NotImplementedError
+
+    def backup_screenshot(self, uuid: str) -> tuple[bytes, str]:
+        raise NotImplementedError
+
     def console_address(self, uuid: str) -> tuple[str, int]:
         """Host and TCP port of the running VM's VNC display, reachable from this node."""
         raise NotImplementedError

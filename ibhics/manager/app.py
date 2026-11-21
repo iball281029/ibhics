@@ -2027,6 +2027,48 @@ def create_app(
         )
         return JobOut(**job.__dict__)
 
+    @api.get("/backup/targets/{name}/usage")
+    def backup_usage(name: str) -> list[dict]:
+        return backups.usage(name)
+
+    @api.get("/backup/capabilities")
+    def backup_capabilities() -> dict:
+        return {
+            "verification": {
+                "mode": "isolated_restore_boot",
+                "probe": "guest_agent_ping",
+                "queue_limit": 1,
+                "node": "backup source node",
+            },
+            "immutability": {
+                "mode": "metadata_with_best_effort_native_lock",
+                "warning": "Soft lock cannot resist host root or storage administrators",
+            },
+            "recovery": {
+                "instant": False,
+                "mode": "full_restore_then_boot",
+                "finalize_required": False,
+                "reason": "Dedup chunks require reconstruction before boot; no live finalize",
+            },
+        }
+
+    @api.get("/backup/targets/{name}/backups/{backup_id}/evidence")
+    def backup_evidence(name: str, backup_id: str, node: str | None = None) -> dict:
+        return backups.evidence(name, backup_id, node)
+
+    @api.post(
+        "/backup/targets/{name}/backups/{backup_id}/recover",
+        response_model=JobOut,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def recover_backup(name: str, backup_id: str, body: RestoreRequest) -> JobOut:
+        cluster.require_quorum()
+        return JobOut(
+            **backups.start_restore(
+                name, backup_id, body.name, body.node, body.pool, body.source_node, recovery=True
+            ).__dict__
+        )
+
     @api.post("/vms/{uuid}/backup", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED)
     def backup_vm(uuid: str, body: BackupRequest) -> JobOut:
         return JobOut(**backups.start_backup(uuid, body.target, body.keep_last, body.mode).__dict__)

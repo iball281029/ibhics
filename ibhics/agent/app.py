@@ -31,6 +31,7 @@ from ..manager.schemas import (
     AgentMigrate,
     AgentPrune,
     AgentRestore,
+    AgentVerify,
     BackupOut,
     CdromRequest,
     CloneIn,
@@ -503,6 +504,18 @@ def create_agent_app(
         def restore(body: AgentRestore) -> VMOut:
             vm = backups.restore(target(body.target), body.backup_id, body.name, body.pool)
             return VMOut.from_info(vm)
+
+        @api.post("/backups/verify")
+        def verify_backup(body: AgentVerify) -> dict:
+            return backups.verify(target(body.target), body.backup_id, body.pool, body.timeout)
+
+        @api.post("/backups/usage")
+        def backup_usage(body: AgentBackupList) -> dict:
+            return backups.usage(target(body.target))
+
+        @api.post("/backups/evidence")
+        def backup_evidence(body: AgentBackupDelete) -> dict:
+            return backups.evidence(target(body.target), body.backup_id)
 
         @api.post("/backups/delete")
         def delete_backup(body: AgentBackupDelete) -> dict:

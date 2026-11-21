@@ -50,6 +50,14 @@ class Store(abc.ABC):
                 if self.get(".repository-lease") == token:
                     self.delete(".repository-lease")
 
+    def protect(self, key, until) -> bool:
+        """Best effort physical protection; False means application soft lock only."""
+        return False
+
+    def release(self, key) -> None:
+        """Called only after retention expires and no restore point references the key."""
+        return None
+
     @abc.abstractmethod
     def put(self, key: str, data: bytes) -> None: ...
 
@@ -123,6 +131,21 @@ class DirStore(Store):
             if p.is_file() and not p.name.startswith(".tmp-")
         )
 
+    def protect(self, key, until) -> bool:
+        try:
+            result = subprocess.run(
+                ["chattr", "+i", str(self._path(key))], capture_output=True, timeout=10
+            )
+            return result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def release(self, key) -> None:
+        try:
+            subprocess.run(["chattr", "-i", str(self._path(key))], capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
 
@@ -192,6 +215,24 @@ class S3Store(Store):
         for page in paginator.paginate(Bucket=self._bucket, Prefix=self._prefix + prefix):
             keys.extend(obj["Key"][len(self._prefix) :] for obj in page.get("Contents", []))
         return sorted(keys)
+
+    def protect(self, key, until) -> bool:
+        try:
+            config = self._s3.get_object_lock_configuration(Bucket=self._bucket)
+            if config.get("ObjectLockConfiguration", {}).get("ObjectLockEnabled") != "Enabled":
+                return False
+            head = self._s3.head_object(Bucket=self._bucket, Key=self._prefix + key)
+            # Never shorten a shared chunk's retention, or retain a delete marker.
+            until = max(until, head.get("ObjectLockRetainUntilDate", until))
+            self._s3.put_object_retention(
+                Bucket=self._bucket,
+                Key=self._prefix + key,
+                VersionId=head["VersionId"],
+                Retention={"Mode": "COMPLIANCE", "RetainUntilDate": until},
+            )
+            return True
+        except Exception:
+            return False
 
     def delete(self, key: str) -> None:
         self._s3.delete_object(Bucket=self._bucket, Key=self._prefix + key)

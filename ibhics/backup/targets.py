@@ -58,6 +58,7 @@ class BackupTarget:
     quota_gb: int | None = None  # local: space set aside; backups stop when it is used up
     storage_class: str = "STANDARD"  # S3 archive tiers with immediate retrieval only
     compression: str = "balanced"
+    immutability_days: int = 0
 
     @property
     def shared(self) -> bool:
@@ -76,6 +77,8 @@ class BackupTarget:
         return self.type in EXCLUSIVE_TYPES
 
     def validate(self) -> None:
+        if type(self.immutability_days) is not int or not 0 <= self.immutability_days <= 36500:
+            raise ValueError("Immutability days must be 0 through 36500")
         if self.compression not in ("fast", "balanced", "maximum"):
             raise ValueError("Compression must be fast, balanced or maximum")
         if self.storage_class not in ("STANDARD", "STANDARD_IA", "ONEZONE_IA", "GLACIER_IR"):

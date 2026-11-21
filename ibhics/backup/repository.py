@@ -21,12 +21,13 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from statistics import median
 from uuid import uuid4
 
-from ..hypervisor.base import NAME_RE, VMInfo
+from ..hypervisor.base import NAME_RE, InvalidState, VMInfo
 from .compression import codec, compress, decompress
 from .store import RepositoryBusy, Store
 
@@ -55,6 +56,12 @@ class BackupInfo:
     new_data_bytes: int = 0
     dedup_saved_bytes: int = 0
     compression: str = "legacy-zlib"
+    verified: str = "skipped"
+    verification: dict | None = None
+    immutable_until: str | None = None
+    lock_status: str = "none"
+    suspicious: bool = False
+    anomaly_reason: str = ""
 
 
 def parse_id(backup_id: str) -> tuple[str, str]:
@@ -89,11 +96,13 @@ class Repository:
         chunk_size: int = CHUNK_SIZE,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         compression: str = "balanced",
+        immutability_days: int = 0,
     ) -> None:
         self.store = store
         self.chunk_size = chunk_size
         self._clock = clock
         self.compression = compression
+        self.immutability_days = immutability_days
         codec(compression)
 
     @contextmanager
@@ -200,7 +209,7 @@ class Repository:
                 dedup_saved_bytes=max(0, nonzero - new_data),
                 compression=codec(self.compression),
             )
-            self.store.put(_manifest_key(backup_id), json.dumps(manifest).encode())
+            self._publish(manifest)
         return _info(manifest)
 
     def transfer(self, backup_id, destination, kind="copy", independent=False, progress=None):
@@ -259,7 +268,7 @@ class Repository:
             if kind != "synthetic_full":
                 manifest.pop("checkpoint", None)
                 manifest.pop("disk_fingerprint", None)
-            destination.store.put(_manifest_key(new_id), json.dumps(manifest).encode())
+            destination._publish(manifest)
         return _info(manifest)
 
     def synthetic_full(self, backup_id, progress=None):
@@ -300,10 +309,68 @@ class Repository:
             }
             # The manifest goes last: a backup that dies halfway leaves only unreferenced
             # chunks, which the next garbage collection removes.
-            self.store.put(_manifest_key(backup_id), json.dumps(manifest, indent=1).encode())
+            self._publish(manifest)
         finally:
             self.store.delete(lock_key)
         return _info(manifest)
+
+    def is_locked(self, manifest):
+        until = manifest.get("immutable_until")
+        return bool(until and datetime.fromisoformat(until) > self._clock())
+
+    def info(self, backup_id):
+        manifest = self.manifest(backup_id)
+        info = _info(manifest)
+        key = f"evidence/{backup_id}/result.json"
+        if self.store.exists(key):
+            info.verification = json.loads(self.store.get(key))
+            info.verified = info.verification.get("verified", "skipped")
+        key = f"protection/{backup_id}.json"
+        if self.store.exists(key):
+            info.lock_status = json.loads(self.store.get(key))["status"]
+        return info
+
+    def _publish(self, manifest):
+        # Derivative copies do not inherit a source's expired lock or boot evidence.
+        manifest.pop("immutable_until", None)
+        manifest.pop("lock_status", None)
+        history = [
+            b
+            for b in self.list()
+            if b.vm_uuid == manifest["vm_uuid"] and b.kind in ("full", "incremental")
+        ]
+        history.sort(key=lambda b: (b.created, b.id))
+        samples = [b.new_data_bytes for b in history[-14:]]
+        changed = manifest.get("new_data_bytes", 0)
+        logical = sum(d["size_bytes"] for d in manifest["disks"])
+        suspicious = bool(
+            len(samples) >= 3 and changed > 3 * median(samples) and changed > logical * 0.2
+        )
+        if manifest["kind"] in ("full", "incremental"):
+            manifest["suspicious"] = suspicious
+            manifest["anomaly_reason"] = (
+                "New unique data exceeds 3× the median of previous runs and 20% of disk size"
+                if suspicious
+                else ""
+            )
+        until = self._clock() + timedelta(days=self.immutability_days)
+        if self.immutability_days:
+            manifest["immutable_until"] = until.isoformat()
+            manifest["lock_status"] = "soft"
+        key = _manifest_key(manifest["id"])
+        self.store.put(key, json.dumps(manifest).encode())
+        if self.immutability_days:
+            prefix = manifest.get("chunk_prefix", "chunks")
+            keys = {
+                f"{prefix}/{d[:2]}/{d}" for disk in manifest["disks"] for d in disk["chunks"] if d
+            }
+            results = [self.store.protect(k, until) for k in sorted(keys)]
+            results.append(self.store.protect(key, until))
+            status = "native" if all(results) else "soft"
+            self.store.put(
+                f"protection/{manifest['id']}.json", json.dumps({"status": status}).encode()
+            )
+            manifest["lock_status"] = status
 
     def _write_disk(self, path: Path) -> tuple[list[str | None], int, int]:
         chunks: list[str | None] = []
@@ -341,7 +408,7 @@ class Repository:
         result = []
         for key in self.store.list(prefix):
             if key.endswith(".json"):
-                result.append(_info(json.loads(self.store.get(key))))
+                result.append(self.info(json.loads(self.store.get(key))["id"]))
         return sorted(result, key=lambda b: (b.vm_name, b.created))
 
     def manifest(self, backup_id: str) -> dict:
@@ -370,6 +437,10 @@ class Repository:
         key = _manifest_key(backup_id)
         if not self.store.exists(key):
             raise BackupNotFound(backup_id)
+        manifest = self.manifest(backup_id)
+        if self.is_locked(manifest):
+            raise InvalidState(f"Restore point is immutable until {manifest['immutable_until']}")
+        self.store.release(key)
         self.store.delete(key)
 
     @_exclusive
@@ -383,7 +454,9 @@ class Repository:
         keep = retained_ids(
             [self.manifest(b.id) for b in backups], keep_last, weekly, monthly, yearly
         )
-        removed = [b.id for b in backups if b.id not in keep]
+        removed = [
+            b.id for b in backups if b.id not in keep and not self.is_locked(self.manifest(b.id))
+        ]
         for backup_id in removed:
             self.delete(backup_id)
         return removed
@@ -405,6 +478,7 @@ class Repository:
         removed = 0
         for key in self.store.list("chunks/") + self.store.list("fulls/"):
             if key not in used:
+                self.store.release(key)
                 self.store.delete(key)
                 removed += 1
         return removed
@@ -426,4 +500,8 @@ def _info(manifest: dict) -> BackupInfo:
         new_data_bytes=manifest.get("new_data_bytes", 0),
         dedup_saved_bytes=manifest.get("dedup_saved_bytes", 0),
         compression=manifest.get("compression", "legacy-zlib"),
+        immutable_until=manifest.get("immutable_until"),
+        lock_status=manifest.get("lock_status", "none"),
+        suspicious=manifest.get("suspicious", False),
+        anomaly_reason=manifest.get("anomaly_reason", ""),
     )

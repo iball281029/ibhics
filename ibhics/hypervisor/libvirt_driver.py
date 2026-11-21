@@ -978,6 +978,28 @@ class LibvirtDriver(HypervisorDriver):
             return self.start_vm(uuid)
         return self._info(self._lookup(uuid))
 
+    def backup_boot_ready(self, uuid: str) -> bool:
+        import libvirt_qemu
+
+        try:
+            libvirt_qemu.qemuAgentCommand(self._lookup(uuid), '{"execute":"guest-ping"}', 1, 0)
+            return True
+        except libvirt.libvirtError:
+            return False
+
+    def backup_screenshot(self, uuid: str) -> tuple[bytes, str]:
+        stream = self._conn.newStream(0)
+        try:
+            mime = self._lookup(uuid).screenshot(stream, 0, 0)
+            parts = []
+            while block := stream.recv(65536):
+                parts.append(block)
+            stream.finish()
+            return b"".join(parts), mime
+        except BaseException:
+            stream.abort()
+            raise
+
     def _wait_guest_agent(self, dom, timeout: float) -> None:
         import libvirt_qemu
 
