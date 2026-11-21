@@ -23,6 +23,16 @@ for (const [vm,guest,expected] of [
 ]) assert.equal(core.detectOS(vm,guest),expected,JSON.stringify(vm));
 assert.equal(core.detectOS(),'other');
 console.log('Shared guest/configured OS detection checks passed');
+const topNetworks=[{name:'vlan2',vlan:2},{name:'default',vlan:1},{name:'empty',vlan:3}];
+const topVMs=Array.from({length:20},(_,i)=>({uuid:String(i),name:'long-name-'+i,state:i%4?'running':'stopped',nics:[{network:i%2?'vlan2':'default'}]}));
+topVMs[0].nics.push({network:'vlan2'},{network:'vlan2'});
+const topBefore=JSON.stringify(topVMs),topLayout=core.topViewLayout(topNetworks,topVMs);
+assert.deepEqual(topLayout.map(z=>z.network.name),['default','vlan2','empty']);
+assert.equal(topLayout.flatMap(z=>z.cards).filter(c=>!c.ghost).length,20);
+assert.equal(topLayout[1].cards.filter(c=>c.ghost).length,1,'duplicate secondary NICs produce one ghost');
+assert.equal(topLayout[2].cards.length,0);
+assert(core.topViewLayout(topNetworks,topVMs,false).flatMap(z=>z.cards).every(c=>c.vm.state==='running'));
+assert.equal(JSON.stringify(topVMs),topBefore,'layout never mutates inventory');
 const inventory = [{uuid:'a',name:'web',nics:[{network:'native'}],ips:['10.0.1.2']},{uuid:'b',name:'db',nics:[{network:'data'},{network:'native'}],ips:['10.0.2.8']}];
 const rules = [{name:'sql',action:'allow',src:'group:apps',dst:'vm:db',proto:'tcp',ports:'5432,6000-6010',enabled:true},{name:'block-data',action:'deny',src:'any',dst:'data',proto:'any',enabled:true}];
 const flow={src:'web',dst:'db',proto:'tcp',port:5432};
@@ -64,7 +74,7 @@ async function checkDiorama() {
   const fs = require('node:fs');
   const source = fs.readFileSync(require.resolve('../../ibhics/manager/static/network3d.js'), 'utf8').replace(/^import .*;$/gm, '');
   class Element {
-    constructor() { this.children=[]; this.style={}; this.hidden=false; this.checked=true; this.clientWidth=1114; this.clientHeight=700; this.width=1114; this.height=700; this.textContent=''; this.events={}; this.attributes={}; this.classes=new Set(['active']); this.classList={contains:c=>this.classes.has(c),add:c=>this.classes.add(c),remove:c=>this.classes.delete(c),toggle:c=>this.classes.has(c)?(this.classes.delete(c),false):(this.classes.add(c),true)}; }
+    constructor() { this.children=[]; this.style={setProperty(k,v){this[k]=v;}}; this.hidden=false; this.checked=true; this.clientWidth=1114; this.clientHeight=700; this.width=1114; this.height=700; this.textContent=''; this.events={}; this.attributes={}; this.classes=new Set(['active']); this.classList={contains:c=>this.classes.has(c),add:c=>this.classes.add(c),remove:c=>this.classes.delete(c),toggle:c=>this.classes.has(c)?(this.classes.delete(c),false):(this.classes.add(c),true)}; }
     append(...items) { this.children.push(...items); }
     prepend(...items) { this.children.unshift(...items); }
     replaceChildren(...items) { this.children=items; }
@@ -143,14 +153,28 @@ async function checkDiorama() {
     snapshot.beams.forEach(b=>b.curve.getPoints(32).forEach(p=>assert([p.x,p.y,p.z].every(Number.isFinite))));
     assert(snapshot.particles.length>0);
     const beforeIdle=pending;api.draw(1.1);assert.equal(pending,beforeIdle,'reduced motion does not enqueue a continuous render loop');
-    api.setView('top');api.draw(2);assert.equal(snapshot.controls.enableRotate,false);assertFit();
-    assert.equal(api.snapshot().labels.filter(l=>l.kind==='vm'&&!l.el.hidden).length,vmCount,'top view keeps every VM icon visible');
-    const topBoxes=api.snapshot().labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.height}));
-    topBoxes.forEach((b,i)=>topBoxes.slice(i+1).forEach(c=>assert(!core.overlaps(b,c),'top icons and captions do not overlap')));
-    for(const label of api.snapshot().labels.filter(l=>l.kind==='vm')){
-      assert(label.icon,'each top-view VM has a shared SVG icon');
-      assert.equal(label.height,100,'top-view bounds include the icon, name and IP');
-    }
+    const rendersBeforeTop=snapshot.renderer.renders;
+    api.setView('top');api.draw(2);
+    assert.equal(api.snapshot().renderer.renders,rendersBeforeTop,'HTML top view never renders WebGL');
+    const top=$('#nw-three').children.find(c=>c.className==='nw-top-board');
+    assert(top&&!top.hidden,'top view uses a separate HTML board');
+    assert.equal(top.children[3].children.length,vlanCount);
+    const cards=top.children[3].children.flatMap(z=>z.children[1].children);
+    assert.equal(cards.filter(c=>!c.className.includes('nw-top-ghost')).length,vmCount);
+    assert.equal(cards.filter(c=>c.className.includes('nw-top-ghost')).length,1);
+    assert(cards.every(c=>!c.draggable),'view mode cannot drag cards');
+    cards[0].onclick();assert.equal(window.selected,cards[0].attributes['data-vm']);
+    data.editing=true;window.Network3D.update();
+    const topZones=()=>top.children[3].children;
+    const topCards=()=>topZones().flatMap(z=>z.children[1].children).filter(c=>c.attributes['data-vm']);
+    const multiCard=topCards().find(c=>c.attributes['data-vm']===vms[0].uuid&&!c.className.includes('nw-top-ghost'));
+    const transfer={setData(){}};multiCard.ondragstart({dataTransfer:transfer});
+    topZones()[1].ondrop({preventDefault(){}});multiCard.ondragend();
+    const topChoice=$('#nw-vm-panel').children.find(c=>c.className==='nw-nic-choice');
+    assert(topChoice,'multi-NIC chooser survives dragend');
+    const beforeTopMove=structuredClone(data.vms[0].nics);topChoice.children[1].onclick();
+    assert.equal(data.vms[0].nics[0].network,networks[1].name);assert.deepEqual(data.vms[0].nics[1],beforeTopMove[1]);
+    data.vms=structuredClone(liveVMs);data.pending=[];data.editing=false;
     api.setView('3d');api.draw(3);assert.equal(snapshot.controls.enableRotate,true);assertFit();
     $('#nw-three').clientWidth=760;$('#nw-three').clientHeight=560;api.draw(3.1);assertFit();
     $('#nw-three').clientWidth=1114;$('#nw-three').clientHeight=700;api.draw(3.2);assertFit();

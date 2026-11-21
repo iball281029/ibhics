@@ -5822,6 +5822,7 @@ window.addEventListener('resize',nwDrawPolicy);
 window.addEventListener('beforeunload',e=>{if(nw.draft){e.preventDefault();e.returnValue='';}});
 // The hologram shares the topology transaction and Policy studio draft.
 window.NetworkUI={getData:()=>({
+    nodes:(state.cluster?.members||[]).filter(m=>m.role==='compute').map(m=>({name:m.name,online:!!m.healthy})),
     networks:topoData().networks,
     vms:topoData().vms.map(v=>({...v,guest_info:state.guests[v.uuid],ips:(state.guests[v.uuid]?.ips||[]).filter(ip=>NetworkCore.ipNumber(ip)!==null)})),
     rules:nwRules(),groups:state.groups,stats:state.stats,key:topoLayoutKey(),
