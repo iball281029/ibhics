@@ -1,5 +1,43 @@
 /* Pure network policy and label placement helpers; shared by UI and Node checks. */
 (function (root) {
+  // Guest-reported OS takes precedence over the configured VM profile. Never
+  // infer an OS from a VM name (a server called "windows-backup" may run Linux).
+  function detectOS(vm = {}, guest = null) {
+    const values = [guest?.os_name, vm.guest_info?.os_name, vm.guest?.os_name,
+      vm.guest_os?.os_name, vm.guest_os?.name, vm.guest_os, vm.os_type];
+    for (const value of values) {
+      if (typeof value !== 'string') continue;
+      if (/\bwindows\b|^win(?:dows)?(?:server|xp|vista|[0-9])/i.test(value)) return 'windows';
+      if (/\blinux\b|ubuntu|debian|centos|fedora|rocky|rhel|red\s*hat|alma(?:linux)?|suse|alpine|amazon linux|oracle linux|arch linux/i.test(value)) return 'linux';
+      // A concrete guest report of another OS wins over a stale configured OS.
+      if (value.trim() && !/^(unknown|other|n\/a|not reported)$/i.test(value.trim())) return 'other';
+    }
+    return 'other';
+  }
+  // Original hologram line art. Only fixed, trusted paths enter the SVG markup.
+  const osMarks = {
+    windows: '<g fill="ACCENT" stroke="none"><path d="M18 17h12v12H18zM34 17h12v12H34zM18 33h12v12H18zM34 33h12v12H34z"/></g>',
+    linux: '<path fill="DARK" d="M21 30c-4 6-7 11-5 15l7-3h18l7 3c2-4-1-9-5-15 2-17-24-17-22 0Z"/><ellipse cx="32" cy="36" rx="10" ry="13" fill="PALE"/><path fill="ACCENT" d="m26 26 6-3 6 3-6 5Zm-3 19-9 5 14 1 2-5m11-1 9 5-14 1-2-5"/><g fill="PALE" stroke="none"><circle cx="27" cy="21" r="3"/><circle cx="37" cy="21" r="3"/></g><g fill="DARK" stroke="none"><circle cx="28" cy="21" r="1.3"/><circle cx="36" cy="21" r="1.3"/></g>',
+    other: '<path d="m32 15 15 9v17l-15 9-15-9V24Zm-15 9 15 9 15-9M32 33v17"/>'
+  };
+  function deviceIcon(kind = 'other', options = {}) {
+    const muted = options.stopped, color = muted ? '#8193a5' : ({windows:'#65cfff',linux:'#ffd76e',firewall:'#b49bff'}[kind] || '#3ef0ff');
+    const mark = k => osMarks[k].replaceAll('ACCENT', muted ? '#8193a5' : k === 'windows' ? '#65cfff' : '#ffd76e').replaceAll('PALE', muted ? '#9ba7b2' : '#eafaff').replaceAll('DARK','#092335');
+    const paths = {
+      node: '<rect x="17" y="6" width="30" height="50" rx="3"/><path d="M13 58h38M22 14h14m-14 9h14m-14 9h14m-14 9h14m-14 9h14"/><g fill="'+(muted ? '#8193a5' : '#6dffb3')+'"><circle cx="41" cy="14" r="1.5"/><circle cx="41" cy="23" r="1.5"/><circle cx="41" cy="32" r="1.5"/><circle cx="41" cy="41" r="1.5"/><circle cx="41" cy="50" r="1.5"/></g>',
+      switch: '<path d="m6 23 8-9h36l8 9v24H6Zm0 0h52M11 40h4v-9h-4Zm9 0h4v-9h-4Zm9 0h4v-9h-4Zm9 0h4v-9h-4Zm9 0h4v-9h-4"/>',
+      internet: '<circle cx="32" cy="30" r="23"/><ellipse cx="32" cy="30" rx="10" ry="23"/><path d="M9 30h46M13 17q19 10 38 0M13 43q19-10 38 0M32 7v46M24 59h16M32 53v6"/>',
+      firewall: '<path d="m32 6 22 8-3 22Q46 51 32 58 18 51 13 36l-3-22Z"/><rect x="22" y="29" width="20" height="16" rx="3"/><path d="M26 29v-6a6 6 0 0 1 12 0v6m-6 6v4"/>',
+      windows: '<rect x="6" y="7" width="52" height="43" rx="4"/><path d="M25 50v7m14-7v7M18 58h28"/>'+mark('windows'),
+      linux: '<rect x="9" y="5" width="46" height="54" rx="4"/><path d="M15 54h8m24 0h2"/>'+mark('linux'),
+      other: '<rect x="8" y="7" width="48" height="50" rx="5"/>'+mark('other')
+    };
+    const content = options.symbolOnly ? mark(osMarks[kind] ? kind : 'other') : (paths[kind] || paths.other);
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nw-device-icon" aria-hidden="true">${content}</svg>`;
+  }
+  function deviceLegend() {
+    return '<div class="nw-device-legend" aria-label="Device legend">'+[['node','ibHiCS node'],['switch','Trunk switch'],['internet','Internet / router'],['firewall','Firewall'],['windows','Windows VM'],['linux','Linux VM'],['other','Other VM']].map(([k,label])=>`<span>${deviceIcon(k)}${label}</span>`).join('')+'<span>● Green = running · Gray = stopped</span></div>';
+  }
   const ipNumber = (s) => {
     const p = String(s).split('.');
     return p.length === 4 && p.every(x => /^\d{1,3}$/.test(x) && +x <= 255 && String(+x) === x)
@@ -113,7 +151,7 @@
     if(!vm || !target || target === `vm:${vm.name}`) return null;
     return {src:`vm:${vm.name}`,dst:target};
   }
-  const api = { zoneAt, stageNicMove, draftRuleFromDrag, dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
+  const api = { detectOS, deviceIcon, deviceLegend, zoneAt, stageNicMove, draftRuleFromDrag, dioramaLayout, clampSlot, ipNumber, inCIDR, ports, endpoint, matches, simulate, overlaps, placeLabels };
   if (typeof module !== 'undefined') module.exports = api;
   else root.NetworkCore = api;
 })(globalThis);

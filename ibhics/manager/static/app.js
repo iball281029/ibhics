@@ -2457,25 +2457,25 @@ function drawTopology() {
   const label = (x, y, text, sub) => `<text x="${x}" y="${y + 38}" class="t-name">${esc(text)}</text>${sub ? `<text x="${x}" y="${y + 53}" class="t-sub">${esc(sub)}</text>` : ""}`;
   const node = (key, x, y, icon, cls, text, sub) =>
     `<g class="tnode ${cls} ${ntopo.sel === key ? "sel" : ""} ${edit && JSON.stringify(edit.layout[key]) !== JSON.stringify(edit.layoutBase[key]) ? "pending" : ""}" data-key="${esc(key)}" transform="translate(0,0)">
-      <rect x="${x - 22}" y="${y - 22}" width="44" height="44" rx="11"/><use href="#${icon}" x="${x - 11}" y="${y - 11}" width="22" height="22"/>${label(x, y, text, sub)}</g>`;
+      <rect x="${x - 22}" y="${y - 22}" width="44" height="44" rx="11"/><svg x="${x - (cls.startsWith("vm ") ? 24 : 30)}" y="${y - (cls.startsWith("vm ") ? 24 : 30)}" width="${cls.startsWith("vm ") ? 48 : 60}" height="${cls.startsWith("vm ") ? 48 : 60}" viewBox="0 0 64 64">${NetworkCore.deviceIcon(icon, {stopped: cls.includes("down")})}</svg>${label(x, y, text, sub)}</g>`;
   let shapes = "";
   if (clusterView) {
     const p = pos[clusterKey], online = members.filter((m) => m.healthy).length;
-    shapes += node(clusterKey, p.x, p.y, "i-nodes", `uplink${online < nodes.length ? " warn" : ""}`, state.cluster.name || "Cluster", `${online}/${nodes.length} nodes online · shared networks`);
+    shapes += node(clusterKey, p.x, p.y, "node", `uplink${online < nodes.length ? " warn" : ""}`, state.cluster.name || "Cluster", `${online}/${nodes.length} nodes online · shared networks`);
   }
   for (const n of clusterView ? [] : nodes) {
     const ports = (ntopo.nics[n] || []).filter((p) => p.master === "br0");
     const sub = ports.length ? ports.map((p) => `${p.name}${p.speed_mbps ? ` ${p.speed_mbps >= 1000 ? `${p.speed_mbps / 1000}G` : `${p.speed_mbps}M`}` : ""}`).join(", ") : "br0";
     const p = pos[`node:${n}`];
-    shapes += node(`node:${n}`, p.x, p.y, "i-nodes", ports.some((x) => x.link) || !ports.length ? "uplink" : "uplink warn", `${n} · uplink`, sub);
+    shapes += node(`node:${n}`, p.x, p.y, "node", ports.some((x) => x.link) || !ports.length ? "uplink" : "uplink warn", `${n} · uplink`, sub);
   }
   for (const n of nets) {
     const p = pos[`net:${n.name}`];
-    shapes += node(`net:${n.name}`, p.x, p.y, "i-nic", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}${clusterView ? ` · ${(n.nodes || []).length}/${nodes.length} nodes${networkCoverage(n).drift ? " · config differs" : ""}` : ""}`);
+    shapes += node(`net:${n.name}`, p.x, p.y, "switch", `switch${edit && !edit.base.networks.some((b) => b.name === n.name) ? " pending" : ""}`, n.name, `${edit && !edit.base.networks.some((b) => b.name === n.name) ? "New · " : ""}VLAN ${vlanId(n)}${n.vlan ? "" : " (native)"}${clusterView ? ` · ${(n.nodes || []).length}/${nodes.length} nodes${networkCoverage(n).drift ? " · config differs" : ""}` : ""}`);
   }
   for (const v of vms) {
     const p = pos[`vm:${v.uuid}`];
-    shapes += node(`vm:${v.uuid}`, p.x, p.y, "i-compute", `vm ${v.state === "running" ? "up" : "down"}`, v.name, v.node || "");
+    shapes += node(`vm:${v.uuid}`, p.x, p.y, NetworkCore.detectOS(v, state.guests[v.uuid]), `vm ${v.state === "running" ? "up" : "down"}`, v.name, (state.guests[v.uuid]?.ips || v.ips || []).filter(ip => NetworkCore.ipNumber(ip) !== null)[0] || "No IP");
     if (edit) shapes += `<circle class="topo-handle" data-vm="${esc(v.uuid)}" cx="${p.x + 29}" cy="${p.y}" r="7"><title>Drag to a switch to add a NIC</title></circle>`;
   }
   if (ntopo.drag?.link && ntopo.drag.at) {
@@ -2490,6 +2490,8 @@ function drawTopology() {
   $("#topo-svg").setAttribute("width", width);
   $("#topo-svg").setAttribute("height", height);
   $("#topo-svg").innerHTML = `${wires}${shapes}${grips}`;
+  let legend = $("#topo-svg").parentElement.querySelector(".nw-device-legend");
+  if (!legend) $("#topo-svg").insertAdjacentHTML("afterend", NetworkCore.deviceLegend());
   ntopo.pos = pos;
   const running = state.vms.filter((v) => v.state === "running").length;
   $("#topo-stats").innerHTML = [[clusterView ? "Cluster nodes" : "Uplinks", nodes.length], ["Virtual switches", nets.length], ["VMs running", running], ["VMs stopped", state.vms.length - running]]
@@ -2523,7 +2525,7 @@ function topoPanel() {
       const v = data.vms.find((x) => x.uuid === id);
       if (!v) { ntopo.sel = null; return topoPanel(); }
       const opts = (cur) => data.networks.map((n) => `<option value="${esc(n.name)}" ${n.name === cur ? "selected" : ""}>${esc(netLabel(n))}</option>`).join("");
-      box.innerHTML = `<h3>${esc(v.name)}</h3><dl class="kv"><dt>Status</dt><dd><span class="badge ${esc(v.state)}">${esc(v.state)}</span></dd><dt>Node</dt><dd>${esc(v.node || "")}</dd></dl>
+      box.innerHTML = `<div class="nw-device-heading ${v.state === "running" ? "up" : "down"}">${NetworkCore.deviceIcon(NetworkCore.detectOS(v, state.guests[v.uuid]), {stopped:v.state !== "running"})}<h3>${esc(v.name)}</h3></div><dl class="kv"><dt>Status</dt><dd><span class="badge ${esc(v.state)}">${esc(v.state)}</span></dd><dt>Node</dt><dd>${esc(v.node || "")}</dd></dl>
         <p class="wiz-label">Network adapters</p>
         ${v.nics.map((nic, i) => `<label>NIC ${i + 1}${nic.mac ? ` <span class="mono muted">${esc(nic.mac)}</span>` : ""}<select data-topo-nic="${i}" ${op && !edit?.saving ? "" : "disabled"}>${opts(nic.network)}</select></label>`).join("") || `<p class="muted">No network adapter.</p>`}
         ${op && !edit && v.nics.length ? `<button class="small primary" data-topo-save="${esc(v.uuid)}" style="margin-top:12px">Apply</button>` : ""}
@@ -5648,7 +5650,7 @@ const nwServices = { Custom: null, Web: ['tcp', '80,443'], SSH: ['tcp', '22'], R
 const nwRule = r => Object.fromEntries(['name','action','src','dst','proto','port','ports','description','enabled'].map(k => [k, r[k] ?? ({port:null, ports:'', description:'', enabled:true}[k])]));
 const nwRules = () => nw.draft || (state.edge?.rules || []).map(nwRule);
 const nwInventory = () => state.vms.map(v => ({...v, ips: (state.guests[v.uuid]?.ips || []).filter(ip => NetworkCore.ipNumber(ip) !== null)}));
-const nwEnds = () => [{id:'any', name:'External / Any', kind:'◎'}, ...state.networks.map(n => ({id:n.name, name:`${n.name} · VLAN ${vlanId(n)}`, kind:'▱'})), ...(state.groups.groups || []).map(g => ({id:`group:${g.id}`, name:g.name, kind:'◉'})), ...state.vms.map(v => ({id:`vm:${v.name}`, name:v.name, kind:'◇'}))];
+const nwEnds = () => [{id:'any', name:'External / Any', kind:'internet'}, ...state.networks.map(n => ({id:n.name, name:`${n.name} · VLAN ${vlanId(n)}`, kind:'switch'})), ...(state.groups.groups || []).map(g => ({id:`group:${g.id}`, name:g.name, kind:'other'})), ...state.vms.map(v => ({id:`vm:${v.name}`, name:v.name, kind:NetworkCore.detectOS(v,state.guests[v.uuid]), vm:v}))];
 function nwStage(rules) {
   if (!canOperate() || nw.busy || nw.deadline) return;
   if (!nw.draft) nw.base = (state.edge?.rules || []).map(nwRule);
@@ -5674,11 +5676,11 @@ function renderNetworkStudio() {
   $('#nw-apply').disabled = !op || !changes || nw.conflict;
   $('#nw-discard').disabled = !op || !nw.draft;
   $('#fw-add').disabled = !op; $('#nw-template-add').disabled = !op;
-  $('#fw-rules').innerHTML = rules.map((r,i) => `<article class="nw-rule ${r.action} ${r.enabled ? '' : 'disabled'}" draggable="${op}" data-rule="${i}"><div class="nw-rule-order">${i+1}<small>↕</small></div><div class="nw-rule-body"><b>${esc(r.name)}</b><div class="nw-route">${esc(r.src)} <span>→</span> ${esc(r.dst)}</div><small>${esc(r.description || 'No description')}</small></div><span class="nw-verdict">${r.action === 'allow' ? 'ALLOW' : 'BLOCK'}</span><span>${esc(r.proto.toUpperCase())} ${esc([r.port,r.ports].filter(Boolean).join(','))}</span><div class="actions">${op ? `<button data-fw-up="${i}" ${i ? '' : 'disabled'} aria-label="Move ${esc(r.name)} up">↑</button><button data-fw-down="${i}" ${i === rules.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(r.name)} down">↓</button><button data-fw-toggle="${i}" aria-pressed="${r.enabled}">${r.enabled ? 'On' : 'Off'}</button><button data-fw-edit="${i}">Edit</button><button data-fw-del="${i}">Remove</button>` : ''}</div></article>`).join('') || '<div class="nw-empty">No rules · All connections are allowed. Connect two endpoints to start.</div>';
+  $('#fw-rules').innerHTML = rules.map((r,i) => `<article class="nw-rule ${r.action} ${r.enabled ? '' : 'disabled'}" draggable="${op}" data-rule="${i}"><div class="nw-rule-order">${NetworkCore.deviceIcon("firewall")}${i+1}<small>↕</small></div><div class="nw-rule-body"><b>${esc(r.name)}</b><div class="nw-route">${esc(r.src)} <span>→</span> ${esc(r.dst)}</div><small>${esc(r.description || 'No description')}</small></div><span class="nw-verdict">${r.action === 'allow' ? 'ALLOW' : 'BLOCK'}</span><span>${esc(r.proto.toUpperCase())} ${esc([r.port,r.ports].filter(Boolean).join(','))}</span><div class="actions">${op ? `<button data-fw-up="${i}" ${i ? '' : 'disabled'} aria-label="Move ${esc(r.name)} up">↑</button><button data-fw-down="${i}" ${i === rules.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(r.name)} down">↓</button><button data-fw-toggle="${i}" aria-pressed="${r.enabled}">${r.enabled ? 'On' : 'Off'}</button><button data-fw-edit="${i}">Edit</button><button data-fw-del="${i}">Remove</button>` : ''}</div></article>`).join('') || '<div class="nw-empty">No rules · All connections are allowed. Connect two endpoints to start.</div>';
   const ends = nwEnds();
   $('#fw-ends').innerHTML = ends.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('');
   $('#nw-test-ends').innerHTML = state.vms.map(v => `<option value="${esc(v.name)}">`).join('');
-  $('#nw-policy-nodes').innerHTML = ends.map(n => `<button class="nw-end ${nw.from === n.id ? 'selected' : ''}" data-end="${esc(n.id)}" ${op ? '' : 'disabled'}><span>${n.kind}</span><b>${esc(n.name)}</b></button>`).join('');
+  $('#nw-policy-nodes').innerHTML = ends.map(n => `<button class="nw-end ${nw.from === n.id ? 'selected' : ''} ${n.vm ? (n.vm.state === 'running' ? 'up' : 'down') : 'equipment'}" data-end="${esc(n.id)}" ${op ? '' : 'disabled'}><span>${NetworkCore.deviceIcon(n.kind,{stopped:n.vm && n.vm.state !== "running"})}</span><b>${esc(n.name)}</b>${n.vm ? `<small>${esc((state.guests[n.vm.uuid]?.ips || n.vm.ips || []).filter(ip=>NetworkCore.ipNumber(ip)!==null)[0] || "No IP")}</small>` : ""}</button>`).join('');
   $('#nw-switch-cards').innerHTML = state.networks.map(n => `<article class="nw-panel"><h3>${esc(n.name)}</h3><div class="nw-vlan">${vlanId(n)}<small>${n.vlan ? 'TAGGED VLAN' : 'NATIVE VLAN'}</small></div><p>${state.vms.filter(v => v.nics.some(nic => nic.network === n.name)).length} virtual machines</p><small>${esc((n.nodes || [n.node || 'Local']).join(' · '))} · ${esc(n.bridge || 'br0')}</small></article>`).join('');
   requestAnimationFrame(nwDrawPolicy);
   nwSafeBanner();
@@ -5789,7 +5791,7 @@ window.addEventListener('beforeunload',e=>{if(nw.draft){e.preventDefault();e.ret
 // The hologram shares the topology transaction and Policy studio draft.
 window.NetworkUI={getData:()=>({
     networks:topoData().networks,
-    vms:topoData().vms.map(v=>({...v,ips:(state.guests[v.uuid]?.ips||[]).filter(ip=>NetworkCore.ipNumber(ip)!==null)})),
+    vms:topoData().vms.map(v=>({...v,guest_info:state.guests[v.uuid],ips:(state.guests[v.uuid]?.ips||[]).filter(ip=>NetworkCore.ipNumber(ip)!==null)})),
     rules:nwRules(),groups:state.groups,stats:state.stats,key:topoLayoutKey(),
     editing:!!ntopo.edit,saving:!!ntopo.edit?.saving,canEdit:canOperate(),
     canApplyFirewall:canOperate()&&!!nw.draft&&!nw.busy&&!nw.conflict&&!nw.deadline,
@@ -5808,7 +5810,7 @@ window.NetworkUI={getData:()=>({
   applyRules:()=>$('#nw-apply').click(),
   selectVM:uuid=>{
   const v=window.NetworkUI.getData().vms.find(v=>v.uuid===uuid);if(!v)return;
-  $('#nw-vm-panel').innerHTML=`<h3>${esc(v.name)}</h3><p>${esc(v.state)} · ${esc(v.node || '')}</p><p>${esc(v.nics.map(n=>n.network).join(' · '))}</p><p>${esc(v.ips.join(', ') || 'No guest IP reported')}</p><h3>Related policy</h3>${nwRules().filter(r=>NetworkCore.matches(r.src,NetworkCore.endpoint(v.name,nwInventory()),state.groups.members)||NetworkCore.matches(r.dst,NetworkCore.endpoint(v.name,nwInventory()),state.groups.members)).map(r=>`<p>${esc(r.name)} · ${esc(r.action)}</p>`).join('') || '<p>No matching endpoint rules</p>'}<button id="nw-vm-test">Test connection</button><div id="nw-layer-colors"></div>`;
+  $('#nw-vm-panel').innerHTML=`<div class="nw-device-heading ${v.state === "running" ? "up" : "down"}">${NetworkCore.deviceIcon(NetworkCore.detectOS(v),{stopped:v.state !== "running"})}<h3>${esc(v.name)}</h3></div><p>${esc(v.state)} · ${esc(v.node || '')}</p><p>${esc(v.nics.map(n=>n.network).join(' · '))}</p><p>${esc(v.ips.join(', ') || 'No guest IP reported')}</p><h3>Related policy</h3>${nwRules().filter(r=>NetworkCore.matches(r.src,NetworkCore.endpoint(v.name,nwInventory()),state.groups.members)||NetworkCore.matches(r.dst,NetworkCore.endpoint(v.name,nwInventory()),state.groups.members)).map(r=>`<p>${esc(r.name)} · ${esc(r.action)}</p>`).join('') || '<p>No matching endpoint rules</p>'}<button id="nw-vm-test">Test connection</button><div id="nw-layer-colors"></div>`;
   $('#nw-vm-test').onclick=()=>{selectTab('net-tabs','net-fw');$('#nw-test-form').elements.src.value=v.name;$('#nw-test-form').elements.dst.focus();};window.Network3D?.colors();
 }};
 

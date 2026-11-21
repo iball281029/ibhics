@@ -1,5 +1,28 @@
 const assert = require('node:assert/strict');
 const core = require('../../ibhics/manager/static/network-core.js');
+// One detector is used by every network view and guest-reported OS wins.
+for (const [vm,guest,expected] of [
+  [{os_type:'Windows Server 2022'},null,'windows'],
+  [{guest_os:'Microsoft Windows 11'},null,'windows'],
+  [{guest_os:{name:'Win10'}},null,'windows'],
+  [{os_type:'linux'},null,'linux'],
+  [{guest_os:'Ubuntu 24.04 LTS'},null,'linux'],
+  [{os_type:'Red Hat Enterprise Linux 9'},null,'linux'],
+  [{os_type:'AlmaLinux 9'},null,'linux'],
+  [{os_type:'openSUSE Leap'},null,'linux'],
+  [{os_type:'Windows',guest_info:{os_name:'Debian GNU/Linux 13'}},null,'linux'],
+  [{os_type:'Linux',guest:{os_name:'Windows Server 2025'}},null,'windows'],
+  [{os_type:'Windows'},{os_name:'Rocky Linux 9'},'linux'],
+  [{os_type:'Linux'},{os_name:'FreeBSD 14'},'other'],
+  [{os_type:'Windows',guest_os:'unknown'},null,'windows'],
+  [{os_type:'Windows',guest_os:{os_name:'Ubuntu'}},null,'linux'],
+  [{os_type:'pfSense'},null,'other'],
+  [{name:'windows-linux-db'},null,'other'],
+  [{guest_os:42,os_type:null},null,'other'],
+  [{},null,'other']
+]) assert.equal(core.detectOS(vm,guest),expected,JSON.stringify(vm));
+assert.equal(core.detectOS(),'other');
+console.log('Shared guest/configured OS detection checks passed');
 const inventory = [{uuid:'a',name:'web',nics:[{network:'native'}],ips:['10.0.1.2']},{uuid:'b',name:'db',nics:[{network:'data'},{network:'native'}],ips:['10.0.2.8']}];
 const rules = [{name:'sql',action:'allow',src:'group:apps',dst:'vm:db',proto:'tcp',ports:'5432,6000-6010',enabled:true},{name:'block-data',action:'deny',src:'any',dst:'data',proto:'any',enabled:true}];
 const flow={src:'web',dst:'db',proto:'tcp',port:5432};
@@ -115,12 +138,19 @@ async function checkDiorama() {
 
     const vmLabels=snapshot.labels.filter(l=>l.kind==='vm');
     assert.equal(vmLabels.filter(l=>!l.el.hidden).length,vmCount,`${vlanCount} VLAN / ${vmCount} VM labels visible`);
-    const boxes=snapshot.labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.kind==='vm'?38:26}));
+    const boxes=snapshot.labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.height}));
     boxes.forEach((b,i)=>{assert(b.x>=0&&b.y>=0&&b.x+b.w<=1114&&b.y+b.h<=700);boxes.slice(i+1).forEach(c=>assert(!core.overlaps(b,c)));});
     snapshot.beams.forEach(b=>b.curve.getPoints(32).forEach(p=>assert([p.x,p.y,p.z].every(Number.isFinite))));
     assert(snapshot.particles.length>0);
     const beforeIdle=pending;api.draw(1.1);assert.equal(pending,beforeIdle,'reduced motion does not enqueue a continuous render loop');
     api.setView('top');api.draw(2);assert.equal(snapshot.controls.enableRotate,false);assertFit();
+    assert.equal(api.snapshot().labels.filter(l=>l.kind==='vm'&&!l.el.hidden).length,vmCount,'top view keeps every VM icon visible');
+    const topBoxes=api.snapshot().labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.height}));
+    topBoxes.forEach((b,i)=>topBoxes.slice(i+1).forEach(c=>assert(!core.overlaps(b,c),'top icons and captions do not overlap')));
+    for(const label of api.snapshot().labels.filter(l=>l.kind==='vm')){
+      assert(label.icon,'each top-view VM has a shared SVG icon');
+      assert.equal(label.height,100,'top-view bounds include the icon, name and IP');
+    }
     api.setView('3d');api.draw(3);assert.equal(snapshot.controls.enableRotate,true);assertFit();
     $('#nw-three').clientWidth=760;$('#nw-three').clientHeight=560;api.draw(3.1);assertFit();
     $('#nw-three').clientWidth=1114;$('#nw-three').clientHeight=700;api.draw(3.2);assertFit();

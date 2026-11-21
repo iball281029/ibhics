@@ -55,13 +55,38 @@ function tube(curve,color,opacity=.65,radius=.055){const mesh=new THREE.Mesh(new
 function cable(a,b,color,vm=null,pending=false){const curve=route(a,b);let line;if(pending){const g=new THREE.BufferGeometry().setFromPoints(curve.getPoints(80));line=new THREE.Line(g,new THREE.LineDashedMaterial({color,dashSize:.3,gapSize:.22}));line.computeLineDistances();scene.add(line);}else line=tube(curve,color,vm&&vm.state!=='running'?.16:.65);beams.push({curve,line,a,b,vm});const stats=vm&&window.NetworkUI.getData().stats[vm.uuid],speed=(stats?.net_rx_bps||0)+(stats?.net_tx_bps||0);
   if(vm?.state==='running'&&speed>0){const intensity=Math.min(1,Math.log10(1+speed)/8);for(let i=0;i<1+Math.floor(intensity*4);i++){const dot=new THREE.Mesh(unitSphere,fill('#cfffff',1));dot.scale.setScalar(.08);scene.add(dot);particles.push({mesh:dot,curve,offset:i/5,speed:.08+intensity*.25});}}
 }
-function rack(parent,color,x,z){equipment.push(box(parent,color,x,1.9,z,1.45,2.65,1.2,.45));box(parent,'#092b46',x,1.9,z+.62,1.23,2.38,.06,.9);for(let i=0;i<6;i++){box(parent,color,x,.92+i*.37,z+.69,1.08,.23,.1);lamps.push(box(parent,'#69ffc5',x+.39,.92+i*.37,z+.76,.09,.055,.04,1));}halo(parent,color,x,1.6,z,4);}
-function switchModel(parent,color,x,z){equipment.push(box(parent,color,x,.87,z,2.5,.42,1.05,.5));for(let i=0;i<8;i++)lamps.push(box(parent,'#69ffc5',x-.95+i*.27,.87,z+.55,.14,.13,.05,1));for(const dx of [-1,1])box(parent,color,x+dx,1.35,z-.36,.06,.8,.06,.8);}
+function rack(parent,color,x,z){equipment.push(box(parent,color,x,1.9,z,1.45,2.65,1.2,.45));box(parent,'#092b46',x,1.9,z+.62,1.23,2.38,.06,.9);for(let i=0;i<6;i++){box(parent,color,x,.92+i*.37,z+.69,1.08,.23,.1);lamps.push(box(parent,'#69ffc5',x+.39,.92+i*.37,z+.76,.09,.055,.04,1));}deviceDecal(parent,'node',x,1.9,z+.8,1.15);halo(parent,color,x,1.6,z,4);}
+function switchModel(parent,color,x,z){equipment.push(box(parent,color,x,.87,z,2.5,.42,1.05,.5));for(let i=0;i<8;i++)lamps.push(box(parent,'#69ffc5',x-.95+i*.27,.87,z+.55,.14,.13,.05,1));deviceDecal(parent,'switch',x,.9,z+.59,.65);for(const dx of [-1,1])box(parent,color,x+dx,1.35,z-.36,.06,.8,.06,.8);}
+// Decode our shared SVG once per kind/state into a retained CanvasTexture.
+// Textures survive scene refreshes; per-model materials are disposed by update().
+const deviceTextures=new Map();
+function deviceTexture(kind,stopped=false,symbolOnly=false){
+  const key=kind+':'+stopped+':'+symbolOnly;
+  if(deviceTextures.has(key))return deviceTextures.get(key);
+  const canvas=document.createElement('canvas');canvas.width=canvas.height=256;
+  const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;deviceTextures.set(key,texture);
+  const image=document.createElement('img');
+  image.onload=()=>{const context=canvas.getContext('2d');context.clearRect(0,0,256,256);context.drawImage(image,0,0,256,256);texture.needsUpdate=true;wake();};
+  image.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(core.deviceIcon(kind,{stopped,symbolOnly}));
+  return texture;
+}
+function deviceDecal(parent,kind,x,y,z,size,stopped=false,symbolOnly=false){
+  const material=new THREE.MeshBasicMaterial({map:deviceTexture(kind,stopped,symbolOnly),transparent:true,opacity:stopped ? .5 : 1,depthWrite:false,side:THREE.DoubleSide});
+  const mesh=new THREE.Mesh(new THREE.PlaneGeometry(size,size),material);mesh.position.set(x,y,z);parent.add(mesh);return mesh;
+}
+function labelHeight(l){return mode==='top'&&l.icon?(l.kind==='vm'||l.kind==='ghost'?100:112):l.kind==='vm'?38:26;}
 function vmModel(vm,position,ghost=false){
-  const g=new THREE.Group();g.position.copy(position);const color=vm.state==='running'?'#6dffb3':vm.state==='paused'?'#ffcb66':'#768da7',os=String(vm.os_type||'').toLowerCase();
-  if(/windows/.test(os)){box(g,color,0,1.05,0,1.35,.9,.18);box(g,color,0,.48,0,.12,.35,.12);box(g,color,0,.28,.08,.78,.12,.52);for(const x of [-.18,.18])for(const y of [.89,1.22])box(g,vm.state==='running'?'#c4fff0':'#768da7',x,y,.11,.29,.26,.03,1);}
-  else if(/linux|ubuntu|debian|centos|fedora|rocky|rhel/.test(os)){box(g,color,0,.83,0,.75,1.3,.75);box(g,'#061a29',0,1,.4,.59,.55,.04,.95);const a=box(g,color,-.12,1.1,.44,.22,.035,.025,1),b=box(g,color,-.12,1,.44,.22,.035,.025,1);a.rotation.z=-.6;b.rotation.z=.6;box(g,color,.14,.93,.44,.16,.035,.025,1);}
-  else{box(g,color,0,.7,0,1.05,.95,.85);box(g,color,0,.7,.44,.65,.12,.03,.9);}
+  const g=new THREE.Group();g.position.copy(position);const stopped=vm.state!=='running',color=stopped?'#768da7':'#6dffb3',os=core.detectOS(vm);
+  if(os==='windows'){
+    box(g,color,0,1.05,0,1.35,.9,.18);box(g,'#061a29',0,1.05,.105,1.2,.76,.03,.95);
+    box(g,color,0,.48,0,.12,.35,.12);box(g,color,0,.28,.08,.78,.12,.52);
+    deviceDecal(g,os,0,1.05,.13,.96,stopped,true);
+  }else if(os==='linux'){
+    box(g,color,0,.95,0,1.05,1.65,.75);box(g,'#061a29',0,1.05,.4,.9,1.3,.04,.95);
+    deviceDecal(g,os,0,1.05,.43,1.1,stopped,true);
+  }else{
+    box(g,color,0,.7,0,1.05,.95,.85);deviceDecal(g,os,0,.7,.44,.85,stopped,true);
+  }
   if(!ghost)halo(g,color,0,.45,0,2.8);g.scale.setScalar(ghost ? .95 : 1.8);scene.add(g);return g;
 }
 function selectVM(uuid){selectedVM=uuid;$('#nw-three-wrap').classList.remove('nw-panel-closed');const button=host.querySelector('.nw-panel-toggle');button.textContent='Hide details';button.setAttribute('aria-expanded','true');window.NetworkUI.selectVM(uuid);
@@ -76,10 +101,13 @@ function selectVM(uuid){selectedVM=uuid;$('#nw-three-wrap').classList.remove('nw
   const apply=document.createElement('button');apply.id='nw-3d-policy-apply';apply.textContent='Apply firewall draft (safe apply)';apply.disabled=data.canApplyFirewall===false;apply.onclick=()=>window.NetworkUI.applyRules?.();panel.append(apply);
 }
 function addLabel(text,position,kind,uuid=null,owner=null) {
-  const el=document.createElement('button');el.className=`nw-label ${kind}`;el.textContent=text;el.title=text;el.setAttribute('aria-label',text);if(kind==='vm'||kind==='ghost'){if(owner)el.setAttribute('data-state',owner.userData.vm.state);const [name,...ip]=text.split(' · ');el.replaceChildren();const strong=document.createElement('span'),small=document.createElement('small');strong.textContent=name;small.textContent=ip.join(' · ');el.append(strong,small);}
+  const el=document.createElement('button');el.className=`nw-label ${kind}`;el.textContent=text;el.title=text;el.setAttribute('aria-label',text);if(kind==='vm'||kind==='ghost'){if(owner)el.setAttribute('data-state',owner.userData.vm.state);const [name,...ip]=text.split(' · ');el.replaceChildren();const strong=document.createElement('span'),small=document.createElement('small');strong.textContent=name;small.textContent=ip.join(' · ')||(owner?.userData.vm.ips?.[0]||'No IP');el.append(strong,small);}
   if(owner){el.title=[owner.userData.vm.name,...(owner.userData.ghost?['Also connected to '+owner.userData.net]:[]),...(owner.userData.vm.ips||[]),...owner.userData.vm.nics.map(n=>n.network)].join(' · ');el.setAttribute('aria-label',el.title);}
   if(uuid)el.onclick=()=>selectVM(uuid);else el.disabled=true;
-  overlay.append(el);labels.push({el,position,kind,uuid,owner});
+  let icon=null;
+  const device=owner?core.detectOS(owner.userData.vm):kind==='shield'?'firewall':kind==='external'?'internet':kind==='equipment'?(text.startsWith('ibHiCS')?'node':'switch'):null;
+  if(device){icon=document.createElement('span');icon.className='nw-top-device';icon.innerHTML=core.deviceIcon(device,{stopped:owner&&owner.userData.vm.state!=='running'});el.append(icon);}
+  overlay.append(el);labels.push({el,position,kind,uuid,owner,icon});
 }
 // Project each object's bounds independently to avoid an oversized world-axis box.
 function sceneFitPoints(){
@@ -101,7 +129,7 @@ function fit(){
   // Include measured HTML label rectangles, then center the combined projection.
   for(let pass=0;pass<3;pass++){
     layout(w,h);
-    const ps=fitPoints.map(p=>project(p,w,h)),boxes=labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:l.kind==='vm'?38:26}));
+    const ps=fitPoints.map(p=>project(p,w,h)),boxes=labels.filter(l=>!l.el.hidden).map(l=>({x:parseFloat(l.el.style.left),y:parseFloat(l.el.style.top),w:parseFloat(l.el.style.width),h:labelHeight(l)}));
     const left=Math.min(...ps.map(p=>p.x),...boxes.map(b=>b.x)),right=Math.max(...ps.map(p=>p.x),...boxes.map(b=>b.x+b.w)),top=Math.min(...ps.map(p=>p.y),...boxes.map(b=>b.y)),bottom=Math.max(...ps.map(p=>p.y),...boxes.map(b=>b.y+b.h));
     const scale=Math.max((right-left)/(w*.88),(bottom-top)/(h*.88));
     const shift=new THREE.Vector3(((left+right)/2-w/2)*(camera.right-camera.left)/w,(h/2-(top+bottom)/2)*(camera.top-camera.bottom)/h,0).applyQuaternion(camera.quaternion);
@@ -163,10 +191,10 @@ function update() {
   });
   if(layers.length){
     const shield=new THREE.Shape();shield.moveTo(-.65,.65);shield.lineTo(0,.9);shield.lineTo(.65,.65);shield.lineTo(.55,-.2);shield.quadraticCurveTo(.3,-.65,0,-.9);shield.quadraticCurveTo(-.3,-.65,-.55,-.2);shield.closePath();
-    const mesh=modelPart(scene,new THREE.ExtrudeGeometry(shield,{depth:.12,bevelEnabled:false}),'#b49bff',serviceX,4,1.5);mesh.rotation.y=Math.PI/4;equipment.push(mesh);
+    const mesh=modelPart(scene,new THREE.ExtrudeGeometry(shield,{depth:.12,bevelEnabled:false}),'#b49bff',serviceX,4,1.5);mesh.rotation.y=Math.PI/4;equipment.push(mesh);const badge=deviceDecal(scene,'firewall',serviceX,4,1.62,1.5);badge.rotation.y=Math.PI/4;
     addLabel('Firewall · '+data.rules.length+' rules',new THREE.Vector3(serviceX,5.2,1.5),'shield');
     const external=new THREE.Vector3(serviceX,5,minZ+1);
-    const globe=modelPart(scene,unitSphere,'#70dfff',external.x,external.y,external.z,1.3,1.3,1.3,.18);globe.userData.endpoint='any';equipment.push(globe);globe.add(new THREE.LineSegments(new THREE.WireframeGeometry(unitSphere),new THREE.LineBasicMaterial({color:'#70dfff',transparent:true,opacity:.4})));halo(scene,'#45e5ff',external.x,external.y,external.z,6);
+    const globe=modelPart(scene,unitSphere,'#70dfff',external.x,external.y,external.z,1.3,1.3,1.3,.18);globe.userData.endpoint='any';equipment.push(globe);deviceDecal(scene,'internet',external.x,external.y,external.z+1.32,1.9);globe.add(new THREE.LineSegments(new THREE.WireframeGeometry(unitSphere),new THREE.LineBasicMaterial({color:'#70dfff',transparent:true,opacity:.4})));halo(scene,'#45e5ff',external.x,external.y,external.z,6);
     addLabel('Internet / external router',external.clone().add(new THREE.Vector3(0,1.7,0)),'external');bounds.expandByPoint(external.clone().addScalar(2));
     cable(trunk,external,'#70dfff');
     if($('#nw-lines').checked){const ends=end=>{if(end==='any')return [external];if(layerMap.has(end))return [layerMap.get(end).clone().add(new THREE.Vector3(0,2,0))];return data.vms.filter(v=>core.matches(end,{vm:v,ips:v.ips||[],networks:v.nics.map(n=>n.network)},data.groups.members)).flatMap(v=>positions.get(v.uuid)?.slice(0,1)||[]);};
@@ -179,15 +207,16 @@ function update() {
 }
 function project(p,w,h){const v=p.clone().project(camera);return {x:(v.x+1)*w/2,y:(1-v.y)*h/2,visible:v.z>-1&&v.z<1};}
 function layout(w,h) {
+  host.setAttribute('data-view',mode);labels.forEach(l=>{l.height=labelHeight(l);l.el.style.height=l.height+'px';});
   scene.updateMatrixWorld();const obstacles=[{x:8,y:8,w:editMode?310:90,h:38},{x:w-136,y:8,w:128,h:38},{x:8,y:h-34,w:w-16,h:26},{x:10,y:h-44-(host.querySelector('.nw-scene-legend').offsetHeight||124),w:host.querySelector('.nw-scene-legend').offsetWidth||244,h:host.querySelector('.nw-scene-legend').offsetHeight||124}];
   if(editMode&&!editHintDismissed)obstacles.push({x:12,y:55,w:w-24,h:64});
-  for(const n of [...nodes,...equipment]){const b=new THREE.Box3();n.traverse(o=>{if(o.isMesh){o.geometry.computeBoundingBox();b.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));}});const points=[];for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z])points.push(project(new THREE.Vector3(x,y,z),w,h));const xs=points.map(p=>p.x),ys=points.map(p=>p.y);obstacles.push({x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)});}
-  for(const b of beams)for(const p of b.curve.getPoints(32)){const v=project(p,w,h);if(v.visible)obstacles.push({x:v.x-2,y:v.y-2,w:4,h:4});}
+  for(const n of mode==='top'?[]:[...nodes,...equipment]){const b=new THREE.Box3();n.traverse(o=>{if(o.isMesh){o.geometry.computeBoundingBox();b.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld));}});const points=[];for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z])points.push(project(new THREE.Vector3(x,y,z),w,h));const xs=points.map(p=>p.x),ys=points.map(p=>p.y);obstacles.push({x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)});}
+  for(const b of mode==='top'?[]:beams)for(const p of b.curve.getPoints(32)){const v=project(p,w,h);if(v.visible)obstacles.push({x:v.x-2,y:v.y-2,w:4,h:4});}
   const front=new THREE.Vector3().subVectors(camera.position,controls.target);front.y=0;front.normalize().multiplyScalar(2.5);
   const points=labels.filter(l=>$('#nw-labels').checked || l.uuid===hover).map(l=>{
-    const p=project(l.owner?l.owner.position.clone().add(front):l.position,w,h),lines=l.kind==='vm'?[[l.el.children[0].textContent,11],[l.el.children[1].textContent,10]]:[[l.el.textContent,12]];
-    const width=Math.max(...lines.map(([text,size])=>{ctx.font=`${size}px monospace`;return (ctx.measureText?ctx.measureText(text).width:text.length*7.4)+24;}));
-    return {...p,w:Math.min(w-8,Math.max(90,width)),h:l.kind==='vm'?38:26,l};
+    const p=project(l.owner?l.owner.position.clone().add(mode==='top'?new THREE.Vector3():front):l.position,w,h);if(mode==='top'&&l.icon)p.y-=labelHeight(l)/2+12;const lines=l.kind==='vm'?[[l.el.children[0].textContent,11],[l.el.children[1].textContent,10]]:[[l.el.textContent,12]];
+    const width=Math.max(mode==='top'&&l.icon?112:0,...lines.map(([text,size])=>{ctx.font=`${size}px monospace`;return (ctx.measureText?ctx.measureText(text).width:text.length*7.4)+24;}));
+    return {...p,w:Math.min(w-8,Math.max(90,width)),h:labelHeight(l),l};
   }).filter(p=>p.visible);
   points.sort((a,b)=>(b.l.uuid===hover)-(a.l.uuid===hover) || (b.l.kind==='vm')-(a.l.kind==='vm'));
   labels.forEach(l=>l.el.hidden=true);leaders.replaceChildren();
@@ -225,7 +254,10 @@ function sceneGuide(){
   const text=document.createElement('span');text.textContent='Drag a VM to another zone to move its network · Shift+drag between VMs to create a firewall rule · Save when done';guide.append(text);
   const close=document.createElement('button');close.textContent='×';close.setAttribute('aria-label','Dismiss edit instructions');close.onclick=()=>{editHintDismissed=true;guide.hidden=true;wake();};guide.append(close);host.append(guide);
   const legend=document.createElement('div');legend.className='nw-scene-legend';legend.setAttribute('aria-label','Topology legend');
-  for(const [symbol,text,kind] of [['▧','Zone color = VLAN','zone'],['━ •','Pipe + moving light = traffic','traffic'],['▣','Green screen = running · gray = stopped','state'],['━ ━','Green / red = firewall allow / block','rules'],['◎','Globe = external network','external']]){const row=document.createElement('div'),icon=document.createElement('span');icon.className='nw-key-'+kind;icon.textContent=symbol;row.append(icon,document.createTextNode(text));legend.append(row);}host.append(legend);
+  // Folded to one small chip by default so it never covers the scene; click to open.
+  legend.classList.add('folded');const legendToggle=document.createElement('button');legendToggle.type='button';legendToggle.className='nw-legend-toggle';legendToggle.textContent='Legend ▸';legendToggle.setAttribute('aria-expanded','false');
+  legendToggle.onclick=()=>{const open=legend.classList.toggle('folded')===false;legendToggle.textContent=open?'Legend ▾':'Legend ▸';legendToggle.setAttribute('aria-expanded',String(open));wake();};legend.append(legendToggle);
+  for(const [symbol,text,kind] of [['▧','Zone color = VLAN','zone'],['━ •','Pipe + moving light = traffic','traffic'],['▣','Green screen = running · gray = stopped','state'],['━ ━','Green / red = firewall allow / block','rules'],['◎','Globe = external network','external']]){const row=document.createElement('div'),icon=document.createElement('span');icon.className='nw-key-'+kind;icon.textContent=symbol;row.append(icon,document.createTextNode(text));legend.append(row);}const devices=document.createElement('div');devices.className='nw-device-legend-wrap';devices.innerHTML=core.deviceLegend();legend.append(devices);host.append(legend);
   const toolbar=$('.nw-view-tools');
   for(const [title,ids] of [['View',['nw-view-3d','nw-view-top','nw-view-edit','nw-reset']],['Show',['nw-labels','nw-traffic','nw-lines','nw-stopped']]]){const group=document.createElement('div');group.className='nw-tool-group';group.setAttribute('role','group');group.setAttribute('aria-label',title);const name=document.createElement('span');name.className='nw-tool-title';name.textContent=title;group.append(name);for(const id of ids){const el=$('#'+id);group.append(el.closest('label')||el);}toolbar.append(group);}
 }
