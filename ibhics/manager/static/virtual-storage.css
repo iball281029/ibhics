@@ -1,4 +1,4 @@
-/* Virtual Storage command center. Geometry is SVG; no canvas or render loop. */
+/* Storage command center. Shared hologram palette with the Migrate workspace. */
 #page-storage .vs-command {
   --vs-cyan:#3ef0ff; --vs-text:#cfefff; --vs-dim:#89aaca;
   position:relative;isolation:isolate;overflow:hidden;padding:24px;
@@ -96,3 +96,94 @@
 #page-storage .vs-command .vs-replica-table th {color:#89aaca;font-size:10px;letter-spacing:1px}
 #page-storage .vs-command .vs-replica-table tr:hover td {background:#3ef0ff08}
 #page-storage .vs-command .vs-replica-table small {display:block;margin-top:6px;font-size:10px}
+/* Workspace hierarchy is explicit: only one primary panel can be visible. */
+#page-storage {--vs-cyan:#3ef0ff;--vs-text:#cfefff;--vs-dim:#89aaca;color:var(--vs-text)}
+#page-storage [hidden] {display:none!important}
+#page-storage .storage-heading {display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:24px;background:none;padding:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#page-storage .storage-heading small {font-size:10px;letter-spacing:3px;color:#89aaca}
+#page-storage .storage-heading h1 {margin:8px 0 0;font-size:30px;color:#e8fbff;letter-spacing:2px}
+#page-storage .storage-heading>span {font-size:11px;color:#89aaca}
+#storage-tabs {display:flex;gap:8px;margin-bottom:18px;padding:6px;border:1px solid #3ef0ff33;border-radius:12px;background:#020d1cee}
+#page-storage #storage-tabs button {flex:1;min-height:52px;padding:12px;border:1px solid transparent;border-radius:6px;background:transparent;color:#89aaca;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:1.5px}
+#page-storage #storage-tabs button[aria-selected="true"] {color:#e8fbff;border-color:#3ef0ff77;background:linear-gradient(130deg,#0e577166,#092136);box-shadow:inset 0 -2px #3ef0ff}
+#page-storage #storage-tabs button:focus-visible {outline:2px solid #cfffff;outline-offset:2px}
+#page-storage .vs-command {margin:0}
+#page-storage .vs-command .table-wrap {border:0;background:transparent}
+#page-storage .vs-command table {width:100%;background:transparent;color:#cfefff;border-collapse:collapse}
+#page-storage .vs-command :is(thead,tbody,tr,td,th) {background:transparent}
+#page-storage .vs-command th {color:#89aaca;font-size:10px;letter-spacing:1px;background:#04121f66;text-transform:uppercase}
+#page-storage .vs-command :is(th,td) {padding:14px 12px;border-bottom:1px dashed #3ef0ff33;font-size:11px;overflow-wrap:anywhere}
+#page-storage .vs-command tr:hover td {background:#3ef0ff08}
+#page-storage .vs-command .vm-sub {color:#89aaca}
+#page-storage .vs-command .avatar {background:#3ef0ff12;color:#3ef0ff;border-color:#3ef0ff55}
+#page-storage .vs-command .bar {background:#3ef0ff14}
+#page-storage .vs-command .bar>i {background:linear-gradient(90deg,#1f8fff,#3ef0ff)}
+#page-storage .vs-command .danger {color:#ffadb9;border-color:#ff6b7a66;background:#ff6b7a0b}
+#page-storage .vs-view-switch {display:inline-flex;flex-shrink:0;gap:0;border:1px solid #3ef0ff55;background:#020a1466}
+#page-storage .vs-view-switch button {min-width:38px;min-height:36px;padding:8px;border:0;clip-path:none;border-radius:0;background:transparent}
+#page-storage .vs-view-switch button+button {border-left:1px solid #3ef0ff33}
+#page-storage .vs-view-switch svg {display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round}
+#page-storage .storage-panels .table-wrap {overflow:visible}
+#page-storage .storage-panels table {display:block;min-width:0}
+#page-storage .storage-panels thead {display:none}
+#page-storage .storage-panels tbody {display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}
+#page-storage .storage-panels tr {display:flex;flex-direction:column;position:relative;min-width:0;padding:18px;background:linear-gradient(160deg,#0b344599,#04121faa);border:1px solid #3ef0ff44;border-radius:4px 18px 4px 18px;box-shadow:inset 0 1px #bff6ff18}
+#page-storage .storage-panels td {display:block!important;border:0;padding:9px 0}
+#page-storage .storage-panels td[data-label]::before {content:attr(data-label);display:block;color:#89aaca;font-size:9px;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:7px}
+#page-storage .storage-panels td:first-child {border-bottom:1px solid #3ef0ff22;padding-bottom:16px;margin-bottom:6px}
+#page-storage .storage-panels td:first-child::before {display:none}
+#page-storage .storage-panels td:last-child {margin-top:auto}
+#page-storage .storage-panels tr:hover td {background:transparent}
+#page-storage .vs-capacity-layout {display:grid;grid-template-columns:minmax(180px,.7fr) 2fr;gap:20px;align-items:center}
+#page-storage .vs-gauge {position:relative;width:154px;height:154px;margin:12px auto 18px;display:grid;place-items:center}
+#page-storage .vs-gauge svg {position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:#3ef0ff19;stroke-width:5}
+#page-storage .vs-gauge .vs-gauge-fill {stroke:#3ef0ff;stroke-linecap:round}
+#page-storage .vs-gauge div {position:relative;text-align:center}
+#page-storage .vs-gauge b {display:block;font-size:19px;color:#e8fbff}
+#page-storage .vs-gauge small {display:block;font-size:9px;letter-spacing:1px;margin-top:7px}
+#page-storage .vs-cache-panel {margin-top:20px}
+/* The SVG stays in the DOM and is revealed if WebGL cannot render. */
+.vs-webgl {position:relative;height:clamp(420px,42vw,560px);width:100%;overflow:hidden;background:#020c18}
+.vs-webgl canvas {display:block;width:100%;height:100%;touch-action:pan-y;cursor:grab}
+.vs-webgl canvas:active {cursor:grabbing}
+.vs-has-webgl>svg,.vs-has-webgl>.vs-grid {display:none}
+.vs-scene-labels {position:absolute;inset:0;pointer-events:none;overflow:hidden}
+.vs-scene-label {position:absolute;transform:translate(-50%,-50%);padding:7px 10px;border:1px solid #3ef0ff44;border-left:2px solid #3ef0ff;background:linear-gradient(120deg,#062136e8,#03101ce0);box-shadow:0 5px 20px #0004;color:#dffbff;white-space:nowrap;text-align:left;max-width:260px;font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+#page-storage .vs-scene-label b {display:block;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+#page-storage .vs-scene-label small {display:block;font-size:9px;color:#91bdcf}
+.vs-label-vip {border-color:#5faaff77;border-left-color:#5faaff}
+.vs-label-cache {border-left-color:#62ffc8}
+.vs-label-alert {border-left-color:#ff637c}
+#page-storage .vs-label-alert small {color:#ffa6b5}
+.vs-label-core {text-align:center;border:1px solid #3ef0ff66}
+/* Storage dialogs share the workspace palette without changing their actions. */
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) {background:radial-gradient(ellipse at top,#103649,#061525 65%);color:#cfefff;border:1px solid #3ef0ff55}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn) {background:#020d1c;color:#cfefff;border:1px solid #3ef0ff55;border-radius:4px;accent-color:#3ef0ff}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.hint,.vm-sub,small,label) {color:#89aaca}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(table,thead,tbody,tr,td,th,.vs-node,.pv-summary,.vs-review) {background:transparent;color:#cfefff;border-color:#3ef0ff33}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) .primary {background:#09607966;border-color:#3ef0ff99}
+@media(max-width:720px) {
+  #page-storage .storage-heading>span {display:none}
+  #page-storage #storage-tabs button {font-size:9px;letter-spacing:.5px;padding:10px 4px}
+  #page-storage .storage-panels tbody {grid-template-columns:minmax(0,1fr)}
+  #page-storage .vs-capacity-layout {grid-template-columns:1fr}
+  #page-storage .vs-scene {overflow:hidden}
+  .vs-webgl {height:440px}
+  .vs-scene-label {padding:4px 6px;max-width:160px}
+  #page-storage .vs-scene-label b {font-size:9px}
+  #page-storage .vs-scene-label small {font-size:8px}
+}
+/* Pause the fallback's animations when a primary/subtab is hidden. */
+#page-storage [hidden] *,body.storage-document-hidden #page-storage * {animation-play-state:paused!important}
+@media(max-width:720px) {
+  #storage-tabs {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+  #page-storage #storage-tabs button {min-width:0;font-size:8px;letter-spacing:0;padding:10px 2px;overflow-wrap:anywhere}
+  #page-storage .storage-heading h1 {font-size:26px}
+}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(header,footer,.wiz-steps,.tabs,.type-card,.pv-cache,.vs-node-head,.vs-protection,.card) {background:#061b2ccc;border-color:#3ef0ff33;color:#cfefff}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(h3,b,summary) {color:#dffbff}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.type-card:has(input:checked),.tabs button.active) {background:#3ef0ff19;border-color:#3ef0ff;color:#e8fbff}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.vs-erase,#vs-review) {background:#401b2a66;border-color:#ff6b7a55;color:#ffc2cd}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn):focus-visible {outline:2px solid #bffaff;outline-offset:2px}
+.vs-scene:not(.vs-linked) .vs-beam {stroke:#ff6b7a}
+@media(max-width:720px) {#page-storage .vs-scene>svg {min-width:0}}

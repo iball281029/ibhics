@@ -4,6 +4,7 @@ window.VirtualStorageUI = (() => {
   let latest = null, inspected = [], receipt = null, timer = null, rendering = false;
   let desiredCacheMode = null, activeTab = "overview", replicationView = "panels";
   function selectTab(name) {
+    if (!["overview", "replication", "cache", "capacity", "files", "settings"].includes(name)) name = "overview";
     activeTab = name;
     $$("[data-vs-tab]").forEach((button) => {
       const selected = button.dataset.vsTab === name;
@@ -14,7 +15,10 @@ window.VirtualStorageUI = (() => {
   }
   $("#vs-tabs").addEventListener("click", (event) => {
     const button = event.target.closest("[data-vs-tab]");
-    if (button) selectTab(button.dataset.vsTab);
+    if (button) {
+      selectTab(button.dataset.vsTab);
+      history.replaceState(null, "", `#storage/virtual/${activeTab}`);
+    }
   });
   $("#vs-tabs").addEventListener("keydown", (event) => {
     const tabs = $$("[data-vs-tab]");
@@ -24,6 +28,7 @@ window.VirtualStorageUI = (() => {
     const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
       : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
     selectTab(tabs[next].dataset.vsTab);
+    history.replaceState(null, "", `#storage/virtual/${activeTab}`);
     tabs[next].focus();
   });
   const busy = (job) => job && ["queued", "running"].includes(job.state);
@@ -211,7 +216,7 @@ window.VirtualStorageUI = (() => {
     const mode = modes.length === 1 ? modes[0] : "mixed";
     const selected = desiredCacheMode || (mode === "writeback" ? "writeback" : "writethrough");
     return `<div class="vs-cache-panel"><b>SSD cache · ${esc(mode)}</b>
-      <p class="hint">${data.cache.map((n) => `${esc(nodeName(n.node))}: ${esc(n.mode || n.error || "Not reported")}${n.dirty_bytes != null ? ` · ${(n.dirty_bytes / 1024**2).toFixed(1)} MiB pending to HDD` : " · Pending to HDD: Not reported"}`).join("<br>")}</p>
+      <p class="hint">${data.cache.map((n) => `${esc(nodeName(n.node))}: ${esc(n.mode || n.error || "Not reported")}${n.dirty_bytes != null ? ` · ${(n.dirty_bytes / 1024**2).toFixed(1)} MiB pending to HDD` : ""}`).join("<br>")}</p>
       ${isAdmin() ? `<div class="actions"><select id="vs-cache-mode" aria-label="SSD cache mode" ${running ? "disabled" : ""}>
         <option value="writethrough" ${selected === "writethrough" ? "selected" : ""}>Writethrough · write to HDD before acknowledging</option>
         <option value="writeback" ${selected === "writeback" ? "selected" : ""}>Writeback · accelerate writes using SSD</option>
@@ -227,13 +232,29 @@ window.VirtualStorageUI = (() => {
     } catch (err) { fail(err); event.target.disabled = false; }
   });
   const reported = (value, suffix = "") => value == null || value === "" ? "Not reported" : `${esc(String(value))}${suffix}`;
-  const metric = (label, value) => `<div><small>${esc(label)}</small><b>${value}</b></div>`;
+  const metric = (label, value) => value == null || value === "Not reported" ? "" : `<div><small>${esc(label)}</small><b>${value}</b></div>`;
+  function gauge(value, label, detail = "", suffix = "%") {
+    const known = Number.isFinite(value);
+    const percent = known && suffix === "%" ? Math.max(0, Math.min(100, value)) : 0;
+    return `<div class="vs-gauge"><svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="42"/><circle class="vs-gauge-fill" cx="50" cy="50" r="42" pathLength="100" stroke-dasharray="${percent} 100" transform="rotate(-90 50 50)"/></svg><div><b>${known ? `${num(value)}${suffix}` : "—"}</b><small>${esc(label)}</small></div></div>${detail ? `<p class="hint">${esc(detail)}</p>` : ""}`;
+  }
+  function cacheGauges(data) {
+    return `<div class="vs-replicas">${(data.cache || []).map((n) => `<article class="vs-replica"><h3>${esc(nodeName(n.node))}</h3>${gauge(n.dirty_bytes == null ? null : n.dirty_bytes / 1024**2, "Pending to HDD", n.error || n.mode || "", " MiB")}<p class="hint">${n.dirty_bytes == null ? "Pending bytes unavailable" : n.dirty_bytes === 0 ? "Cache is clean" : "Dirty data waiting to destage"}. Cache capacity is not reported; no percentage is estimated.</p></article>`).join("")}</div>`;
+  }
+  function replicationConnected(data) {
+    const nodes = data.nodes.filter((n) => n.role === "compute");
+    return nodes.length === 2 && !["degraded", "failed"].includes(data.phase) && nodes.every((n) => {
+      const r = n.resources?.find((r) => r.name === data.created?.spec.name);
+      return n.healthy && r?.devices?.length && r.devices.every((d) => d["disk-state"] === "UpToDate")
+        && r.connections?.some((c) => c["connection-state"] === "Connected" && c.peer_devices?.length);
+    });
+  }
   function topologyScene(data, pool) {
     const nodes = data.nodes.filter((n) => n.role === "compute");
     const witness = data.nodes.find((n) => n.role === "witness");
     const usage = pool && Number.isFinite(pool.allocation_gb) && pool.capacity_gb > 0
       ? Math.max(0, Math.min(100, pool.allocation_gb / pool.capacity_gb * 100)) : null;
-    return `<div class="vs-scene ${data.phase === "ready" || data.phase === "syncing" ? "vs-linked" : ""}">
+    return `<div id="vs-topology" class="vs-scene ${replicationConnected(data) ? "vs-linked" : ""}">
       <div class="vs-grid" aria-hidden="true"></div>
       <svg viewBox="0 0 900 380" role="img" aria-label="Two data replicas connected through DRBD, with an Arbiter above and Storage VIP in the center">
         <g class="vs-wires"><path d="M220 240H680"/><path d="M450 90V220"/></g>
@@ -263,6 +284,7 @@ window.VirtualStorageUI = (() => {
         const devices = r?.devices || [];
         const current = devices.length && devices.every((d) => d["disk-state"] === "UpToDate" && d.quorum);
         return `<article class="vs-replica"><header><h3>${esc(n.display_name || n.name)}</h3><span class="badge ${n.healthy ? "plain" : "failed"}">${!n.healthy ? "Offline" : r ? n.role === "witness" ? "Voting · no VM data" : current ? "Up to date" : "Check replication" : n.software_ready ? "Ready to create" : "Preparation required"}</span></header>
+          ${n.role === "compute" ? gauge((r?.connections || []).flatMap((c) => c.peer_devices || []).map((d) => d["percent-in-sync"]).filter((v) => typeof v === "number").reduce((min, v) => min == null ? v : Math.min(min, v), null), "Replica sync") : ""}
           <div class="vs-overview">${metric("Role", reported(r?.role || (n.role === "witness" ? "Arbiter" : "Data node")))}${metric("Disk state", reported(devices.map((d) => d["disk-state"]).filter(Boolean).join(", ")))}${metric("Quorum", devices.length && devices.every((d) => typeof d.quorum === "boolean") ? devices.every((d) => d.quorum) ? "Yes" : "No" : "Not reported")}</div>
           ${(r?.connections || []).map((c) => `<div class="vs-peer"><b>${esc(c.name || "Peer")} · ${reported(c["connection-state"])}</b>${(c.peer_devices || []).map((d) => `<div class="vs-overview">${metric("Replication", reported(d["replication-state"]))}${metric("Sync", reported(d["percent-in-sync"], "%"))}${metric("Out of sync", reported(d["out-of-sync"], " KiB"))}${metric("Verify remaining (reported units)", reported(d["ov-left"]))}</div>`).join("")}</div>`).join("") || '<p class="hint">Peer sync / out-of-sync / verify: Not reported</p>'}
           ${n.error || n.missing_components?.length ? `<p class="hint">${esc(n.error || n.missing_components.join("; "))}</p>` : ""}</article>`;
@@ -271,11 +293,13 @@ window.VirtualStorageUI = (() => {
   function workspace(data, pool, running, prepared) {
     const spec = data.created?.spec, status = data.resource?.status;
     const summary = `<div class="vs-overview">${metric("Virtual Storage", reported(pool?.display_name || spec?.name))}${metric("Storage VIP", reported(spec?.virtual_ip))}${metric("Active node", reported(status?.primary ? nodeName(status.primary) : null))}${metric("Usable capacity", spec ? `${esc(spec.size_gib.toLocaleString())} GiB` : "Not reported")}</div>`;
-    const capacity = `<div class="vs-overview">${metric("Used", pool?.allocation_gb != null ? `${num(pool.allocation_gb)} GB` : "Not reported")}${metric("Available", pool?.available_gb != null ? `${num(pool.available_gb)} GB` : "Not reported")}${metric("Thin pool data / metadata", "Not reported")}${metric("Capacity growth", "Not reported")}</div><p class="hint">Usage is the exported filesystem capacity. Thin pool utilization and growth history are not reported by the current API.</p>`;
+    const usedPercent = pool?.capacity_gb > 0 && Number.isFinite(pool.allocation_gb)
+      ? pool.allocation_gb / pool.capacity_gb * 100 : null;
+    const capacity = `<div class="vs-capacity-layout"><article class="vs-replica">${gauge(usedPercent, "Filesystem used")}</article><div class="vs-overview">${metric("Used", pool?.allocation_gb != null ? `${num(pool.allocation_gb)} GB` : null)}${metric("Available", pool?.available_gb != null ? `${num(pool.available_gb)} GB` : null)}${metric("Total capacity", pool?.capacity_gb != null ? `${num(pool.capacity_gb)} GB` : null)}</div></div><p class="hint">Usage is the exported filesystem capacity. Thin pool utilization and growth history are not reported by the current API.</p>`;
     const panels = {
       overview: `${topologyScene(data, pool)}${summary}${pool ? `<div class="vs-overview">${metric("Used", pool.allocation_gb != null ? `${num(pool.allocation_gb)} GB` : "Not reported")}${metric("Available", pool.available_gb != null ? `${num(pool.available_gb)} GB` : "Not reported")}${metric("Shared by", pool.members.map((m) => esc(nodeName(m.node))).join(", "))}</div>` : ""}${!spec ? `<p class="hint">${prepared ? "Choose the disks on both nodes, review what will be erased, then create your shared storage." : "Prepare the storage components first, then select the data disks and optional SSD cache yourself."}</p>` : ""}`,
       replication: replication(data),
-      cache: `<h3>SSD acceleration</h3>${cacheControls(data, running) || '<p class="hint">No SSD cache reported for this Virtual Storage.</p>'}<div class="vs-overview">${metric("Cache hit ratio", "Not reported")}</div>`,
+      cache: `<h3>SSD acceleration</h3>${cacheGauges(data)}${cacheControls(data, running) || '<p class="hint">No SSD cache reported for this Virtual Storage.</p>'}`,
       capacity: `<h3>Capacity telemetry</h3>${capacity}`,
       files: `<h3>Shared filesystem</h3><p class="hint">${pool ? `Shared by ${pool.members.map((m) => esc(nodeName(m.node))).join(", ")}` : "Storage pool is not available for browsing."}</p>${pool ? '<button id="vs-browse" data-vs-browse class="primary">Browse files</button>' : ""}`,
       settings: `<h3>Storage identity</h3>${summary}${pool && isAdmin() ? '<button id="vs-rename" data-vs-rename>Rename</button>' : ""}${spec ? '<p class="hint">Additional Virtual Storage is not enabled on this installation yet.</p>' : ""}`,
@@ -310,17 +334,29 @@ window.VirtualStorageUI = (() => {
       const focus = box.contains(document.activeElement) ? document.activeElement : null;
       const focusId = focus?.id;
       const focusAction = focus?.hasAttribute("data-vs-view") ? focus.dataset.vsView : null;
+      const previousScene = document.getElementById("vs-topology");
       box.innerHTML = `<div class="vs-section-head"><span class="badge ${data.phase === "ready" ? "online" : "warning"}">${esc(label)}</span><small>RF2 / SHARED STORAGE</small></div>
         ${data.phase === "syncing" ? '<p class="hint">Storage is serving data while the second copy synchronizes. Full redundancy is not ready yet.</p>' : ""}
         ${running ? `<div class="vs-job" role="status"><b>${data.job.kind === "cache-mode" ? "Changing SSD cache" : data.job.kind === "software" ? "Preparing storage software" : "Creating Virtual Storage"}</b><p>${esc(data.job.step)}</p><div class="vs-working" aria-label="Operation in progress"></div><small>This operation continues if you close the page.</small></div>` : ""}
         ${["failed", "interrupted"].includes(data.job?.state) ? `<div class="vs-erase"><b>Operation ${esc(data.job.state)}</b><p>${esc(data.job.error)}</p><small>Inspect the recorded operation before retrying. Disk erasure is never replayed automatically.</small></div>` : ""}
         ${data.error ? `<p class="vs-erase">${esc(data.error)}</p>` : ""}
         ${workspace(data, pool, running, prepared)}`;
+      if (previousScene?.classList.contains("vs-has-webgl")) {
+        const freshScene = document.getElementById("vs-topology");
+        previousScene.querySelector("svg").replaceWith(freshScene.querySelector("svg"));
+        previousScene.classList.toggle("vs-linked", replicationConnected(data));
+        freshScene.replaceWith(previousScene);
+      }
+      mountScene();
       if (focusId) document.getElementById(focusId)?.focus({preventScroll: true});
       else if (focusAction) box.querySelector(`[data-vs-view="${focusAction}"]`)?.focus({preventScroll: true});
       if (currentPage() === "storage") timer = setTimeout(() => render().catch(fail), running ? 2500 : 10000);
     } catch (err) { box.textContent = `Could not check Virtual Storage: ${err.message}`; }
     finally { rendering = false; }
   }
-  return {render, ownsPool};
+  function mountScene() {
+    if (latest) window.StorageScene?.mount(document.getElementById("vs-topology"), latest,
+      StorageView.pools(state.pools).find(ownsPool), replicationConnected(latest));
+  }
+  return {render, ownsPool, selectTab, mountScene};
 })();

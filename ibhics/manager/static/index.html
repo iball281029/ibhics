@@ -279,27 +279,41 @@
     </section>
 
     <section class="page" id="page-storage">
-      <div class="sheet vs-command" style="margin-bottom:18px">
+      <header class="storage-heading"><div><small>IBHICS / DATA SERVICES</small><h1>Storage fabric</h1></div><span>Infrastructure · media · capacity</span></header>
+      <nav id="storage-tabs" role="tablist" aria-label="Storage workspaces">
+        <button id="storage-tab-virtual" role="tab" aria-selected="true" aria-controls="storage-panel-virtual" data-storage-tab="virtual">Virtual Storage</button>
+        <button id="storage-tab-local" role="tab" aria-selected="false" tabindex="-1" aria-controls="storage-panel-local" data-storage-tab="local">Local &amp; External</button>
+        <button id="storage-tab-iso" role="tab" aria-selected="false" tabindex="-1" aria-controls="storage-panel-iso" data-storage-tab="iso">ISO Library</button>
+      </nav>
+      <section class="sheet vs-command" id="storage-panel-virtual" data-storage-panel="virtual" role="tabpanel" aria-labelledby="storage-tab-virtual">
         <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a><button id="vs-prepare" class="admin-only" disabled>Prepare storage</button><button id="vs-create" class="primary admin-only" disabled>+ Add Virtual Storage</button></div>
         <nav id="vs-tabs" role="tablist" aria-label="Virtual Storage sections"><button id="vs-tab-overview" role="tab" aria-controls="vs-panel-overview" aria-selected="true" tabindex="0" data-vs-tab="overview">Overview</button><button id="vs-tab-replication" role="tab" aria-controls="vs-panel-replication" aria-selected="false" tabindex="-1" data-vs-tab="replication">Replication</button><button id="vs-tab-cache" role="tab" aria-controls="vs-panel-cache" aria-selected="false" tabindex="-1" data-vs-tab="cache">Cache</button><button id="vs-tab-capacity" role="tab" aria-controls="vs-panel-capacity" aria-selected="false" tabindex="-1" data-vs-tab="capacity">Capacity</button><button id="vs-tab-files" role="tab" aria-controls="vs-panel-files" aria-selected="false" tabindex="-1" data-vs-tab="files">Files</button><button id="vs-tab-settings" role="tab" aria-controls="vs-panel-settings" aria-selected="false" tabindex="-1" data-vs-tab="settings">Settings</button></nav>
         <div id="virtual-storage-status">Checking storage readiness…</div>
-      </div>
-      <div class="sheet">
+      </section>
+      <section class="sheet vs-command storage-collection storage-panels" id="storage-panel-local" data-storage-panel="local" role="tabpanel" aria-labelledby="storage-tab-local" hidden>
         <div class="page-head">
           <h1>Local &amp; external storage</h1><span class="sub">Node-local pools and external storage connections</span>
           <span class="spacer"></span>
+          <div class="vs-view-switch" role="group" aria-label="Pool display">
+            <button type="button" data-storage-view="panels" aria-label="Panel view" title="Panels" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+            <button type="button" data-storage-view="list" aria-label="List view" title="List" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+          </div>
           <button class="primary admin-only" data-open="pool-dialog">+ Add storage</button>
         </div>
         <div class="table-wrap" style="margin-top:14px"><table>
           <thead><tr><th>Pool</th><th>Scope / nodes</th><th>Type</th><th>Source</th><th style="min-width:220px">Usage</th><th></th></tr></thead>
           <tbody id="pools"></tbody>
         </table></div>
-      </div>
-      <div class="sheet" style="margin-top:18px">
+      </section>
+      <section class="sheet vs-command storage-collection storage-panels" id="storage-panel-iso" data-storage-panel="iso" role="tabpanel" aria-labelledby="storage-tab-iso" hidden>
         <div class="page-head">
           <h1>ISO library</h1><span class="sub" id="iso-location">Install media for new VMs and the CD/DVD drive, kept in /var/lib/ibhics/iso</span>
           <span class="spacer"></span>
           <label class="inline">Storage <select id="iso-dest"></select></label>
+          <div class="vs-view-switch" role="group" aria-label="ISO display">
+            <button type="button" data-storage-view="panels" aria-label="Panel view" title="Panels" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button>
+            <button type="button" data-storage-view="list" aria-label="List view" title="List" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button>
+          </div>
           <label class="btn primary operator-only">Upload ISO<input type="file" class="iso-upload" accept=".iso" multiple hidden></label>
         </div>
         <div class="iso-progress"></div>
@@ -307,7 +321,7 @@
           <thead><tr><th>ISO</th><th>Stored on</th><th>Size</th><th>In the CD/DVD drive of</th><th></th></tr></thead>
           <tbody id="isos"></tbody>
         </table></div>
-      </div>
+      </section>
     </section>
 
     <section class="page" id="page-fabric">
@@ -1785,9 +1799,11 @@
 <script src="storage-view.js"></script>
 <script src="app.js"></script>
 <script src="virtual-storage.js"></script>
+<script src="storage-navigation.js"></script>
 <script src="spatial.js"></script>
 <script src="fabric.js"></script>
 <script type="importmap">{"imports":{"three":"./vendor/three/three.module.min.js","three/addons/":"./vendor/three/addons/"}}</script>
 <script type="module" src="fabric3d.js"></script>
+<script type="module" src="storage-scene.js"></script>
 </body>
 </html>
