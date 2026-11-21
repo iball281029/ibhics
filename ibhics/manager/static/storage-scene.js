@@ -116,9 +116,9 @@ function create(host) {
     if (usage != null) {
       const fill = ring(1.95, CYAN, usage, .095); fill.position.y = .19; telemetry.add(fill);
     }
-    label(new THREE.Vector3(0, .1, 2.3), pool?.display_name || spec?.name || 'Storage core',
-      usage == null ? 'Filesystem telemetry unavailable' : `${(usage * 100).toFixed(1)}% used · ${pool.allocation_gb} / ${pool.capacity_gb} GB`, 'vs-label-core');
-    label(new THREE.Vector3(0, 3.65, .1), spec?.virtual_ip || 'VIP not configured', 'STORAGE VIP', 'vs-label-vip');
+    // Labels sit beside the objects, never on them: core below, nodes outside, arbiter aside.
+    label(new THREE.Vector3(0, -.9, 3.4), pool?.display_name || spec?.name || 'Storage core',
+      `${spec?.virtual_ip ? `VIP ${spec.virtual_ip}` : 'VIP not configured'} · ${usage == null ? 'usage not reported' : `${(usage * 100).toFixed(1)}% used · ${pool.allocation_gb} / ${pool.capacity_gb} GB`}`, 'vs-label-core');
     data.nodes.filter((n) => n.role === 'compute').slice(0, 2).forEach((node, i) => {
       const x = i ? 4.3 : -4.3;
       const color = node.healthy ? CYAN : RED;
@@ -136,11 +136,11 @@ function create(host) {
       if (cache) {
         const layer = hologram(new THREE.BoxGeometry(2.25, .18, 1.7), 0x62ffc8, .35);
         layer.position.set(x, .43, 0); telemetry.add(layer);
-        label(new THREE.Vector3(x, .25, 1.8), 'SSD CACHE', cache.dirty_bytes == null
-          ? cache.error || 'Pending bytes unavailable' : `${(cache.dirty_bytes / 1024**2).toFixed(1)} MiB pending`, 'vs-label-cache');
       }
-      label(new THREE.Vector3(x, 2.65, .25), node.display_name || node.name,
-        node.healthy ? 'DATA NODE · ONLINE' : 'DATA NODE · OFFLINE', node.healthy ? '' : 'vs-label-alert');
+      const cacheText = !cache ? '' : cache.dirty_bytes == null ? ' · SSD cache'
+        : ` · cache ${(cache.dirty_bytes / 1024**2).toFixed(1)} MiB pending`;
+      label(new THREE.Vector3(x + Math.sign(x || 1) * 2.7, 3.3, 0), node.display_name || node.name,
+        (node.healthy ? 'DATA NODE · ONLINE' : 'DATA NODE · OFFLINE') + cacheText, node.healthy ? '' : 'vs-label-alert');
       // Transparent telemetry panes are physical objects, positioned behind each node.
       const pane = hologram(new THREE.BoxGeometry(2.2, .9, .025), BLUE, .055);
       pane.position.set(x, 2.2, -1.8); pane.rotation.y = i ? -.25 : .25; telemetry.add(pane);
@@ -153,7 +153,7 @@ function create(host) {
     if (witness) {
       const arbiter = hologram(new THREE.OctahedronGeometry(.5), witness.healthy ? BLUE : RED, .23);
       arbiter.position.set(0, 4.6, -2.5); telemetry.add(arbiter); spins.push(arbiter);
-      label(new THREE.Vector3(0, 5.4, -2.5), witness.display_name || witness.name,
+      label(new THREE.Vector3(2.3, 4.7, -2.5), witness.display_name || witness.name,
         witness.healthy ? 'ARBITER · QUORUM VOTE' : 'ARBITER · OFFLINE', witness.healthy ? 'vs-label-arbiter' : 'vs-label-arbiter vs-label-alert');
       const beam = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, 3.15, 0), arbiter.position]), new THREE.LineBasicMaterial({color: BLUE, transparent: true, opacity: .4}));
@@ -162,8 +162,12 @@ function create(host) {
     const link = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-4.3, .28, 0), new THREE.Vector3(4.3, .28, 0)]),
     new THREE.LineBasicMaterial({color: linkColor, transparent: true, opacity: .7})); telemetry.add(link);
-    label(new THREE.Vector3(0, .1, -2.6), connected ? 'DRBD · CONNECTED' : 'DRBD · CHECK REPLICAS',
-      connected ? 'UpToDate · replication active' : 'Replication flow paused', connected ? 'vs-label-link' : 'vs-label-link vs-label-alert');
+    // Link status is a fixed HUD chip, so it never covers the scene.
+    const hud = document.createElement('div');
+    hud.className = `vs-scene-label vs-scene-hud ${connected ? 'vs-label-link' : 'vs-label-link vs-label-alert'}`;
+    const hudTitle = document.createElement('b'); hudTitle.textContent = connected ? 'DRBD · CONNECTED' : 'DRBD · CHECK REPLICAS';
+    const hudDetail = document.createElement('small'); hudDetail.textContent = connected ? 'UpToDate · replication active' : 'Replication flow paused';
+    hud.append(hudTitle, hudDetail); labels.append(hud);
     for (let i = 0; i < 18; i++) {
       const particle = new THREE.Mesh(new THREE.SphereGeometry(.035, 6, 4), material(linkColor, 1));
       particle.position.set(-4.3 + i / 18 * 8.6, .3, 0);

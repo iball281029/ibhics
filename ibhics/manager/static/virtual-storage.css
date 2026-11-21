@@ -156,6 +156,8 @@
 .vs-label-alert {border-left-color:#ff637c}
 #page-storage .vs-label-alert small {color:#ffa6b5}
 .vs-label-core {text-align:center;border:1px solid #3ef0ff66}
+.vs-scene-label.vs-scene-hud {left:16px!important;top:16px!important;transform:none}
+#page-storage .vs-scene-label {background:linear-gradient(120deg,#062136b8,#03101ca8);backdrop-filter:blur(3px)}
 /* Storage dialogs share the workspace palette without changing their actions. */
 :is(#virtual-storage-dialog,#pool-dialog,#pool-view) {background:radial-gradient(ellipse at top,#103649,#061525 65%);color:#cfefff;border:1px solid #3ef0ff55}
 :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn) {background:#020d1c;color:#cfefff;border:1px solid #3ef0ff55;border-radius:4px;accent-color:#3ef0ff}
