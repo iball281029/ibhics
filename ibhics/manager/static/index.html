@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="network.css">
 <link rel="stylesheet" href="virtual-storage.css">
 <link rel="stylesheet" href="cluster.css">
+<link rel="stylesheet" href="node.css">
 <link rel="stylesheet" href="backup.css">
 </head>
 <body class="command-workspace spatial-workspace">
@@ -451,6 +452,7 @@
         <div id="cluster-empty" class="cl-empty" hidden><h2>Build your cluster, one node at a time</h2><ol><li><b>Create cluster</b><span>Start on this server. Existing VMs stay here.</span></li><li><b>Add nodes</b><span>Connect other independently installed servers.</span></li><li><b>Add a witness for 2 nodes</b><span>An independent Arbiter helps keep quorum.</span></li></ol><button class="primary admin-only" data-open="cluster-create-dialog">Create cluster</button></div>
         <div id="cluster-hero" class="cl-hero"></div>
         <div id="cluster-overview" class="cl-overview"></div>
+        <div id="cluster-ha" class="cl-ha" hidden></div>
         <div class="cl-pairing" id="cluster-pairing"><h3>Joining an existing cluster?</h3>
           <p class="hint">Copy this server’s pairing key, then enter its Node ID and agent address in Add node on your cluster manager.</p>
           <p id="cluster-pairing-address"></p><button class="admin-only" id="cluster-copy-key">Copy pairing key</button>

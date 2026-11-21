@@ -51,7 +51,7 @@ for (const count of [1,2,3,4,7]) {
   const hero = elements.get('#cluster-hero').innerHTML;
   assert.equal((hero.match(/class="cl-map-node /g)||[]).length,count);
   assert.equal((hero.match(/class="cl-link /g)||[]).length,count);
-  assert.match(elements.get('#cluster-overview').innerHTML,/<b>On<\/b><span>1 VMs protected/);
+  assert.match(elements.get('#cluster-overview').innerHTML,/VMs restart on another server/);
   assert.match(elements.get('#cluster-members').innerHTML,/Add a node/);
 }
 context.state.cluster = {quorum:false,members:[compute]};
