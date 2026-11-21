@@ -3369,8 +3369,10 @@ function clusterFaultTolerance(c, pools, vms, hosts) {
   const quorum = Math.floor((voters - 1) / 2);
   limits.push({ key: "quorum", n: quorum, text: voters === 2 ? "2 votes: losing either one stops quorum. Add a witness." : `${voters} votes: a majority (${Math.floor(voters / 2) + 1}) must stay online` });
   limits.push({ key: "nodes", n: Math.max(0, compute.length - 1), text: `${compute.length} compute node${compute.length === 1 ? "" : "s"}: one must keep running the VMs` });
-  const vstore = pools.some((p) => p.shared && (p.name === "virtualstorage" || /virtual storage/i.test(p.display_name || "")));
-  const shared = pools.some((p) => p.shared);
+  // /pools lists each node's pools; a pool is shared when every compute node has it.
+  const onAll = (p) => compute.every((m) => pools.some((q) => q.name === p.name && q.node === m.name));
+  const vstore = pools.some((p) => p.name === "virtualstorage" || /gateway-exports/.test(p.source || "") || /virtual storage/i.test(p.display_name || ""));
+  const shared = pools.some((p) => p.shared || (compute.length > 1 && ["nfs", "iscsi"].includes(p.type) && onAll(p)));
   const copies = vstore ? 2 : shared ? Infinity : 1;
   limits.push({ key: "data", n: copies === Infinity ? Infinity : copies - 1, text: vstore ? "Virtual Storage keeps 2 copies of every disk" : shared ? "Shared storage (outside the nodes) holds the disks" : "Local disks only: VMs on a failed node stop until it returns" });
   const sizes = compute.map((m) => Number(hosts[m.name]?.memory_mb) || 0);
