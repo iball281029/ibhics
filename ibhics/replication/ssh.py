@@ -59,6 +59,7 @@ class SnapshotSSHProvider(ChangeProvider):
         self.ssh = ssh or SSH(source)
         self.name = "ibhics-repl-" + uuid.uuid4().hex
         self.paths: dict[str, str] = {}
+        self.descriptors: dict[str, str] = {}
         self.exports: list[str] = []
         self.export_dir: str | None = None
         self.kind = ""
@@ -186,9 +187,11 @@ class SnapshotSSHProvider(ChangeProvider):
             remote = posixpath.normpath(posixpath.join(posixpath.dirname(descpath), flat))
             size = int(self.command("stat", "-c", "%s", remote).strip())
             self.paths[remote] = remote
+            self.descriptors[remote] = descpath
             disks.append(Disk(remote, size))
         if not disks:
             raise ValueError("ESXi VM has no flat disks")
+        self._prepare_tracking()
         self.snapshot_attempted = True
         self.command(
             "vim-cmd",
@@ -202,7 +205,13 @@ class SnapshotSSHProvider(ChangeProvider):
         self.esxi_snapshot_id = self._snapshot_id()
         if not self.esxi_snapshot_id:
             raise RuntimeError("ESXi snapshot ownership could not be verified")
-        return Point(self.name, tuple(disks))
+        return Point(self._tracking_token(disks), tuple(disks))
+
+    def _prepare_tracking(self):
+        pass
+
+    def _tracking_token(self, disks):
+        return self.name
 
     def _snapshot_id(self) -> str | None:
         text = self.command("vim-cmd", "vmsvc/snapshot.get", self.vm.ref)

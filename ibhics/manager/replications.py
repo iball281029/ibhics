@@ -68,6 +68,8 @@ class ReplicationJob:
     test_vm: str | None = None
     operation: str | None = None
     history: list[dict] = field(default_factory=list)
+    change_tracking: str | None = None
+    fallback_reason: str | None = None
 
 
 class ReplicationManager:
@@ -281,6 +283,16 @@ class ReplicationManager:
                             "state": job.state,
                             "bytes_transferred": job.bytes_transferred,
                             "error": job.error,
+                            "change_tracking": (
+                                job.change_tracking
+                                if operation in ("sync", "cutover") and not job.error
+                                else None
+                            ),
+                            "fallback_reason": (
+                                job.fallback_reason
+                                if operation in ("sync", "cutover") and not job.error
+                                else None
+                            ),
                         }
                     )
                     job.history = job.history[-100:]
@@ -315,6 +327,9 @@ class ReplicationManager:
             job.last_sync = self.clock().isoformat()
             job.last_point = point_started
             job.bytes_transferred = result["bytes_transferred"]
+            job.change_tracking = result.get("change_tracking", "hash-delta")
+            job.fallback_reason = result.get("fallback_reason")
+            job.capability["change_tracking"] = job.change_tracking
             job.changed_pct = round(100 * result["changed_bytes"] / result["total_bytes"], 2)
             job.percent = 100
             self._save()

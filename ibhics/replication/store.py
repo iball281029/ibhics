@@ -225,6 +225,8 @@ class ReplicaStore:
                 "bytes_transferred": transferred,
                 "changed_bytes": changed,
                 "total_bytes": total,
+                "change_tracking": provider.tracking,
+                "fallback_reason": provider.fallback_reason,
             }
             durable_json(self.root / "current.json", manifest)
         except BaseException:

@@ -9,6 +9,8 @@ from pathlib import Path
 from ..hypervisor import DiskSpec, NicSpec, VMSpec
 from ..importer.convert import V2VConverter
 from ..importer.resize import resize_image
+from ..importer.sources import SourceType
+from .cbt import ESXiCBTProvider
 from .ssh import SnapshotSSHProvider
 from .store import ReplicaStore, durable_json, operation_lock
 
@@ -41,7 +43,8 @@ class LocalRuntime:
         return ReplicaStore(roots[0].parent / "metadata", roots)
 
     def sync(self, job, source, vm, progress):
-        return self.store(job).sync(SnapshotSSHProvider(source, vm), progress)
+        provider = ESXiCBTProvider if source.type == SourceType.VMWARE else SnapshotSSHProvider
+        return self.store(job).sync(provider(source, vm), progress)
 
     def ownership(self, job):
         path = self.store(job).root / "ownership.json"

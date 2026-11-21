@@ -27,6 +27,9 @@ class ChangeProvider(ABC):
     by disk. None means unknown: hash every chunk. Tokens advance only at commit.
     """
 
+    tracking = "hash-delta"
+    fallback_reason: str | None = None
+
     @abstractmethod
     def begin(self) -> Point: ...
 
@@ -49,7 +52,10 @@ def capability(source: Source) -> dict:
     supported = kind in (SourceType.KVM, SourceType.VMWARE)
     reason = {
         SourceType.KVM: "SSH: file-backed qcow2 internal snapshots only; block storage pending",
-        SourceType.VMWARE: "ESXi SSH: base flat VMDK only; pre-existing snapshots refused",
+        SourceType.VMWARE: (
+            "Direct ESXi: CBT when API and disk changeIds are ready, otherwise hash-delta; "
+            "base flat VMDK only; pre-existing snapshots refused"
+        ),
         SourceType.P2V: "Live P2V delta is not yet supported by the agent",
         SourceType.NUTANIX: "Full re-sync required; consistent snapshot provider not yet supported",
         SourceType.SANGFOR: "Full re-sync required; consistent live export not yet supported",

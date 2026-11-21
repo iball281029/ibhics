@@ -401,3 +401,31 @@ def test_create_on_a_node_that_already_has_vms(env):
         },
     )
     assert ok.status_code == 202, ok.text
+
+
+def test_actual_tracking_and_fallback_persist_in_job_and_sync_history(env):
+    client, manager, runtime, now = env
+    original = runtime.sync
+    tracking = ["hash-delta", "CBT baseline requires a full hash scan"]
+
+    def tracked_sync(*args):
+        result = original(*args)
+        return {**result, "change_tracking": tracking[0], "fallback_reason": tracking[1]}
+
+    runtime.sync = tracked_sync
+    job = create(client)
+    assert job["change_tracking"] == "hash-delta"
+    assert "baseline" in job["fallback_reason"]
+    assert job["history"][-1]["fallback_reason"] == job["fallback_reason"]
+    tracking[:] = ["cbt", None]
+    url = f"/api/v1/migrate/replications/{job['id']}"
+    updated = client.post(url + "/sync").json()
+    assert updated["change_tracking"] == updated["capability"]["change_tracking"] == "cbt"
+    assert updated["fallback_reason"] is None
+    assert [h["change_tracking"] for h in updated["history"]] == ["hash-delta", "cbt"]
+    manager.load()
+    assert client.get(url).json()["history"] == updated["history"]
+    runtime.fail = True
+    failed = client.post(url + "/sync").json()
+    assert failed["history"][-1]["change_tracking"] is None
+    assert failed["change_tracking"] == "cbt"  # latest committed cycle remains visible
