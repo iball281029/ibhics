@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from .base import (
+    ADVANCED_FIELDS,
     CloneSpec,
     Customization,
     DiskEdit,
@@ -22,6 +23,11 @@ from .base import (
 
 def spec_from_json(data: dict) -> VMSpec:
     return VMSpec(
+        **{
+            k: data[k]
+            for k in (*ADVANCED_FIELDS, "machine_type", "secure_boot", "video")
+            if k in data
+        },
         name=data["name"],
         vcpus=data["vcpus"],
         memory_mb=data["memory_mb"],
@@ -64,6 +70,7 @@ def edit_from_json(data: dict) -> VMEdit:
 
 def spec_to_json(spec: VMSpec) -> dict:
     return {
+        **{k: getattr(spec, k) for k in (*ADVANCED_FIELDS, "machine_type", "secure_boot", "video")},
         "name": spec.name,
         "vcpus": spec.vcpus,
         "memory_mb": spec.memory_mb,

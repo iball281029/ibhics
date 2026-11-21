@@ -257,6 +257,7 @@ def create_app(
     activity=None,
     p2v=None,
     p2v_pin: str = "",
+    replications=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -321,6 +322,7 @@ def create_app(
             async def schedule() -> None:
                 while True:
                     await asyncio.to_thread(backups.tick)
+                    await asyncio.to_thread(replications.tick)
                     await asyncio.to_thread(recycle.purge_expired)
                     await asyncio.to_thread(activity.purge)
                     await asyncio.sleep(scheduler_interval)
@@ -344,6 +346,10 @@ def create_app(
     imports.p2v = p2v
     imports.migrations = migrations
     app.state.imports = imports
+    from .replications import ReplicationManager
+
+    replications = replications or ReplicationManager(imports)
+    app.state.replications = replications
     install_driver_errors(app)
     install_cluster_errors(app)
 
@@ -796,6 +802,10 @@ def create_app(
             return migration_tls.renew_all()
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @api.get("/nodes/{name}/hardware-capabilities")
+    def hardware_capabilities(name: str) -> dict:
+        return cluster.member(name).driver.hardware_capabilities()
 
     @api.get("/nodes/{name}/host", response_model=HostOut)
     def node_host(name: str) -> HostOut:
@@ -1682,6 +1692,9 @@ def create_app(
             body.start,
             clear_hibernation=body.clear_hibernation,
             disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
+            nics=[n.model_dump() for n in body.nics] if body.nics is not None else None,
+            cpu_sockets=body.cpu_sockets,
+            cpu_cores=body.cpu_cores,
         )
         return ImportJobOut(**job.__dict__)
 
@@ -1718,6 +1731,10 @@ def create_app(
     @api.get("/migrate/jobs", response_model=list[ImportJobOut])
     def list_imports() -> list[ImportJobOut]:
         return [ImportJobOut(**job.__dict__) for job in imports.jobs()]
+
+    from . import replication_api
+
+    replication_api.install(api, replications)
 
     # VM console: the browser's noVNC WebSocket is relayed to the VM's VNC display, on this
     # node directly or through the agent of the VM's node.

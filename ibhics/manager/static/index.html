@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="fabric.css">
 <link rel="stylesheet" href="vmspace.css">
 <link rel="stylesheet" href="migrate.css">
+<link rel="stylesheet" href="virtual-storage.css">
 </head>
 <body class="command-workspace spatial-workspace">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -278,9 +279,10 @@
     </section>
 
     <section class="page" id="page-storage">
-      <div class="sheet" style="margin-bottom:18px">
+      <div class="sheet vs-command" style="margin-bottom:18px">
         <div class="page-head"><h1>Virtual Storage</h1><span class="sub">Two data replicas + Arbiter</span><span class="spacer"></span><a class="btn small" href="#cluster">Manage cluster</a><button id="vs-prepare" class="admin-only" disabled>Prepare storage</button><button id="vs-create" class="primary admin-only" disabled>+ Add Virtual Storage</button></div>
-        <div id="virtual-storage-status" style="padding:20px">Checking storage readiness…</div>
+        <nav id="vs-tabs" role="tablist" aria-label="Virtual Storage sections"><button id="vs-tab-overview" role="tab" aria-controls="vs-panel-overview" aria-selected="true" tabindex="0" data-vs-tab="overview">Overview</button><button id="vs-tab-replication" role="tab" aria-controls="vs-panel-replication" aria-selected="false" tabindex="-1" data-vs-tab="replication">Replication</button><button id="vs-tab-cache" role="tab" aria-controls="vs-panel-cache" aria-selected="false" tabindex="-1" data-vs-tab="cache">Cache</button><button id="vs-tab-capacity" role="tab" aria-controls="vs-panel-capacity" aria-selected="false" tabindex="-1" data-vs-tab="capacity">Capacity</button><button id="vs-tab-files" role="tab" aria-controls="vs-panel-files" aria-selected="false" tabindex="-1" data-vs-tab="files">Files</button><button id="vs-tab-settings" role="tab" aria-controls="vs-panel-settings" aria-selected="false" tabindex="-1" data-vs-tab="settings">Settings</button></nav>
+        <div id="virtual-storage-status">Checking storage readiness…</div>
       </div>
       <div class="sheet">
         <div class="page-head">
@@ -568,7 +570,13 @@
           <button data-tab="import" class="active">Import VMs</button>
           <button data-tab="sources">Sources</button>
           <button data-tab="imports">Jobs</button>
+          <button data-tab="replications">Replication</button>
           <button data-tab="p2v">Physical machines</button>
+        </div>
+        <div class="subpage" id="tab-replications">
+          <div class="toolbar"><button id="new-replication" class="primary operator-only">New replication</button><span class="spacer"></span><div class="mg-view-switch" role="group" aria-label="Replication view"><button type="button" data-replication-view="cards" aria-label="Card view" aria-pressed="true" title="Cards"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></button><button type="button" data-replication-view="list" aria-label="List view" aria-pressed="false" title="List"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h3M10 5h11M3 12h3M10 12h11M3 19h3M10 19h11"/></svg></button></div></div>
+          <p class="hint">Choose a source and VMs under Import VMs, then create a replication. Source VMs may remain running during sync. Cutover requires shutdown confirmation.</p>
+          <div id="replications" class="mg-replicas"></div>
         </div>
         <div class="subpage active" id="tab-import">
 <div class="mg-flow">
@@ -867,8 +875,10 @@
         <div class="hw-rows">
           <div class="hw-row">
             <div class="hw-head"><svg><use href="#i-cpu"/></svg><b>CPU</b></div>
-            <div class="chips presets" data-target="vcpus"><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="4">4</button><button type="button" data-v="8">8</button><button type="button" data-v="16">16</button></div>
-            <label class="inline unit"><input name="vcpus" type="number" min="1" max="256" value="2"> vCPU</label>
+            <div class="chips presets" data-target="cpu_cores"><button type="button" data-v="1">1</button><button type="button" data-v="2">2</button><button type="button" data-v="4">4</button><button type="button" data-v="8">8</button><button type="button" data-v="16">16</button></div>
+            <label>Sockets <input name="cpu_sockets" type="number" min="1" max="256" value="1"></label>
+            <label>Cores per socket <input name="cpu_cores" type="number" min="1" max="256" value="2"></label>
+            <label class="inline unit"><input name="vcpus" type="number" value="2" readonly> total vCPU</label>
           </div>
           <div class="hw-row">
             <div class="hw-head"><svg><use href="#i-mem"/></svg><b>Memory</b></div>
@@ -886,6 +896,23 @@
             <div class="hw-head"><svg><use href="#i-nic"/></svg><b>Network</b></div>
             <select name="network" class="net-list"><option value="default">default</option></select>
           </div>
+          <details class="wide"><summary>Console and advanced hardware</summary><div class="form-grid"><label>CPU mode <select name="cpu_mode"><option value="default">Default (host-model)</option><option value="host-passthrough">Use CPU from host</option></select></label>
+<label>Mouse <select name="mouse"><option value="tablet">USB tablet</option><option value="ps2">PS/2 mouse</option></select></label>
+<label>Console keyboard <select name="keymap"><option value="default">default</option><option value="en-us">en-us</option><option value="en-gb">en-gb</option><option value="de">de</option><option value="fr">fr</option><option value="es">es</option><option value="it">it</option><option value="ja">ja</option><option value="th" disabled>th (requires node keymap)</option></select></label>
+<label>Boot menu delay (seconds) <input name="boot_menu_seconds" type="number" min="0" max="60" value="0"></label>
+<label class="check"><input type="checkbox" name="restart_on_crash" checked> Restart after a crash</label>
+<label class="check"><input type="checkbox" name="ballooning" checked> Memory ballooning</label>
+<label class="check"><input type="checkbox" name="serial_port" checked> Serial console (PTY)</label>
+<label class="check"><input type="checkbox" name="usb_controller"> USB 3 controller</label>
+<label class="check"><input type="checkbox" name="tpm" disabled> TPM 2.0</label><span class="hint hw-cap-hint">Select a node to check swtpm and firmware support.</span>
+<p class="hint wide">CPU mode, console and advanced hardware changes require a stopped VM. Host CPU mode requires compatible destination CPUs for migration.</p>
+<label class="check"><input type="checkbox" name="secure_boot" disabled> Secure Boot (UEFI / Q35)</label>
+<label>Machine type <select name="machine_type"><option value="q35">Q35</option><option value="i440fx">i440fx</option></select></label>
+<label>Display adapter <select name="video"><option value="auto">OS default</option><option value="virtio">VirtIO GPU</option><option value="vga">Standard VGA</option><option value="qxl">QXL</option><option value="cirrus">Cirrus</option></select></label>
+<p class="hint wide">If the console stays blank, try another display adapter after shutting down the VM.</p>
+<label>First boot device <select name="boot_first"><option value="auto">Automatic</option><option value="hd">Disk</option><option value="cdrom">CD/DVD</option><option value="network">Network</option></select></label>
+<label class="check"><input name="autostart" type="checkbox"> Power on when the node starts</label>
+</div></details>
           <div class="hw-row">
             <div class="hw-head"><svg><use href="#i-system"/></svg><b>Firmware</b></div>
             <select name="firmware"><option value="bios">BIOS</option><option value="uefi">UEFI</option></select>
@@ -955,6 +982,17 @@
         <div class="opt-row"><span>Boot order</span><div class="boot-order" id="edit-boot"></div></div>
         <div class="opt-row"><span>Start with the node</span><label class="check"><input type="checkbox" name="autostart"> Power on this VM when its node starts</label></div>
         <div class="opt-row"><span>Firmware</span><b id="edit-firmware"></b></div>
+        <div class="opt-row"><span>Machine type</span><b id="edit-machine"></b></div>
+        <details><summary>Console and advanced hardware</summary><div class="form-grid"><label>CPU mode <select name="cpu_mode"><option value="default">Default (host-model)</option><option value="host-passthrough">Use CPU from host</option></select></label>
+<label>Mouse <select name="mouse"><option value="tablet">USB tablet</option><option value="ps2">PS/2 mouse</option></select></label>
+<label>Console keyboard <select name="keymap"><option value="default">default</option><option value="en-us">en-us</option><option value="en-gb">en-gb</option><option value="de">de</option><option value="fr">fr</option><option value="es">es</option><option value="it">it</option><option value="ja">ja</option><option value="th" disabled>th (requires node keymap)</option></select></label>
+<label>Boot menu delay (seconds) <input name="boot_menu_seconds" type="number" min="0" max="60" value="0"></label>
+<label class="check"><input type="checkbox" name="restart_on_crash" checked> Restart after a crash</label>
+<label class="check"><input type="checkbox" name="ballooning" checked> Memory ballooning</label>
+<label class="check"><input type="checkbox" name="serial_port" checked> Serial console (PTY)</label>
+<label class="check"><input type="checkbox" name="usb_controller"> USB 3 controller</label>
+<label class="check"><input type="checkbox" name="tpm" disabled> TPM 2.0</label><span class="hint hw-cap-hint">Select a node to check swtpm and firmware support.</span>
+<p class="hint wide">CPU mode, console and advanced hardware changes require a stopped VM. Host CPU mode requires compatible destination CPUs for migration.</p></div></details>
       </div>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save</button></footer>
@@ -1697,35 +1735,37 @@
 
 <dialog id="import-dialog" class="wizard migrate-wizard mg-dialog">
   <form method="dialog" id="import-form">
-    <header><h3>Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
+    <header><h3 id="import-title">Migrate VMs</h3><button value="cancel" formnovalidate aria-label="Close dialog">×</button></header>
     <ol class="wiz-steps">
       <li data-step="1"><b>1</b>Select VMs</li><li data-step="2"><b>2</b>Target</li>
-      <li data-step="3"><b>3</b>Network mapping</li><li data-step="4"><b>4</b>Summary</li>
+      <li data-step="3"><b>3</b><span id="import-final-step">Summary</span></li>
     </ol>
     <section class="wiz-page body" data-page="1">
-      <p class="hint">Power off selected VMs at the source to continue.</p>
+      <p class="hint" id="import-power-hint">Power off selected VMs at the source to continue.</p>
       <div class="table-wrap"><table><thead><tr><th></th><th>VM</th><th>Power</th><th>Disks</th></tr></thead><tbody id="import-pick-vms"></tbody></table></div>
     </section>
     <section class="wiz-page body" data-page="2" hidden>
-      <div class="form-grid">
-        <label>Default node <select name="node" id="import-node" required></select></label>
-        <label>Default storage pool <select name="pool" id="import-pool" required></select></label>
-        <div id="import-capacity" class="wide" role="status"></div>
-        <div id="import-names" class="wide"></div>
-        <div id="import-disk-targets" class="wide"></div>
+      <div id="import-bulk" class="mg-bulk" hidden><strong>Apply to all VMs</strong>
+        <label>Node <select name="node" id="import-node"></select></label>
+        <label>Storage pool <select name="pool" id="import-pool"></select></label>
       </div>
+      <div id="import-capacity" class="mg-capacity" role="status"></div>
+      <div id="import-disk-targets"></div>
       <div class="edit-note win-note" id="import-win" hidden>
         <p>Windows: run <code>powercfg /h off</code> at the source, then shut down fully. Fast Startup can lock the disk and prevent driver installation.</p>
         <p id="import-hib">Clear hibernation is available per VM for SSH VMware / KVM only; unsaved sessions on the copy are discarded.</p>
       </div>
     </section>
-    <section class="wiz-page body" data-page="3" hidden><div id="import-nets"></div></section>
-    <section class="wiz-page body" data-page="4" hidden>
+    <section class="wiz-page body" data-page="3" hidden>
+      <div id="replication-schedule" class="form-grid" hidden><label>Interval (minutes)<input name="replication_interval" type="number" min="1" max="525600" step="1" value="15"></label><label>Or daily at (local manager time)<input name="replication_at" type="time"></label><p class="hint">A daily time overrides the interval. A consistent seed starts immediately.</p></div>
       <div id="import-summary"></div><div id="import-submit-status" role="status" aria-live="polite"></div>
     </section>
     <footer><button value="cancel" formnovalidate>Cancel</button><button type="button" class="wiz-back">Back</button><button type="button" class="primary wiz-next">Next</button><button class="primary wiz-ok" value="ok" hidden>Start migration</button></footer>
   </form>
 </dialog>
+
+<dialog id="replication-cutover-dialog"><form method="dialog"><header><h3>Cutover replication</h3><button value="cancel" formnovalidate>×</button></header><div class="body"><p>Shut down the source VM fully before continuing. Final sync and driver conversion run before the destination VM is created.</p><label><input name="source_powered_off" type="checkbox" required> I confirm the source VM is powered off and will remain off.</label></div><footer><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="danger">Confirm cutover</button></footer></form></dialog>
+<dialog id="replication-test-dialog"><form method="dialog"><header><h3>Test failover</h3><button value="cancel" formnovalidate>×</button></header><div class="body"><p>Boot an independent copy. Leave all NICs disconnected for an isolated test.</p><div id="replication-test-networks"></div></div><footer><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Start test</button></footer></form></dialog>
 
 <dialog id="user-dialog">
   <form method="dialog" id="user-form">

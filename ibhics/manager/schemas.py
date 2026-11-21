@@ -26,7 +26,9 @@ from ..hypervisor import (
     VMSpec,
     VMState,
 )
+from ..hypervisor.base import ADVANCED_FIELDS
 from ..hypervisor.host import HostNetwork, IfaceConfig, SettingsEdit
+from ..importer.nics import validate_mac
 
 # VM names: letters (English or Thai), digits, '_', '.', '-'; see hypervisor.base.VM_NAME_RE.
 VM_NAME_PATTERN = r"^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$"
@@ -59,7 +61,23 @@ class NicOut(BaseModel):
     mac: str | None = None
 
 
-class VMCreate(BaseModel):
+class VMHardware(BaseModel):
+    cpu_sockets: int | None = Field(default=None, ge=1, le=256)
+    cpu_cores: int | None = Field(default=None, ge=1, le=256)
+    cpu_mode: Literal["default", "host-passthrough"] = "default"
+    mouse: Literal["tablet", "ps2"] = "tablet"
+    keymap: Literal["default", "en-us", "en-gb", "de", "fr", "es", "it", "ja", "th"] = "default"
+    boot_menu_seconds: int = Field(default=0, ge=0, le=60)
+    restart_on_crash: bool = True
+    ballooning: bool = True
+    serial_port: bool = True
+    usb_controller: bool = False
+    machine_type: Literal["q35", "i440fx"] = "q35"
+    secure_boot: bool = False
+    tpm: bool = False
+
+
+class VMCreate(VMHardware):
     name: str = Field(pattern=VM_NAME_PATTERN)
     vcpus: int = Field(default=1, ge=1, le=256)
     memory_mb: int = Field(default=1024, ge=128)
@@ -76,8 +94,15 @@ class VMCreate(BaseModel):
     # Manager only: which compute node to place the VM on. Empty picks automatically.
     node: str | None = None
 
+    boot: list[str] | None = None
+    autostart: bool = False
+
     def to_spec(self) -> VMSpec:
         return VMSpec(
+            **{
+                k: getattr(self, k)
+                for k in (*ADVANCED_FIELDS, "machine_type", "secure_boot", "boot", "autostart")
+            },
             name=self.name,
             vcpus=self.vcpus,
             memory_mb=self.memory_mb,
@@ -92,7 +117,7 @@ class VMCreate(BaseModel):
         )
 
 
-class VMOut(BaseModel):
+class VMOut(VMHardware):
     uuid: str
     name: str
     state: VMState
@@ -118,6 +143,7 @@ class VMOut(BaseModel):
     def from_info(cls, info: VMInfo, node: str | None = None) -> VMOut:
         spec = info.spec
         return cls(
+            **{k: getattr(spec, k) for k in (*ADVANCED_FIELDS, "machine_type", "secure_boot")},
             node=node,
             uuid=info.uuid,
             name=spec.name,
@@ -267,6 +293,17 @@ class VMEditIn(BaseModel):
     disks: list[DiskEditIn] | None = Field(default=None, max_length=26)
     nics: list[NicEditIn] | None = Field(default=None, max_length=16)
     delete_removed_disks: bool = False
+    cpu_sockets: int | None = None
+    cpu_cores: int | None = None
+    cpu_mode: str | None = None
+    tpm: bool | None = None
+    mouse: str | None = None
+    keymap: str | None = None
+    boot_menu_seconds: int | None = None
+    restart_on_crash: bool | None = None
+    ballooning: bool | None = None
+    serial_port: bool | None = None
+    usb_controller: bool | None = None
 
     def to_edit(self) -> VMEdit:
         data = self.model_dump()
@@ -928,6 +965,8 @@ class SourceOut(BaseModel):
 
 
 class SourceVMOut(BaseModel):
+    sockets: int | None = None
+    cores_per_socket: int | None = None
     ref: str
     name: str
     vcpus: int
@@ -936,6 +975,7 @@ class SourceVMOut(BaseModel):
     disks_gb: list[int]
     nics: int
     networks: list[str] = []
+    macs: list[str] = []
     state: str
     guest_os: str
     notes: str = ""
@@ -946,7 +986,27 @@ class DiskTarget(BaseModel):
     size_gb: int | None = Field(default=None, ge=1)
 
 
+class NicTarget(BaseModel):
+    network: str = Field(min_length=1, max_length=128)
+    mac: str | None = None
+    mac_mode: Literal["keep", "new", "custom"] = "new"
+
+    @model_validator(mode="after")
+    def check_mac(self):
+        if self.mac is not None:
+            self.mac = validate_mac(self.mac)
+        if self.mac_mode == "custom" and not self.mac:
+            raise ValueError("custom MAC mode requires a MAC")
+        if self.mac_mode != "custom" and self.mac is not None:
+            raise ValueError("only custom MAC mode accepts an explicit MAC")
+        return self
+
+
 class ImportRequest(BaseModel):
+    cpu_sockets: int | None = Field(default=None, ge=1, le=256)
+    cpu_cores: int | None = Field(default=None, ge=1, le=256)
+
+    nics: list[NicTarget] | None = Field(default=None, max_length=16)
     disks: list[DiskTarget] | None = None
     source: str
     vm: str = Field(description="the ref from GET /migrate/sources/{name}/vms")
@@ -966,6 +1026,7 @@ class ImportRequest(BaseModel):
 
 
 class ImportJobOut(BaseModel):
+    nics: list[NicTarget] | None = Field(default=None, max_length=16)
     disks: list[DiskTarget] | None = None
     pool: str = "default"
     id: str
@@ -984,6 +1045,10 @@ class ImportJobOut(BaseModel):
 
 
 class AgentImport(BaseModel):
+    cpu_sockets: int | None = Field(default=None, ge=1, le=256)
+    cpu_cores: int | None = Field(default=None, ge=1, le=256)
+
+    nics: list[NicTarget] | None = Field(default=None, max_length=16)
     disks: list[DiskTarget] | None = None
     source: dict
     vm: dict

@@ -175,3 +175,9 @@ def test_api_accepts_a_sangfor_source():
     }
     resp = c.post("/api/v1/migrate/sources", json=body)
     assert resp.status_code == 201 and "secret-pw" not in resp.text
+
+
+@pytest.mark.parametrize("size,expected", [("512M", 1), ("1.1G", 2), ("2G", 2)])
+def test_disk_capacity_rounds_up(size, expected):
+    vm = parse_vm({"vmid": 101, "name": "small", "scsi0": f"local:disk,size={size}"})
+    assert vm.disks_gb == [expected]

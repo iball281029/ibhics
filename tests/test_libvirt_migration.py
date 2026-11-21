@@ -82,7 +82,18 @@ def flags(*names):
 BASE = ("PEER2PEER", "PERSIST_DEST", "UNDEFINE_SOURCE")
 
 
-def test_live_on_shared_storage(make):
+@pytest.mark.parametrize("tuned", [False, True])
+def test_live_on_shared_storage(make, monkeypatch, tuned):
+    if tuned:
+        monkeypatch.setattr(
+            __import__(__name__),
+            "DOMAIN_XML",
+            DOMAIN_XML.replace("<devices>", "<iothreads>1</iothreads><devices>").replace(
+                "<source pool='default'",
+                "<driver name='qemu' type='qcow2' cache='none' io='native' iothread='1'/>"
+                "<target dev='vda' bus='virtio'/><source pool='default'",
+            ),
+        )
     driver, dom, deleted = make(active=True)
     driver.migrate_vm("u", "qemu+tls://node2/system")
     assert dom.calls == [

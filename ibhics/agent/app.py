@@ -66,6 +66,8 @@ def create_agent_app(
     pool_labels_path: Path | None = None,
     storage_root: Path = Path("/var/lib/ibhics/virtual-storage"),
     migration_pki=None,
+    replication_root: Path = Path("/var/lib/ibhics/replica-manifests"),
+    replication_guard: Path = Path("/run/lock/ibhics-replication.lock"),
 ) -> FastAPI:
     if not token:
         raise ValueError("an agent needs a cluster token")
@@ -152,6 +154,10 @@ def create_agent_app(
         )
 
     if role == NodeRole.COMPUTE:
+
+        @api.get("/hardware-capabilities")
+        def hardware_capabilities() -> dict:
+            return driver.hardware_capabilities()
 
         @api.get("/host", response_model=HostOut)
         def host() -> HostOut:
@@ -515,6 +521,9 @@ def create_agent_app(
                 )
             }
 
+        from ..replication import agent as replication_agent
+
+        replication_agent.install(api, name, driver, replication_root, replication_guard)
         imports = imports or NodeImport(driver)
 
         def read_source(body: dict) -> Source:
@@ -527,7 +536,7 @@ def create_agent_app(
 
         @api.get("/imports/capabilities")
         def import_capabilities() -> dict:
-            return {"disk_targets": True}
+            return {"disk_targets": True, "nic_targets": True, "cpu_topology": True}
 
         @api.post("/imports/source-vms")
         def source_vms(body: dict) -> list[dict]:
@@ -575,6 +584,9 @@ def create_agent_app(
                 body.start,
                 clear_hibernation=body.clear_hibernation,
                 disks=[d.model_dump() for d in body.disks] if body.disks is not None else None,
+                nics=[n.model_dump() for n in body.nics] if body.nics is not None else None,
+                cpu_sockets=body.cpu_sockets,
+                cpu_cores=body.cpu_cores,
             )
             return VMOut.from_info(info)
 

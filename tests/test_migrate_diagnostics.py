@@ -226,16 +226,17 @@ def test_static_migrate_controls():
     js = (static / "app.js").read_text()
     assert "data-source-test=" in js
     assert "Run connection test" in js
-    assert "steps: 4," in js[js.index("const importWiz") :]
+    assert "steps: 3," in js[js.index("const importWiz") :]
 
 
 def test_network_mapping_preserves_nic_order_and_duplicate_networks():
     """Run the actual pure JS mapper without a browser or network."""
     static = Path(__file__).parents[1] / "ibhics" / "manager" / "static" / "app.js"
     js = static.read_text()
-    code = js[js.index("function importNetworkKeys(vm)") : js.index("function renderImportNets()")]
+    code = js[js.index("function importNetworkKeys(vm)") : js.index("function importOptions(")]
     code += """
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto').webcrypto;
 assert.deepEqual(importNetworkKeys({nics:3, networks:['LAN','WAN','LAN']}), ['LAN','WAN','LAN']);
 assert.deepEqual(importNetworkKeys({nics:2, networks:[]}),
   ['Adapter 1 (unspecified)','Adapter 2 (unspecified)']);
@@ -314,6 +315,7 @@ def test_wizard_validation_and_partial_job_retry_with_mock_dom():
     end = js.index("// ---------- settings ----------", start)
     prefix = r"""
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto').webcrypto;
 const noop = () => {};
 const elements = {node: {value:'node1',addEventListener:noop},
                   pool: {value:'default',addEventListener:noop}};
@@ -324,18 +326,33 @@ const $ = (key) => {
                                     addEventListener:noop});
   return boxes.get(key);
 };
-const $$ = () => [];
+let controls = [], resets = [], randoms = [];
+const $$ = (key) => key.includes('data-random-mac-vm') ? randoms
+  : key.includes('data-target-field') ? controls
+  : key.includes('data-reset-field') ? resets : [];
 const handlers = {};
-const wizard = (id, options) => ({step:4,check:options.check,show:options.show});
-const state = {pools:[{node:'node1',name:'default',active:true,type:'dir',available_gb:100}],
-               vms:[],imports:[],networks:[],sources:[]};
+const wizard = (id, options) => ({step:3,check:options.check,show:options.show});
+const state = {pools:[{node:'node1',name:'default',active:true,type:'dir',available_gb:200}],
+               vms:[],imports:[],networks:['vs-lan','vs-wan','vm1-lan','vm1-other-lan','vm2-lan'].map(name=>({name})),sources:[]};
 const esc = s => String(s);
+const computeMembers=()=>[{name:'node1',healthy:true},{name:'node2',healthy:true}];
+const renderMigrateSummary=noop;
 let refreshes=0, tab=null;
 const refresh=async () => {refreshes++};
 const selectTab=(id, value) => {tab=value};
 const toast=noop;
-let rejectSecond=true, requests=[];
+let rejectSecond=true, requests=[], networkRequests=[];
+let networkInventory=null;
+const api=async (url) => {
+  assert.equal(url,'/networks');return [...(networkInventory || state.networks)];
+};
 const post=async (url, body) => {
+  if (url==='/networks') {
+    networkRequests.push(body);
+    const network={...body,nodes:['node1','node2']};
+    networkInventory.push(network);
+    return network;
+  }
   requests.push(body);
   if (body.vm==='vm2' && rejectSecond) {rejectSecond=false;throw new Error('mock rejection')}
   return {id:body.vm};
@@ -349,18 +366,19 @@ const post=async (url, body) => {
              disks_gb:[40],nics:1,networks:['LAN'],guest_os:'Windows 11'};
   Object.assign(importBatch,{source:'esx01',vms:[vm1,vm2],picked:new Set(['vm1','vm2'])});
   importBatch.networks=new Map([['LAN','vs-lan'],['WAN','vs-wan']]);
-  importWiz.check(4);
-  assert.match($('#import-capacity').textContent,/60 GB total disks/);
+  importWiz.check(3);
+  assert.match($('#import-capacity').innerHTML,/120 GiB required/);
   vm1.state='running';assert.throws(()=>importWiz.check(1),/Power off/);vm1.state='stopped';
   state.pools[0].available_gb=50;assert.throws(()=>importWiz.check(2),/Insufficient space/);
   state.pools[0].available_gb=100;state.pools[0].type='lvm';
-  assert.throws(()=>importWiz.check(2),/Insufficient space/);state.pools[0].type='dir';
+  assert.throws(()=>importWiz.check(2),/Insufficient space/);
+  state.pools[0].type='dir';state.pools[0].available_gb=200;
   importBatch.names.set('vm1','db1');assert.throws(()=>importWiz.check(2),/distinct/);
   importBatch.names.set('vm1','bad name');assert.throws(()=>importWiz.check(2),/VM names/);
   importBatch.names.set('vm1','existing');state.vms=[{name:'existing'}];
   assert.throws(()=>importWiz.check(2),/already exists/);state.vms=[];
   importBatch.names.set('vm1','renamed');
-  importBatch.resources.set('vm1',{vcpus:8,memory_mb:8192});
+  importBatch.resources.set('vm1',{vcpus:8,cpu_sockets:2,cpu_cores:4,memory_mb:8192});
   const form=new Map([['node','node1'],['pool','default'],['clear_hibernation','on']]);
   await assert.rejects(handlers['import-dialog'](form),/mock rejection/);
   assert.deepEqual([...importBatch.submitted],['vm1']);
@@ -370,9 +388,11 @@ const post=async (url, body) => {
   assert.deepEqual(requests.map(r=>r.vm),['vm1','vm2','vm2']);
   assert.deepEqual(requests[0].network,['vs-wan','vs-lan','vs-lan']);
   assert.deepEqual(requests[2].network,['vs-lan']);
+  assert.deepEqual(requests[0].nics,requests[0].network.map(network=>({network,mac_mode:'new',mac:null})));
   assert.equal(requests[0].clear_hibernation,false);
-  assert.equal(requests[2].clear_hibernation,true);
+  assert.equal(requests[2].clear_hibernation,false);
   assert.equal(requests[0].vcpus,8);assert.equal(requests[0].memory_mb,8192);
+  assert.equal(requests[0].cpu_sockets,2);assert.equal(requests[0].cpu_cores,4);
   assert.equal(refreshes,1);assert.equal(tab,'imports');
   importBatch.submitted.clear(); requests=[];
   state.pools[0].available_gb=1000;
@@ -382,7 +402,7 @@ const post=async (url, body) => {
   importBatch.networks.set(importNicKey(vm1,1),'vm1-lan');
   importBatch.networks.set(importNicKey(vm1,2),'vm1-other-lan');
   importBatch.networks.set(importNicKey(vm2,0),'vm2-lan');
-  importWiz.show(4);
+  importWiz.show(3);
   assert.match($('#import-summary').innerHTML,/node2/);
   assert.match($('#import-summary').innerHTML,/SHRINK/);
   assert.match($('#import-summary').innerHTML,/GROW/);
@@ -392,6 +412,100 @@ const post=async (url, body) => {
   assert.deepEqual(requests.map(r=>r.disks[0]),[{pool:'default',size_gb:25},{pool:'fast',size_gb:30}]);
   assert.deepEqual(requests[0].network,['vs-wan','vm1-lan','vm1-other-lan']);
   assert.deepEqual(requests[1].network,['vm2-lan']);
+  importBatch.submitted.clear();
+  const field={dataset:{targetVm:'0',targetField:'size_gb',targetDisk:'0'},value:'10'};
+  controls=[field];renderImportTargets();field.onchange();
+  assert.equal(importTarget(vm1).disks[0].size_gb,10);
+  assert.match($('#import-disk-targets').innerHTML,/TARGET \/ CURRENT VM/);
+  assert.match($('#import-disk-targets').innerHTML,/mg-shrink-hint/);
+  const reset={dataset:{resetVm:'0',resetField:'size_gb',resetDisk:'0'}};
+  resets=[reset];renderImportTargets();reset.onclick();
+  assert.equal(importTarget(vm1).disks[0].size_gb,20);
+  controls=[];resets=[];
+  const unknown={...vm1,ref:'unknown',disks_gb:[0],nics:0,networks:[]};
+  importBatch.vms=[unknown];importBatch.picked=new Set(['unknown']);
+  renderImportTargets();importCapacity();
+  assert.equal(importTarget(unknown).disks[0].size_gb,null);
+  assert.match($('#import-disk-targets').innerHTML,/size detected after conversion/);
+  assert.doesNotMatch($('#import-disk-targets').innerHTML,/mg-shrink-hint|Unknown GB/);
+  assert.match($('#import-capacity').innerHTML,/Pending detection/);
+  assert.equal($('#import-bulk').hidden,true);
+  assert.deepEqual(importNetworkKeys(unknown),[]);
+  importBatch.targets.get('unknown').disks[0].size_gb=12;
+  renderImportTargets();
+  assert.doesNotMatch($('#import-disk-targets').innerHTML,/GROW|SHRINK/);
+  unknown.disks_gb=[];importBatch.targets.delete('unknown');
+  renderImportTargets();importWiz.check(2);
+  assert.match($('#import-disk-targets').innerHTML,/Storage pool/);
+  assert.equal(importTarget(unknown).pool,'default');
+  elements.node.value='node2';elements.pool.value='fast';importApplyAll();
+  assert.equal(importTarget(unknown).node,'node2');
+  assert.equal(importTarget(unknown).pool,'fast');
+  importBatch.submitted.add('unknown');
+  elements.node.value='node1';elements.pool.value='default';importApplyAll();
+  assert.equal(importTarget(unknown).node,'node2');
+  importBatch.submitted.clear();
+  unknown.nics=1;unknown.networks=['LAN'];
+  importBatch.networks.set(importNicKey(unknown,0),'');
+  assert.throws(()=>importWiz.check(2),/available target network/);
+  importBatch.networks.delete(importNicKey(unknown,0));
+  assert.equal(importNicNetwork(unknown,0,'LAN'),'vs-lan');
+  unknown.nics=3;unknown.networks=['LAN','LAN','LAN'];
+  unknown.macs=['52:54:00:11:22:33'];
+  importBatch.nicSettings.clear();
+  assert.equal(importNicSettings(unknown,0).mac_mode,'keep');
+  assert.equal(importNicSettings(unknown,1).mac_mode,'new');
+  unknown.state='running';assert.equal(importDefaultMac(unknown,0),'new');unknown.state='stopped';
+  importNicSettings(unknown,1).mac_mode='custom';
+  importNicSettings(unknown,1).mac='bad';
+  assert.throws(()=>importWiz.check(2),/unicast/);
+  importNicSettings(unknown,1).mac='01:00:00:11:22:33';
+  assert.throws(()=>importWiz.check(2),/unicast/);
+  importNicSettings(unknown,1).mac='52:54:00:11:22:33';
+  assert.throws(()=>importWiz.check(2),/Duplicate MAC/);
+  importNicSettings(unknown,1).mac='52:54:00:aa:bb:cc';
+  state.vms=[{nics:[{mac:'52:54:00:AA:BB:CC'}]}];
+  assert.throws(()=>importWiz.check(2),/Duplicate MAC/);state.vms=[];
+  const dice={dataset:{randomMacVm:'0',randomMacNic:'2'}};
+  randoms=[dice];renderImportTargets();dice.onclick();randoms=[];
+  const generated=importNicSettings(unknown,2).mac;
+  assert.match(generated,/^52:54:00(:[0-9a-f]{2}){3}$/);
+  assert.equal(importNicSettings(unknown,2).mac_mode,'custom');
+  assert.match($('#import-disk-targets').innerHTML,new RegExp(generated));
+  const macReset={dataset:{resetVm:'0',resetField:'mac_mode',resetDisk:'2'}};
+  resets=[macReset];renderImportTargets();macReset.onclick();resets=[];
+  assert.equal(importNicSettings(unknown,2).mac_mode,'new');
+  importBatch.networks.set(importNicKey(unknown,1),'__new_vlan__');
+  importBatch.networks.set(importNicKey(unknown,2),'__new_vlan__');
+  importNicSettings(unknown,1).vlan='4095';
+  assert.throws(()=>importWiz.check(2),/VLAN ID/);
+  importNicSettings(unknown,1).vlan='20';importNicSettings(unknown,2).vlan='20';
+  renderImportTargets();
+  assert.match($('#import-disk-targets').innerHTML,/New VLAN/);
+  importWiz.show(3);
+  assert.match($('#import-summary').innerHTML,/New VLAN 20/);
+  assert.match($('#import-summary').innerHTML,/MAC 52:54:00:11:22:33/);
+  requests=[];networkInventory=[...state.networks];
+  await handlers['import-dialog'](form);
+  assert.deepEqual(networkRequests,[{name:'vlan-20',vlan:20}]);
+  assert.deepEqual(requests[0].nics,[
+    {network:'vs-lan',mac_mode:'keep',mac:null},
+    {network:'vlan-20',mac_mode:'custom',mac:'52:54:00:aa:bb:cc'},
+    {network:'vlan-20',mac_mode:'new',mac:null},
+  ]);
+  importBatch.submitted.clear();
+  importBatch.networks.set(importNicKey(unknown,1),'__new_vlan__');
+  await importResolveNetworks(unknown);
+  assert.equal(networkRequests.length,1);
+  assert.equal(importNicNetwork(unknown,1,'LAN'),'vlan-20');
+  renderImportTargets();
+  assert.match($('#import-disk-targets').innerHTML,/vlan-20 · VLAN 20/);
+  assert.match($('#import-disk-targets').innerHTML,/vs-lan · untagged/);
+  const mixed={name:'mixed',vlan:20,configurations:{node2:{vlan:null}}};
+  assert.equal(importNetworkLabel(mixed,'node2'),'mixed · untagged');
+
+
+
 })().catch(error=>{console.error(error);process.exitCode=1});
 """
     subprocess.run(["node", "-e", prefix + js[start:end] + suffix], check=True, capture_output=True)

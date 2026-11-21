@@ -8,6 +8,7 @@ disks over SSH before virt-v2v converts them.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shlex
 import xml.etree.ElementTree as ET
@@ -35,12 +36,14 @@ def parse_qm_config(vmid: str, text: str) -> tuple[SourceVM, list[str]]:
             continue
         volumes.append(value.split(",", 1)[0])
         m = QM_SIZE.search(value)
-        sizes.append(max(1, round(float(m[1]) * UNIT[m[2]])) if m else 0)
+        sizes.append(max(1, math.ceil(float(m[1]) * UNIT[m[2]])) if m else 0)
     sockets, cores = int(conf.get("sockets", 1)), int(conf.get("cores", 1))
     vm = SourceVM(
         ref=vmid,
         name=re.sub(r"[^A-Za-z0-9_.-]", "-", conf.get("name", f"vm-{vmid}"))[:63],
         vcpus=int(conf.get("vcpus", sockets * cores)),
+        sockets=sockets,
+        cores_per_socket=cores,
         memory_mb=int(conf.get("memory", 2048)),
         firmware=Firmware.UEFI if conf.get("bios") == "ovmf" else Firmware.BIOS,
         disks_gb=sizes,
@@ -81,7 +84,17 @@ def parse_libvirt_domain(xml: str) -> tuple[SourceVM, list[str]]:
     vm = SourceVM(
         ref=name,
         name=re.sub(r"[^A-Za-z0-9_.-]", "-", name)[:63],
-        vcpus=int(root.findtext("vcpu", "1")),
+        vcpus=int(
+            (root.find("vcpu").get("current") if root.find("vcpu") is not None else None)
+            or root.findtext("vcpu", "1")
+        ),
+        sockets=int(root.find("cpu/topology").get("sockets", "1"))
+        if root.find("cpu/topology") is not None
+        else None,
+        cores_per_socket=int(root.find("cpu/topology").get("cores", "1"))
+        * int(root.find("cpu/topology").get("threads", "1"))
+        if root.find("cpu/topology") is not None
+        else None,
         memory_mb=mib,
         firmware=Firmware.UEFI if efi else Firmware.BIOS,
         disks_gb=[0] * len(paths),

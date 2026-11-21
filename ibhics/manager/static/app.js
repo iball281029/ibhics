@@ -61,7 +61,7 @@ const avatar = (icon) => `<span class="avatar"><svg><use href="#${icon}"/></svg>
 
 // ---------- state ----------
 
-const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
+const state = { networks: [], me: null, cluster: null, hosts: {}, summaries: {}, guests: {}, stats: {}, groups: { groups: [], members: {} }, vms: [], pools: [], targets: [], sources: [], policies: [], jobs: [], moves: [], imports: [], replications: [], users: [], isos: [], templates: [], deploys: [], recycle: { days: 0, vms: [] } };
 const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + witness", "cluster": "Cluster", "incomplete": "Incomplete" };
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
@@ -329,6 +329,7 @@ document.addEventListener("click", (e) => {
   const form = b.closest("form");
   form.elements[b.closest(".chips").dataset.target].value = b.dataset.v;
   syncPresets(form);
+  form.elements[b.closest(".chips").dataset.target].dispatchEvent(new Event("input", { bubbles: true }));
 });
 document.addEventListener("input", (e) => { if (e.target.form && $(".chips.presets", e.target.form)) syncPresets(e.target.form); });
 
@@ -468,6 +469,7 @@ const loaders = {
   sources: async () => { state.sources = await api("/migrate/sources"); },
   isos: async () => { state.isos = await api("/isos"); },
   imports: async () => { state.imports = await api("/migrate/jobs"); },
+  replications: async () => { state.replications = await api("/migrate/replications"); },
   containers: async () => { state.containers = await api("/containers"); },
   ctTemplates: async () => { if (!state.ctTemplates?.length) state.ctTemplates = await api("/containers/templates"); },
   summaries: async () => {
@@ -830,7 +832,7 @@ async function refresh(page, auto = false) {
   if (page === "cluster") { await load("vms", "summaries"); renderCluster(); }
   if (page === "node") { await load("vms", "pools"); await renderNodeDetail(auto); }
   if (page === "backup") { await load("targets", "policies", "jobs"); fillSelects(); renderTargets(); renderPolicies(); renderJobs(); await renderBackups(); await renderAllSnapshots(); }
-  if (page === "migrate") { await load("sources", "imports", "pools"); fillSelects(); renderSources(); renderImports(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
+  if (page === "migrate") { await load("sources", "imports", "replications", "pools"); fillSelects(); renderSources(); renderImports(); renderReplications(); renderP2V().catch(() => {}); if (!auto || !sourceVMsFor) await renderSourceVMs(); }
   if (page === "templates") { await load("vms", "pools", "deploys", "recycle"); renderTemplates(); }
   if (page === "recycle") { await load("recycle"); renderRecycle(); }
   if (page === "terminal") renderTerminal();
@@ -1748,6 +1750,11 @@ handlers["deploy-dialog"] = async (f, ctx) => {
 
 // ---------- edit VM ----------
 // A list of the VM's parts on the left, the selected part's settings on the right.
+const VM_ADVANCED_DEFAULTS = { cpu_mode: "default", mouse: "tablet", keymap: "default", boot_menu_seconds: 0, restart_on_crash: true, ballooning: true, serial_port: true, usb_controller: false, tpm: false };
+function hardwareFormValues(f) {
+  return Object.fromEntries(Object.entries(VM_ADVANCED_DEFAULTS).map(([key, value]) => [key,
+    typeof value === "boolean" ? f.get(key) === "on" : typeof value === "number" ? Number(f.get(key)) : f.get(key) || value]));
+}
 let editing = null;
 const BOOT_NAMES = { hd: "Hard disk", cdrom: "CD/DVD", network: "Network (PXE)" };
 
@@ -1756,6 +1763,9 @@ async function openEdit(uuid) {
   editing = {
     vm,
     vcpus: vm.vcpus,
+    cpu_sockets: vm.cpu_sockets || 1,
+    cpu_cores: vm.cpu_cores || vm.vcpus,
+    topologyChanged: false,
     memory_mb: vm.memory_mb,
     disks: vm.disks.map((d, i) => ({ index: i, size_gb: d.size_gb, min: d.size_gb, pool: d.pool, bus: d.bus })),
     nics: vm.nics.map((n) => ({ mac: n.mac, network: n.network, model: n.model || "virtio" })),
@@ -1767,11 +1777,18 @@ async function openEdit(uuid) {
   };
   openDialog("edit-dialog", { uuid }, { os_type: vm.os_type, description: vm.description });
   $("#edit-form").elements.autostart.checked = vm.autostart;
+  for (const [key, fallback] of Object.entries(VM_ADVANCED_DEFAULTS)) {
+    const input = $("#edit-form").elements[key];
+    if (typeof fallback === "boolean") input.checked = vm[key] ?? fallback;
+    else input.value = vm[key] ?? fallback;
+  }
+  $("#edit-machine").textContent = vm.machine_type || "q35";
+  await updateHardwareCapabilities($("#edit-form"), vm.node);
   $("#edit-title").textContent = `Edit virtual machine (${vm.name})`;
-  $("#edit-firmware").textContent = vm.firmware === "uefi" ? "UEFI" : "BIOS";
+  $("#edit-firmware").textContent = (vm.firmware === "uefi" ? "UEFI" : "BIOS") + (vm.secure_boot ? " · Secure Boot" : "");
   const note = $("#edit-note");
   note.hidden = vm.state !== "running";
-  note.textContent = "This VM is running. Disks, network adapters, the CD and more vCPUs (up to 32) or memory (in 128 MB steps, up to 512 GB) change now. Fewer vCPUs or less memory and the boot order apply after it is shut down and powered on again. A VM made before hot-add support needs one restart after its first CPU or memory change.";
+  note.textContent = "This VM is running. CPU topology and advanced hardware require shutdown. Disks, network adapters, the CD and more vCPUs without a fixed topology (up to 32) or memory (in 128 MB steps, up to 512 GB) change now. Fewer vCPUs or less memory and the boot order apply after it is shut down and powered on again. A VM made before hot-add support needs one restart after its first CPU or memory change.";
   selectTab("edit-tabs", "edit-hw");
   renderEdit();
 }
@@ -1801,8 +1818,11 @@ function renderEdit() {
     pane.innerHTML = `<h4>Display</h4><label>Display adapter <select data-set="video">${Object.entries(VIDEO_NAMES).map(([k, v]) => `<option value="${k}" ${k === e.video ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <p class="hint">VirtIO GPU suits Linux and Windows 10/Server 2016 and later. Older Windows (Server 2012 R2 and before, 7, 8.1) shows a black or slow screen with it: use Standard VGA. Applies after a restart.</p>`;
   } else if (s === "cpu") {
-    pane.innerHTML = `<h4>Processor</h4><label>vCPU <input type="number" min="1" max="256" value="${e.vcpus}" data-set="vcpus"></label>
-      <p class="hint">Host CPU model is passed through (host-model), so the VM can still live-migrate between nodes.</p>`;
+    pane.innerHTML = `<h4>Processor</h4>
+      <label>Sockets <input type="number" min="1" max="256" value="${e.cpu_sockets}" data-set="cpu_sockets"></label>
+      <label>Cores per socket <input type="number" min="1" max="256" value="${e.cpu_cores}" data-set="cpu_cores"></label>
+      <label>Total vCPU <input value="${e.vcpus}" readonly></label>
+      <p class="hint">Topology changes require a stopped VM. A fixed topology uses all configured CPUs; CPU hot-add remains available for existing VMs without a fixed topology.</p>`;
   } else if (s === "mem") {
     pane.innerHTML = `<h4>Memory</h4><label>Memory (GB) <input type="number" min="0.25" step="0.25" value="${e.memory_mb / 1024}" data-set="memory_gb"></label>`;
   } else if (s.startsWith("disk")) {
@@ -1861,7 +1881,11 @@ function renderEdit() {
   form.addEventListener("change", (ev) => {
     const t = ev.target, e = editing;
     if (!e) return;
-    if (t.dataset.set === "vcpus") e.vcpus = Number(t.value);
+    if (["cpu_sockets", "cpu_cores"].includes(t.dataset.set)) {
+      e[t.dataset.set] = Number(t.value);
+      e.vcpus = e.cpu_sockets * e.cpu_cores;
+      e.topologyChanged = true;
+    }
     if (t.dataset.set === "memory_gb") e.memory_mb = Math.round(Number(t.value) * 1024);
     if (t.dataset.set === "iso") e.iso = t.value;
     if (t.dataset.set === "video") e.video = t.value;
@@ -1870,7 +1894,7 @@ function renderEdit() {
     if (t.dataset.boot) {
       e.boot = $$("#edit-boot select").map((sel) => sel.value).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
     }
-    if (!t.dataset.boot && t.name !== "autostart" && t.name !== "os_type" && t.name !== "description") renderEdit();
+    if (!t.name && !t.dataset.boot && t.name !== "autostart" && t.name !== "os_type" && t.name !== "description") renderEdit();
   });
 }
 
@@ -1884,6 +1908,9 @@ handlers["edit-dialog"] = async (f, { uuid }) => {
     os_type: f.get("os_type"), description: f.get("description"),
     vcpus: e.vcpus, memory_mb: e.memory_mb, boot: e.boot.length ? e.boot : ["hd"],
     autostart: f.get("autostart") === "on", video: e.video,
+    ...hardwareFormValues(f),
+    ...($("#edit-form").elements.tpm.disabled ? { tpm: e.vm.tpm || false } : {}),
+    ...(e.topologyChanged ? { cpu_sockets: e.cpu_sockets, cpu_cores: e.cpu_cores } : {}),
     disks: e.disks.map((d) => (d.index == null ? { size_gb: d.size_gb, pool: d.pool } : { index: d.index, size_gb: d.size_gb })),
     nics: e.nics.map((n) => (n.mac ? { mac: n.mac, network: n.network, model: n.model } : { network: n.network, model: n.model })),
     delete_removed_disks: deleteDisks,
@@ -1901,9 +1928,12 @@ const vmWiz = wizard("vm-dialog", {
     const f = $("#vm-form");
     $$(".vm-disk:not(:first-child)", f).forEach((d) => d.parentNode.removeChild(d));
     f.elements.vcpus.value = 2;
+    f.elements.cpu_sockets.value = 1;
+    f.elements.cpu_cores.value = 2;
     f.elements.memory_gb.value = 4;
     f.elements.disk_gb.value = 60;
     vmWizOs(f);
+    updateHardwareCapabilities(f, f.elements.node.value);
     syncPresets(f);
   },
   check(step) {
@@ -1911,6 +1941,8 @@ const vmWiz = wizard("vm-dialog", {
     if (step === 1 && !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(f.name.value)) throw new Error("Name the VM with letters (English or Thai), digits, '-', '_' or '.' (no spaces).");
     if (step === 1 && state.vms.some((v) => v.name === f.name.value)) throw new Error(`A VM named ${f.name.value} already exists.`);
     if (step === 2) {
+      f.vcpus.value = Number(f.cpu_sockets.value) * Number(f.cpu_cores.value);
+      if (!Number.isInteger(Number(f.vcpus.value)) || Number(f.vcpus.value) > 256) throw new Error("CPU total must be an integer between 1 and 256.");
       if (!(Number(f.vcpus.value) >= 1)) throw new Error("Give the VM at least 1 vCPU.");
       if (!(Number(f.memory_gb.value) >= 0.25)) throw new Error("Give the VM at least 0.25 GB of memory.");
       if ($$(".vm-disk", $("#vm-form")).some((d) => !(Number($("input", d).value) >= 1) || !$("select", d).value)) throw new Error("Each disk needs a size and a storage pool.");
@@ -1986,7 +2018,13 @@ handlers["vm-dialog"] = async (f) => {
   const { legacy, nic } = osProfile(f.get("os_family"), (f.get("os_type") || "").toLowerCase());
   const body = {
     name: f.get("name"),
-    vcpus: Number(f.get("vcpus")),
+    vcpus: Number(f.get("cpu_sockets")) * Number(f.get("cpu_cores")),
+    cpu_sockets: Number(f.get("cpu_sockets")), cpu_cores: Number(f.get("cpu_cores")),
+    ...hardwareFormValues(f),
+    machine_type: f.get("machine_type") || "q35",
+    secure_boot: f.get("secure_boot") === "on",
+    autostart: f.get("autostart") === "on",
+    boot: f.get("boot_first") === "auto" ? null : [f.get("boot_first"), ...["hd", "cdrom", "network"].filter((d) => d !== f.get("boot_first"))],
     memory_mb: Math.round(Number(f.get("memory_gb")) * 1024),
     firmware: f.get("firmware"),
     os_type: f.get("os_type").trim() || (f.get("os_family") === "windows" ? "Windows" : ""),
@@ -1994,7 +2032,7 @@ handlers["vm-dialog"] = async (f) => {
     disks: $$(".vm-disk", form).map((d) => ({ size_gb: Number($("input", d).value), pool: $("select", d).value || "default", bus: legacy ? "sata" : "virtio" })),
     nics: [{ network: f.get("network") || "default", model: nic }],
     node: f.get("node") || null,
-    video: legacy ? "vga" : "virtio",
+    video: f.get("video") && f.get("video") !== "auto" ? f.get("video") : legacy ? "vga" : "virtio",
   };
   if (f.get("iso")) body.iso = f.get("iso");
   const vm = await post("/vms", body);
@@ -2008,6 +2046,34 @@ handlers["vm-dialog"] = async (f) => {
   }
   if (currentPage() === "compute") await refresh("compute"); else location.hash = "compute";
 };
+
+$("#vm-form").addEventListener("input", () => {
+  const f = $("#vm-form").elements;
+  f.vcpus.value = Number(f.cpu_sockets.value) * Number(f.cpu_cores.value);
+});
+$("#vm-form").addEventListener("change", () => {
+  const f = $("#vm-form").elements;
+  f.vcpus.value = Number(f.cpu_sockets.value) * Number(f.cpu_cores.value);
+});
+
+async function updateHardwareCapabilities(form, node) {
+  const request = (form.hardwareCapsRequest || 0) + 1;
+  form.hardwareCapsRequest = request;
+  let caps = {};
+  if (node) { try { caps = await api(`/nodes/${encodeURIComponent(node)}/hardware-capabilities`); } catch (_) {} }
+  if (form.hardwareCapsRequest !== request) return;
+  for (const key of ["tpm", "secure_boot"]) {
+    const input = form.elements[key];
+    if (!input) continue;
+    input.disabled = !caps[key];
+    // Keep an existing TPM checked so saving unrelated settings does not remove it.
+    if (input.disabled && form.id !== "edit-form") input.checked = false;
+  }
+  const thai = form.elements.keymap.querySelector('option[value="th"]');
+  thai.disabled = !(caps.keymaps || []).includes("th");
+  $$(".hw-cap-hint", form).forEach((hint) => { hint.textContent = !node ? "Select a node to enable TPM or Secure Boot." : `TPM: ${caps.tpm ? "swtpm available" : "swtpm unavailable"}. Secure Boot: ${caps.secure_boot ? "firmware available" : "enrolled-key OVMF unavailable"}.`; });
+}
+$("#vm-form").elements.node.addEventListener("change", () => updateHardwareCapabilities($("#vm-form"), $("#vm-form").elements.node.value));
 
 // Back up a VM now. With no backup target yet, ask where backups go first (a local
 // folder on the node by default), then start the backup straight away.
@@ -4625,12 +4691,12 @@ function renderMigrateSummary() {
   const members = state.cluster?.members || [];
   $("#mg-nodes").textContent = members.map((m) => m.name).join(" · ") || "No cluster nodes available";
   $("#mg-node-count").textContent = `${members.length} nodes`;
-  const f = $("#import-form").elements;
-  const pool = state.pools.find((p) => p.active && computeMembers().some((m) => m.healthy && m.name === p.node));
-  $("#mg-write").textContent = `WRITE · ${f.pool.value || pool?.name || "select storage"}`;
-  $("#mg-destination").textContent = f.node.value && f.pool.value
-    ? `to ${f.node.value} · ${f.pool.value} · network ${[...importBatch.networks.values()].join(", ") || "default"}`
-    : pool ? `Suggested: ${pool.node} · ${pool.name} · network default — confirm in wizard` : "Choose destination in the import wizard";
+  const destinations = importChosen().map((vm) => importBatch.targets.get(vm.ref)).filter(Boolean);
+  const pools = [...new Set(destinations.flatMap((t) => t.disks.length ? t.disks.map((d) => d.pool) : [t.pool]))];
+  $("#mg-write").textContent = `WRITE · ${pools.join(" · ") || "select storage"}`;
+  $("#mg-destination").textContent = destinations.length
+    ? `to ${[...new Set(destinations.map((t) => t.node))].join(" · ")} · ${pools.join(" · ")}`
+    : "Choose destination in the import wizard";
 }
 $("#source-chips").addEventListener("click", (e) => {
   const chip = e.target.closest("[data-browse-source]");
@@ -4975,11 +5041,15 @@ function renderImports() {
       <button class="small" data-task-log="${esc(j.id)}" data-task-title="${esc(j.name)}">Log</button>${canOperate() && ["queued", "running"].includes(j.state) ? `<button class="small danger" data-import-cancel="${esc(j.id)}">Cancel</button>` : ""}</td></tr>`).join("") : empty(7, "No imports yet");
 }
 
-async function openImportWizard(indices) {
+async function openImportWizard(indices, replication = false) {
   if (!canOperate() || !sourceVMsFor || !indices.length) return;
   const source = sourceVMsFor, vms = [...sourceVMs];
   await load("vms", "pools", "networks");
-  openDialog("import-dialog", { source, vms, indices });
+  if (replication) {
+    const cap = await api(`/migrate/sources/${enc(source)}/replication-capability`);
+    if (!cap.supported) throw new Error(cap.reason);
+  }
+  openDialog("import-dialog", { source, vms, indices, replication });
 }
 $("#migrate-selected").addEventListener("click", () => openImportWizard([...migratePicked]).catch(fail));
 $("#page-migrate").addEventListener("click", async (e) => {
@@ -5055,120 +5125,301 @@ handlers["source-dialog"] = async (f) => {
 };
 
 // Map the union of source networks, then rebuild each VM's NIC array in NIC order.
+// Replication controls live outside the import-wizard diagnostic test slice.
+let replicationView = "cards";
+function renderReplications() {
+  const box = $("#replications");
+  box.classList.toggle("is-list", replicationView === "list");
+  box.innerHTML = state.replications.length ? state.replications.map((j) => {
+    const busy = !!j.operation || ["seeding", "syncing", "cutting-over"].includes(j.state);
+    const button = (action, label, disabled = false) => `<button class="small operator-only" data-replication-id="${esc(j.id)}" data-replication-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`;
+    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.capability.change_tracking)}</p><dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>Transferred / changed</dt><dd>${Number(j.bytes_transferred).toLocaleString()} bytes / ${Number(j.changed_pct)}%</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status">${esc(j.error || j.operation || "")}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : "Pause", busy || j.state === "done")}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
+  }).join("") : '<p class="hint">No replications yet.</p>';
+}
+$("#new-replication").onclick = () => {
+  if (!sourceVMsFor || !sourceVMs.length) {
+    selectTab("migrate-tabs", "import");
+    toast("Select a source and load its VM inventory first.");
+    return;
+  }
+  const indices = migratePicked.size ? [...migratePicked] : sourceVMs.map((v, i) => i);
+  openImportWizard(indices, true).catch(fail);
+};
+$$("[data-replication-view]").forEach((b) => { b.onclick = () => {
+  replicationView = b.dataset.replicationView;
+  $$("[data-replication-view]").forEach((v) => v.setAttribute("aria-pressed", String(v === b)));
+  renderReplications();
+}; });
+$("#replications").onclick = async (e) => {
+  const b = e.target.closest("[data-replication-action]");
+  if (!b || !canOperate()) return;
+  const j = state.replications.find((job) => job.id === b.dataset.replicationId);
+  if (!j) return;
+  const action = b.dataset.replicationAction, url = `/migrate/replications/${enc(j.id)}`;
+  b.disabled = true;
+  try {
+    if (action === "cutover") openDialog("replication-cutover-dialog", j);
+    else if (action === "test-failover") {
+      await load("networks");
+      $("#replication-test-networks").innerHTML = Array.from({length: j.source_vm.nics}, (_, i) => `<label>NIC ${i + 1}<select name="network"><option value="">Disconnected (isolated)</option>${state.networks.filter((n) => !n.node || n.node === j.node).map((n) => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></label>`).join("");
+      openDialog("replication-test-dialog", j);
+    } else if (action === "pause") await patch(url, {paused: j.state !== "paused"});
+    else if (action === "delete") { if (confirm(`Delete replica data for ${j.name}? The cutover VM is kept.`)) await del(`${url}?confirm=true`); }
+    else await post(`${url}/${action}`);
+    await refresh("migrate");
+  } catch (err) { fail(err); } finally { b.disabled = false; }
+};
+handlers["replication-cutover-dialog"] = async (f, j) => {
+  if (f.get("source_powered_off") !== "on") throw new Error("Confirm that the source VM is powered off.");
+  await post(`/migrate/replications/${enc(j.id)}/cutover`, {source_powered_off: true});
+  await refresh("migrate");
+};
+handlers["replication-test-dialog"] = async (f, j) => {
+  const networks = f.getAll("network");
+  if (networks.some(Boolean) && networks.some((n) => !n)) throw new Error("Choose all test networks or leave every NIC disconnected.");
+  await post(`/migrate/replications/${enc(j.id)}/test-failover`, {networks: networks.some(Boolean) ? networks : []});
+  await refresh("migrate");
+};
+
 const importForm = $("#import-form");
-const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() };
+const importBatch = { vms: [], picked: new Set(), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set() };
 function importChosen() { return importBatch.vms.filter((vm) => importBatch.picked.has(vm.ref)); }
 function importNetworkKeys(vm) {
-  return Array.from({ length: Math.max(vm.nics || 1, vm.networks?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
+  return Array.from({ length: Math.max(vm.nics ?? 1, vm.networks?.length || 0, vm.macs?.length || 0) }, (_, i) => vm.networks?.[i] || `Adapter ${i + 1} (unspecified)`);
 }
 function importTarget(vm) {
   if (!importBatch.targets.has(vm.ref)) importBatch.targets.set(vm.ref, {
-    node: importForm.elements.node.value, defaultNode: true, start: importForm.elements.start?.checked || false,
-    clear_hibernation: importForm.elements.clear_hibernation?.checked || false,
-    disks: vm.disks_gb.map((size) => ({ pool: importForm.elements.pool.value, size_gb: size || null, defaultPool: true })),
+    node: importForm.elements.node.value, originalNode: importForm.elements.node.value,
+    pool: importForm.elements.pool.value, originalPool: importForm.elements.pool.value, start: false, clear_hibernation: false,
+    disks: (vm.disks_gb || []).map((size) => ({ pool: importForm.elements.pool.value, size_gb: size || null })),
   });
   return importBatch.targets.get(vm.ref);
 }
 function importNicKey(vm, i) { return JSON.stringify([vm.ref, i]); }
 function importNicNetwork(vm, i, source) {
-  return importBatch.networks.get(importNicKey(vm, i)) || importBatch.networks.get(source) || "default";
+  const nic = importNicKey(vm, i);
+  return importBatch.networks.get(nic) ?? importBatch.networks.get(source) ?? importDefaultNetwork(vm, source);
 }
-function renderImportNets() {
-  $("#import-nets").innerHTML = importChosen().map((vm, v) => `<h4>${esc(vm.name)}</h4><table><thead><tr><th>NIC / Source network</th><th>Target virtual switch</th></tr></thead><tbody>${importNetworkKeys(vm).map((src, i) => {
-    const target = importTarget(vm);
-    const nets = state.networks.filter((n) => !n.node || n.node === target.node);
-    const selected = importNicNetwork(vm, i, src);
-    return `<tr><td>NIC ${i + 1} · ${esc(src)}</td><td><select data-import-nic="${v}:${i}" aria-label="${esc(vm.name)} NIC ${i + 1}">${nets.map((n) => `<option value="${esc(n.name)}" ${selected === n.name ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select></td></tr>`;
-  }).join("")}</tbody></table>`).join("") + `<p class="hint">Add missing virtual switches under Network first.</p>`;
-  $$("#import-nets [data-import-nic]").forEach((select) => {
-    const [v, i] = select.dataset.importNic.split(":").map(Number), vm = importChosen()[v];
-    const save = () => importBatch.networks.set(importNicKey(vm, i), select.value);
-    save(); select.onchange = save;
-  });
+function importAvailableNetworks(vm) {
+  const node = importTarget(vm).node;
+  return state.networks.filter((n) => (!n.node || n.node === node) && (!n.nodes?.length || n.nodes.includes(node)));
+}
+function importNetworkVlan(n, node) { return n.configurations?.[node] ? n.configurations[node].vlan : n.vlan; }
+function importNetworkLabel(n, node) {
+  const vlan = importNetworkVlan(n, node);
+  return `${n.name} · ${vlan ? `VLAN ${vlan}` : "untagged"}`;
+}
+function importDefaultMac(vm, i) { return vm.macs?.[i] && vm.state === "stopped" ? "keep" : "new"; }
+function importNicSettings(vm, i) {
+  const key = importNicKey(vm, i);
+  if (!importBatch.nicSettings.has(key)) importBatch.nicSettings.set(key, {mac_mode: importDefaultMac(vm, i), mac: "", vlan: ""});
+  return importBatch.nicSettings.get(key);
+}
+function importNicMac(vm, i) {
+  const n = importNicSettings(vm, i);
+  return n.mac_mode === "keep" ? vm.macs?.[i] || "Detected during conversion" : n.mac_mode === "custom" ? n.mac : "Generated on destination";
+}
+function importNetworkOptions(vm, selected) {
+  const nets = importAvailableNetworks(vm);
+  return `<option value="">Select…</option>` + (selected && selected !== "__new_vlan__" && !nets.some((n) => n.name === selected) ? `<option selected disabled value="${esc(selected)}">${esc(selected)} (unavailable)</option>` : "") + nets.map((n) => `<option value="${esc(n.name)}" ${selected === n.name ? "selected" : ""}>${esc(importNetworkLabel(n, importTarget(vm).node))}</option>`).join("") + `<option value="__new_vlan__" ${selected === "__new_vlan__" ? "selected" : ""}>New VLAN…</option>`;
+}
+function importNicLabel(vm, i, src) {
+  const name = importNicNetwork(vm, i, src), nic = importNicSettings(vm, i);
+  return name === "__new_vlan__" ? `New VLAN ${nic.vlan}` : importNetworkLabel(importAvailableNetworks(vm).find((n) => n.name === name) || {name}, importTarget(vm).node);
+}
+function importValidateNics() {
+  const seen = new Set((state.vms || []).flatMap((v) => (v.nics || v.spec?.nics || []).map((n) => n.mac?.toLowerCase()).filter(Boolean)));
+  for (const vm of importChosen()) {
+    if (importBatch.submitted.has(vm.ref)) continue;
+    importNetworkKeys(vm).forEach((src, i) => {
+      const n = importNicSettings(vm, i), net = importNicNetwork(vm, i, src);
+      if (net === "__new_vlan__") {
+        if (!Number.isInteger(Number(n.vlan)) || Number(n.vlan) < 1 || Number(n.vlan) > 4094) throw new Error("VLAN ID must be 1–4094.");
+      } else if (!importAvailableNetworks(vm).some((n) => n.name === net)) throw new Error("Choose an available target network for every NIC.");
+      if (n.mac_mode === "keep" && (!vm.macs?.[i] || vm.state !== "stopped")) throw new Error("Keep source MAC requires a known MAC and a stopped VM.");
+      if (n.mac_mode !== "new") {
+        const mac = importNicMac(vm, i).toLowerCase();
+        if (!/^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/.test(mac) || (parseInt(mac.slice(0, 2), 16) & 1) || mac === "00:00:00:00:00:00") throw new Error("MAC must be a nonzero unicast address in xx:xx:xx:xx:xx:xx format.");
+        if (seen.has(mac)) throw new Error("Duplicate MAC address in batch or cluster.");
+        seen.add(mac);
+      }
+    });
+  }
+}
+async function importResolveNetworks(vm) {
+  for (const [i, src] of importNetworkKeys(vm).entries()) {
+    if (importNicNetwork(vm, i, src) !== "__new_vlan__") continue;
+    const vlan = Number(importNicSettings(vm, i).vlan), node = importTarget(vm).node;
+    // Re-read before creating: another batch item or operator may already have made it.
+    state.networks = await api("/networks");
+    let existing = importAvailableNetworks(vm).find((n) => importNetworkVlan(n, node) === vlan);
+    if (!existing) {
+      const base = `vlan-${vlan}`;
+      let name = base, suffix = 2;
+      while (state.networks.some((n) => n.name === name)) name = `${base}-${suffix++}`;
+      try { existing = await post("/networks", {name, vlan}); }
+      catch (err) {
+        state.networks = await api("/networks");
+        existing = importAvailableNetworks(vm).find((n) => importNetworkVlan(n, node) === vlan);
+        if (!existing) throw err;
+      }
+      if (!state.networks.some((n) => n.name === existing.name)) state.networks.push(existing);
+    }
+    importBatch.networks.set(importNicKey(vm, i), existing.name);
+  }
+}
+function importDefaultNetwork(vm, source) {
+  const nets = importAvailableNetworks(vm);
+  return nets.find((n) => n.name === source)?.name || nets.find((n) => n.name === "default")?.name || nets[0]?.name || "";
+}
+function importOptions(items, selected) {
+  return `<option value="" ${!selected ? "selected" : ""}>Select…</option>${selected && !items.includes(selected) ? `<option value="${esc(selected)}" selected disabled>${esc(selected)} (unavailable)</option>` : ""}` + items.map((name) => `<option value="${esc(name)}" ${selected === name ? "selected" : ""}>${esc(name)}</option>`).join("");
 }
 function renderImportTargets() {
+  $("#import-bulk").hidden = importChosen().length < 2;
   $("#import-disk-targets").innerHTML = importChosen().map((vm, v) => {
     const t = importTarget(vm), locked = importBatch.submitted.has(vm.ref) ? "disabled" : "";
+    const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
+    r.cpu_sockets ??= vm.sockets && vm.cores_per_socket && vm.sockets * vm.cores_per_socket === vm.vcpus ? vm.sockets : 1;
+    r.cpu_cores ??= r.vcpus / r.cpu_sockets;
+    r.vcpus = r.cpu_sockets * r.cpu_cores;
+    importBatch.resources.set(vm.ref, r);
     const pools = state.pools.filter((p) => p.node === t.node && p.active);
-    return `<article class="mg-vm-target"><h4>${esc(vm.name)}</h4><div class="form-grid">
-      <label>Destination node<select data-target-vm="${v}" data-target-field="node" ${locked}>${computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}" ${t.node === m.name ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
-      <label class="check"><input type="checkbox" data-target-vm="${v}" data-target-field="start" ${t.start ? "checked" : ""} ${locked}>Start after import</label>
-      ${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? `<label class="check"><input type="checkbox" data-target-vm="${v}" data-target-field="clear_hibernation" ${t.clear_hibernation ? "checked" : ""} ${locked}>Clear hibernation on copied disks (SSH VMware / KVM)</label>` : ""}</div>
-      <table><thead><tr><th>Disk / Source</th><th>Storage pool</th><th>Target GiB</th><th>Change</th></tr></thead><tbody>${t.disks.map((d, i) => {
-        const source = vm.disks_gb[i], shrink = d.size_gb && source && d.size_gb < source;
-        return `<tr><td>Disk ${i + 1} · ${source || "Unknown"} GB</td><td><select data-target-vm="${v}" data-target-disk="${i}" data-target-field="pool" ${locked}>${pools.map((p) => `<option value="${esc(p.name)}" ${d.pool === p.name ? "selected" : ""}>${esc(poolText(p))}</option>`).join("")}</select></td><td><input type="number" min="1" step="1" value="${d.size_gb || ""}" placeholder="Original" data-target-vm="${v}" data-target-disk="${i}" data-target-field="size_gb" ${locked} aria-label="Disk ${i + 1} target GiB"></td><td><span class="mg-resize-badge">${shrink ? "SHRINK" : d.size_gb > source && source ? "GROW" : "Original"}</span></td></tr>`;
-      }).join("")}</tbody></table><p class="hint">Shrink requires used space +10% (at least +1 GiB), checked after conversion. NTFS, ext2/3/4 and single-volume LVM supported. XFS/btrfs/ReFS unsupported; disable BitLocker. Grow adds disk capacity; extend the guest filesystem after boot.</p></article>`;
-  }).join("");
-  $$("#import-disk-targets [data-target-field]").forEach((input) => {
-    input.onchange = () => {
-      const vm = importChosen()[Number(input.dataset.targetVm)], t = importTarget(vm), key = input.dataset.targetField;
-      if (input.dataset.targetDisk != null) t.disks[Number(input.dataset.targetDisk)][key] = key === "size_gb" ? (input.value === "" ? null : Number(input.value)) : input.value;
-      else t[key] = input.type === "checkbox" ? input.checked : input.value;
-      if (key === "pool") t.disks[Number(input.dataset.targetDisk)].defaultPool = false;
-      if (key === "node") {
-        t.defaultNode = false;
-        const pools = state.pools.filter((p) => p.node === t.node && p.active);
-        t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool)) d.pool = pools[0]?.name || ""; });
-      }
-      renderImportTargets(); importCapacity();
+    const field = (label, key, value, original, control, disk = null) => {
+      const changed = String(value ?? "") !== String(original ?? "");
+      const attrs = `data-target-vm="${v}" data-target-field="${key}" ${disk == null ? "" : `data-target-disk="${disk}"`} ${locked}`;
+      return `<div class="mg-target-field ${changed ? "is-changed" : ""}"><label>${label}${control(attrs)}</label><button type="button" class="mg-reset" data-reset-vm="${v}" data-reset-field="${key}" ${disk == null ? "" : `data-reset-disk="${disk}"`} ${!changed || locked ? "disabled" : ""} aria-label="Reset ${esc(label)}">Reset</button></div>`;
     };
-  });
+    const input = (label, key, value, original, type = "text", constraints = "") => field(label, key, value, original, (attrs) => `<input type="${type}" value="${esc(value)}" ${constraints} ${attrs}>`);
+    const initialNode = t.originalNode ?? importForm.elements.node.value;
+    const initialPool = t.originalPool ?? importForm.elements.pool.value;
+    const nicKeys = importNetworkKeys(vm);
+    const shrinking = t.disks.some((d, i) => d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i]);
+    return `<article class="mg-vm-target mg-transfer"><section class="mg-source-pane"><span class="mg-eyebrow">TARGET / CURRENT VM</span><h4>${esc(vm.name)}</h4><dl class="mg-source-specs"><div><dt>OS / firmware</dt><dd>${esc(vm.guest_os || "OS not reported")} · ${esc(vm.firmware || "Not reported")}</dd></div><div><dt>Compute</dt><dd>${vm.vcpus} vCPU · ${vm.memory_mb} MB memory</dd></div><div><dt>Power</dt><dd>${esc(vm.state || "Not reported")}</dd></div></dl><div class="mg-device-list">${nicKeys.map((net, i) => `<p>NIC ${i + 1} · ${esc(net)}${vm.macs?.[i] ? `<small>${esc(vm.macs[i])}</small>` : ""}</p>`).join("")}${(vm.disks_gb || []).map((size, i) => `<p>Disk ${i + 1} · ${size ? `${size} GiB` : "size detected after conversion"}</p>`).join("") || "<p>Disk size detected after conversion</p>"}</div></section>
+      <div class="mg-transfer-arrow" aria-hidden="true"><div class="mg-beam"><i></i><b>›</b><b>›</b><b>›</b><em>MIGRATE</em></div></div>
+      <section class="mg-target-pane"><span class="mg-eyebrow">DESTINATION / ibHiCS</span><div class="mg-target-grid">
+      ${input("VM name", "name", importBatch.names.get(vm.ref) ?? vm.name, vm.name)}
+      ${field("Node", "node", t.node, initialNode, (attrs) => `<select ${attrs}>${importOptions(computeMembers().filter((m) => m.healthy).map((m) => m.name), t.node)}</select>`)}
+      <label>Total vCPU <input type="number" value="${r.vcpus}" readonly></label>
+      ${input("Sockets", "cpu_sockets", r.cpu_sockets, vm.sockets || 1, "number", 'min="1" max="256" step="1"')}
+      ${input("Cores per socket", "cpu_cores", r.cpu_cores, vm.cores_per_socket || vm.vcpus, "number", 'min="1" max="256" step="1"')}
+      ${input("Memory (MB)", "memory_mb", r.memory_mb, vm.memory_mb, "number", 'min="128" step="1"')}
+      </div><div class="mg-target-devices">${nicKeys.map((src, i) => {
+        const n = importNicSettings(vm, i), net = importNicNetwork(vm, i, src);
+        return `<div class="mg-target-nic"><h5>NIC ${i + 1} · ${esc(src)}</h5>${field("VLAN / Network", "network", net, importDefaultNetwork(vm, src), (attrs) => `<select ${attrs}>${importNetworkOptions(vm, net)}</select>`, i)}
+        ${net === "__new_vlan__" ? field("VLAN ID", "vlan", n.vlan, "", (attrs) => `<input type="number" min="1" max="4094" step="1" value="${esc(n.vlan)}" ${attrs}>`, i) : ""}
+        ${field("MAC", "mac_mode", n.mac_mode, importDefaultMac(vm, i), (attrs) => `<select ${attrs}><option value="keep" ${n.mac_mode === "keep" ? "selected" : ""} ${!vm.macs?.[i] || vm.state !== "stopped" ? "disabled" : ""}>Keep source MAC</option><option value="new" ${n.mac_mode === "new" ? "selected" : ""}>Generate new</option><option value="custom" ${n.mac_mode === "custom" ? "selected" : ""}>Custom</option></select>`, i)}
+        ${n.mac_mode === "custom" ? field("MAC address", "mac", n.mac, "", (attrs) => `<input value="${esc(n.mac)}" placeholder="52:54:00:12:34:56" ${attrs}>`, i) : `<small>${esc(importNicMac(vm, i))}</small>`}
+        <button type="button" data-random-mac-vm="${v}" data-random-mac-nic="${i}" ${locked} title="Generate and use a random MAC">🎲</button></div>`;
+      }).join("")}
+
+      ${!t.disks.length ? field("Storage pool", "pool", t.pool, initialPool, (attrs) => `<select ${attrs}>${importOptions(pools.map((p) => p.name), t.pool)}</select>`) : ""}
+      ${t.disks.map((d, i) => {
+        const source = vm.disks_gb[i];
+        const badge = source && d.size_gb && d.size_gb !== source ? `<span class="mg-resize-badge">${d.size_gb < source ? "SHRINK" : "GROW"}</span>` : "";
+        return `<div class="mg-target-disk"><h5>Disk ${i + 1} ${badge}</h5><div class="mg-target-grid">${field("Storage pool", "pool", d.pool, initialPool, (attrs) => `<select ${attrs}>${importOptions(pools.map((p) => p.name), d.pool)}</select>`, i)}${field("Size (GiB)", "size_gb", d.size_gb, source || null, (attrs) => `<input type="number" min="1" step="1" value="${d.size_gb ?? ""}" placeholder="Keep original size" ${attrs}>`, i)}</div></div>`;
+      }).join("")}</div>${shrinking ? '<p class="hint mg-shrink-hint">Shrink needs used space +10% (minimum +1 GiB). Checked after conversion; filesystem support required.</p>' : ""}
+      <div class="mg-target-grid">${field(importBatch.replication ? "Start after cutover" : "Start after import", "start", t.start, false, (attrs) => `<input type="checkbox" ${t.start ? "checked" : ""} ${attrs}>`)}${/windows/i.test(vm.guest_os) && !$("#import-hib").hidden ? field("Clear hibernation", "clear_hibernation", t.clear_hibernation, false, (attrs) => `<input type="checkbox" ${t.clear_hibernation ? "checked" : ""} ${attrs}>`) : ""}</div></section></article>`;
+  }).join("");
+  const save = (input, reset = false) => {
+    const vm = importChosen()[Number(input.dataset[reset ? "resetVm" : "targetVm"])];
+    if (importBatch.submitted.has(vm.ref)) return;
+    const t = importTarget(vm), key = input.dataset[reset ? "resetField" : "targetField"];
+    const disk = input.dataset[reset ? "resetDisk" : "targetDisk"];
+    let value = input.type === "checkbox" ? input.checked : input.value;
+    if (["vcpus", "cpu_sockets", "cpu_cores", "memory_mb", "size_gb"].includes(key)) value = value === "" && key === "size_gb" ? null : Number(value);
+    if (reset) value = key === "name" ? vm.name : ["vcpus", "memory_mb"].includes(key) ? vm[key] : key === "node" ? t.originalNode : key === "pool" ? t.originalPool : key === "size_gb" ? vm.disks_gb[Number(disk)] || null : false;
+    if (reset && key === "cpu_sockets") value = vm.sockets || 1;
+    if (reset && key === "cpu_cores") value = vm.cores_per_socket || vm.vcpus;
+    if (["mac", "mac_mode", "vlan"].includes(key)) {
+      const n = importNicSettings(vm, Number(disk));
+      n[key] = reset ? key === "mac_mode" ? importDefaultMac(vm, Number(disk)) : "" : value;
+    } else if (key === "network") {
+      const nic = importNicKey(vm, Number(disk));
+      if (reset) importBatch.networks.delete(nic); else importBatch.networks.set(nic, value);
+    } else if (key === "name") importBatch.names.set(vm.ref, value);
+    else if (["vcpus", "cpu_sockets", "cpu_cores", "memory_mb"].includes(key)) importBatch.resources.get(vm.ref)[key] = value;
+    else if (disk != null) t.disks[Number(disk)][key] = value;
+    else t[key] = value;
+    if (key === "node") {
+      const pools = state.pools.filter((p) => p.node === t.node && p.active);
+      t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool)) d.pool = pools[0]?.name || ""; });
+      if (!pools.some((p) => p.name === t.pool)) t.pool = pools[0]?.name || "";
+    }
+    renderImportTargets(); importCapacity(); renderMigrateSummary();
+  };
+  $$("#import-disk-targets [data-random-mac-vm]").forEach((button) => { button.onclick = () => {
+    const vm = importChosen()[Number(button.dataset.randomMacVm)];
+    if (importBatch.submitted.has(vm.ref)) return;
+    const n = importNicSettings(vm, Number(button.dataset.randomMacNic));
+    n.mac_mode = "custom";
+    n.mac = "52:54:00:" + Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, "0")).join(":");
+    renderImportTargets(); renderMigrateSummary();
+  }; });
+  $$("#import-disk-targets [data-target-field]").forEach((input) => { input.onchange = () => save(input); });
+  $$("#import-disk-targets [data-reset-field]").forEach((button) => { button.onclick = () => save(button, true); });
 }
 function importCapacity() {
-  const f = importForm.elements;
-  const pool = state.pools.find((p) => p.node === f.node.value && p.name === f.pool.value && p.active);
-  const disks = importChosen().reduce((total, vm) => total + vm.disks_gb.reduce((a, b) => a + b, 0), 0);
-  let needed = disks * (["lvm", "iscsi"].includes(pool?.type) ? 2 : 1);
   let invalid = false, insufficient = false;
   const demand = new Map();
   for (const vm of importChosen()) {
-    const t = importBatch.targets.get(vm.ref);
-    if (!t) continue;
-    const scratch = t.disks[0]?.pool || f.pool.value;
+    const t = importTarget(vm);
+    const scratch = t.disks[0]?.pool || t.pool || importForm.elements.pool.value;
     const shrinking = t.disks.some((d, i) => d.size_gb && d.size_gb < vm.disks_gb[i]);
-    const add = (p, size) => { const key = JSON.stringify([t.node, p]); demand.set(key, (demand.get(key) || 0) + size); };
-    add(scratch, t.disks.reduce((sum, d, i) => sum + Math.max(d.size_gb || vm.disks_gb[i], vm.disks_gb[i]), 0) * (shrinking ? 3 : 1));
+    const add = (pool, size, unknown) => {
+      const key = JSON.stringify([t.node, pool]);
+      const entry = demand.get(key) || { size: 0, unknown: false };
+      entry.size += size; entry.unknown ||= unknown;
+      demand.set(key, entry);
+    };
+    if (!computeMembers().some((m) => m.healthy && m.name === t.node)) invalid = true;
+    add(scratch, t.disks.reduce((sum, d, i) => sum + Math.max(d.size_gb || vm.disks_gb[i] || 0, vm.disks_gb[i] || 0), 0) * (shrinking ? 3 : 1), !t.disks.length || vm.disks_gb.some((g) => !g));
     t.disks.forEach((d, i) => {
       if (d.size_gb != null && (!Number.isInteger(d.size_gb) || d.size_gb < 1)) invalid = true;
-      add(d.pool, d.size_gb || vm.disks_gb[i]);
+      add(d.pool, d.size_gb || vm.disks_gb[i] || 0, !d.size_gb && !vm.disks_gb[i]);
     });
   }
-  for (const [key, size] of demand) {
-    const [node, name] = JSON.parse(key), selected = state.pools.find((p) => p.node === node && p.name === name && p.active);
-    if (!selected) invalid = true;
-    else if (selected.available_gb < size) insufficient = true;
+  const bars = [];
+  for (const [key, entry] of demand) {
+    const [node, name] = JSON.parse(key), pool = state.pools.find((p) => p.node === node && p.name === name && p.active);
+    if (!pool) invalid = true;
+    const free = pool?.available_gb;
+    const short = Number.isFinite(free) && free < entry.size;
+    insufficient ||= short;
+    const required = entry.size ? `${entry.unknown ? "≥ " : ""}${entry.size} GiB` : "Pending detection";
+    bars.push(`<div class="mg-pool-capacity ${short || !pool ? "is-short" : ""}"><strong>${esc(node)} / ${esc(name || "Select pool")}</strong><span>${required} required · ${Number.isFinite(free) ? `${Math.floor(free)} GiB` : "Unknown"} free</span><meter min="0" max="${Math.max(free || 0, entry.size, 1)}" value="${entry.size}" aria-label="${esc(node)} / ${esc(name)} required space"></meter>${entry.unknown ? '<small>Size detected after conversion; required space may increase.</small>' : ""}</div>`);
   }
-  if (demand.size) needed = [...demand.values()].reduce((a, b) => a + b, 0);
-  const unknown = importChosen().some((v) => !v.disks_gb.length || v.disks_gb.some((g) => !g));
-  $("#import-capacity").textContent = `${disks} GB total disks; ${needed} GB required including conversion space; ${pool ? `${Math.floor(pool.available_gb)} GB free` : "select an available pool"}.${unknown ? " Warning: some disk sizes are unknown; actual space may be higher." : ""}${insufficient || (!demand.size && pool && pool.available_gb < needed) ? " Warning: insufficient free space. Choose a larger pool." : ""}`;
-  return { pool, needed, invalid, insufficient, customized: demand.size > 0 };
+  $("#import-capacity").innerHTML = bars.join("");
+  return { invalid, insufficient };
 }
 function importTargetPools() {
   const sel = importForm.elements.pool, was = sel.value;
   const pools = state.pools.filter((p) => p.node === importForm.elements.node.value && p.active);
   sel.innerHTML = pools.map((p) => `<option value="${esc(p.name)}">${esc(poolText(p))} (${Math.floor(p.available_gb)} GB free, ${esc(p.type)})</option>`).join("");
   if (pools.some((p) => p.name === was)) sel.value = was;
-  for (const t of importBatch.targets.values()) {
-    if (!t.defaultNode) continue;
-    t.node = importForm.elements.node.value;
-    t.disks.forEach((d) => { if (!pools.some((p) => p.name === d.pool) || d.defaultPool) d.pool = sel.value; });
-  }
-  if (importBatch.targets.size) renderImportTargets();
   importCapacity();
 }
-function importDefaultPool() {
-  for (const t of importBatch.targets.values()) {
-    if (t.node !== importForm.elements.node.value) continue;
-    t.disks.forEach((d) => { if (d.defaultPool) d.pool = importForm.elements.pool.value; });
+function importApplyAll() {
+  for (const vm of importChosen()) {
+    if (importBatch.submitted.has(vm.ref)) continue;
+    const t = importTarget(vm);
+    t.node = importForm.elements.node.value;
+    t.pool = importForm.elements.pool.value;
+    t.disks.forEach((d) => { d.pool = importForm.elements.pool.value; });
   }
-  if (importBatch.targets.size) renderImportTargets();
-  importCapacity();
+  renderImportTargets(); importCapacity(); renderMigrateSummary();
 }
 const importWiz = wizard("import-dialog", {
-  steps: 4,
+  steps: 3,
   reset() {
     const ctx = dialogContext;
-    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), submitted: new Set() });
+    Object.assign(importBatch, { source: ctx.source, vms: ctx.vms, picked: new Set(ctx.indices.map((i) => ctx.vms[i].ref)), names: new Map(), resources: new Map(), targets: new Map(), networks: new Map(), nicSettings: new Map(), submitted: new Set(), replication: !!ctx.replication });
+    $("#import-title").textContent = importBatch.replication ? "New replication" : "Migrate VMs";
+    $("#import-final-step").textContent = importBatch.replication ? "Schedule & review" : "Summary";
+    $("#replication-schedule").hidden = !importBatch.replication;
+    $$("#replication-schedule input").forEach((input) => { input.disabled = !importBatch.replication; });
+    $("#import-dialog .wiz-ok").textContent = importBatch.replication ? "Create replication" : "Start migration";
+    $("#import-power-hint").textContent = importBatch.replication ? "Source VMs may remain running while snapshots sync." : "Power off selected VMs at the source to continue.";
     $("#import-submit-status").textContent = "";
     importForm.elements.node.innerHTML = computeMembers().filter((m) => m.healthy).map((m) => `<option value="${esc(m.name)}">${esc(nodeOptionText(m.name))}</option>`).join("");
     importTargetPools();
@@ -5176,72 +5427,66 @@ const importWiz = wizard("import-dialog", {
   check(step) {
     const chosen = importChosen();
     if (!chosen.length) throw new Error("Select at least one VM.");
-    if (chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
+    if (!importBatch.replication && chosen.some((vm) => vm.state === "running")) throw new Error("Power off all selected VMs at the source, then refresh the inventory before migration.");
     if (step >= 2) {
-      const { pool, needed, invalid, insufficient, customized } = importCapacity();
-      if (!pool) throw new Error("Choose a healthy node and an available storage pool.");
-      if (invalid) throw new Error("Choose an available pool and a positive whole target size for every disk.");
-      if (insufficient || (!customized && pool.available_gb < needed)) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      const { invalid, insufficient } = importCapacity();
+      if (invalid) throw new Error("Choose a healthy node, an available pool, and a positive whole disk size (or leave size blank to keep the original).");
+      if (insufficient) throw new Error("Insufficient space for the selected VMs and conversion files.");
+      importValidateNics();
       const names = chosen.map((v) => importBatch.names.get(v.ref) ?? v.name);
       if (names.some((n) => !/^[a-zA-Z0-9\u0E00-\u0E7F][a-zA-Z0-9\u0E00-\u0E7F_.-]{0,62}$/.test(n))) throw new Error("VM names must be 1–63 letters (English or Thai), digits, '-', '_' or '.'.");
       if (new Set(names).size !== names.length) throw new Error("Each selected VM needs a distinct target name.");
       if (chosen.some((v) => {
         const r = importBatch.resources.get(v.ref) || v;
-        return !Number.isInteger(r.vcpus) || r.vcpus < 1 || r.vcpus > 256 || !Number.isInteger(r.memory_mb) || r.memory_mb < 128;
+        return (r.cpu_sockets != null && (!Number.isInteger(r.cpu_sockets) || r.cpu_sockets < 1)) || (r.cpu_cores != null && (!Number.isInteger(r.cpu_cores) || r.cpu_cores < 1)) || !Number.isInteger(r.vcpus) || r.vcpus < 1 || r.vcpus > 256 || !Number.isInteger(r.memory_mb) || r.memory_mb < 128;
       })) throw new Error("Choose 1–256 vCPUs and at least 128 MB memory per VM.");
       if (chosen.some((v, i) => !importBatch.submitted.has(v.ref) && (state.vms.some((vm) => vm.name === names[i]) || state.imports.some((j) => j.name === names[i] && ["queued", "running"].includes(j.state))))) throw new Error("A target name already exists or has a pending migration. Choose another name.");
     }
   },
   show(step) {
     if (step === 1) {
-      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" ? " — power off first" : ""}</td><td>${vm.disks_gb.map((g) => g ? `${g} GB` : "Unknown").join(", ")}</td></tr>`).join("");
+      $("#import-pick-vms").innerHTML = importBatch.vms.map((vm, i) => `<tr><td><input type="checkbox" data-wizard-vm="${i}" ${importBatch.picked.has(vm.ref) ? "checked" : ""} ${importBatch.submitted.size ? "disabled" : ""} aria-label="Select ${esc(vm.name)}"></td><td>${esc(vm.name)}</td><td>${esc(vm.state || "Unknown")}${vm.state === "running" && !importBatch.replication ? " — power off first" : ""}</td><td>${(vm.disks_gb || []).map((g) => g ? `${g} GiB` : "Size detected after conversion").join(", ") || "Size detected after conversion"}</td></tr>`).join("");
     }
     if (step === 2) {
-      $("#import-names").innerHTML = `<table><thead><tr><th>Source VM</th><th>New name</th><th>vCPU</th><th>Memory (MB)</th></tr></thead><tbody>${importChosen().map((vm, i) => {
-        const r = importBatch.resources.get(vm.ref) || { vcpus: vm.vcpus, memory_mb: vm.memory_mb };
-        importBatch.resources.set(vm.ref, r);
-        const lock = importBatch.submitted.has(vm.ref) ? "readonly" : "";
-        return `<tr><td>${esc(vm.name)}</td><td><input data-import-name="${i}" value="${esc(importBatch.names.get(vm.ref) ?? vm.name)}" ${lock} aria-label="New name for ${esc(vm.name)}"></td><td><input data-import-cpu="${i}" type="number" min="1" max="256" value="${r.vcpus}" ${lock} aria-label="vCPU for ${esc(vm.name)}"></td><td><input data-import-memory="${i}" type="number" min="128" step="128" value="${r.memory_mb}" ${lock} aria-label="Memory for ${esc(vm.name)}"></td></tr>`;
-      }).join("")}</tbody></table>`;
-      $$("#import-names [data-import-name]").forEach((input, i) => input.addEventListener("input", () => importBatch.names.set(importChosen()[i].ref, input.value)));
-      [["cpu", "vcpus"], ["memory", "memory_mb"]].forEach(([attr, key]) => {
-        $$(`#import-names [data-import-${attr}]`).forEach((input, i) => input.addEventListener("input", () => { importBatch.resources.get(importChosen()[i].ref)[key] = Number(input.value); }));
-      });
       const source = state.sources.find((s) => s.name === importBatch.source);
       $("#import-win").hidden = !importChosen().some((v) => /windows/i.test(v.guest_os));
-      $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings.transport || "ssh") === "ssh"));
+      $("#import-hib").hidden = !(source?.type === "kvm" || (source?.type === "vmware" && (source.settings?.transport || "ssh") === "ssh"));
       renderImportTargets();
       importCapacity();
     }
-    if (step === 3) renderImportNets();
-    if (step === 4) {
+    if (step === 3) {
       $("#import-summary").innerHTML = importChosen().map((vm) => {
         const t = importTarget(vm), r = importBatch.resources.get(vm.ref) || vm;
-        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Unknown"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>")}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicNetwork(vm, i, src))}`).join("<br>")}</p></article>`;
-      }).join("") + `<p class="hint">Keep source VMs powered off until migration completes.</p>`;
+        return `<article class="mg-vm-target"><h4>${esc(vm.name)} → ${esc(importBatch.names.get(vm.ref) ?? vm.name)}</h4><p>${esc(t.node)} · vCPU ${vm.vcpus} → ${r.vcpus} (${r.cpu_sockets || 1} × ${r.cpu_cores || r.vcpus}) · Memory ${vm.memory_mb} → ${r.memory_mb} MB · Start: ${t.start ? "Yes" : "No"} · Clear hibernation: ${t.clear_hibernation ? "Yes" : "No"}</p><p>${t.disks.map((d, i) => `Disk ${i + 1}: ${vm.disks_gb[i] || "Size detected after conversion"} → ${d.size_gb || "Original"} GiB / ${esc(d.pool)} ${d.size_gb && vm.disks_gb[i] && d.size_gb < vm.disks_gb[i] ? "SHRINK" : vm.disks_gb[i] && d.size_gb > vm.disks_gb[i] ? "GROW" : ""}`).join("<br>") || `Storage pool: ${esc(t.pool)} · size detected after conversion`}</p><p>${importNetworkKeys(vm).map((src, i) => `NIC ${i + 1}: ${esc(src)} → ${esc(importNicLabel(vm, i, src))} · MAC ${esc(importNicMac(vm, i))}`).join("<br>")}</p></article>`;
+      }).join("") + `<p class="hint">${importBatch.replication ? "Sync starts immediately. Shut down the source only when ready for cutover." : "Keep source VMs powered off until migration completes."}</p>`;
     }
   },
 });
-$("#import-pick-vms").addEventListener("change", (e) => {
+$("#import-pick-vms").onchange = (e) => {
   const input = e.target.closest("[data-wizard-vm]");
   if (!input) return;
   const ref = importBatch.vms[Number(input.dataset.wizardVm)].ref;
   if (input.checked) importBatch.picked.add(ref); else importBatch.picked.delete(ref);
-});
-importForm.elements.node.addEventListener("change", importTargetPools);
-importForm.elements.pool.addEventListener("change", importDefaultPool);
+};
+importForm.elements.node.onchange = () => { importTargetPools(); importApplyAll(); };
+importForm.elements.pool.onchange = importApplyAll;
 
 handlers["import-dialog"] = async (f) => {
-  if (importWiz.step !== 4) throw new Error("Review the migration summary first.");
-  importWiz.check(4);
+  if (importWiz.step !== 3) throw new Error("Review the migration summary first.");
+  importWiz.check(3);
   const chosen = importChosen();
   for (const vm of chosen) {
     if (importBatch.submitted.has(vm.ref)) continue;
     try {
+      await importResolveNetworks(vm);
       const t = importBatch.targets.get(vm.ref);
-      await post("/migrate/jobs", {
+      const schedule = importBatch.replication ? (f.get("replication_at") ? {at: f.get("replication_at")} : {interval_minutes: Number(f.get("replication_interval"))}) : undefined;
+      await post(importBatch.replication ? "/migrate/replications" : "/migrate/jobs", {
+        ...(schedule ? {schedule} : {}),
+        cpu_sockets: (importBatch.resources.get(vm.ref) || {}).cpu_sockets || 1,
+        cpu_cores: (importBatch.resources.get(vm.ref) || {}).cpu_cores || (importBatch.resources.get(vm.ref) || vm).vcpus,
         source: importBatch.source, vm: vm.ref, name: importBatch.names.get(vm.ref) ?? vm.name,
-        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), start: t ? t.start : f.get("start") === "on",
+        node: t?.node || f.get("node"), pool: t?.disks[0]?.pool || t?.pool || f.get("pool"), disks: t?.disks.length ? t.disks.map((d) => ({pool: d.pool, size_gb: d.size_gb})) : undefined, vcpus: (importBatch.resources.get(vm.ref) || vm).vcpus, memory_mb: (importBatch.resources.get(vm.ref) || vm).memory_mb, network: importNetworkKeys(vm).map((k, i) => importNicNetwork(vm, i, k)), nics: importNetworkKeys(vm).length ? importNetworkKeys(vm).map((k, i) => ({network: importNicNetwork(vm, i, k), mac_mode: importNicSettings(vm, i).mac_mode, mac: importNicSettings(vm, i).mac_mode === "custom" ? importNicSettings(vm, i).mac.toLowerCase() : null})) : undefined, start: t ? t.start : f.get("start") === "on",
         clear_hibernation: (t ? t.clear_hibernation : f.get("clear_hibernation") === "on") && /windows/i.test(vm.guest_os) && !$("#import-hib").hidden,
       });
       importBatch.submitted.add(vm.ref);
@@ -5251,9 +5496,9 @@ handlers["import-dialog"] = async (f) => {
       throw err;
     }
   }
-  toast(`${chosen.length} migration jobs created.`);
+  toast(`${chosen.length} ${importBatch.replication ? "replication" : "migration"} jobs created.`);
   await refresh("migrate");
-  selectTab("migrate-tabs", "imports");
+  selectTab("migrate-tabs", importBatch.replication ? "replications" : "imports");
 };
 
 // ---------- settings ----------

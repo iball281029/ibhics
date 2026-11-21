@@ -838,3 +838,11 @@ def test_import_log_summary_download_and_missing_job(env, monkeypatch):
     assert client.get(url + "?format=unknown").status_code == 422
     for query in ("", "?format=summary", "?download=1"):
         assert client.get("/api/v1/migrate/jobs/missing/log" + query).status_code == 404
+
+
+@pytest.mark.parametrize("size,expected", [("512M", 1), ("1.1G", 2), ("2G", 2)])
+def test_proxmox_disk_capacity_rounds_up(size, expected):
+    from ibhics.importer.kvm import parse_qm_config
+
+    vm, _ = parse_qm_config("101", f"scsi0: local:disk,size={size}")
+    assert vm.disks_gb == [expected]

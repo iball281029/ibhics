@@ -60,6 +60,21 @@ class NicSpec:
 VIDEO_MODELS = ("virtio", "vga", "qxl", "cirrus")
 
 
+ADVANCED_FIELDS = (
+    "cpu_sockets",
+    "cpu_cores",
+    "cpu_mode",
+    "tpm",
+    "mouse",
+    "keymap",
+    "boot_menu_seconds",
+    "restart_on_crash",
+    "ballooning",
+    "serial_port",
+    "usb_controller",
+)
+
+
 @dataclass
 class VMSpec:
     name: str
@@ -90,7 +105,41 @@ class VMSpec:
     # older Windows, which shows a black screen with virtio), qxl or cirrus.
     video: str = "virtio"
 
+    cpu_sockets: int | None = None
+    cpu_cores: int | None = None
+    cpu_mode: str = "default"
+    mouse: str = "tablet"
+    keymap: str = "default"
+    boot_menu_seconds: int = 0
+    restart_on_crash: bool = True
+    ballooning: bool = True
+    serial_port: bool = True
+    usb_controller: bool = False
+    machine_type: str = "q35"
+    secure_boot: bool = False
+    tpm: bool = False
+
     def validate(self) -> None:
+        if (self.cpu_sockets is None) != (self.cpu_cores is None):
+            raise ValueError("CPU sockets and cores must be provided together")
+        if self.cpu_sockets is not None and (
+            self.cpu_sockets < 1
+            or self.cpu_cores < 1
+            or self.cpu_sockets * self.cpu_cores != self.vcpus
+        ):
+            raise ValueError("vcpus must equal sockets multiplied by cores")
+        if self.cpu_mode not in ("default", "host-passthrough"):
+            raise ValueError("unsupported CPU mode")
+        if self.mouse not in ("tablet", "ps2"):
+            raise ValueError("unsupported mouse")
+        if self.keymap not in ("default", "en-us", "en-gb", "de", "fr", "es", "it", "ja", "th"):
+            raise ValueError("unsupported VNC keymap")
+        if not 0 <= self.boot_menu_seconds <= 60:
+            raise ValueError("boot menu delay must be between 0 and 60 seconds")
+        if self.machine_type not in ("q35", "i440fx"):
+            raise ValueError("unsupported machine type")
+        if self.secure_boot and (self.firmware != Firmware.UEFI or self.machine_type != "q35"):
+            raise ValueError("Secure Boot requires UEFI and Q35")
         if self.video not in VIDEO_MODELS:
             raise ValueError(f"video is one of {', '.join(VIDEO_MODELS)}")
         if len(self.os_type) > 64:
@@ -411,11 +460,31 @@ class VMEdit:
     nics: list[NicEdit] | None = None
     # Removing a disk detaches it; this also deletes its volume and data.
     delete_removed_disks: bool = False
+    cpu_sockets: int | None = None
+    cpu_cores: int | None = None
+    cpu_mode: str | None = None
+    tpm: bool | None = None
+    mouse: str | None = None
+    keymap: str | None = None
+    boot_menu_seconds: int | None = None
+    restart_on_crash: bool | None = None
+    ballooning: bool | None = None
+    serial_port: bool | None = None
+    usb_controller: bool | None = None
 
     def apply_to(self, spec: VMSpec) -> VMSpec:
         """The VMSpec this edit asks for, validated; disks and NICs are checked apart."""
         new = VMSpec(**{**spec.__dict__})
-        for name in ("description", "os_type", "vcpus", "memory_mb", "boot", "autostart", "video"):
+        for name in (
+            "description",
+            "os_type",
+            "vcpus",
+            "memory_mb",
+            "boot",
+            "autostart",
+            "video",
+            *ADVANCED_FIELDS,
+        ):
             if getattr(self, name) is not None:
                 setattr(new, name, getattr(self, name))
         new.validate()
@@ -513,6 +582,32 @@ class MigrationFailed(RuntimeError):
 
 class HypervisorDriver(abc.ABC):
     """Operations every node must support. The manager talks only to this interface."""
+
+    def hardware_capabilities(self) -> dict:
+        return {
+            "tpm": False,
+            "secure_boot": False,
+            "keymaps": ["default", "en-us", "en-gb", "de", "fr", "es", "it", "ja"],
+        }
+
+    def validate_hardware(self, spec: VMSpec, previous: VMSpec | None = None) -> None:
+        caps = self.hardware_capabilities()
+        if spec.tpm and not (previous and previous.tpm) and not caps.get("tpm"):
+            raise ValueError("TPM 2.0 requires swtpm on the selected node")
+        if (
+            spec.secure_boot
+            and not (previous and previous.secure_boot)
+            and not caps.get("secure_boot")
+        ):
+            raise ValueError(
+                "Secure Boot requires OVMF firmware with enrolled keys on the selected node"
+            )
+        if (
+            spec.keymap == "th"
+            and not (previous and previous.keymap == "th")
+            and "th" not in caps.get("keymaps", [])
+        ):
+            raise ValueError("Thai VNC keymap is not available on the selected node")
 
     @abc.abstractmethod
     def host_info(self) -> HostInfo: ...

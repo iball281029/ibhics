@@ -18,6 +18,7 @@ from .auth import Auth
 from .backups import BackupManager
 from .imports import ImportManager
 from .migrations import TRANSPORTS, MigrationManager
+from .replications import ReplicationManager
 from .usage import UsageHistory
 from .vmgroups import VMGroups
 
@@ -170,6 +171,8 @@ def main() -> None:
 
     imports = ImportManager(cluster, state_path=args.migrate_state_file)
     imports.load()
+    replications = ReplicationManager(imports, args.state_file.with_name("replications.json"))
+    replications.load()
 
     groups = VMGroups(state_path=args.groups_file)
     groups.load()
@@ -182,6 +185,7 @@ def main() -> None:
         migrations=migrations,
         auth=auth,
         imports=imports,
+        replications=replications,
         groups=groups,
         recycle_days=args.recycle_days,
         edge_state=Path("/var/lib/ibhics/edge.json") if args.driver == "libvirt" else None,
@@ -221,6 +225,7 @@ def _state_files(args) -> list[Path]:
         args.users_file.with_name("sessions.json"),
         args.groups_file,
         args.migrate_state_file,
+        state.with_name("replications.json"),
         state.with_name("pool-labels.json"),
         state.with_name("ha.json"),
         state.with_name("p2v.json"),

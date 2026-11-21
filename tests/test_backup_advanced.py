@@ -309,7 +309,8 @@ def test_rest_api_synthetic_copy_archive_restore_and_policy(tmp_path):
     assert client.delete("/api/v1/backup/targets/secondary").status_code == 422
 
 
-def test_checkpoint_pull_capture_establishes_base_and_incremental(monkeypatch, tmp_path):
+@pytest.mark.parametrize("tuned", [False, True])
+def test_checkpoint_pull_capture_establishes_base_and_incremental(monkeypatch, tmp_path, tuned):
     import sys
     import types
     import xml.etree.ElementTree as ET
@@ -344,9 +345,11 @@ def test_checkpoint_pull_capture_establishes_base_and_incremental(monkeypatch, t
             return True
 
         def XMLDesc(self, flags):
+            threads = "<iothreads>1</iothreads>" if tuned else ""
+            tuning = " cache='none' io='native' iothread='1'" if tuned else ""
             return (
-                "<domain><devices><disk device='disk'><driver type='qcow2'/>"
-                "<target dev='vda'/></disk></devices></domain>"
+                f"<domain>{threads}<devices><disk device='disk'><driver type='qcow2'{tuning}/>"
+                "<target dev='vda' bus='virtio'/></disk></devices></domain>"
             )
 
         def backupBegin(self, xml, checkpoint):

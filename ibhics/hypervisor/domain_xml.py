@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from .base import DiskSpec, Firmware, NicSpec, VMSpec
+from .base import ADVANCED_FIELDS, DiskSpec, Firmware, NicSpec, VMSpec
 from .pool_xml import vg_name
 
 DISK_DEVS = "abcdefghijklmnopqrstuvwxyz"
@@ -73,13 +73,13 @@ def cdrom_element(iso: str | None, dev: str = "sda") -> ET.Element:
     return cdrom
 
 
-def disk_element(disk: DiskSpec, volume: str, dev: str) -> ET.Element:
+def disk_element(disk: DiskSpec, volume: str, dev: str, iothread: str | None = None) -> ET.Element:
     # Block disks name the LV itself: Debian's virt-aa-helper does not resolve
     # <source pool volume> for logical pools, so AppArmor would deny QEMU the device.
     # The domain metadata keeps which pool and volume the disk is.
     block = disk.backend == "block"
     disk_el = ET.Element("disk", type="block" if block else "volume", device="disk")
-    ET.SubElement(
+    driver = ET.SubElement(
         disk_el,
         "driver",
         name="qemu",
@@ -87,12 +87,56 @@ def disk_element(disk: DiskSpec, volume: str, dev: str) -> ET.Element:
         cache="none",
         discard="unmap",
     )
+    if disk.bus == "virtio":
+        driver.set("io", "native")
+        if iothread is not None:
+            driver.set("iothread", iothread)
     if block:
         ET.SubElement(disk_el, "source", dev=f"/dev/{vg_name(disk.pool)}/{volume}")
     else:
         ET.SubElement(disk_el, "source", pool=disk.pool, volume=volume)
     ET.SubElement(disk_el, "target", dev=dev, bus=disk.bus)
     return disk_el
+
+
+def disk_iothread_ids(root: ET.Element) -> set[str]:
+    """Include explicit IDs and the IDs libvirt fills in up to the thread count."""
+    count = int(root.findtext("iothreads", "0"))
+    ids = {int(el.get("id")) for el in root.findall("iothreadids/iothread")}
+    candidate = 1
+    while len(ids) < count:
+        ids.add(candidate)
+        candidate += 1
+    return {str(i) for i in ids} if count > 0 else set()
+
+
+def normalize_disk_io(root: ET.Element) -> bool:
+    """Fill missing virtio disk tuning in an offline definition; keep user choices."""
+    changed = False
+    for disk in root.findall("devices/disk[@device='disk']"):
+        target, driver = disk.find("target"), disk.find("driver")
+        if (
+            target is None
+            or target.get("bus") != "virtio"
+            or driver is None
+            or driver.get("cache") != "none"
+            or driver.get("name") != "qemu"
+        ):
+            continue
+        for key, value in (("io", "native"), ("discard", "unmap")):
+            if driver.get(key) is None:
+                driver.set(key, value)
+                changed = True
+        if driver.get("iothread") is not None or driver.find("iothreads") is not None:
+            continue
+        if root.find("iothreads") is None:
+            ET.SubElement(root, "iothreads").text = "1"
+            changed = True
+        ids = disk_iothread_ids(root)
+        if ids:
+            driver.set("iothread", min(ids, key=int))
+            changed = True
+    return changed
 
 
 def nic_element(nic: NicSpec) -> ET.Element:
@@ -217,13 +261,24 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         max(MAX_VCPUS, spec.vcpus)
     )
 
+    if any(disk.bus == "virtio" for disk in spec.disks):
+        ET.SubElement(dom, "iothreads").text = "1"
+
     os_attrs = {"firmware": "efi"} if spec.firmware == Firmware.UEFI else {}
     os_el = ET.SubElement(dom, "os", **os_attrs)
-    ET.SubElement(os_el, "type", arch="x86_64", machine="q35").text = "hvm"
+    ET.SubElement(
+        os_el, "type", arch="x86_64", machine="q35" if spec.machine_type == "q35" else "pc"
+    ).text = "hvm"
     for dev in spec.boot or (["cdrom", "hd"] if spec.iso else ["hd"]):
         ET.SubElement(os_el, "boot", dev=dev)
 
+    if spec.secure_boot:
+        firmware = ET.SubElement(os_el, "firmware")
+        ET.SubElement(firmware, "feature", enabled="yes", name="secure-boot")
+        ET.SubElement(firmware, "feature", enabled="yes", name="enrolled-keys")
     features = ET.SubElement(dom, "features")
+    if spec.secure_boot:
+        ET.SubElement(features, "smm", state="on")
     ET.SubElement(features, "acpi")
     ET.SubElement(features, "apic")
     # host-model keeps live migration possible between nodes with different CPU generations.
@@ -247,7 +302,7 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
         volume = volume_name(spec.name, index, disk)
         # SATA disks (older Windows with no virtio driver) come after the two CD drives.
         dev = f"vd{DISK_DEVS[index]}" if disk.bus == "virtio" else f"sd{DISK_DEVS[index + 2]}"
-        devices.append(disk_element(disk, volume, dev))
+        devices.append(disk_element(disk, volume, dev, iothread="1"))
         ET.SubElement(meta, f"{{{META_NS}}}disk", dev=dev, pool=disk.pool, volume=volume)
 
     # A CD drive is always there (empty without an ISO), so a disc such as the guest
@@ -270,4 +325,107 @@ def build_domain_xml(spec: VMSpec, uuid: str | None = None) -> str:
     ET.SubElement(channel, "target", type="virtio", name="org.qemu.guest_agent.0")
     ET.SubElement(devices, "memballoon", model="virtio")
 
+    apply_hardware_xml(dom, spec)
     return ET.tostring(dom, encoding="unicode")
+
+
+def apply_hardware_xml(
+    root: ET.Element, spec: VMSpec, fields: tuple[str, ...] = ADVANCED_FIELDS
+) -> None:
+    """Apply managed hardware without replacing device addresses or storage XML."""
+    cpu = root.find("cpu")
+    if cpu is None:
+        cpu = ET.SubElement(root, "cpu")
+    if "cpu_mode" in fields:
+        # "default" keeps the CPU model the VM had before, which live-migrates between
+        # nodes with different CPUs; host-passthrough pins it to this host's CPU.
+        if spec.cpu_mode == "default":
+            if cpu.get("mode") == "host-passthrough":
+                cpu.attrib.pop("mode")
+        else:
+            cpu.set("mode", spec.cpu_mode)
+            for attr in ("match", "check"):
+                cpu.attrib.pop(attr, None)
+            for tag in ("model", "vendor", "feature"):
+                for el in cpu.findall(tag):
+                    cpu.remove(el)
+    if "cpu_sockets" in fields or "cpu_cores" in fields:
+        for el in cpu.findall("topology"):
+            cpu.remove(el)
+        if spec.cpu_sockets is not None:
+            # A fixed topology describes the full CPU capacity. Growing it is an offline edit.
+            ET.SubElement(
+                cpu,
+                "topology",
+                sockets=str(spec.cpu_sockets),
+                cores=str(spec.cpu_cores),
+                threads="1",
+            )
+            vcpu = root.find("vcpu")
+            vcpu.text = str(spec.vcpus)
+            vcpu.set("current", str(spec.vcpus))
+            cell = cpu.find("numa/cell")
+            if cell is not None:
+                cell.set("cpus", "0" if spec.vcpus == 1 else f"0-{spec.vcpus - 1}")
+    os_el = root.find("os")
+    if "boot_menu_seconds" in fields:
+        for el in os_el.findall("bootmenu"):
+            os_el.remove(el)
+        if spec.boot_menu_seconds:
+            ET.SubElement(
+                os_el, "bootmenu", enable="yes", timeout=str(spec.boot_menu_seconds * 1000)
+            )
+    if "restart_on_crash" in fields:
+        crash = root.find("on_crash")
+        if crash is None:
+            crash = ET.SubElement(root, "on_crash")
+        crash.text = "restart" if spec.restart_on_crash else "destroy"
+    devices = root.find("devices")
+    if "keymap" in fields:
+        graphics = devices.find("graphics[@type='vnc']")
+        if graphics is not None:
+            graphics.attrib.pop("keymap", None)
+            if spec.keymap != "default":
+                graphics.set("keymap", spec.keymap)
+    if "mouse" in fields:
+        for el in devices.findall("input"):
+            if el.get("type") in ("tablet", "mouse"):
+                devices.remove(el)
+        ET.SubElement(
+            devices,
+            "input",
+            type="tablet" if spec.mouse == "tablet" else "mouse",
+            bus="usb" if spec.mouse == "tablet" else "ps2",
+        )
+    if "ballooning" in fields:
+        for el in devices.findall("memballoon"):
+            devices.remove(el)
+        ET.SubElement(devices, "memballoon", model="virtio" if spec.ballooning else "none")
+    if "serial_port" in fields:
+        if not spec.serial_port:
+            for tag in ("serial", "console"):
+                for el in devices.findall(tag):
+                    devices.remove(el)
+        elif devices.find("serial") is None:
+            serial = ET.SubElement(devices, "serial", type="pty")
+            ET.SubElement(serial, "target", port="0")
+        if spec.serial_port and devices.find("console") is None:
+            console = ET.SubElement(devices, "console", type="pty")
+            ET.SubElement(console, "target", type="serial", port="0")
+    if "usb_controller" in fields and spec.usb_controller:
+        # A USB controller is normally auto-added by libvirt; request one explicitly.
+        if devices.find("controller[@type='usb'][@model='qemu-xhci']") is None:
+            controllers = devices.findall("controller[@type='usb']")
+            index = max((int(el.get("index", "0")) for el in controllers), default=-1) + 1
+            ET.SubElement(devices, "controller", type="usb", model="qemu-xhci", index=str(index))
+    elif "usb_controller" in fields:
+        for el in devices.findall("controller[@type='usb'][@model='qemu-xhci']"):
+            devices.remove(el)
+    if "tpm" in fields:
+        for el in devices.findall("tpm"):
+            devices.remove(el)
+        if spec.tpm:
+            tpm = ET.SubElement(
+                devices, "tpm", model="tpm-crb" if spec.machine_type == "q35" else "tpm-tis"
+            )
+            ET.SubElement(tpm, "backend", type="emulator", version="2.0")
