@@ -260,18 +260,3 @@ $("#notification-test").onclick = async e => {
   } catch (err) { $("#notification-result").textContent = err.message; }
   finally { e.target.disabled = false; }
 };
-let visibleNotificationIds = [];
-async function refreshNotifications() {
-  try {
-    const data = await api("/notifications");
-    visibleNotificationIds = data.events.map(e => e.id);
-    $("#notification-count").textContent = data.unread;
-    $("#notification-list").innerHTML = data.events.map(e => `<article class="notification-item ${e.read ? "is-read" : ""} ${esc(e.level)}"><b>${esc(e.level)} · ${esc(e.category)}</b><p>${esc(e.message)}</p><small>${esc(new Date(e.time).toLocaleString())}</small></article>`).join("") || '<p class="hint">No notifications</p>';
-  } catch (_) { /* Poll again after sign-in or connection recovery. */ }
-}
-$("#notifications-read").onclick = async () => {
-  try { await post("/notifications/read", {ids:visibleNotificationIds}); await refreshNotifications(); }
-  catch (err) { fail(err); }
-};
-setTimeout(refreshNotifications, 1000);
-setInterval(refreshNotifications, 30000);

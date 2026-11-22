@@ -17,6 +17,7 @@
 <link rel="stylesheet" href="cluster.css">
 <link rel="stylesheet" href="node.css">
 <link rel="stylesheet" href="settings.css">
+<link rel="stylesheet" href="alerts.css">
 <link rel="stylesheet" href="backup.css">
 </head>
 <body class="command-workspace spatial-workspace">
@@ -77,7 +78,7 @@
   <header class="appbar">
     <a class="brand brand-holo" href="#home" aria-label="ibHiCS home"><span class="brand-corner" aria-hidden="true"></span><span class="brand-word"><span class="brand-ib">ib</span><span class="brand-hics">HiCS</span></span><small>HYPER-CONVERGED</small></a>
     <span class="spacer"></span>
-    <details class="notification-menu"><summary aria-label="Notifications">🔔 <span id="notification-count">0</span></summary><div class="notification-panel st-panel"><button type="button" id="notifications-read">Mark all read</button><div id="notification-list" aria-live="polite"></div></div></details>
+    <details class="notification-menu"><summary aria-label="Notifications">🔔 <span id="notification-count">0</span></summary><div class="notification-panel st-panel"><div class="notification-toolbar"><a href="#alerts">View all alerts →</a><button type="button" id="notifications-read">Mark all read</button></div><div id="notification-list" aria-live="polite"></div></div></details>
     <div class="menu-btn meta" id="tasks-menu" tabindex="0">
       <small>Tasks</small><span id="tasks-count"><span class="dot"></span> None running</span>
       <div class="dropdown tasks-panel" id="tasks-panel"></div>
@@ -828,6 +829,16 @@
       <div class="sheet">
         <div class="page-head"><h1>Activity</h1><span class="sub">Backups, restores, live migrations and imports across the cluster</span></div>
         <ul class="feed" id="activity-feed" style="margin-top:14px"></ul>
+      </div>
+    </section>
+
+    <section class="page" id="page-alerts">
+      <div class="sheet">
+        <div class="page-head"><div><span class="st-eyebrow">CONTROL / ALERTS</span><h1>Alerts</h1><p id="alerts-summary" class="hint">Loading alert history…</p></div><span class="spacer"></span><a href="#system" data-tab-link="notifications" class="admin-only">Notification settings</a><button type="button" id="alerts-refresh">Refresh</button></div>
+        <p class="hint">Reading an alert does not resolve its cause. Open its details to check the related resource.</p>
+        <div class="alerts-filters"><label>Search<input id="alerts-search" type="search" placeholder="Message, node or event…"></label><label>Severity<select id="alerts-level"><option value="">All severities</option><option value="critical">Critical</option><option value="warning">Warning</option><option value="info">Info</option></select></label><label>Category<select id="alerts-category"><option value="">All categories</option></select></label><label>Read status<select id="alerts-read-filter"><option value="">All alerts</option><option value="unread">Unread</option><option value="read">Read</option></select></label></div>
+        <p id="alerts-error" role="status"></p>
+        <div class="alerts-layout"><div class="alerts-history"><div class="toolbar"><span id="alerts-result-count" role="status"></span><span class="spacer"></span><button id="alerts-read-visible" type="button" disabled>Mark filtered alerts as read</button></div><div id="alerts-list" class="alerts-list"></div></div><aside id="alert-detail" class="st-panel alert-detail" aria-label="Alert details" hidden></aside></div>
       </div>
     </section>
 
@@ -1898,6 +1909,7 @@
 <script src="network-core.js"></script>
 <script src="app.js"></script>
 <script src="settings.js"></script>
+<script src="alerts.js"></script>
 <script src="virtual-storage.js"></script>
 <script src="storage-navigation.js"></script>
 <script src="spatial.js"></script>

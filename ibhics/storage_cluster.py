@@ -374,11 +374,31 @@ class StorageController:
                 )
             except Exception as exc:
                 error = str(exc)
+        # The active manager can move independently of the storage controller.
+        # Ask authenticated compute agents for the original controller's view;
+        # never provision storage or infer a healthy mirror from a mounted NFS pool.
+        owner = next((m.name for m in self.cluster.members() if m.local), None)
+        if not created or error:
+            for member in self.cluster.compute_members():
+                if member.local or not self.cluster.is_healthy(member):
+                    continue
+                try:
+                    peer = remote(member, "GET", "/virtual-storage/manager-status")
+                    peer_created = peer.get("created")
+                    if not peer_created or (created and peer_created != created):
+                        continue
+                    created = peer_created
+                    resource, error = peer.get("resource"), peer.get("error")
+                    owner = member.name
+                    break
+                except Exception:
+                    continue
         return {
             "created": created,
             "resource": resource,
             "error": error,
             "job": self.jobs.current(),
+            "controller_node": owner if created else None,
         }
 
     def cache(self):

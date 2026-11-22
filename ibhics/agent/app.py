@@ -212,6 +212,29 @@ def create_agent_app(
 
     if role == NodeRole.COMPUTE:
 
+        @api.get("/virtual-storage/manager-status")
+        def storage_manager_status() -> dict:
+            import json
+
+            from ..storage_cluster import StorageController
+
+            path = storage_root.with_name("virtual-storage-runtime") / "created.json"
+            created = json.loads(path.read_text()) if path.exists() else None
+            resource, error = None, None
+            if created:
+                try:
+                    resource = next(
+                        (
+                            r
+                            for r in StorageController._gateway()
+                            if r["name"] == created["spec"]["name"]
+                        ),
+                        None,
+                    )
+                except Exception:
+                    error = "Storage controller status is unavailable"
+            return {"created": created, "resource": resource, "error": error}
+
         @api.get("/hardware-capabilities")
         def hardware_capabilities() -> dict:
             return driver.hardware_capabilities()
