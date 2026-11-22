@@ -69,6 +69,19 @@ class NBDReader:
             offset = cursor
 
 
+def _sweep_scratch(base: Path, older_than: float = 3600) -> None:
+    """Remove scratch folders left by earlier backups (best effort)."""
+    import shutil
+    import time
+
+    for leftover in base.glob("cbt-*"):
+        try:
+            if time.time() - leftover.stat().st_mtime > older_than:
+                shutil.rmtree(leftover, ignore_errors=True)
+        except OSError:
+            pass
+
+
 @contextmanager
 def capture(driver, uuid, parent=None):
     try:
@@ -101,8 +114,12 @@ def capture(driver, uuid, parent=None):
     staging = getattr(driver, "_backup_staging", None)
     base = staging(disks) if staging else Path(driver.scratch_dir)
     base.mkdir(parents=True, exist_ok=True)
+    _sweep_scratch(base)
     handles, started = [], False
-    with TemporaryDirectory(prefix="cbt-", dir=base) as directory:
+    # On NFS, QEMU may still hold a deleted scratch file for a moment after the job ends
+    # (.nfs* silly-rename), so the folder cannot be removed yet. That must not fail a
+    # finished backup; the next run sweeps the leftover folder.
+    with TemporaryDirectory(prefix="cbt-", dir=base, ignore_cleanup_errors=True) as directory:
         from .libvirt_driver import _qemu_may_write
 
         _qemu_may_write(Path(directory))
