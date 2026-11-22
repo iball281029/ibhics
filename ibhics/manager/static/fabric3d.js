@@ -273,8 +273,10 @@ function beam(a, b, color, height = 3) {
 // ---------- a stage: renderer, bloom, labels, controls, loop ----------
 
 class Stage {
-  constructor(container, { controls = true, distance = 40, fov = 45, bloom = 0.75, frameRadius = 0 } = {}) {
+  constructor(container, { controls = true, distance = 40, fov = 45, bloom = 0.75, frameRadius = 0, themeAware = false } = {}) {
     this.container = container;
+    this.themeAware = themeAware;
+    this.materialThemes = new WeakMap();
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
     this.renderer.setClearColor(0x020a14, bloom ? 1 : 0);
@@ -337,7 +339,31 @@ class Stage {
   }
   tick(dt, t) {
     const still = reduced.matches;
+    const light = this.themeAware && document.documentElement.dataset.theme === "light";
     this.scene.traverse((o) => {
+      if (this.themeAware && o.material) {
+        for (const material of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (!material.color) continue;
+          let original = this.materialThemes.get(material);
+          if (!original) {
+            original = {color:material.color.clone(), blending:material.blending, light:false};
+            this.materialThemes.set(material, original);
+          }
+          if (original.light !== light) {
+            if (light) {
+              const hsl = original.color.getHSL({});
+              if (hsl.s < 0.12) material.color.set(0x344b68);
+              else material.color.setHSL(hsl.h, Math.min(0.76, Math.max(0.48, hsl.s)), 0.29);
+              material.blending = THREE.NormalBlending;
+            } else {
+              material.color.copy(original.color);
+              material.blending = original.blending;
+            }
+            original.light = light;
+            material.needsUpdate = true;
+          }
+        }
+      }
       const u = o.userData;
       if (u.spin && !still) o.rotation.y += u.spin * dt;
       if (u.spinSelf && !still) { o.rotation.y += u.spinSelf * dt; o.rotation.x += u.spinSelf * 0.4 * dt; }
@@ -526,7 +552,7 @@ function inside(container) {
 // ---------- Overview pictures ----------
 
 function hero(container, kind) {
-  const stage = new Stage(container, { controls: false, distance: 16, fov: 36, bloom: 0 });
+  const stage = new Stage(container, { controls: false, distance: 16, fov: 36, bloom: 0, themeAware: true });
   stage.scene.fog = null;
   const root = stage.root, spin = new THREE.Group(); spin.userData.spin = 0.3; root.add(spin);
   if (kind === "compute") {
