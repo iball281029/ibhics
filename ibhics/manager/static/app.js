@@ -5840,7 +5840,7 @@ function renderUsers() {
     <td>${esc(when(u.created))}</td>
     <td><div class="actions">${u.name === me || (u.role === "admin" && !isAdmin()) ? "" : `
       <button class="small" data-user-reset="${esc(u.name)}">Reset password</button>
-      ${isAdmin() ? `<button class="small" data-user-twofa="${esc(u.name)}" ${u.totp_enabled ? "" : 'disabled title="2FA is not turned on for this user"'}>Reset 2FA</button>` : ""}
+      ${isAdmin() ? (u.totp_enabled || u.require_2fa ? `<button class="small" data-user-tfa-off="${esc(u.name)}" title="Turn 2FA off for this user; no code at sign-in">Turn off 2FA</button>` : `<button class="small" data-user-tfa-on="${esc(u.name)}" title="This user must set up 2FA at the next sign-in">Require 2FA</button>`) : ""}
       <button class="small" data-user-toggle="${esc(u.name)}" data-enabled="${u.enabled}">${u.enabled ? "Disable" : "Enable"}</button>
       <button class="small danger" data-user-del="${esc(u.name)}">Delete</button>`}</div></td>
   </tr>`).join("") : empty(6, state.me ? "No users" : "Sign-in is off on this manager");
@@ -5864,7 +5864,12 @@ $("#users").addEventListener("change", async (e) => {
 $("#users").addEventListener("click", async (e) => {
   const d = e.target.closest("button")?.dataset || {};
   try {
-    if (d.userTwofa) {
+    if (d.userTfaOn || d.userTfaOff) {
+      const name = d.userTfaOn || d.userTfaOff, on = !!d.userTfaOn;
+      if (!on && !confirm(`Turn off 2FA for ${name}? They will sign in with the password only.`)) return;
+      await patch(`/users/${enc(name)}`, { require_2fa: on });
+      toast(on ? `${name} must set up 2FA at the next sign-in` : `2FA turned off for ${name}`);
+    } else if (d.userTwofa) {
       openTwofaReset(d.userTwofa);
       return;
     } else if (d.userReset) {

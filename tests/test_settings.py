@@ -1254,3 +1254,16 @@ def test_node_health_requires_expected_application_versions(
     monkeypatch.setattr("ibhics.updater.time.sleep", lambda _: None)
     monkeypatch.setenv("IBHICS_AGENT_HOST", "127.0.0.1")
     assert NodeApplicationUpdater(tmp_path).health("new") is expected
+
+
+def test_admin_can_require_and_turn_off_2fa_per_user(tmp_path):
+    from ibhics.manager.auth import Auth
+
+    auth = Auth(tmp_path / "users.json")
+    auth.bootstrap("Adm1n-password!", must_change=False)
+    auth.add_user("bob", "operator", "Bob-password-1!")
+    assert auth.update_user("bob", require_totp=True).require_totp is True
+    again = Auth(tmp_path / "users.json")
+    again.load()
+    assert again.user("bob").require_totp is True
+    assert auth.update_user("bob", require_totp=False).require_totp is False

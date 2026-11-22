@@ -68,6 +68,7 @@ class User:
     totp_pending_until: float = 0
     totp_last_step: int = -1
     recovery_hashes: list[str] = field(default_factory=list, repr=False)
+    require_totp: bool = False  # an admin asked this user to set up 2FA
     permissions: list[str] = field(default_factory=list)
 
 
@@ -333,6 +334,7 @@ class Auth:
         enabled: bool | None = None,
         password: str | None = None,
         acting: str | None = None,
+        require_totp: bool | None = None,
     ) -> User:
         with self._lock:
             user = self.user(name)
@@ -351,6 +353,10 @@ class Auth:
                 self._sync_permissions()
             if enabled is not None:
                 user.enabled = enabled
+            if require_totp is not None:
+                user.require_totp = require_totp
+                if not require_totp:
+                    self.reset_2fa(name)  # "Turn off 2FA": no code needed from now on
             if password is not None:
                 user.password_hash = hash_password(password)
                 user.must_change_password = True
@@ -527,7 +533,7 @@ class Auth:
         with self._lock:
             user = self.user(name)
             recent = self._reauth(user, password)
-            if self.require_2fa:
+            if self.require_2fa or user.require_totp:
                 raise Forbidden("2FA is required by your administrator")
             if not user.totp_secret or not self._second_factor(user, code):
                 recent.append(self._clock())

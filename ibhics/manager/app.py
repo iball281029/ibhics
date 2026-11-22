@@ -421,7 +421,12 @@ def create_app(
             raise Forbidden("change your initial password first")
         # An admin may always turn the requirement off, or nobody could undo it.
         unlock = route == f"{API}/security/2fa" and str(user.role) == "admin"
-        if auth.require_2fa and not user.totp_secret and route not in SELF_ROUTES and not unlock:
+        if (
+            (auth.require_2fa or user.require_totp)
+            and not user.totp_secret
+            and route not in SELF_ROUTES
+            and not unlock
+        ):
             raise Forbidden("2FA enrollment required; open Settings > My account")
         if route not in SELF_ROUTES:
             area = category(route)
@@ -715,6 +720,7 @@ def create_app(
             enabled=body.enabled,
             password=body.password,
             acting=acting(request),
+            require_totp=body.require_2fa,
         )
         return UserOut.from_user(user)
 
@@ -2083,7 +2089,7 @@ def create_app(
             if (
                 user.must_change_password
                 or "vms" not in auth.permissions(user)
-                or (auth.require_2fa and not user.totp_secret)
+                or ((auth.require_2fa or user.require_totp) and not user.totp_secret)
             ):
                 await console.refuse(ws, "the console needs the operator role")
                 return
