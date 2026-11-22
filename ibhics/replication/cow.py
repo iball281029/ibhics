@@ -19,6 +19,16 @@ from .store import ReplicaStore, durable_json, fsync_dir
 MAX_DEPTH = 32
 
 
+class CBTRequired(ValueError):
+    def __init__(self):
+        super().__init__("CBT unavailable or reset; baseline preserved, full scan not started")
+
+
+class ReplicaMaintenanceRequired(ValueError):
+    def __init__(self):
+        super().__init__("Replica chain needs maintenance before the next incremental sync")
+
+
 class CowReplicaStore(ReplicaStore):
     def _command(self, argv, parent):
         try:
@@ -28,7 +38,7 @@ class CowReplicaStore(ReplicaStore):
 
     def _layer(self, old, parent, generation):
         if old.get("depth", 0) >= MAX_DEPTH:
-            raise ValueError("Replica chain needs maintenance before the next incremental sync")
+            raise ReplicaMaintenanceRequired
         target = parent / f"{generation}.qcow2"
         if target.exists():
             raise ValueError("Replica layer already exists")
@@ -85,9 +95,7 @@ class CowReplicaStore(ReplicaStore):
                     raise ValueError("Replica layout changed; an explicit new baseline is required")
                 ranges = provider.list_changed(previous.get("token"))
                 if ranges is None or provider.tracking != "cbt":
-                    raise ValueError(
-                        "CBT unavailable or reset; baseline preserved, full scan not started"
-                    )
+                    raise CBTRequired
                 plans = []
                 for disk, old in zip(point.disks, old_disks, strict=True):
                     if disk.key != old["key"] or disk.size != old["size"] or disk.key not in ranges:

@@ -56,6 +56,29 @@ def test_missing_cbt_never_silently_starts_full_scan(tmp_path):
     assert provider.reads == [] and provider.ended
 
 
+def test_no_change_cleanup_failure_does_not_advance_point(tmp_path):
+    store = CowReplicaStore(tmp_path / "meta", [tmp_path / "disk"], chunk=4096)
+    before = store.sync(Provider(b"a" * 8192))
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        store.sync(Delta(b"a" * 8192, [], fail_end=True))
+    assert store.current() == before
+
+
+def test_known_remote_cbt_error_remains_actionable():
+    from types import SimpleNamespace
+
+    from ibhics.replication.cow import CBTRequired
+
+    response = SimpleNamespace(status_code=409, json=lambda: {"detail": "CBT_REQUIRED"})
+    member = SimpleNamespace(client=SimpleNamespace(request=lambda *args, **kwargs: response))
+    runtime = object.__new__(ClusterRuntime)
+    from ibhics.manager.replications import ReplicationJob
+
+    job = ReplicationJob("1" * 32, "src", "vm", "name", "node", {}, {}, "now", {}, {})
+    with pytest.raises(CBTRequired, match="full scan not started"):
+        runtime._call(member, "sync", job)
+
+
 @pytest.mark.skipif(
     not shutil.which("qemu-img") or not shutil.which("qemu-io"), reason="QEMU tools"
 )

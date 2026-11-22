@@ -235,6 +235,14 @@ class ClusterRuntime(LocalRuntime):
             raise InvalidState("Replication agent request failed; inspect node operation") from None
         if response.status_code == 404:
             raise ValueError("This compute agent does not support replication; upgrade it first")
+        if response.status_code == 409:
+            from .cow import CBTRequired, ReplicaMaintenanceRequired
+
+            detail = response.json().get("detail")
+            if detail == "CBT_REQUIRED":
+                raise CBTRequired
+            if detail == "REPLICA_MAINTENANCE_REQUIRED":
+                raise ReplicaMaintenanceRequired
         if response.status_code != 200:
             raise InvalidState("Replication agent operation failed; inspect the execution node")
         return response.json()
