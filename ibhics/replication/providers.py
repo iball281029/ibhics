@@ -65,7 +65,8 @@ def capability(source: Source) -> dict:
             "Proxmox without libvirt: file-backed qcow2 internal snapshots only"
         ),
         SourceType.VMWARE: (
-            "Direct ESXi: CBT when API and disk changeIds are ready, otherwise hash-delta; "
+            "Direct ESXi: full baseline once, then CBT and copy-on-write deltas; "
+            "invalid or unavailable CBT stops the sync instead of a full scan; "
             "base flat VMDK only; pre-existing snapshots refused"
         ),
         SourceType.P2V: (

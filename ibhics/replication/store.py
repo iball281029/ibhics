@@ -21,6 +21,28 @@ from .providers import ChangeProvider
 CHUNK = 4 << 20
 
 
+def replica_path(parent: Path, manifest: dict, disk: dict) -> Path:
+    import re
+
+    generation = disk.get("generation", manifest["generation"])
+    fmt = disk.get("format", "raw")
+    if not re.fullmatch(r"[0-9a-f]{32}", generation) or fmt not in ("raw", "qcow2"):
+        raise ValueError("Invalid replica image identity")
+    return parent / f"{generation}.{fmt}"
+
+
+def replica_size(path: Path, disk: dict) -> int:
+    if disk.get("format", "raw") == "raw":
+        return path.stat().st_size
+    result = subprocess.run(
+        ["qemu-img", "info", "-f", "qcow2", "--backing-chain", "--output=json", str(path)],
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    return json.loads(result.stdout)[0]["virtual-size"]
+
+
 def durable_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f".{path.name}-{uuid.uuid4().hex}.tmp")
@@ -115,7 +137,7 @@ class ReplicaStore:
         # Pool mount points can differ on relay and destination nodes. A generation's
         # relative name, never a path from another node, identifies its disk files.
         for disk, root in zip(data.get("disks", []), self.disk_roots, strict=False):
-            disk["path"] = str(root / f"{data['generation']}.raw")
+            disk["path"] = str(replica_path(root, data, disk))
         return data
 
     def sync(self, provider: ChangeProvider, progress=lambda done, total: None) -> dict:
@@ -268,7 +290,23 @@ class ReplicaStore:
         try:
             for index, disk in enumerate(current["disks"]):
                 path = folder / f"disk-{index}.raw"
-                sparse_copy(Path(disk["path"]), path, self.chunk)
+                if disk.get("format", "raw") == "qcow2":
+                    subprocess.run(
+                        [
+                            "qemu-img",
+                            "convert",
+                            "-f",
+                            "qcow2",
+                            "-O",
+                            "raw",
+                            str(disk["path"]),
+                            str(path),
+                        ],
+                        capture_output=True,
+                        check=True,
+                    )
+                else:
+                    sparse_copy(Path(disk["path"]), path, self.chunk)
                 result.append(path)
             return result
         except BaseException:
