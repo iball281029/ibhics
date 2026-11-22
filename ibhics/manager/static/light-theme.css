@@ -3,21 +3,21 @@
    Do not define these aliases on :root or [data-theme="dark"]. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f7fb;
-  --surface-1: #ffffff;
-  --surface-2: #f8fafc;
-  --surface-3: #edf2f8;
-  --surface-glass: rgb(255 255 255 / 96%);
+  --bg: #d5dce7;
+  --surface-1: #e8edf4;
+  --surface-2: #e1e7ef;
+  --surface-3: #d2dae5;
+  --surface-glass: rgb(232 237 244 / 94%);
   --panel: var(--surface-1);
-  --text: #0f172a;
-  --muted: #475569;
+  --text: #0b1324;
+  --muted: #334359;
   --text-muted: var(--muted);
-  --faint: #52647a;
-  --line: #d8e2ee;
-  --line-strong: #94a8c0;
-  --hover: #edf4fc;
-  --brand: #2454b8;
-  --brand-soft: #eaf1fc;
+  --faint: #3f5068;
+  --line: #b7c3d3;
+  --line-strong: #7d91aa;
+  --hover: #dbe4f0;
+  --brand: #1f47a3;
+  --brand-soft: #d9e4f6;
   --accent: #086b85;
   --accent-2: #6545aa;
   --cyan: var(--accent);
@@ -33,30 +33,30 @@
   --rail-icon: var(--muted);
   --c-compute: var(--brand); --c-storage: var(--ok); --c-network: var(--violet);
   --c-nodes: var(--warn); --c-backup: var(--pink); --c-migrate: var(--accent);
-  --grad: linear-gradient(115deg, #2454b8, #6545aa);
-  --grad-soft: linear-gradient(115deg, #f1f6fd, #f6f3fb);
-  --shadow: 0 2px 4px rgb(43 72 111 / 3%), 0 10px 28px rgb(43 72 111 / 6%);
-  --glow: 0 0 18px rgb(8 107 133 / 8%);
-  --chart-grid: rgb(71 101 139 / 12%);
+  --grad: linear-gradient(115deg, #1f47a3, #5a3a9e);
+  --grad-soft: linear-gradient(115deg, #dfe8f6, #e6e0f2);
+  --shadow: inset 0 1px 0 rgb(255 255 255 / 55%), 0 2px 6px rgb(16 34 62 / 10%), 0 14px 34px rgb(16 34 62 / 14%);
+  --glow: 0 0 22px rgb(8 107 133 / 14%);
+  --chart-grid: rgb(51 67 89 / 16%);
   --depth-glow: rgb(36 84 184 / 4%); --depth-cyan: rgb(8 107 133 / 3%);
-  --depth-grid: var(--chart-grid); --depth-edge: #fff; --depth-shadow: var(--shadow);
+  --depth-grid: var(--chart-grid); --depth-edge: rgb(255 255 255 / 70%); --depth-shadow: var(--shadow);
   --theme-surface: var(--surface-1); --theme-surface-2: var(--surface-2);
   --theme-text: var(--text); --theme-muted: var(--muted);
   --theme-on-accent: #fff;
   --theme-line: var(--line); --theme-line-strong: var(--line-strong);
   --theme-accent: var(--accent); --theme-violet: var(--violet); --theme-pink: var(--pink);
   --theme-ok: var(--ok); --theme-warn: var(--warn); --theme-danger: var(--bad);
-  --theme-ok-soft: #eaf7f1; --theme-warn-soft: #fff6e6; --theme-danger-soft: #fff0f3;
-  --theme-accent-soft: #eaf3fa; --theme-violet-soft: #f1edfa; --theme-pink-soft: #f9edf5;
+  --theme-ok-soft: #d4ece1; --theme-warn-soft: #f1e3c8; --theme-danger-soft: #f2d8de;
+  --theme-accent-soft: #d3e6ee; --theme-violet-soft: #e0d9f0; --theme-pink-soft: #efd9e6;
   --theme-muted-soft: var(--surface-3);
-  --theme-tint: rgb(36 84 184 / 5%); --theme-chart-grid: var(--chart-grid);
+  --theme-tint: rgb(31 71 163 / 8%); --theme-chart-grid: var(--chart-grid);
   --theme-shadow: var(--shadow); --theme-text-shadow: none; --theme-filter: none;
   /* Canvas uses hex values so its existing alpha helper can consume them. */
   --canvas-cyan: #086b85; --canvas-blue: #2454b8; --canvas-pink: #9d3678;
   --canvas-green: #087350; --canvas-red: #b82d49; --canvas-amber: #925308;
   --canvas-violet: #6545aa; --canvas-orange: #a34b21;
-  --canvas-label-bg: #ffffff; --canvas-label-text: #0f172a;
-  --scene-bg: #f4f7fb; --scene-ink: #344b68;
+  --canvas-label-bg: #eef2f8; --canvas-label-text: #0f172a;
+  --scene-bg: #cfd8e4; --scene-ink: #22364f;
 }
 
 /* Shared shell and controls. The same materials serve every workspace. */
@@ -210,3 +210,11 @@
 /* Intentional dark work areas: shell/VM console retain their own output palette. */
 :root[data-theme="light"] .command-workspace .term input { color: inherit; background: transparent; border: 0; }
 :root[data-theme="light"] .vs-working { background: linear-gradient(90deg, var(--brand-soft), var(--accent), var(--brand-soft)); background-size: 200% 100%; }
+
+/* Ground 3D scenes on a tinted stage so they do not float on the page */
+:root[data-theme="light"] .nexus-visual { background: radial-gradient(ellipse 62% 58% at 58% 58%, #c2ccda 0%, #ccd5e1 45%, transparent 78%); border-radius: 18px; }
+:root[data-theme="light"] .nexus-floor { opacity: .9; filter: drop-shadow(0 18px 24px rgb(16 34 62 / 22%)); }
+:root[data-theme="light"] #page-cluster .cl-hero { background: linear-gradient(160deg, #dde4ee, #cbd4e1); }
+:root[data-theme="light"] #page-cluster .cl-map-node > svg.cl-3d { filter: drop-shadow(0 10px 10px rgb(16 34 62 / 28%)); }
+:root[data-theme="light"] .command-kpi, :root[data-theme="light"] .cl-overview > div { box-shadow: var(--shadow); }
+:root[data-theme="light"] #page-cluster .cl-map::after { opacity: .35; }
