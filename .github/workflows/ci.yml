@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  replication-cow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y qemu-utils
+      - run: pip install -e ".[dev]"
+      - run: pytest -q tests/test_replication_cow.py
+
   p2v-agent:
     runs-on: ubuntu-latest
     steps:

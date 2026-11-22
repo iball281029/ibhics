@@ -13,7 +13,7 @@ from ..importer.sources import SourceType
 from .bitmap import KVMPullProvider
 from .cbt import ESXiCBTProvider
 from .nutanix import NutanixSnapshotProvider
-from .store import ReplicaStore, durable_json, operation_lock
+from .store import ReplicaStore, durable_json, operation_lock, replica_path, replica_size
 
 
 class ReplicaConverter(V2VConverter):
@@ -51,7 +51,12 @@ class LocalRuntime:
         }.get(source.type)
         if provider is None:
             raise ValueError("No replication provider for this source")
-        return self.store(job).sync(provider(source, vm), progress)
+        store = self.store(job)
+        if source.type == SourceType.VMWARE:
+            from .cow import CowReplicaStore
+
+            store = CowReplicaStore(store.root, store.disk_roots, store.chunk)
+        return store.sync(provider(source, vm), progress)
 
     def ownership(self, job):
         path = self.store(job).root / "ownership.json"
@@ -82,8 +87,8 @@ class LocalRuntime:
         if len(manifest["disks"]) != len(store.disk_roots):
             raise ValueError("Replica disk count differs from target")
         for disk, parent in zip(manifest["disks"], store.disk_roots, strict=True):
-            path = parent / f"{manifest['generation']}.raw"
-            if not path.is_file() or path.stat().st_size != disk["size"]:
+            path = replica_path(parent, manifest, disk)
+            if not path.is_file() or replica_size(path, disk) != disk["size"]:
                 raise ValueError("Replica generation is not accessible on target pool")
             disk["path"] = str(path)
         with operation_lock(store.disk_roots[0].parent / "replication.lock"):
@@ -230,6 +235,14 @@ class ClusterRuntime(LocalRuntime):
             raise InvalidState("Replication agent request failed; inspect node operation") from None
         if response.status_code == 404:
             raise ValueError("This compute agent does not support replication; upgrade it first")
+        if response.status_code == 409:
+            from .cow import CBTRequired, ReplicaMaintenanceRequired
+
+            detail = response.json().get("detail")
+            if detail == "CBT_REQUIRED":
+                raise CBTRequired
+            if detail == "REPLICA_MAINTENANCE_REQUIRED":
+                raise ReplicaMaintenanceRequired
         if response.status_code != 200:
             raise InvalidState("Replication agent operation failed; inspect the execution node")
         return response.json()
@@ -274,8 +287,7 @@ class ClusterRuntime(LocalRuntime):
                 continue
             try:
                 state = self._call(member, "progress", job)
-                if state.get("total"):
-                    progress(state["done"], state["total"])
+                progress(state.get("done", 0), state.get("total", 0))
             except Exception as exc:
                 if type(exc).__name__ == "SyncStopped":
                     stopped = exc

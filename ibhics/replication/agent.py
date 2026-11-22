@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from ..cluster import Cluster
 from ..hypervisor import InvalidState
 from ..importer import Source, SourceVM
+from .cow import CBTRequired, ReplicaMaintenanceRequired
 from .runtime import LocalRuntime
 from .store import operation_lock
 
@@ -82,6 +83,13 @@ def install(api, name, driver, root: Path, guard=Path("/run/lock/ibhics-replicat
                 if action == "delete":
                     runtime.delete(job)
                     return {"ok": True}
+            except (CBTRequired, ReplicaMaintenanceRequired) as exc:
+                code = (
+                    "CBT_REQUIRED"
+                    if isinstance(exc, CBTRequired)
+                    else "REPLICA_MAINTENANCE_REQUIRED"
+                )
+                raise HTTPException(409, code) from None
             except Exception:
                 # Agent clients and access logs must never echo SSH output or request secrets.
                 raise InvalidState("Replication operation failed on this node") from None

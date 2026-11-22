@@ -308,7 +308,13 @@ class ReplicationManager:
                 with self._lock:
                     job.state = "failed"
                     # Provider/SSH output is intentionally excluded, including passwords.
-                    job.error = "Replication operation failed; inspect node and source"
+                    from ..replication.cow import CBTRequired, ReplicaMaintenanceRequired
+
+                    job.error = (
+                        str(exc)
+                        if isinstance(exc, (CBTRequired, ReplicaMaintenanceRequired))
+                        else "Replication operation failed; inspect node and source"
+                    )
                     notify = getattr(self, "notify", lambda *args: None)
                     notify(
                         "critical",
