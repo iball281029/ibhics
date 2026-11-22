@@ -90,7 +90,9 @@ def install(api, settings, auth):
         user = signed_in(request)
         return {
             "enabled": bool(user.totp_secret),
-            "required": auth.require_2fa,
+            # Required for this user: by the cluster-wide setting or by an admin for them.
+            "required": auth.require_2fa or bool(getattr(user, "require_totp", False)),
+            "required_for_all": auth.require_2fa,
             "recovery_remaining": len(user.recovery_hashes),
         }
 

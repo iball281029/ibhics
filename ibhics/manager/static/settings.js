@@ -11,7 +11,7 @@ async function renderAccountSecurity() {
   $("#twofa-status").textContent = `${security.enabled ? `Enabled · ${security.recovery_remaining} recovery codes remaining.` : "Not enabled."} ${security.required ? "Your administrator requires 2FA. Enroll here before using the console." : "Add a second step to protect your account."}`;
   $("#twofa-setup").hidden = security.enabled;
   $("#twofa-disable").hidden = !security.enabled || security.required;
-  $("#twofa-required").checked = security.required;
+  $("#twofa-required").checked = security.required_for_all ?? security.required;
 }
 
 async function renderSettings() {
