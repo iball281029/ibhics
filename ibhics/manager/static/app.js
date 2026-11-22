@@ -5840,7 +5840,7 @@ function renderUsers() {
     <td>${esc(when(u.created))}</td>
     <td><div class="actions">${u.name === me || (u.role === "admin" && !isAdmin()) ? "" : `
       <button class="small" data-user-reset="${esc(u.name)}">Reset password</button>
-      ${isAdmin() && u.totp_enabled ? `<button class="small" data-user-twofa="${esc(u.name)}">Reset 2FA</button>` : ""}
+      ${isAdmin() ? `<button class="small" data-user-twofa="${esc(u.name)}" ${u.totp_enabled ? "" : 'disabled title="2FA is not turned on for this user"'}>Reset 2FA</button>` : ""}
       <button class="small" data-user-toggle="${esc(u.name)}" data-enabled="${u.enabled}">${u.enabled ? "Disable" : "Enable"}</button>
       <button class="small danger" data-user-del="${esc(u.name)}">Delete</button>`}</div></td>
   </tr>`).join("") : empty(6, state.me ? "No users" : "Sign-in is off on this manager");
@@ -5868,10 +5868,10 @@ $("#users").addEventListener("click", async (e) => {
       openTwofaReset(d.userTwofa);
       return;
     } else if (d.userReset) {
-      const pw = prompt(`New temporary password for ${d.userReset} (8+ characters). They must change it at sign-in.`);
+      const pw = await askNewPassword(d.userReset);
       if (!pw) return;
       await patch(`/users/${enc(d.userReset)}`, { password: pw });
-      toast(`Password of ${d.userReset} reset`);
+      toast(`Password of ${d.userReset} reset; they set their own at next sign-in`);
     } else if (d.userToggle) {
       await patch(`/users/${enc(d.userToggle)}`, { enabled: d.enabled !== "true" });
     } else if (d.userDel) {
@@ -6547,3 +6547,28 @@ document.addEventListener("click", async (e) => {
     refresh(currentPage());
   } catch (err) { fail(err); }
 });
+
+// Admin password reset: type one or generate one, see it, copy it.
+function genPassword(length = 16) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%+=";
+  const bytes = crypto.getRandomValues(new Uint32Array(length));
+  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
+}
+function askNewPassword(user) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement("dialog");
+    dlg.className = "pw-reset";
+    dlg.innerHTML = `<form method="dialog"><h3>Reset password · ${esc(user)}</h3>
+      <p class="hint">Type a temporary password or generate one. ${esc(user)} must change it at the next sign-in.</p>
+      <div class="pw-row"><input name="pw" type="text" minlength="8" autocomplete="off" spellcheck="false" placeholder="8+ characters" required>
+      <button type="button" data-gen>Generate</button><button type="button" data-copy>Copy</button></div>
+      <div class="pw-actions"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Set password</button></div></form>`;
+    document.body.append(dlg);
+    const input = dlg.querySelector("input");
+    dlg.querySelector("[data-gen]").onclick = () => { input.value = genPassword(); input.select(); };
+    dlg.querySelector("[data-copy]").onclick = async () => { try { await navigator.clipboard.writeText(input.value); toast("Password copied"); } catch { input.select(); } };
+    dlg.addEventListener("close", () => { resolve(dlg.returnValue === "ok" ? input.value : ""); dlg.remove(); });
+    dlg.showModal();
+    input.focus();
+  });
+}
