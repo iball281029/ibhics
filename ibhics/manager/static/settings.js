@@ -59,6 +59,7 @@ async function renderSettings() {
   const roleSelect = $("#user-form select[name=role]"), selected = roleSelect.value;
   roleSelect.innerHTML = Object.keys(roleData.roles).map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join("");
   roleSelect.value = selected;
+  await renderNotificationConfig();
   await renderAccountSecurity();
   await renderApprovals();
 }
@@ -190,3 +191,87 @@ $("#approvals-list").onclick = async e => {
   } catch (err) { fail(err); }
   finally { await renderApprovals(); }
 };
+
+
+let notificationCatalog = [];
+function renderEventPreferences(catalog, preferences) {
+  notificationCatalog = catalog;
+  let category = "";
+  $("#notification-events").innerHTML = catalog.map(event => {
+    const pref = preferences[event.id];
+    let heading = "";
+    if (event.category !== category) {
+      category = event.category;
+      heading = `<tr><th colspan="4" scope="colgroup">${esc(category)}</th></tr>`;
+    }
+    return heading + `<tr data-event-id="${esc(event.id)}"><td><b>${esc(event.id)}</b>${event.hooked ? "" : ' <span class="hint">coming soon</span>'}<br><small>${esc(event.description)}</small></td><td><select data-event-level aria-label="${esc(event.id)} level">${["critical", "warning", "info"].map(level => `<option ${pref.level === level ? "selected" : ""}>${level}</option>`).join("")}</select></td>${["in_app", "email"].map(channel => `<td><input type="checkbox" role="switch" data-channel="${channel}" aria-label="${esc(event.id)} ${channel}" ${pref[channel] ? "checked" : ""}></td>`).join("")}</tr>`;
+  }).join("");
+}
+function eventPreferences() {
+  return Object.fromEntries(Array.from(document.querySelectorAll("#notification-events tr[data-event-id]")).map(row => [row.dataset.eventId, {
+    level:row.querySelector("[data-event-level]").value,
+    in_app:row.querySelector('[data-channel="in_app"]').checked,
+    email:row.querySelector('[data-channel="email"]').checked,
+  }]));
+}
+$("#notification-defaults").onclick = () => {
+  renderEventPreferences(notificationCatalog, Object.fromEntries(notificationCatalog.map(event => [event.id, {level:event.level, in_app:event.in_app, email:event.email}])));
+  $("#notification-config").dataset.dirty = "true";
+};
+$("#notification-critical").onclick = () => {
+  const preferences = eventPreferences();
+  for (const pref of Object.values(preferences)) if (pref.level === "critical") { pref.in_app = true; pref.email = true; }
+  renderEventPreferences(notificationCatalog, preferences);
+  $("#notification-config").dataset.dirty = "true";
+};
+
+async function renderNotificationConfig() {
+  if (!state.me || !isAdmin()) return;
+  const form = $("#notification-config");
+  if (form.dataset.dirty || form.contains(document.activeElement)) return;
+  const config = await api("/settings/notifications");
+  for (const key of ["host", "port", "security", "username", "from", "summary_at"]) form.elements[key].value = config[key];
+  form.elements.password.value = "";
+  form.elements.password.placeholder = config.password || "No password saved";
+  form.elements.recipients.value = config.recipients.join(", ");
+  form.elements.daily_summary.checked = config.daily_summary;
+  renderEventPreferences(config.catalog, config.preferences);
+
+}
+$("#notification-config").addEventListener("input", e => { e.currentTarget.dataset.dirty = "true"; });
+settingsForm("#notification-config", async (f, form) => {
+  const body = Object.fromEntries(["host", "security", "username", "from", "summary_at"].map(k => [k, f.get(k)]));
+  Object.assign(body, {port:Number(f.get("port")), recipients:f.get("recipients").split(/[,;\s]+/).filter(Boolean), preferences:eventPreferences(), daily_summary:f.has("daily_summary")});
+  if (f.has("clear_password")) body.password = "";
+  else if (f.get("password")) body.password = f.get("password");
+  await api("/settings/notifications", {method:"PUT", body:JSON.stringify(body)});
+  form.elements.password.value = "";
+  form.elements.clear_password.checked = false;
+  delete form.dataset.dirty;
+  $("#notification-result").textContent = "Settings saved";
+  await renderNotificationConfig();
+});
+$("#notification-test").onclick = async e => {
+  e.target.disabled = true;
+  $("#notification-result").textContent = "Sending with saved settings…";
+  try {
+    const result = await post("/settings/notifications/test");
+    $("#notification-result").textContent = result.message;
+  } catch (err) { $("#notification-result").textContent = err.message; }
+  finally { e.target.disabled = false; }
+};
+let visibleNotificationIds = [];
+async function refreshNotifications() {
+  try {
+    const data = await api("/notifications");
+    visibleNotificationIds = data.events.map(e => e.id);
+    $("#notification-count").textContent = data.unread;
+    $("#notification-list").innerHTML = data.events.map(e => `<article class="notification-item ${e.read ? "is-read" : ""} ${esc(e.level)}"><b>${esc(e.level)} · ${esc(e.category)}</b><p>${esc(e.message)}</p><small>${esc(new Date(e.time).toLocaleString())}</small></article>`).join("") || '<p class="hint">No notifications</p>';
+  } catch (_) { /* Poll again after sign-in or connection recovery. */ }
+}
+$("#notifications-read").onclick = async () => {
+  try { await post("/notifications/read", {ids:visibleNotificationIds}); await refreshNotifications(); }
+  catch (err) { fail(err); }
+};
+setTimeout(refreshNotifications, 1000);
+setInterval(refreshNotifications, 30000);

@@ -23,6 +23,7 @@ import httpx
 
 from .. import __version__
 from .auth import Forbidden
+from .events import publish
 
 MAX_PACKAGE = 32 * 1024 * 1024
 
@@ -323,6 +324,12 @@ class Settings:
                 "package": base64.b64encode(package).decode(),
             }
             self.save()
+            publish(
+                self,
+                "update.available",
+                f"Update available: {manifest['version']}",
+                f"update:{manifest['version']}",
+            )
             return manifest
 
     def check(self, daily: bool = False):
@@ -368,7 +375,19 @@ class Settings:
                     continue
             else:
                 continue
+            previous = job["state"]
             job.update(result)
+            if (
+                previous != job["state"]
+                and job["kind"] == "update"
+                and job["state"] in ("done", "failed", "interrupted")
+            ):
+                publish(
+                    self,
+                    "update.installed" if job["state"] == "done" else "update.failed",
+                    f"Application update: {job['state']}",
+                    f"update:{job['id']}",
+                )
             if job["state"] == "done":
                 self.data["previous_available"] = job["kind"] == "update"
                 if job["kind"] == "update":
@@ -491,6 +510,13 @@ class Settings:
                 job["state"] = "interrupted"
                 job["detail"] = "Rollback failed; inspect every node before continuing"
         finally:
+            if job["kind"] == "update":
+                publish(
+                    self,
+                    "update.installed" if job["state"] == "done" else "update.failed",
+                    f"Application update: {job['state']}",
+                    f"update:{job['id']}",
+                )
             with self.lock:
                 self.save()
 

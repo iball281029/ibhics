@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import httpx
 
 from .auth import Forbidden
+from .events import publish
 from .settings import private_json
 
 
@@ -131,6 +132,12 @@ class Approvals:
                 "created": datetime.fromtimestamp(self.clock(), UTC).isoformat(),
             }
             self.data["requests"].append(item)
+            publish(
+                self,
+                "approval.pending",
+                f"Approval requested by {user.name}",
+                f"approval:{item['id']}",
+            )
             self.save()
             return {
                 "approval_request_id": item["id"],

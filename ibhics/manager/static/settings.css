@@ -40,3 +40,18 @@ dialog.pw-reset h3{margin:0 0 8px}
 dialog.pw-reset .pw-row{display:flex;gap:8px;margin:14px 0}
 dialog.pw-reset .pw-row input{flex:1;font:15px ui-monospace,monospace;padding:10px;border-radius:10px;border:1px solid #3ef0ff44;background:#04101c;color:#fff}
 dialog.pw-reset .pw-actions{display:flex;justify-content:flex-end;gap:8px}
+
+.notification-menu { position: relative; }
+.notification-menu summary { cursor: pointer; padding: 10px; }
+.notification-panel { position: absolute; right: 0; top: 100%; width: min(420px, 88vw); max-height: 65vh; overflow: auto; z-index: 100; background: var(--panel, #101b2b); border: 1px solid var(--line, #31556b); box-shadow: 0 12px 40px #0008; }
+.notification-item { padding: 12px; border-bottom: 1px solid var(--line, #31556b); }
+.notification-item p { margin: 6px 0; }
+.notification-item.critical b { color: #ff7e91; }
+.notification-item.warning b { color: #f4cc78; }
+.notification-item.info b { color: #72dcdf; }
+.notification-item.is-read { opacity: .6; }
+#notification-config fieldset { margin: 14px 0; display: flex; gap: 12px; flex-wrap: wrap; }
+
+.notification-events { overflow-x: auto; }
+.notification-events table { width: 100%; }
+.notification-events th, .notification-events td { padding: .6rem; text-align: left; }

@@ -7,7 +7,7 @@ role=${2:?compute or witness required}
 venv=/opt/ibhics/venv
 current=$("$venv/bin/python" -c 'import ibhics; print(ibhics.__version__)')
 case "$current" in
-    1.3.0b2+vstore3.56|1.3.0b2+vstore3.55|1.3.0b2+vstore3.54|1.3.0b2+vstore3.53|1.3.0b2+vstore3.52|1.3.0b2+vstore3.51|1.3.0b2+vstore3.50|1.3.0b2+vstore3.49|1.3.0b2+vstore3.48|1.3.0b2+vstore3.47|1.3.0b2+vstore3.46|1.3.0b2+vstore3.45|1.3.0b2+vstore3.44|1.3.0b2+vstore3.43|1.3.0b2+vstore3.42|1.3.0b2+vstore3.41|1.3.0b2+vstore3.40|1.3.0b2+vstore3.39|1.3.0b2+vstore3.38|1.3.0b2+vstore3.37|1.3.0b2+vstore3.36|1.3.0b2+vstore3.35|1.3.0b2+vstore3.34|1.3.0b2+vstore3.33|1.3.0b2+vstore3.32) ;;
+    1.3.0b2+vstore3.57|1.3.0b2+vstore3.56|1.3.0b2+vstore3.55|1.3.0b2+vstore3.54|1.3.0b2+vstore3.53|1.3.0b2+vstore3.52|1.3.0b2+vstore3.51|1.3.0b2+vstore3.50|1.3.0b2+vstore3.49|1.3.0b2+vstore3.48|1.3.0b2+vstore3.47|1.3.0b2+vstore3.46|1.3.0b2+vstore3.45|1.3.0b2+vstore3.44|1.3.0b2+vstore3.43|1.3.0b2+vstore3.42|1.3.0b2+vstore3.41|1.3.0b2+vstore3.40|1.3.0b2+vstore3.39|1.3.0b2+vstore3.38|1.3.0b2+vstore3.37|1.3.0b2+vstore3.36|1.3.0b2+vstore3.35|1.3.0b2+vstore3.34|1.3.0b2+vstore3.33|1.3.0b2+vstore3.32) ;;
     1.3.0b2+vstore3.31|1.3.0b2+vstore3.30|1.3.0b2+vstore3.29|1.3.0b2+vstore3.28|1.3.0b2+vstore3.27|1.3.0b2+vstore3.26|1.3.0b2+vstore3.25|1.3.0b2+vstore3.24|1.3.0b2+vstore3.23|1.3.0b2+vstore3.22|1.3.0b2+vstore3.21|1.3.0b2+vstore3.20|1.3.0b2+vstore3.19|1.3.0b2+vstore3.18|1.3.0b2+vstore3.17|1.3.0b2+vstore3.16|1.3.0b2+vstore3.15|1.3.0b2+vstore3.14|1.3.0b2+vstore3.13|1.3.0b2+vstore3.12|1.3.0b2+vstore3.11|1.3.0b2+vstore3.10|1.3.0b2+vstore3.9|1.3.0b2+vstore3.8|1.3.0b2+vstore3.7|1.3.0b2+vstore3.6|1.3.0b2+vstore3.5|1.3.0b2+vstore3.4|1.3.0b2+vstore3.3|1.3.0b2+vstore3.2|1.3.0b2+vstore3.1|1.3.0b2+vstore3|1.3.0b2+vstore2|1.3.0b2+vstore1|1.3.0b2+arbiterfix1) ;;
     *) echo "Unexpected installed release: $current"; exit 1;;
 esac
@@ -16,12 +16,12 @@ if pgrep -x virt-v2v >/dev/null && [[ ${IBHICS_UPGRADE_FORCE:-} != 1 ]]; then
     echo "A VM import (virt-v2v) is running on this node; upgrade after it finishes" >&2
     exit 3
 fi
-# Replication workers hold a shared lock through snapshot cleanup and commit.
+# Backup, restore, verification and replication hold a shared lock through cleanup.
 # Keep this exclusive lock until the upgrade exits to close the check/start race.
 exec 9>/run/lock/ibhics-replication.lock
 if ! flock -n -x 9; then
-    echo "VM replication is active; upgrade after sync/conversion finishes" >&2
-    exit 3
+    echo "Backup/restore/verification or replication is active; waiting for completion" >&2
+    flock -x 9
 fi
 backup=/opt/ibhics/vstore3.26-backup-$(date +%Y%m%d-%H%M%S)
 mkdir -m 700 "$backup"
@@ -67,7 +67,7 @@ for _ in range(20):
         req = urllib.request.Request(agent_url, headers={'X-Ibhics-Token': token})
         with urllib.request.urlopen(req, timeout=3) as response:
             agent = json.load(response)
-        assert agent['version'] == '1.3.0b2+vstore3.57'
+        assert agent['version'] == '1.3.0b2+vstore3.58'
         if sys.argv[1] == 'compute':
             try:
                 with urllib.request.urlopen('https://127.0.0.1:8888/api/v1/health',

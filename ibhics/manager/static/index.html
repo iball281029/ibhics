@@ -77,6 +77,7 @@
   <header class="appbar">
     <a class="brand brand-holo" href="#home" aria-label="ibHiCS home"><span class="brand-corner" aria-hidden="true"></span><span class="brand-word"><span class="brand-ib">ib</span><span class="brand-hics">HiCS</span></span><small>HYPER-CONVERGED</small></a>
     <span class="spacer"></span>
+    <details class="notification-menu"><summary aria-label="Notifications">🔔 <span id="notification-count">0</span></summary><div class="notification-panel st-panel"><button type="button" id="notifications-read">Mark all read</button><div id="notification-list" aria-live="polite"></div></div></details>
     <div class="menu-btn meta" id="tasks-menu" tabindex="0">
       <small>Tasks</small><span id="tasks-count"><span class="dot"></span> None running</span>
       <div class="dropdown tasks-panel" id="tasks-panel"></div>
@@ -837,10 +838,33 @@
           <button data-tab="about" class="active">Overview &amp; subscriptions</button>
           <button data-tab="updates">Updates</button>
           <button data-tab="support">Support</button>
+          <button data-tab="notifications" class="admin-only">Notifications</button>
           <button data-tab="account">My account</button>
           <button data-tab="users" id="settings-users-tab">Users &amp; permissions</button>
           <button data-tab="approvals">Approvals</button>
           <button data-tab="audit" class="admin-only">Audit log</button>
+        </div>
+        <div class="subpage" id="tab-notifications">
+          <form id="notification-config" class="st-panel admin-only">
+            <h3>Email alerts</h3><p class="hint">SMTP credentials are stored privately. Times use the manager's local timezone.</p>
+            <div class="form-grid">
+              <label>SMTP host<input name="host" maxlength="2048"></label>
+              <label>Port<input name="port" type="number" min="1" max="65535" value="587" required></label>
+              <label>Security<select name="security"><option>STARTTLS</option><option>SSL</option><option value="none">None</option></select></label>
+              <label>Username<input name="username" autocomplete="off"></label>
+              <label>Password<input name="password" type="password" autocomplete="new-password" placeholder="Leave blank to keep saved password"></label>
+              <label class="inline"><input name="clear_password" type="checkbox">Clear saved password</label>
+              <label>From<input name="from" type="email"></label>
+              <label>Recipients<textarea name="recipients" placeholder="ops@example.com, admin@example.com"></textarea></label>
+              <label>Daily summary time<input name="summary_at" type="time" value="08:00" required></label>
+              <label class="inline"><input name="daily_summary" type="checkbox">Send daily summary</label>
+            </div>
+            <div class="actions"><button type="button" id="notification-critical">Enable all critical</button><button type="button" id="notification-defaults">Reset defaults</button></div>
+            <p class="hint">Event switches control delivery. Coming soon events have no active hook. Save to apply changes. Daily summary and test email are separate.</p>
+            <div class="notification-events"><table><thead><tr><th>Event</th><th>Level</th><th>In-app</th><th>Email</th></tr></thead><tbody id="notification-events"></tbody></table></div>
+            <div class="actions"><button class="primary">Save</button><button type="button" id="notification-test">Send test email</button></div>
+            <p id="notification-result" role="status"></p>
+          </form>
         </div>
         <div class="subpage" id="tab-approvals">
           <h3>Two-person approval</h3>
@@ -1435,6 +1459,11 @@
         <div class="form-grid" style="margin-top:14px">
           <label class="pol-at">Time <input name="at" type="time" value="02:00"></label>
           <label class="pol-every" hidden>Every <span class="inline unit"><input name="every_hours" type="number" min="1" max="168" value="6"> hours</span></label>
+        </div>
+        <div class="form-grid">
+          <label>Automatic retries<input name="retries" type="number" min="0" max="10" value="2"></label>
+          <label>Retry delay (minutes)<input name="retry_delay_minutes" type="number" min="1" max="1440" value="15"></label>
+          <label>RPO limit (hours)<input name="rpo_hours" type="number" min="0.01" step="any" placeholder="Twice the schedule interval"></label>
         </div>
         <p class="wiz-label">Keep</p>
         <div class="hw-row" style="padding:0">

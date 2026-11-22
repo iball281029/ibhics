@@ -133,6 +133,37 @@ def install(api, settings, auth):
             auth.reset_2fa(name)
         return {"reset": True}
 
+    @api.get("/notifications")
+    def notification_list(request: Request):
+        return request.app.state.notifications.view()
+
+    @api.post("/notifications/read")
+    async def notification_read(request: Request):
+        body = await limited_json_body(request, 65536)
+        identifiers = body.get("ids", [])
+        if not isinstance(identifiers, list) or any(not isinstance(i, str) for i in identifiers):
+            raise ValueError("Supply notification ids")
+        return request.app.state.notifications.read(identifiers)
+
+    @api.get("/settings/notifications")
+    def notification_config(request: Request, response: Response):
+        admin(request)
+        response.headers["Cache-Control"] = "no-store"
+        return request.app.state.notifications.config()
+
+    @api.put("/settings/notifications")
+    async def notification_save(request: Request):
+        admin(request)
+        return request.app.state.notifications.configure(await limited_json_body(request, 16384))
+
+    @api.post("/settings/notifications/test")
+    async def notification_test(request: Request):
+        import asyncio
+
+        admin(request)
+        future = request.app.state.notifications.test()
+        return await asyncio.wrap_future(future)
+
     @api.get("/settings")
     def view(request: Request):
         result = settings.view()
