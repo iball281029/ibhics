@@ -22,8 +22,8 @@
 :root[data-theme="light"] .command-workspace :is(.sheet,.card,.spatial-kpi,.vm-card,.vm-spatial-inspector) {background:#fff;border-color:#dce4ef;box-shadow:var(--shadow);color:var(--text)}
 :root[data-theme="light"] .spatial-workspace .sheet::before,:root[data-theme="light"] .spatial-workspace .sheet::after {display:none}
 :root[data-theme="light"] .command-workspace :is(.page-head,.toolbar,.tabs) {background:#f8faff;border-color:#e1e8f2;color:var(--text)}
-:root[data-theme="light"] .command-workspace :is(button,.btn) {border-color:#d4deed;background:#fff;color:#294362;box-shadow:0 1px 3px #203c5b06}
-:root[data-theme="light"] .command-workspace :is(button,.btn).primary {background:var(--grad);border-color:#3559db;color:#fff;box-shadow:0 4px 12px #345be51a}
+:root[data-theme="light"] .command-workspace :is(button,.btn):not(.danger) {border-color:#d4deed;background:#fff;color:#294362;box-shadow:0 1px 3px #203c5b06}
+:root[data-theme="light"] .command-workspace :is(button,.btn).primary:not(.danger) {background:var(--grad);border-color:#3559db;color:#fff;box-shadow:0 4px 12px #345be51a}
 :root[data-theme="light"] .command-workspace :is(input:not([type="checkbox"]):not([type="radio"]),select,textarea) {background:#fff;border-color:#cbd7e7;color:#17243b;color-scheme:light}
 :root[data-theme="light"] .command-workspace .tabs button.active {background:#eaf0ff;color:#244cc5;border-color:#b9caef}
 :root[data-theme="light"] .command-workspace .nexus-hero {background:linear-gradient(112deg,#fff 35%,#f2f7ff);border-color:#d7e3f2;box-shadow:0 12px 38px #253b5b0b}
