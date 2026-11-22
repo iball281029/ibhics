@@ -2,7 +2,7 @@
 window.VirtualStorageUI = (() => {
   const dialog = $("#virtual-storage-dialog"), form = $("#virtual-storage-form");
   let latest = null, inspected = [], receipt = null, timer = null, rendering = false;
-  let desiredCacheMode = null, activeTab = "overview", replicationView = "panels";
+  let desiredCacheMode = null, activeTab = "overview";
   function selectTab(name) {
     if (!["overview", "mirror", "cache", "capacity", "files", "settings"].includes(name)) name = "overview";
     activeTab = name;
@@ -186,13 +186,6 @@ window.VirtualStorageUI = (() => {
     if (event.target.id === "vs-cache-mode") desiredCacheMode = event.target.value;
   });
   $("#virtual-storage-status").addEventListener("click", async (event) => {
-    const view = event.target.closest("[data-vs-view]");
-    if (view) {
-      replicationView = view.dataset.vsView;
-      $("#vs-replicas").classList.toggle("vs-list", replicationView === "list");
-      $$("[data-vs-view]").forEach((b) => b.setAttribute("aria-pressed", String(b === view)));
-      return;
-    }
     const browse = event.target.closest("[data-vs-browse]"), rename = event.target.closest("[data-vs-rename]");
     const pool = StorageView.pools(state.pools).find(ownsPool);
     if (browse && pool) { openPoolView(pool.node, pool.name); return; }
@@ -311,29 +304,83 @@ window.VirtualStorageUI = (() => {
         <text x="420" y="737" class="vs-ring-hint">DRAG TO ROTATE · SELECT TO EXPLORE</text>
       </svg></div>`;
   }
-  function replicaTable(data) {
-    return `<div class="vs-replica-table table-wrap"><table><thead><tr><th>Node</th><th>Role / disk</th><th>Status / quorum</th><th>Peer replication</th><th>Sync</th><th>Out of sync</th><th>Verify remaining</th></tr></thead><tbody>${data.nodes.map((n) => {
-      const r = n.resources?.find((r) => r.name === data.created?.spec.name);
-      const peers = (r?.connections || []).flatMap((c) => c.peer_devices || []);
-      const values = (key, suffix = "") => peers.length ? peers.map((d) => reported(d[key], suffix)).join("<br>") : "Not reported";
-      const disks = r?.devices || [];
-      const quorum = disks.length && disks.every((d) => typeof d.quorum === "boolean")
-        ? disks.every((d) => d.quorum) ? "Yes" : "No" : "Not reported";
-      return `<tr><td>${esc(n.display_name || n.name)}</td><td>${esc(n.role === "witness" ? "Arbiter" : r?.role || "Data node")}<small>${reported(disks.map((d) => d["disk-state"]).filter(Boolean).join(", "))}</small></td><td>${n.healthy ? "Online" : "Offline"}<small>Quorum: ${quorum}</small></td><td>${values("replication-state")}</td><td>${values("percent-in-sync", "%")}</td><td>${values("out-of-sync", " KiB")}</td><td>${values("ov-left")}<small>Reported units</small></td></tr>`;
-    }).join("")}</tbody></table></div>`;
+  // A diskless Arbiter is a voter, never a third data copy. Progress and pending
+  // bytes only use the link between the two data nodes; the same backlog is not
+  // added twice just because both peers report it.
+  function mirrorStatus(data) {
+    const name = data.created?.spec?.name;
+    const nodes = (data.nodes || []).filter(n => n.role === "compute").map(n => {
+      const resource = n.resources?.find(r => r.name === name);
+      const disks = resource?.devices || [];
+      const peers = (data.nodes || []).filter(p => p.role === "compute" && p.name !== n.name);
+      const connection = resource?.connections?.find(c => peers.some(p => p.name === c.name));
+      const volumes = connection?.peer_devices || [];
+      const current = !!n.healthy && disks.length > 0 && disks.every(d => d["disk-state"] === "UpToDate" && d.quorum === true)
+        && !resource?.suspended && !resource?.["force-io-failures"];
+      const complete = volumes.length > 0 && volumes.length === disks.length;
+      const valid = (v, key) => typeof v[key] === "number" && Number.isFinite(v[key]) && v[key] >= 0;
+      const percent = complete && volumes.every(v => valid(v, "percent-in-sync") && v["percent-in-sync"] <= 100)
+        ? Math.min(...volumes.map(v => v["percent-in-sync"])) : null;
+      const pending = complete && volumes.every(v => valid(v, "out-of-sync"))
+        ? volumes.reduce((sum, v) => sum + v["out-of-sync"] * 1024, 0) : null;
+      const linked = !!n.healthy && connection?.["connection-state"] === "Connected";
+      const syncing = volumes.some(v => String(v["replication-state"]).startsWith("Sync"));
+      const matched = current && linked && complete && percent === 100 && pending === 0
+        && volumes.every(v => v["replication-state"] === "Established");
+      return {node:n, resource, current, percent, pending, linked, syncing, matched};
+    });
+    const witness = (data.nodes || []).find(n => n.role === "witness");
+    const voter = witness?.resources?.find(r => r.name === name);
+    const voting = !!witness?.healthy && !!voter?.devices?.length && voter.devices.every(d => d.quorum === true)
+      && nodes.length === 2 && nodes.every(n => voter.connections?.some(c => c.name === n.node.name && c["connection-state"] === "Connected"));
+    const online = data.active === true && data.resource?.status?.service === "Started";
+    const percent = nodes.length === 2 && nodes.every(n => n.linked && n.percent != null) ? Math.min(...nodes.map(n => n.percent)) : null;
+    const pending = nodes.length === 2 && nodes.every(n => n.linked && n.pending != null) ? Math.max(...nodes.map(n => n.pending)) : null;
+    const copies = nodes.filter(n => n.current && n.linked).length;
+    const matched = nodes.length === 2 && nodes.every(n => n.matched);
+    const protectedData = online && matched && voting && data.phase === "ready" && !data.error;
+    const syncing = nodes.some(n => n.syncing) || data.phase === "syncing";
+    const tone = protectedData ? "good" : !name ? "unknown" : !online || nodes.some(n => !n.node.healthy) ? "bad" : "attention";
+    const title = protectedData ? "Your data is in sync" : !name ? "No mirror configured"
+      : !online ? "Check storage availability" : syncing ? "Updating the second copy"
+      : !matched ? "Check your data copies" : "Check the Arbiter connection";
+    const note = protectedData ? "Both servers hold a current copy. The Arbiter is connected."
+      : !name ? "Mirror status will appear after storage has been configured."
+      : !online ? "Storage service is not confirmed online. Check the cluster before making changes."
+      : syncing ? "Storage is online while the copies catch up. Full redundancy is not confirmed yet."
+      : !matched ? "Storage is online, but two matching copies are not confirmed. Check the servers below."
+      : "Both copies match, but the Arbiter is not confirmed ready. Check its connection.";
+    return {nodes, witness, voting, online, percent, pending, copies, matched, protectedData, syncing, tone, title, note};
+  }
+  function mirrorBytes(value) {
+    if (value == null) return "—";
+    if (value < 1024) return `${value} B`;
+    const unit = value < 1024**2 ? "KiB" : value < 1024**3 ? "MiB" : "GiB";
+    const divisor = unit === "KiB" ? 1024 : unit === "MiB" ? 1024**2 : 1024**3;
+    return `${(value / divisor).toFixed(1)} ${unit}`;
   }
   function replication(data) {
-    return `<div class="vs-section-head"><div><h3>Replica telemetry</h3><p class="hint">Arbiter votes in quorum and stores no VM data. Verify status is read only.</p></div><div class="vs-view-switch" aria-label="Replica display"><button data-vs-view="panels" aria-pressed="${replicationView === "panels"}">Panels</button><button data-vs-view="list" aria-pressed="${replicationView === "list"}">List</button></div></div>
-      <div id="vs-replicas" class="vs-replicas ${replicationView === "list" ? "vs-list" : ""}">${data.nodes.map((n) => {
-        const r = n.resources?.find((r) => r.name === data.created?.spec.name);
-        const devices = r?.devices || [];
-        const current = devices.length && devices.every((d) => d["disk-state"] === "UpToDate" && d.quorum);
-        return `<article class="vs-replica"><header><h3>${esc(n.display_name || n.name)}</h3><span class="badge ${n.healthy ? "plain" : "failed"}">${!n.healthy ? "Offline" : r ? n.role === "witness" ? "Voting · no VM data" : current ? "Up to date" : "Check replication" : n.software_ready ? "Ready to create" : "Preparation required"}</span></header>
-          ${n.role === "compute" ? gauge((r?.connections || []).flatMap((c) => c.peer_devices || []).map((d) => d["percent-in-sync"]).filter((v) => typeof v === "number").reduce((min, v) => min == null ? v : Math.min(min, v), null), "Replica sync") : ""}
-          <div class="vs-overview">${metric("Role", reported(r?.role || (n.role === "witness" ? "Arbiter" : "Data node")))}${metric("Disk state", reported(devices.map((d) => d["disk-state"]).filter(Boolean).join(", ")))}${metric("Quorum", devices.length && devices.every((d) => typeof d.quorum === "boolean") ? devices.every((d) => d.quorum) ? "Yes" : "No" : "Not reported")}</div>
-          ${(r?.connections || []).map((c) => `<div class="vs-peer"><b>${esc(c.name || "Peer")} · ${reported(c["connection-state"])}</b>${(c.peer_devices || []).map((d) => `<div class="vs-overview">${metric("Replication", reported(d["replication-state"]))}${metric("Sync", reported(d["percent-in-sync"], "%"))}${metric("Out of sync", reported(d["out-of-sync"], " KiB"))}${metric("Verify remaining (reported units)", reported(d["ov-left"]))}</div>`).join("")}</div>`).join("") || '<p class="hint">Peer sync / out-of-sync / verify: Not reported</p>'}
-          ${n.error || n.missing_components?.length ? `<p class="hint">${esc(n.error || n.missing_components.join("; "))}</p>` : ""}</article>`;
-      }).join("")}${replicaTable(data)}</div>`;
+    const s = mirrorStatus(data);
+    const shield = '<svg viewBox="0 0 100 112" fill="none" aria-hidden="true"><path d="M50 5 90 20v34c0 25-22 44-40 53C32 98 10 79 10 54V20Z" fill="currentColor" fill-opacity=".07" stroke="currentColor" stroke-width="1.5"/><path d="M50 15 81 27v26c0 20-17 35-31 43-14-8-31-23-31-43V27Z" stroke="currentColor" stroke-opacity=".3"/>' + (s.protectedData ? '<path d="m31 53 13 13 26-29" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>' : '<path d="M50 36v23M50 73v1" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>') + '</svg>';
+    const nodeIcon = '<svg viewBox="0 0 40 48" fill="none" aria-hidden="true"><rect x="5" y="3" width="30" height="42" rx="5" stroke="currentColor"/><path d="M13 13h15M13 23h15M13 33h15" stroke="currentColor" stroke-width="2"/><circle cx="11" cy="13" r="1" fill="currentColor"/><circle cx="11" cy="23" r="1" fill="currentColor"/><circle cx="11" cy="33" r="1" fill="currentColor"/></svg>';
+    const percent = s.percent == null ? "—" : `${Number(s.percent.toFixed(2))}%`;
+    const chip = (tone, text) => `<span class="mirror-chip ${tone}"><i aria-hidden="true"></i>${esc(text)}</span>`;
+    const fact = (label, value, help) => `<article class="mirror-fact"><span>${esc(label)}</span><strong>${esc(value)}</strong><small>${esc(help)}</small></article>`;
+    const cards = s.nodes.map(n => {
+      const tone = !n.node.healthy ? "bad" : n.matched ? "good" : n.resource ? "attention" : "unknown";
+      const label = !n.node.healthy ? "Offline" : n.matched ? "Copy up to date" : n.syncing ? "Updating copy" : !n.resource ? "Status unavailable" : "Check this copy";
+      const role = n.resource?.role === "Primary" ? "Serving storage" : n.resource?.role === "Secondary" ? "Mirror copy" : "Data server";
+      const help = !n.node.healthy ? "This server cannot currently be reached." : n.matched ? "Current data is available on this server."
+        : n.syncing ? "New changes are being copied to this server." : "A current, matching copy is not confirmed.";
+      return `<article class="mirror-node ${tone}"><div class="mirror-node-top"><span class="mirror-node-icon">${nodeIcon}</span>${chip(tone, label)}</div><small>${esc(role)}</small><h4><a href="#node/${encodeURIComponent(n.node.name)}">${esc(n.node.display_name || n.node.name)} <span aria-hidden="true">↗</span></a></h4><p>${esc(help)}</p><div class="mirror-node-foot"><span class="mirror-link-light ${n.linked ? "good" : "attention"}" aria-hidden="true"></span>${n.linked ? "Connected to the other server" : "Mirror link not confirmed"}</div></article>`;
+    }).join("");
+    return `<section class="mirror-dashboard ${s.tone}" aria-label="Storage mirror status">
+      <div class="mirror-hero"><div class="mirror-emblem">${shield}</div><div class="mirror-hero-copy"><span class="mirror-eyebrow">DATA PROTECTION / LIVE STATUS</span><h3>${esc(s.title)}</h3><p>${esc(s.note)}</p></div>${chip(s.tone, s.protectedData ? "Protected" : s.tone === "unknown" ? "Not configured" : "Needs attention")}</div>
+      <div class="mirror-facts">${fact("Current data copies", `${s.copies} / 2`, "One copy on each data server")}${fact("Mirror sync", percent, s.percent == null ? "Waiting for mirror telemetry" : s.matched ? "Both copies match" : "Lowest reported data-link progress")}${fact("Waiting to sync", mirrorBytes(s.pending), s.pending == null ? "Pending data is not confirmed" : s.pending === 0 ? "No pending data reported" : "Changes still waiting to be copied")}</div>
+      <div class="mirror-servers">${cards || '<p class="hint">No data servers reported.</p>'}</div>
+      <div class="mirror-arbiter"><span class="mirror-voter-icon" aria-hidden="true">◇</span><div><span class="mirror-eyebrow">ARBITER / TIE-BREAKER</span><b>${esc(s.witness?.display_name || s.witness?.name || "No Arbiter reported")}</b><p>Helps the servers agree which copy can serve storage. Stores no VM data.</p></div>${chip(s.voting ? "good" : "attention", s.voting ? "Connected" : "Check connection")}</div>
+      <div class="mirror-footer"><span><i class="mirror-link-light ${s.online ? "good" : "attention"}" aria-hidden="true"></i>Storage ${s.online ? "online" : "availability not confirmed"}</span><span>Updates automatically</span></div>
+    </section>`;
   }
   function workspace(data, pool, running, prepared) {
     const spec = data.created?.spec, status = data.resource?.status;
@@ -378,7 +425,6 @@ window.VirtualStorageUI = (() => {
       const pool = StorageView.pools(state.pools).find(ownsPool);
       const focus = box.contains(document.activeElement) ? document.activeElement : null;
       const focusId = focus?.id;
-      const focusAction = focus?.hasAttribute("data-vs-view") ? focus.dataset.vsView : null;
       const previousScene = document.getElementById("vs-topology");
       box.innerHTML = `<div class="vs-section-head"><span class="badge ${data.phase === "ready" ? "online" : "warning"}">${esc(label)}</span><small>RF2 / SHARED STORAGE</small></div>
         ${data.phase === "syncing" ? '<p class="hint">Storage is serving data while the second copy synchronizes. Full redundancy is not ready yet.</p>' : ""}
@@ -393,7 +439,6 @@ window.VirtualStorageUI = (() => {
       }
       mountScene();
       if (focusId) document.getElementById(focusId)?.focus({preventScroll: true});
-      else if (focusAction) box.querySelector(`[data-vs-view="${focusAction}"]`)?.focus({preventScroll: true});
       if (currentPage() === "storage") timer = setTimeout(() => render().catch(fail), running ? 2500 : 10000);
     } catch (err) { box.textContent = `Could not check Virtual Storage: ${err.message}`; }
     finally { rendering = false; }

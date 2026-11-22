@@ -60,19 +60,20 @@ const assert = require('node:assert/strict');
 const escapes = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => escapes[c]);
 const num = String, nodeName = String, isAdmin = () => false;
-const activeTab = 'overview', replicationView = 'panels';
+const activeTab = 'overview';
 const cacheControls = () => '';
 """
         + "const reported ="
         + components
     )
     code += r"""
-const resource = () => ({name:'virtualstorage',devices:[{'disk-state':'UpToDate',quorum:true}],
-connections:[{'connection-state':'Connected',peer_devices:[{'percent-in-sync':99.5}]}]});
+const resource = (peer='two') => ({name:'virtualstorage',
+devices:[{'disk-state':'UpToDate',quorum:true}],
+connections:[{name:peer,'connection-state':'Connected',peer_devices:[{'percent-in-sync':99.5}]}]});
 const data = {phase:'ready',
 created:{spec:{name:'virtualstorage',virtual_ip:'10.0.0.1',size_gib:100}},
 nodes:[{name:'one',role:'compute',healthy:true,resources:[resource()]},
-{name:'two',role:'compute',healthy:true,resources:[resource()]}],
+{name:'two',role:'compute',healthy:true,resources:[resource('one')]}],
 cache:[{node:'one',mode:'writeback',dirty_bytes:0},{node:'two',dirty_bytes:12*1024**2}]};
 const pool = {name:'virtualstorage',capacity_gb:100,allocation_gb:25,available_gb:75,
 members:[{node:'one'}]};
@@ -113,6 +114,53 @@ const missing = topologyScene({nodes:[],cache:[]},null);
 assert(missing.includes('class="vs-missing">—'));
 assert(!missing.includes('NaN'));
 assert(!missing.includes('Online'));
+// Mirror summaries must never count the diskless voter as a data copy or use
+// its 100% link to mask data-node sync/backlog problems.
+const mirror = structuredClone(data);
+mirror.active = true; mirror.resource = {status:{service:'Started',state:'OK'}};
+mirror.nodes[0].healthy = true;
+for (const n of mirror.nodes) {
+  const r=n.resources[0];
+  r.connections[0].peer_devices=[{'percent-in-sync':100,'out-of-sync':0,'replication-state':'Established'}];
+  r.connections.push({name:'arbiter','connection-state':'Connected',peer_devices:[{'percent-in-sync':100,'out-of-sync':0,'replication-state':'Established'}]});
+}
+mirror.nodes.push({name:'arbiter',role:'witness',healthy:true,resources:[{name:'virtualstorage',devices:[{'disk-state':'Diskless',quorum:true}],connections:[{name:'one','connection-state':'Connected'},{name:'two','connection-state':'Connected'}]}]});
+assert.equal(mirrorStatus(mirror).protectedData,true);
+assert.equal(mirrorStatus(mirror).copies,2);
+assert.equal(mirrorStatus(mirror).pending,0);
+assert(replication(mirror).includes('Your data is in sync'));
+assert(!replication(mirror).includes('Established'));
+assert(!replication(mirror).includes('Diskless'));
+assert(!replication(mirror).includes('Verify remaining'));
+assert(!replication(mirror).includes('Replica telemetry'));
+mirror.nodes[0].resources[0].connections[0].peer_devices[0]['percent-in-sync']=96.5;
+assert.equal(mirrorStatus(mirror).percent,96.5);
+assert.equal(mirrorStatus(mirror).protectedData,false);
+for (const n of mirror.nodes.slice(0,2)) {
+  const r=n.resources[0];r.devices.push({'disk-state':'UpToDate',quorum:true});
+  r.connections[0].peer_devices=[{'percent-in-sync':90,'out-of-sync':2,'replication-state':'SyncSource'},{'percent-in-sync':95,'out-of-sync':3,'replication-state':'SyncSource'}];
+}
+assert.equal(mirrorStatus(mirror).pending,5*1024); // one backlog, not both peers added together
+assert.equal(mirrorStatus(mirror).percent,90);
+assert(mirrorStatus(mirror).syncing);
+assert.equal(mirrorBytes(mirrorStatus(mirror).pending),'5.0 KiB');
+mirror.nodes[0].resources[0].connections[0].peer_devices[0]['out-of-sync']=undefined;
+assert.equal(mirrorStatus(mirror).pending,null);
+assert.equal(mirrorStatus(mirror).protectedData,false);
+mirror.nodes[0].healthy=false;
+assert.equal(mirrorStatus(mirror).percent,null);
+assert(!replication(mirror).includes('Protected</span>'));
+mirror.nodes[0].healthy=true;
+mirror.nodes[2].healthy=false;
+assert.equal(mirrorStatus(mirror).voting,false);
+mirror.active=false;
+assert.equal(mirrorStatus(mirror).online,false);
+assert.equal(mirrorStatus(mirror).protectedData,false);
+assert.equal(mirrorStatus({nodes:[],cache:[]}).protectedData,false);
+assert.equal(mirrorStatus({nodes:[],cache:[]}).pending,null);
+assert(!replication({nodes:[],cache:[]}).includes('NaN'));
+mirror.nodes[0].display_name='<img src=x onerror=alert(1)>';
+assert(!replication(mirror).includes('<img'));
 pool.display_name = '<img src=x onerror=alert(1)>';
 assert(!topologyScene(data,pool).includes('<img'));
 pool.allocation_gb=200;
