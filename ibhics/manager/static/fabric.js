@@ -15,7 +15,23 @@ window.FabricMap = (() => {
   const liveBtn = $id("fabric-live"), playBtn = $id("fabric-play"), backBtn = $id("fx-back");
   const ctx = canvas.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)");
-  const H1 = "#3ef0ff", H2 = "#7fb8ff", PINK = "#ff8fd8", GREEN = "#6dffb3", RED = "#ff6b7a", AMBER = "#ffcb66";
+  let H1 = "#3ef0ff", H2 = "#7fb8ff", PINK = "#ff8fd8", GREEN = "#6dffb3", RED = "#ff6b7a", AMBER = "#ffcb66";
+  let lightPaint = false, paintTheme = "", labelBackground = "rgba(4,18,31,.84)", labelText = "#e8fbff";
+  function syncPaint() {
+    const theme = document.documentElement.dataset.theme || "dark";
+    if (paintTheme === theme) return;
+    paintTheme = theme; lightPaint = theme === "light";
+    const css = lightPaint ? getComputedStyle(document.documentElement) : null;
+    const paint = (name, fallback) => css?.getPropertyValue(name).trim() || fallback;
+    H1 = paint("--canvas-cyan", "#3ef0ff"); H2 = paint("--canvas-blue", "#7fb8ff");
+    PINK = paint("--canvas-pink", "#ff8fd8"); GREEN = paint("--canvas-green", "#6dffb3");
+    RED = paint("--canvas-red", "#ff6b7a"); AMBER = paint("--canvas-amber", "#ffcb66");
+    NET_COLORS.splice(0, NET_COLORS.length, H1, PINK, paint("--canvas-violet", "#b49bff"), GREEN, AMBER, paint("--canvas-orange", "#ff9f7a"));
+    labelBackground = paint("--canvas-label-bg", "rgba(4,18,31,.84)");
+    labelText = paint("--canvas-label-text", "#e8fbff");
+    scene.nets.forEach((net, i) => { net.color = NET_COLORS[i % NET_COLORS.length]; });
+    panels();
+  }
   const NET_COLORS = [H1, PINK, "#b49bff", GREEN, AMBER, "#ff9f7a"];
   const HOME = { yaw: 0.6, tilt: 0.38, zoom: 1 };
   const view = { ...HOME, spin: true, vyaw: 0 };
@@ -244,17 +260,18 @@ window.FabricMap = (() => {
     const bx = x + 26, by = y - h - 18;
     ctx.strokeStyle = hexA(color, 0.8); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x + 10, y - 10); ctx.lineTo(bx, by + h); ctx.lineTo(bx + w, by + h); ctx.stroke();
-    ctx.fillStyle = "rgba(4,18,31,.84)"; ctx.fillRect(bx, by, w, h);
+    ctx.fillStyle = labelBackground; ctx.fillRect(bx, by, w, h);
     ctx.fillStyle = color; ctx.fillRect(bx, by, 3, h);
     ctx.textAlign = "left";
     lines.forEach((l, i) => {
       ctx.font = `${i ? "" : "600 "}11px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      ctx.fillStyle = i ? hexA(color, 0.95) : "#e8fbff"; ctx.fillText(l, bx + 10, by + 16 + i * 15);
+      ctx.fillStyle = i ? hexA(color, 0.95) : labelText; ctx.fillText(l, bx + 10, by + 16 + i * 15);
     });
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = lightPaint ? "source-over" : "lighter";
   }
 
   function draw(t) {
+    syncPaint();
     W = canvas.clientWidth; H = canvas.clientHeight;
     const dpr = devicePixelRatio || 1;
     if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) { canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); }
@@ -271,7 +288,7 @@ window.FabricMap = (() => {
     if (playing && t >= nextStep) { nextStep = t + 450; step(); }
     hits = [];
     const snap = moment(), cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.33 * view.zoom;
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = lightPaint ? "source-over" : "lighter";
     if (mode === "inside") { if (!inside3d) drawInside(t, snap); ctx.globalCompositeOperation = "source-over"; return; }
 
     // HUD rings around the globe, turning slowly, with four brackets.
@@ -374,7 +391,7 @@ window.FabricMap = (() => {
       ctx.fillStyle = "rgba(62,240,255,.06)"; ctx.fill(); ctx.stroke();
       for (let f = 6; f < h - 2; f += 6) { // lit floors
         const on = still.matches || Math.sin(t / 500 + f + bx) > -0.6;
-        ctx.strokeStyle = hexA(on ? "#b8fbff" : H1, on ? 0.8 : 0.25);
+        ctx.strokeStyle = hexA(on ? (lightPaint ? GREEN : "#b8fbff") : H1, on ? 0.8 : 0.25);
         ctx.beginPath(); ctx.moveTo(bx + 2, y - f - 0.3 * (f / h) * 0); ctx.lineTo(bx + w - 2, y - d - f + 1); ctx.stroke();
       }
     };
@@ -443,13 +460,13 @@ window.FabricMap = (() => {
       const sg = ctx.createLinearGradient(sx - 50, 0, sx, 0); sg.addColorStop(0, hexA(color, 0)); sg.addColorStop(1, hexA(color, 0.12));
       ctx.fillStyle = sg; ctx.fillRect(Math.max(x, sx - 50), y, Math.min(50, sx - x), h);
     }
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = lightPaint ? "source-over" : "lighter";
   }
   function text(x, y, str, color, size = 11, align = "center", weight = "") {
     ctx.globalCompositeOperation = "source-over";
     ctx.font = `${weight} ${size}px ui-monospace, SFMono-Regular, Menlo, monospace`; ctx.textAlign = align;
     ctx.fillStyle = color; ctx.fillText(str, x, y);
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = lightPaint ? "source-over" : "lighter";
   }
   function wire(a, b, color, t, amount, bend = 0) {
     const mid = [(a[0] + b[0]) / 2 + bend, (a[1] + b[1]) / 2];

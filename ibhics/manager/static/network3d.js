@@ -333,12 +333,43 @@ function layout(w,h) {
     if(l.kind==='vm')l.el.children[1].hidden=dim;
   }
 }
+// Keep original material colors/blending for an exact return to dark mode.
+const themeMaterials = new WeakMap();
+let materialsLight = false;
+function syncMaterialTheme() {
+  const light = document.documentElement?.dataset.theme === 'light';
+  if (!light && !materialsLight) return;
+  materialsLight = light;
+  const css = light ? getComputedStyle(document.documentElement) : null;
+  scene.traverse(object => {
+    for (const material of object.material ? (Array.isArray(object.material) ? object.material : [object.material]) : []) {
+      if (!material.color || material.map) continue;
+      let original = themeMaterials.get(material);
+      if (!original) {
+        original = {color:material.color.clone(), blending:material.blending, light:false};
+        themeMaterials.set(material, original);
+      }
+      if (original.light === light) continue;
+      if (light) {
+        const hsl = original.color.getHSL({});
+        if (hsl.l < .2) material.color.set(css.getPropertyValue('--surface-3').trim());
+        else if (hsl.s < .12) material.color.set(css.getPropertyValue('--scene-ink').trim());
+        else material.color.setHSL(hsl.h, Math.min(.76, Math.max(.48, hsl.s)), .29);
+        material.blending = THREE.NormalBlending;
+      } else {
+        material.color.copy(original.color); material.blending = original.blending;
+      }
+      original.light = light; material.needsUpdate = true;
+    }
+  });
+}
 function draw(time=0) {
   frame=0;if(mode==='top'){drawTopLines();return;}if(!active())return;
   const w=host.clientWidth,h=host.clientHeight;if(!w||!h)return;
   if(renderer.domElement.width!==Math.round(w*renderer.getPixelRatio())||renderer.domElement.height!==Math.round(h*renderer.getPixelRatio()))renderer.setSize(w,h,false);
   if(Math.abs(fitAspect-w/h)>.001)fit();
   for(const p of particles){p.mesh.visible=$('#nw-traffic').checked;if(p.mesh.visible)p.mesh.position.copy(p.curve.getPoint(motion.matches?p.offset:(time/1000*p.speed+p.offset)%1));}
+  syncMaterialTheme();
   renderer.render(scene,camera);layout(w,h);
   if(!motion.matches&&$('#nw-traffic').checked&&particles.length)frame=requestAnimationFrame(draw);
 }
@@ -412,3 +443,5 @@ new MutationObserver(wake).observe($('#tab-net-topology'),{attributes:true,attri
 document.addEventListener('visibilitychange',wake);motion.addEventListener('change',wake);
 window.Network3D={update,colors,dragging:()=>Boolean(drag||topDrag)};
 if(window.NetworkUI?.getData().networks.length)update();
+
+new MutationObserver(wake).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});

@@ -32,6 +32,15 @@
 </style>
 <link rel="stylesheet" href="future.css">
 <link rel="stylesheet" href="command.css">
+<link rel="stylesheet" href="light-theme.css">
+<script>
+// Apply the workspace preference before the login form paints.
+try {
+  const theme = localStorage.getItem("ibhics-theme");
+  // Login historically has its own dark palette without a data-theme attribute.
+  if (theme === "light") document.documentElement.dataset.theme = theme;
+} catch { /* Storage can be unavailable in private sessions. */ }
+</script>
 </head>
 <body class="login-page">
 <section class="login-hero" aria-label="ibHiCS infrastructure platform">
