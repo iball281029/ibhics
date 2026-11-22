@@ -19,8 +19,10 @@ from pathlib import Path
 from ..backup import BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
 from ..backup.repository import parse_id
 from ..backup.targets import repository_identity
+from ..backup.upgrade_guard import GUARD_PATH, upgrade_guard
 from ..cluster import Cluster, Member, NodeUnavailable
 from ..hypervisor import VMExists
+from .events import publish
 
 AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -43,6 +45,7 @@ class Policy:
     keep_last: int = 7
     enabled: bool = True
     last_run: str | None = None
+    created: str | None = None
     mode: str = "incremental"
     full_weekday: int | None = None
     synthetic_weekday: int | None = None
@@ -59,8 +62,17 @@ class Policy:
     verify_after_backup: bool = False
     verify_pool: str | None = None
     verify_timeout: int = 300
+    retries: int = 2
+    retry_delay_minutes: int = 15
+    rpo_hours: float | None = None
 
     def validate(self) -> None:
+        if type(self.retries) is not int or not 0 <= self.retries <= 10:
+            raise ValueError("Retries must be 0 through 10")
+        if type(self.retry_delay_minutes) is not int or not 1 <= self.retry_delay_minutes <= 1440:
+            raise ValueError("Retry delay must be 1 through 1440 minutes")
+        if self.rpo_hours is not None and self.rpo_hours <= 0:
+            raise ValueError("RPO hours must be positive")
         if not 1 <= self.verify_timeout <= 3600:
             raise ValueError("Verification timeout must be 1 through 3600 seconds")
         if self.verify_after_backup and not self.verify_pool:
@@ -106,7 +118,12 @@ class Policy:
             return last is None or now - last >= timedelta(hours=self.every_hours)
         hour, minute = (int(x) for x in self.at.split(":"))
         slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        return now >= slot and (last is None or last < slot)
+        if now < slot:
+            slot -= timedelta(days=1)
+        created = datetime.fromisoformat(self.created) if self.created else None
+        return (last is not None and last < slot) or (
+            last is None and (slot.date() == now.date() or created is not None and created <= slot)
+        )
 
 
 PROGRESS_POLL = 2.0  # s between looks at a long task's progress
@@ -128,6 +145,10 @@ class Job:
     step: str = ""  # long tasks: what runs now, and how far (move-disks)
     percent: float | None = None
     report: dict = field(default_factory=dict)
+    attempt: int = 0
+    retry_at: str | None = None
+    vm_uuid: str | None = None
+    scheduled: bool = False
 
 
 class BackupManager:
@@ -138,6 +159,9 @@ class BackupManager:
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         executor: Executor | None = None,
     ) -> None:
+        self.notify = lambda *args, **kwargs: None
+        self.record_backup = lambda job: None
+        self.guard_path = GUARD_PATH
         self._cluster = cluster
         self._state_path = state_path
         self._clock = clock
@@ -213,6 +237,7 @@ class BackupManager:
             self._validate_policy_targets(policy)
             if policy.name in self._policies:
                 raise VMExists(f"a backup policy named {policy.name!r} already exists")
+            policy.created = policy.created or self._clock().isoformat()
             self._policies[policy.name] = policy
             self._save()
         return policy
@@ -240,7 +265,7 @@ class BackupManager:
                 raise ValueError("The schedule name cannot be changed")
             policy.validate()
             self._validate_policy_targets(policy)
-            updated = replace(policy, last_run=current.last_run)
+            updated = replace(policy, last_run=current.last_run, created=current.created)
             self._policies[name] = updated
             try:
                 self._save()
@@ -273,12 +298,46 @@ class BackupManager:
             return []
         now = self._clock()
         jobs = []
+        for job in self.jobs():
+            if (
+                job.state != "retry_wait"
+                or not job.retry_at
+                or now < datetime.fromisoformat(job.retry_at)
+            ):
+                continue
+            policy = self._policies.get(job.policy)
+            if not policy or not policy.enabled:
+                job.state, job.retry_at = "cancelled", None
+                with self._lock:
+                    self._save()
+                continue
+            job.attempt += 1
+            try:
+                member, vm = self._cluster.find_vm(job.vm_uuid)
+            except Exception:
+                self._retry_failed(job, policy)
+                continue
+            job.retry_at = None
+            self._backup_job(
+                member,
+                vm.uuid,
+                vm.spec.name,
+                policy.target,
+                policy.keep_last,
+                policy.name,
+                settings=policy,
+                existing=job,
+            )
+            jobs.append(job)
         for policy in self.policies():
-            if policy.due(now):
-                jobs.extend(self.run_policy(policy.name, now))
+            if policy.due(now) and not any(
+                j.policy == policy.name and j.state in ("queued", "running", "retry_wait")
+                for j in self.jobs()
+            ):
+                jobs.extend(self.run_policy(policy.name, now, scheduled=True))
         return jobs
 
-    def run_policy(self, name: str, now: datetime | None = None) -> list[Job]:
+    def run_policy(self, name: str, now: datetime | None = None, scheduled=False) -> list[Job]:
         with self._lock:
             policy = self._policies.get(name)
             if policy is None:
@@ -299,6 +358,7 @@ class BackupManager:
                         policy.keep_last,
                         policy.name,
                         settings=policy,
+                        scheduled=scheduled,
                     )
                 )
         return jobs
@@ -339,8 +399,13 @@ class BackupManager:
         policy: str | None,
         mode="incremental",
         settings: Policy | None = None,
+        scheduled=False,
+        existing: Job | None = None,
     ) -> Job:
-        job = self._new_job("backup", target_name, vm_name, member.name, policy)
+        job = existing or self._new_job("backup", target_name, vm_name, member.name, policy)
+        job.node, job.target = member.name, target_name
+        job.vm_uuid = uuid
+        job.scheduled = scheduled or job.scheduled
 
         def work() -> str:
             target = self.target(target_name)
@@ -446,11 +511,25 @@ class BackupManager:
                             job.report["verification"] = {"verified": "failed", "reason": str(exc)}
                         finally:
                             verification.finished = self._clock().isoformat()
+                            if verification.state == "failed":
+                                self.notify(
+                                    "critical",
+                                    "verify",
+                                    f"Verification failed: {vm_name}",
+                                    f"verify:{target_name}:{vm_name}",
+                                )
                 job.step = (
                     "Complete — suspicious data change; review restore point"
                     if info.suspicious
                     else "Complete"
                 )
+                if info.suspicious:
+                    self.notify(
+                        "warning",
+                        "anomaly",
+                        f"Suspicious restore point: {vm_name}",
+                        f"anomaly:{target_name}:{vm_name}",
+                    )
                 job.percent = 100
                 with self._lock:
                     self._save()
@@ -582,7 +661,7 @@ class BackupManager:
 
             threading.Thread(target=watch, daemon=True).start()
         try:
-            with self.vm_busy(uuid):
+            with self.upgrade_guard(), self.vm_busy(uuid):
                 result = work()
             job.state = "done"
             return result
@@ -608,20 +687,127 @@ class BackupManager:
             self._jobs.append(job)
         return job
 
+    def upgrade_guard(self):
+        return upgrade_guard(self.guard_path)
+
+    def _retry_failed(self, job, policy):
+        if job.scheduled and policy and job.attempt < policy.retries:
+            when = self._clock() + timedelta(minutes=policy.retry_delay_minutes)
+            job.state, job.retry_at = "retry_wait", when.isoformat()
+            job.step = f"Retry {job.attempt + 1}/{policy.retries} at {when:%H:%M}"
+        else:
+            job.state, job.retry_at = "failed", None
+            job.finished = self._clock().isoformat()
+            self.record_backup(job)
+            self.notify(
+                "critical", "backup", f"Backup failed: {job.vm}", f"backup:{job.target}:{job.vm}"
+            )
+        with self._lock:
+            self._save()
+
     def _submit(self, job: Job, work: Callable[[], str]) -> None:
+        with self._lock:
+            job.state, job.finished = "queued", None
+            self._save()
+
         def run() -> None:
             job.state = "running"
+            previous = next(
+                (
+                    j
+                    for j in self.jobs()
+                    if j is not job
+                    and j.kind == "backup"
+                    and j.vm == job.vm
+                    and j.target == job.target
+                ),
+                None,
+            )
+            recovered = job.attempt > 0 or (previous is not None and previous.state == "failed")
             try:
-                job.result = work()
-                job.state = "done"
+                with self._lock:
+                    self._save()
+                with self.upgrade_guard():
+                    job.result = work()
+                job.state, job.error, job.retry_at = "done", None, None
+                if job.kind in ("backup", "restore", "recovery"):
+                    publish(
+                        self,
+                        "backup.succeeded" if job.kind == "backup" else "restore.succeeded",
+                        f"{job.kind.title()} completed: {job.vm}",
+                        f"{job.kind}:{job.id}",
+                    )
+                if job.kind == "backup" and recovered:
+                    self.notify(
+                        "info",
+                        "backup",
+                        f"Backup recovered: {job.vm}",
+                        f"backup:{job.target}:{job.vm}",
+                    )
             except Exception as exc:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.state = "failed"
+                if job.kind == "backup":
+                    self._retry_failed(job, self._policies.get(job.policy))
+                elif job.kind in ("restore", "recovery"):
+                    publish(
+                        self, "restore.failed", f"Restore failed: {job.vm}", f"restore:{job.id}"
+                    )
+                elif job.kind == "verify":
+                    self.notify(
+                        "critical",
+                        "verify",
+                        f"Verification failed: {job.vm}",
+                        f"verify:{job.target}:{job.vm}",
+                    )
             job.finished = self._clock().isoformat()
+            if job.kind == "backup" and job.state == "done":
+                self.record_backup(job)
             with self._lock:
                 self._save()
 
         self._executor.submit(run)
+
+    def check_rpo(self):
+        now = self._clock()
+        for policy in self.policies():
+            if not policy.enabled:
+                continue
+            limit = timedelta(hours=policy.rpo_hours or 2 * (policy.every_hours or 24))
+            try:
+                points = [point for _, point in self.list_backups(policy.target)]
+                names = policy.vms or sorted(
+                    {
+                        vm.spec.name
+                        for _, vm in self._cluster.all_vms()
+                        if not vm.spec.recycled and not vm.spec.template
+                    }
+                    | {point.vm_name for point in points}
+                )
+            except Exception:
+                self.notify(
+                    "critical",
+                    "rpo",
+                    f"Cannot check restore points: {policy.name}",
+                    f"rpo-check:{policy.name}",
+                )
+                continue
+            for name in names:
+                recent = [
+                    point
+                    for point in points
+                    if point.vm_name == name
+                    and not point.suspicious
+                    and getattr(point, "verified", "skipped") != "failed"
+                    and now - datetime.fromisoformat(point.created) < limit
+                ]
+                if not recent:
+                    self.notify(
+                        "critical",
+                        "rpo",
+                        f"RPO exceeded: {name} ({policy.name})",
+                        f"rpo:{policy.name}:{name}",
+                    )
 
     # Backups on a target
 

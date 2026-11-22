@@ -72,7 +72,7 @@ const TOPOLOGY = { "standalone": "Standalone", "two-node-witness": "2 nodes + wi
 const POOL_TYPES = { dir: "Folder", disk: "Local disk · thin", nfs: "NFS", iscsi: "iSCSI", lvm: "Disks · LVM" };
 const TARGET_TYPES = { local: "Local disk", nfs: "NFS", smb: "SMB", usb: "USB", iscsi: "iSCSI", fc: "FC", s3: "S3" };
 const SOURCE_TYPES = { vmware: "VMware", kvm: "Proxmox / KVM", ova: "OVA folder", disk: "Disk images", upload: "Uploaded files" };
-const JOB_STATE = { accepted: "Accepted", skipped: "Skipped", queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
+const JOB_STATE = { retry_wait: "Retry scheduled", accepted: "Accepted", skipped: "Skipped", queued: "Queued", running: "Running", done: "Succeeded", failed: "Failed", cancelled: "Cancelled" };
 // Jobs that can be stopped from the Tasks page, and the API call that stops them.
 const CANCEL_PATH = { Import: (id) => `/migrate/jobs/${enc(id)}/cancel`, "Live migration": (id) => `/migrations/${enc(id)}/cancel`, Move: (id) => `/migrations/${enc(id)}/cancel` };
 const isAdmin = () => !state.me || state.me.role === "admin";
@@ -560,6 +560,7 @@ function renderTasks() {
       <span class="spacer"></span><span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span></div>
     ${isActive(t) ? `<div class="task-step">${esc(t.step || (t.state === "queued" ? "Waiting for a free slot" : "Working"))}${t.percent != null ? ` · ${t.percent}%` : ""}</div>
       <div class="bar${t.percent == null ? " busy" : ""}"><i style="width:${t.percent ?? 30}%"></i></div>` : ""}
+    ${t.state === "retry_wait" ? `<div class="task-step">${esc(t.step)}</div>` : ""}
     ${t.error ? `<div class="task-error">${esc(t.error)}</div>` : ""}
     <div class="task-foot"><span>${esc(when(t.created))}</span>${t.log ? `<button class="small" data-task-log="${esc(t.log)}" data-task-title="${esc(t.title)}">Log</button>` : ""}</div>
   </div>`;
@@ -607,7 +608,7 @@ function renderTaskPage() {
 async function renderTaskDetail(t) {
   const box = $("#task-detail");
   if (!t) { box.innerHTML = `<p class="hint">Pick a task to see its details.</p>`; return; }
-  const step = isActive(t) ? esc(t.step || (t.state === "queued" ? "Waiting for a free slot" : "Working")) + (t.percent != null ? ` · ${t.percent}%` : "") : "";
+  const step = (isActive(t) || t.state === "retry_wait") ? esc(t.step || (t.state === "queued" ? "Waiting for a free slot" : "Working")) + (t.percent != null ? ` · ${t.percent}%` : "") : "";
   const rows = [["Type", esc(t.kind)], ["Object", esc(t.title)], ["Details", esc(t.sub)],
     ["Status", `<span class="badge ${esc(t.state)}">${JOB_STATE[t.state] || esc(t.state)}</span>`],
     ["Current step", step], ["Started", esc(when(t.created))], ["Finished", t.finished ? esc(when(t.finished)) : ""],
@@ -4563,7 +4564,7 @@ function renderJobs() {
     <td>${esc(j.node || "")}</td>
     <td>${esc(when(j.created))}</td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.error || j.step || j.result || "")}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
+    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.state === "retry_wait" ? j.step : j.error || j.step || j.result || "")}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
   </tr>`).join("") : empty(7, "No jobs yet");
 }
 
@@ -4713,7 +4714,7 @@ const policyWiz = wizard("policy-dialog", {
       f.scope.value = policy.vms.length ? "pick" : "all";
       f.mode.value = policy.at != null ? "at" : "every";
       f.backup_mode.value = policy.mode;
-      for (const key of ["name", "at", "every_hours", "keep_last", "full_weekday", "synthetic_weekday", "keep_weekly", "keep_monthly", "keep_yearly", "copy_target", "copy_keep_last", "archive_target", "archive_weekday", "archive_keep_weekly", "archive_keep_monthly", "archive_keep_yearly"]) {
+      for (const key of ["retries", "retry_delay_minutes", "rpo_hours", "name", "at", "every_hours", "keep_last", "full_weekday", "synthetic_weekday", "keep_weekly", "keep_monthly", "keep_yearly", "copy_target", "copy_keep_last", "archive_target", "archive_weekday", "archive_keep_weekly", "archive_keep_monthly", "archive_keep_yearly"]) {
         if (policy[key] != null) f[key].value = policy[key];
       }
       f.enabled.checked = policy.enabled;
@@ -4806,6 +4807,9 @@ handlers["policy-dialog"] = async (f, ctx) => {
   body.verify_after_backup = f.get("verify_after_backup") === "on";
   body.verify_pool = f.get("verify_pool") || null;
   body.verify_timeout = Number(f.get("verify_timeout"));
+  body.retries = Number(f.get("retries"));
+  body.retry_delay_minutes = Number(f.get("retry_delay_minutes"));
+  body.rpo_hours = f.get("rpo_hours") ? Number(f.get("rpo_hours")) : null;
   body.mode = f.get("backup_mode");
   for (const key of ["full_weekday", "synthetic_weekday"]) body[key] = f.get(key) === "" ? null : Number(f.get(key));
   for (const key of ["keep_weekly", "keep_monthly", "keep_yearly", "copy_keep_last", "archive_weekday", "archive_keep_weekly", "archive_keep_monthly", "archive_keep_yearly"]) body[key] = Number(f.get(key));

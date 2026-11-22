@@ -535,7 +535,7 @@ def test_viewer_and_empty_custom_role_cannot_mutate_any_endpoint(env):
     count = 0
     for path, operations in client.app.openapi()["paths"].items():
         if not path.startswith("/api/v1/") or path.startswith(
-            ("/api/v1/auth/", "/api/v1/p2v/upload/")
+            ("/api/v1/auth/", "/api/v1/p2v/upload/", "/api/v1/notifications/read")
         ):
             continue
         for operation in operations:

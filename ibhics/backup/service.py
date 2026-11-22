@@ -20,6 +20,7 @@ from .console import console_png
 from .repository import CHUNK_SIZE, BackupInfo, Repository, RepositoryBusy
 from .store import Mounter, S3Store, open_store
 from .targets import BackupTarget, repository_identity
+from .upgrade_guard import protected
 
 
 class VerificationSkipped(RuntimeError):
@@ -53,6 +54,7 @@ class NodeBackup:
         target.validate()
         return open_store(target, self._mounter, self._s3_factory)
 
+    @protected
     def backup(
         self, uuid: str, target: BackupTarget, mode="incremental", progress=None
     ) -> BackupInfo:
@@ -83,6 +85,7 @@ class NodeBackup:
                 with self._driver.export_disks(uuid) as images:
                     return repo.backup(vm, images, spec_to_json(vm.spec), note=reason)
 
+    @protected
     def synthetic_full(self, target, backup_id, progress=None):
         check_quota(target)
         with self._locks[target.name], self._open(target) as store:
@@ -93,6 +96,7 @@ class NodeBackup:
                 immutability_days=target.immutability_days,
             ).synthetic_full(backup_id, progress)
 
+    @protected
     def copy(self, source, destination, backup_id, archive=False, progress=None):
         if repository_identity(source) == repository_identity(destination):
             raise ValueError("Choose a different destination repository")
@@ -123,6 +127,7 @@ class NodeBackup:
         with self._open(target) as store:
             return Repository(store).list(vm_name)
 
+    @protected
     def restore(
         self,
         target: BackupTarget,
@@ -190,6 +195,7 @@ class NodeBackup:
         if shutil.disk_usage(scratch).free < largest + 1024**3:
             raise VerificationSkipped("Insufficient scratch space for verification restore")
 
+    @protected
     def verify(self, target, backup_id, pool, timeout=300):
         """One isolated boot per node. Manager also serializes across the cluster/VM."""
         if not 1 <= timeout <= 3600:
@@ -266,7 +272,8 @@ class NodeBackup:
                 existing = store.root
                 while not existing.exists():
                     existing = existing.parent
-                physical_free = shutil.disk_usage(existing).free
+                disk_usage = shutil.disk_usage(existing)
+                physical_free = disk_usage.free
                 free = physical_free
                 if target.quota_gb:
                     free = min(free, max(0, target.quota_gb * 1024**3 - used))
@@ -276,6 +283,7 @@ class NodeBackup:
                     "basis": "filesystem",
                     "capacity_scope": str(existing.stat().st_dev),
                     "filesystem_free_bytes": physical_free,
+                    "filesystem_total_bytes": disk_usage.total,
                     "quota_bytes": target.quota_gb * 1024**3 if target.quota_gb else None,
                 }
             return {

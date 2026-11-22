@@ -793,10 +793,14 @@ class PolicyIn(BaseModel):
     verify_after_backup: bool = False
     verify_pool: str | None = Field(default=None, pattern=NAME_PATTERN)
     verify_timeout: int = Field(default=300, ge=1, le=3600)
+    retries: int = Field(default=2, ge=0, le=10)
+    retry_delay_minutes: int = Field(default=15, ge=1, le=1440)
+    rpo_hours: float | None = Field(default=None, gt=0)
 
 
 class PolicyOut(PolicyIn):
     last_run: str | None = None
+    created: str | None = None
 
 
 class JobOut(BaseModel):

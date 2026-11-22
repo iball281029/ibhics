@@ -222,6 +222,7 @@ ADMIN_ROUTES = {
 SELF_ROUTES = {
     f"{API}/{path}"
     for path in (
+        "notifications/read",
         "auth/me",
         "auth/logout",
         "auth/password",
@@ -350,11 +351,28 @@ def create_app(
 
             async def schedule() -> None:
                 while True:
-                    await asyncio.to_thread(settings.check, True)
-                    await asyncio.to_thread(backups.tick)
-                    await asyncio.to_thread(replications.tick)
-                    await asyncio.to_thread(recycle.purge_expired)
-                    await asyncio.to_thread(activity.purge)
+                    for name, work in (
+                        ("Update check", lambda: settings.check(True)),
+                        ("Backup schedule", backups.tick),
+                        ("Replication schedule", replications.tick),
+                    ):
+                        try:
+                            await asyncio.to_thread(work)
+                        except Exception:
+                            logging.getLogger(__name__).warning("%s failed; will retry", name)
+                    try:
+                        await asyncio.to_thread(
+                            notifications.monitor, cluster, backups, replications, settings
+                        )
+                    except Exception:
+                        logging.getLogger(__name__).warning("Alert monitoring failed; will retry")
+                    for work in (recycle.purge_expired, activity.purge):
+                        try:
+                            await asyncio.to_thread(work)
+                        except Exception:
+                            logging.getLogger(__name__).warning(
+                                "Scheduled cleanup failed; will retry"
+                            )
                     try:
                         # A node that missed a new VLAN gets it once it is back.
                         await asyncio.to_thread(sync_all_networks)
@@ -391,6 +409,22 @@ def create_app(
 
     replications = replications or ReplicationManager(imports)
     app.state.replications = replications
+    from .notifications import Notifications
+
+    notifications = Notifications(
+        settings.path.with_name("notifications.json") if settings.path else None
+    )
+    app.state.notifications = notifications
+    notifications.storage_status = storage_controller.status
+    backups.notify = notifications.emit
+    backups.record_backup = notifications.record_backup
+    replications.notify = notifications.emit
+    for source in (backups, replications, imports, migrations, settings):
+        source.event = notifications.event
+    if auth:
+        auth.event = notifications.event
+    if ha is not None:
+        ha.event = notifications.event
     install_driver_errors(app)
     install_cluster_errors(app)
 
@@ -398,6 +432,8 @@ def create_app(
 
     approvals = Approvals(auth) if auth else None
     app.state.approvals = approvals
+    if approvals:
+        approvals.event = notifications.event
     settings.approval_required = lambda: bool(approvals and approvals.data["enabled"])
 
     @app.exception_handler(PendingApproval)
@@ -1675,13 +1711,16 @@ def create_app(
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         cluster.require_in_service(member)
-        return VMOut.from_info(member.driver.start_vm(uuid), member.name)
+        vm = member.driver.start_vm(uuid)
+        notifications.event("vm.started", f"VM started: {vm.spec.name}", f"vm:{uuid}:start")
+        return VMOut.from_info(vm, member.name)
 
     @api.post("/vms/{uuid}/stop", response_model=VMOut)
     def stop_vm(uuid: str, body: StopRequest | None = None) -> VMOut:
         cluster.require_quorum()
         member, _ = cluster.find_vm(uuid)
         vm = member.driver.stop_vm(uuid, force=bool(body and body.force))
+        notifications.event("vm.stopped", f"VM stopped: {vm.spec.name}", f"vm:{uuid}:stop")
         return VMOut.from_info(vm, member.name)
 
     @api.post("/vms/{uuid}/restart", response_model=VMOut)

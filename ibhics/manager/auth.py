@@ -24,6 +24,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import quote
 
+from .events import publish
 from .permissions import BUILTIN, CATEGORIES
 from .totp import verify_totp
 
@@ -408,10 +409,24 @@ class Auth:
             ok = verify_password(password, user.password_hash if user else _DUMMY_HASH)
             if not (ok and user and user.enabled):
                 recent.append(now)
+                if len(recent) == self._max_failures:
+                    publish(
+                        self,
+                        "auth.failed_logins",
+                        "Repeated failed sign-ins reached lockout threshold",
+                        f"auth:{name}",
+                    )
                 self._forget_old_failures(now)
                 raise AuthError("wrong username or password")
             if user.totp_secret and not self._second_factor(user, code):
                 recent.append(now)
+                if len(recent) == self._max_failures:
+                    publish(
+                        self,
+                        "auth.failed_logins",
+                        "Repeated failed sign-ins reached lockout threshold",
+                        f"auth:{name}",
+                    )
                 raise AuthError("Enter a valid 6-digit authentication code or unused recovery code")
             self._failures.pop(name, None)
             user.last_login = self._stamp()

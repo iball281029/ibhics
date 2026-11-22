@@ -22,6 +22,7 @@ from ..importer.nics import validate_nics
 from ..replication.providers import capability
 from ..replication.runtime import ClusterRuntime
 from ..replication.store import durable_json
+from .events import publish
 
 
 class SyncStopped(Exception):
@@ -285,6 +286,13 @@ class ReplicationManager:
         def run():
             try:
                 work(job)
+                if operation in ("sync", "cutover"):
+                    publish(
+                        self,
+                        "replication.synced" if operation == "sync" else "replication.cutover_done",
+                        f"Replication {operation} completed: {job.name}",
+                        f"replication:{job.id}:{job.run_started}",
+                    )
             except SyncStopped:
                 with self._lock:
                     job.state, job.error = "paused", None
@@ -301,6 +309,13 @@ class ReplicationManager:
                     job.state = "failed"
                     # Provider/SSH output is intentionally excluded, including passwords.
                     job.error = "Replication operation failed; inspect node and source"
+                    notify = getattr(self, "notify", lambda *args: None)
+                    notify(
+                        "critical",
+                        "replication",
+                        f"Replication failed: {job.name}",
+                        f"replication:{job.id}",
+                    )
             finally:
                 with self._lock:
                     job.operation = None

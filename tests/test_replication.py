@@ -254,6 +254,13 @@ def test_busy_rejected_and_failed_sync_does_not_expose_secrets(env):
     runtime.fail = True
     assert client.post(url + "/sync").json()["state"] == "failed"
     assert "SECRET" not in client.get(url).text
+    notifications = client.get("/api/v1/notifications").json()["events"]
+    assert any(e["event_id"] == "replication.synced" for e in notifications)
+    notifications = [e for e in notifications if e["event_id"] == "replication.failed"]
+    assert len(notifications) == 1
+    assert notifications[0]["category"] == "replication"
+    assert notifications[0]["level"] == "critical"
+    assert "SECRET" not in str(notifications)
     executor = Deferred()
     manager.executor = executor
     assert client.post(url + "/sync").status_code == 202

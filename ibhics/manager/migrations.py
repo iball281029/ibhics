@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from ..cluster import Cluster, Member, NodeUnavailable
 from ..hypervisor import InvalidState, PoolInfo, PoolType, VMInfo, VMState
+from .events import publish
 
 # How the source node's libvirtd reaches the destination's. TLS needs the cluster's
 # libvirt certificates on every node; SSH needs root keys; plain TCP is for labs only.
@@ -291,6 +292,7 @@ class MigrationManager:
                 job.state, job.error = "cancelled", "cancelled by the operator; the VM stayed"
         else:
             job.state = "done"
+            publish(self, "vm.migrated", f"VM migrated: {job.vm}", f"migration:{job.id}")
         finally:
             job.finished = self._now()
             with self._lock:

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from ..cluster import Cluster, Member, NodeRole
 from ..hypervisor import InvalidState, VMState
+from .events import publish
 from .migrations import MigrationManager, _shared
 
 GRACE_S = 90  # NFSv4 lease time: a dead node's image locks are gone after this
@@ -227,6 +228,8 @@ class HighAvailability:
             }
 
     def _event(self, action, vm, node, error=None, detail=None) -> None:
+        if action == "restart" and error is None:
+            publish(self, "ha.restarted", f"HA restarted {vm} on {node}", f"ha:{vm}:{node}")
         with self._lock:
             self.events.append(
                 {

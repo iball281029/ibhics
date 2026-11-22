@@ -22,6 +22,7 @@ from ..importer.diagnostics import test_source
 from ..importer.logs import clean_v2v_log, parse_v2v_log
 from ..importer.nics import validate_nics
 from ..importer.sources import IMAGE_SUFFIXES
+from .events import publish
 
 
 @dataclass
@@ -415,6 +416,14 @@ class ImportManager:
                 job.error, job.state = f"{type(exc).__name__}: {exc}", "failed"
                 if "cancelled by the operator" in str(exc):
                     job.state = "cancelled"
+            if job.state in ("done", "failed"):
+                kind = "p2v" if source.type == SourceType.P2V else "import"
+                publish(
+                    self,
+                    f"{kind}.{job.state}",
+                    f"{kind.upper()} {job.state}: {job.name}",
+                    f"{kind}:{job.id}",
+                )
             job.finished = self._now()
             self._nic_macs.pop(job.id, None)
 
