@@ -273,7 +273,7 @@ function beam(a, b, color, height = 3) {
 // ---------- a stage: renderer, bloom, labels, controls, loop ----------
 
 class Stage {
-  constructor(container, { controls = true, distance = 40, fov = 45, bloom = 0.75, frameRadius = 0, themeAware = false } = {}) {
+  constructor(container, { controls = true, distance = 40, fov = 45, bloom = 0.75, frameRadius = 0, themeAware = true } = {}) {
     this.container = container;
     this.themeAware = themeAware;
     this.materialThemes = new WeakMap();
@@ -340,6 +340,17 @@ class Stage {
   tick(dt, t) {
     const still = reduced.matches;
     const light = this.themeAware && document.documentElement.dataset.theme === "light";
+    const palette = light && typeof getComputedStyle === "function" ? getComputedStyle(document.documentElement) : null;
+    if (this.renderer && this.paintLight !== light) {
+      const background = light ? palette.getPropertyValue("--scene-bg").trim() : 0x020a14;
+      this.renderer.setClearColor(background, this.composer ? 1 : 0);
+      if (this.scene.fog) this.scene.fog.color.set(background);
+      if (this.bloom) {
+        this.darkBloomStrength ??= this.bloom.strength;
+        this.bloom.strength = light ? 0 : this.darkBloomStrength;
+      }
+      this.paintLight = light;
+    }
     this.scene.traverse((o) => {
       if (this.themeAware && o.material) {
         for (const material of Array.isArray(o.material) ? o.material : [o.material]) {
@@ -352,7 +363,7 @@ class Stage {
           if (original.light !== light) {
             if (light) {
               const hsl = original.color.getHSL({});
-              if (hsl.s < 0.12) material.color.set(0x344b68);
+              if (hsl.s < 0.12) material.color.set(palette?.getPropertyValue("--scene-ink").trim() || 0x344b68);
               else material.color.setHSL(hsl.h, Math.min(0.76, Math.max(0.48, hsl.s)), 0.29);
               material.blending = THREE.NormalBlending;
             } else {

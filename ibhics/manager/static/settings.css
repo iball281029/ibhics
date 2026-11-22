@@ -1,54 +1,54 @@
 /* Settings shares the cyan glass palette of Cluster, Backup and Network. */
-#page-system .sheet{--st-muted:#a8bdcf;color:#e0f7ff;padding:24px;border:1px solid #3ef0ff33;border-radius:22px;background:radial-gradient(ellipse at 35% 0,#103e54,#071a2c 45%,#040b17);box-shadow:inset 0 0 100px #00e5ff0d}
-#page-system .page-head{margin:0 0 20px;padding:0 0 18px;border-color:#3ef0ff22}
-#page-system h1{font-size:28px;color:#e8fbff;text-shadow:0 0 18px #3ef0ff55;margin:8px 0}
-#page-system :is(h2,h3,b){color:#e0f7ff}
-#page-system .st-eyebrow{font:11px ui-monospace,monospace;letter-spacing:2px;color:#7eefff}
+#page-system .sheet{--st-muted:var(--theme-muted, #a8bdcf);color:var(--theme-text, #e0f7ff);padding:24px;border:1px solid var(--theme-line, #3ef0ff33);border-radius:22px;background:radial-gradient(ellipse at 35% 0,var(--theme-surface, #103e54),var(--theme-surface, #071a2c) 45%,var(--theme-surface, #040b17));box-shadow:var(--theme-shadow, inset 0 0 100px #00e5ff0d)}
+#page-system .page-head{margin:0 0 20px;padding:0 0 18px;border-color:var(--theme-line, #3ef0ff22)}
+#page-system h1{font-size:28px;color:var(--theme-text, #e8fbff);text-shadow:var(--theme-text-shadow, 0 0 18px #3ef0ff55);margin:8px 0}
+#page-system :is(h2,h3,b){color:var(--theme-text, #e0f7ff)}
+#page-system .st-eyebrow{font:11px ui-monospace,monospace;letter-spacing:2px;color:var(--theme-accent, #7eefff)}
 #page-system :is(.hint,small,dt,label){color:var(--st-muted);line-height:1.7}
 #page-system .tabs{display:flex;flex-wrap:wrap;gap:7px;border:0;margin-bottom:22px}
-#page-system :is(button,.btn){min-height:38px;border:1px solid #3ef0ff55;border-radius:8px;background:#061626;color:#e0f7ff;padding:8px 14px;white-space:normal}
-#page-system :is(button,.btn):hover{background:#103c50;border-color:#3ef0ff}
+#page-system :is(button,.btn){min-height:38px;border:1px solid var(--theme-line, #3ef0ff55);border-radius:8px;background:var(--theme-surface, #061626);color:var(--theme-text, #e0f7ff);padding:8px 14px;white-space:normal}
+#page-system :is(button,.btn):hover{background:var(--theme-surface, #103c50);border-color:var(--theme-line-strong, #3ef0ff)}
 #page-system :is(button,.btn):disabled{opacity:.45;cursor:not-allowed}
-#page-system :is(button,.btn,input,textarea,select):focus-visible{outline:2px solid #bffaff;outline-offset:3px}
-#page-system :is(.primary,.tabs .active){background:linear-gradient(120deg,#086080,#34447c);border-color:#3ef0ff99}
+#page-system :is(button,.btn,input,textarea,select):focus-visible{outline:2px solid var(--theme-line-strong, #bffaff);outline-offset:3px}
+#page-system :is(.primary,.tabs .active){background:linear-gradient(120deg,var(--theme-accent, #086080),var(--theme-accent, #34447c));border-color:var(--theme-line-strong, #3ef0ff99)}
 #page-system .st-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
-#page-system .st-panel{padding:22px;margin-bottom:20px;min-width:0;overflow-wrap:anywhere;border:1px solid #3ef0ff33;border-radius:14px;background:linear-gradient(135deg,#10425d55,#09162b99);box-shadow:inset 0 1px #bff6ff18}
+#page-system .st-panel{padding:22px;margin-bottom:20px;min-width:0;overflow-wrap:anywhere;border:1px solid var(--theme-line, #3ef0ff33);border-radius:14px;background:linear-gradient(135deg,var(--theme-tint, #10425d55),var(--theme-surface, #09162b99));box-shadow:var(--theme-shadow, inset 0 1px #bff6ff18)}
 #page-system .st-panel h3{margin:0 0 12px;font-size:18px}
 #page-system .st-panel p{line-height:1.7}
-#page-system .st-status{display:inline-block;border:1px solid #8eacc8;border-radius:30px;padding:3px 12px;font-size:12px;color:#b8ccdf}
-#page-system .st-status.Active{color:#79ffc2;border-color:#79ffc266}
-#page-system .st-status.Expired{color:#ffb4bd;border-color:#ff869566}
-#page-system .st-expiry{font-size:21px;display:block;margin-top:18px;color:#efffff}
+#page-system .st-status{display:inline-block;border:1px solid var(--theme-line-strong, #8eacc8);border-radius:30px;padding:3px 12px;font-size:12px;color:var(--theme-muted, #b8ccdf)}
+#page-system .st-status.Active{color:var(--theme-ok, #79ffc2);border-color:var(--theme-line, #79ffc266)}
+#page-system .st-status.Expired{color:var(--theme-muted, #ffb4bd);border-color:var(--theme-line, #ff869566)}
+#page-system .st-expiry{font-size:21px;display:block;margin-top:18px;color:var(--theme-text, #efffff)}
 #page-system label{display:grid;gap:7px;margin-bottom:14px;font-size:13px}
 #page-system label.inline{display:flex;align-items:center;gap:10px}
-#page-system :is(input,select,textarea){width:100%;min-width:0;max-width:100%;background:#061626;color:#e0f7ff;border:1px solid #3ef0ff44;border-radius:8px;padding:10px;font:inherit}
-#page-system input[type=checkbox]{width:18px;height:18px;accent-color:#3ef0ff}
+#page-system :is(input,select,textarea){width:100%;min-width:0;max-width:100%;background:var(--theme-surface, #061626);color:var(--theme-text, #e0f7ff);border:1px solid var(--theme-line, #3ef0ff44);border-radius:8px;padding:10px;font:inherit}
+#page-system input[type=checkbox]{width:18px;height:18px;accent-color:var(--theme-accent, #3ef0ff)}
 #page-system fieldset{border:0;padding:0;margin:0;min-width:0}
-#page-system table{background:#071a2c;color:#dff7ff}
-#page-system :is(td,th){border-color:#3ef0ff22;padding:12px}
-#page-system th{color:#a8d8ed;background:#0d2539}
-#page-system pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a7ffdc;background:#041321;padding:16px;border-radius:8px}
-#page-system a{color:#9eeeff}
-#page-system .st-job{padding:12px 0;border-bottom:1px solid #3ef0ff22;display:flex;flex-wrap:wrap;gap:10px}
+#page-system table{background:var(--theme-surface, #071a2c);color:var(--theme-text, #dff7ff)}
+#page-system :is(td,th){border-color:var(--theme-line, #3ef0ff22);padding:12px}
+#page-system th{color:var(--theme-muted, #a8d8ed);background:var(--theme-surface, #0d2539)}
+#page-system pre{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--theme-muted, #a7ffdc);background:var(--theme-surface, #041321);padding:16px;border-radius:8px}
+#page-system a{color:var(--theme-accent, #9eeeff)}
+#page-system .st-job{padding:12px 0;border-bottom:1px solid var(--theme-line, #3ef0ff22);display:flex;flex-wrap:wrap;gap:10px}
 #page-system [hidden]{display:none!important}
 @media(max-width:760px){#page-system .sheet{padding:16px}#page-system .st-grid{grid-template-columns:1fr}#page-system .st-panel{padding:16px}#page-system .tabs button{flex:1 1 135px}}
 
 /* Admin password reset dialog */
-dialog.pw-reset{border:1px solid #3ef0ff55;border-radius:16px;background:linear-gradient(160deg,#0f3b55,#071629);color:#dff7ff;padding:22px;width:min(520px,92vw);box-shadow:0 0 40px -12px #3ef0ff}
-dialog.pw-reset::backdrop{background:#020812aa}
+dialog.pw-reset{border:1px solid var(--theme-line, #3ef0ff55);border-radius:16px;background:linear-gradient(160deg,var(--theme-surface, #0f3b55),var(--theme-surface, #071629));color:var(--theme-text, #dff7ff);padding:22px;width:min(520px,92vw);box-shadow:var(--theme-shadow, 0 0 40px -12px #3ef0ff)}
+dialog.pw-reset::backdrop{background:var(--theme-surface, #020812aa)}
 dialog.pw-reset h3{margin:0 0 8px}
 dialog.pw-reset .pw-row{display:flex;gap:8px;margin:14px 0}
-dialog.pw-reset .pw-row input{flex:1;font:15px ui-monospace,monospace;padding:10px;border-radius:10px;border:1px solid #3ef0ff44;background:#04101c;color:#fff}
+dialog.pw-reset .pw-row input{flex:1;font:15px ui-monospace,monospace;padding:10px;border-radius:10px;border:1px solid var(--theme-line, #3ef0ff44);background:var(--theme-surface, #04101c);color:var(--theme-text, #fff)}
 dialog.pw-reset .pw-actions{display:flex;justify-content:flex-end;gap:8px}
 
 .notification-menu { position: relative; }
 .notification-menu summary { cursor: pointer; padding: 10px; }
-.notification-panel { position: absolute; right: 0; top: 100%; width: min(420px, 88vw); max-height: 65vh; overflow: auto; z-index: 100; background: var(--panel, #101b2b); border: 1px solid var(--line, #31556b); box-shadow: 0 12px 40px #0008; }
-.notification-item { padding: 12px; border-bottom: 1px solid var(--line, #31556b); }
+.notification-panel { position: absolute; right: 0; top: 100%; width: min(420px, 88vw); max-height: 65vh; overflow: auto; z-index: 100; background: var(--panel, var(--theme-surface, #101b2b)); border: 1px solid var(--line, var(--theme-line-strong, #31556b)); box-shadow: var(--theme-shadow, 0 12px 40px #0008); }
+.notification-item { padding: 12px; border-bottom: 1px solid var(--line, var(--theme-line-strong, #31556b)); }
 .notification-item p { margin: 6px 0; }
-.notification-item.critical b { color: #ff7e91; }
-.notification-item.warning b { color: #f4cc78; }
-.notification-item.info b { color: #72dcdf; }
+.notification-item.critical b { color: var(--theme-danger, #ff7e91); }
+.notification-item.warning b { color: var(--theme-warn, #f4cc78); }
+.notification-item.info b { color: var(--theme-accent, #72dcdf); }
 .notification-item.is-read { opacity: .6; }
 #notification-config fieldset { margin: 14px 0; display: flex; gap: 12px; flex-wrap: wrap; }
 

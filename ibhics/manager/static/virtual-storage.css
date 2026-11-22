@@ -1,90 +1,90 @@
 /* Storage command center. Shared hologram palette with the Migrate workspace. */
 #page-storage .vs-command {
-  --vs-cyan:#3ef0ff; --vs-text:#cfefff; --vs-dim:#89aaca;
+  --vs-cyan:var(--theme-accent, #3ef0ff); --vs-text:var(--theme-text, #cfefff); --vs-dim:var(--theme-muted, #89aaca);
   position:relative;isolation:isolate;overflow:hidden;padding:24px;
   color:var(--vs-text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  border:1px solid #3ef0ff33;border-radius:22px;
-  background:radial-gradient(ellipse at 50% 0,#0b3a52,#071a2c 48%,#040b17);
-  box-shadow:inset 0 0 100px #00e5ff14;
+  border:1px solid var(--theme-line, #3ef0ff33);border-radius:22px;
+  background:radial-gradient(ellipse at 50% 0,var(--theme-surface, #0b3a52),var(--theme-surface, #071a2c) 48%,var(--theme-surface, #040b17));
+  box-shadow:var(--theme-shadow, inset 0 0 100px #00e5ff14);
 }
-#page-storage .vs-command::before {content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:repeating-linear-gradient(0deg,#3ef0ff05 0 1px,transparent 1px 4px)}
-#page-storage .vs-command .page-head {padding:0 0 20px;margin:0;border-color:#3ef0ff22;gap:12px;flex-wrap:wrap}
-#page-storage .vs-command h1 {color:#e8fbff;font:700 26px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-shadow:0 0 18px #3ef0ff66}
-#page-storage .vs-command :is(h3,b) {color:#dffbff}
+#page-storage .vs-command::before {content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:repeating-linear-gradient(0deg,var(--theme-chart-grid, #3ef0ff05) 0 1px,transparent 1px 4px)}
+#page-storage .vs-command .page-head {padding:0 0 20px;margin:0;border-color:var(--theme-line, #3ef0ff22);gap:12px;flex-wrap:wrap}
+#page-storage .vs-command h1 {color:var(--theme-text, #e8fbff);font:700 26px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-shadow:var(--theme-text-shadow, 0 0 18px #3ef0ff66)}
+#page-storage .vs-command :is(h3,b) {color:var(--theme-text, #dffbff)}
 #page-storage .vs-command h3 {font-size:13px;letter-spacing:1.5px;margin:0 0 12px}
 #page-storage .vs-command :is(.hint,.sub,small) {color:var(--vs-dim);line-height:1.7}
-#page-storage .vs-command :is(button,.btn,select) {min-height:38px;padding:9px 14px;border:1px solid #3ef0ff55;border-radius:0;background:#020a1499;color:var(--vs-text);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px;box-shadow:inset 0 0 12px #3ef0ff08}
+#page-storage .vs-command :is(button,.btn,select) {min-height:38px;padding:9px 14px;border:1px solid var(--theme-line, #3ef0ff55);border-radius:0;background:var(--theme-surface, #020a1499);color:var(--vs-text);font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.5px;box-shadow:var(--theme-shadow, inset 0 0 12px #3ef0ff08)}
 #page-storage .vs-command :is(button,.btn) {clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
-#page-storage .vs-command :is(button,.btn):hover {border-color:#3ef0ff;background:#3ef0ff18}
-#page-storage .vs-command .primary {background:linear-gradient(120deg,#08608099,#34447c88);border-color:#3ef0ff99;color:#efffff}
+#page-storage .vs-command :is(button,.btn):hover {border-color:var(--theme-line-strong, #3ef0ff);background:var(--theme-tint, #3ef0ff18)}
+#page-storage .vs-command .primary {background:linear-gradient(120deg,var(--theme-accent, #08608099),var(--theme-accent, #34447c88));border-color:var(--theme-line-strong, #3ef0ff99);color:var(--theme-on-accent, #efffff)}
 #page-storage .vs-command button:disabled {opacity:.4;cursor:not-allowed}
-#page-storage .vs-command :is(button,.btn,select,[role="tabpanel"]):focus-visible {outline:2px solid #bffaff;outline-offset:3px}
-#page-storage .vs-command select {max-width:100%;min-width:0;white-space:normal;background:#020a14;color:var(--vs-text)}
-#page-storage .vs-command select option {background:#020a14;color:#cfefff}
-#vs-tabs {display:flex;flex-wrap:wrap;gap:8px;padding:20px 0;border-bottom:1px solid #3ef0ff22;margin-bottom:20px}
+#page-storage .vs-command :is(button,.btn,select,[role="tabpanel"]):focus-visible {outline:2px solid var(--theme-line-strong, #bffaff);outline-offset:3px}
+#page-storage .vs-command select {max-width:100%;min-width:0;white-space:normal;background:var(--theme-surface, #020a14);color:var(--vs-text)}
+#page-storage .vs-command select option {background:var(--theme-surface, #020a14);color:var(--theme-text, #cfefff)}
+#vs-tabs {display:flex;flex-wrap:wrap;gap:8px;padding:20px 0;border-bottom:1px solid var(--theme-line, #3ef0ff22);margin-bottom:20px}
 #vs-tabs button {text-transform:uppercase;letter-spacing:1.5px!important}
-#page-storage #vs-tabs [aria-selected="true"],#page-storage .vs-view-switch [aria-pressed="true"] {background:#3ef0ff20;color:#efffff;border-color:#3ef0ff;box-shadow:inset 0 -2px #3ef0ff,inset 0 0 20px #3ef0ff18}
+#page-storage #vs-tabs [aria-selected="true"],#page-storage .vs-view-switch [aria-pressed="true"] {background:var(--theme-tint, #3ef0ff20);color:var(--theme-text, #efffff);border-color:var(--theme-line-strong, #3ef0ff);box-shadow:var(--theme-shadow, inset 0 -2px #3ef0ff,inset 0 0 20px #3ef0ff18)}
 #virtual-storage-status {min-width:0}
 #page-storage .vs-command [hidden] {display:none!important}
 #page-storage .vs-command .vs-section-head {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;margin-bottom:18px}
-#page-storage .vs-command .badge {display:inline-block;border:1px solid currentColor;padding:4px 10px;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#a4b7cb;background:#89aaca0c;border-radius:24px;white-space:normal}
-#page-storage .vs-command .badge.online {color:#6dffb3;background:#6dffb312}
-#page-storage .vs-command .badge.warning {color:#ffcb66;background:#ffcb6612}
-#page-storage .vs-command .badge.failed {color:#ff6b7a;background:#ff6b7a12}
+#page-storage .vs-command .badge {display:inline-block;border:1px solid currentColor;padding:4px 10px;font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--theme-muted, #a4b7cb);background:var(--theme-chart-grid, #89aaca0c);border-radius:24px;white-space:normal}
+#page-storage .vs-command .badge.online {color:var(--theme-ok, #6dffb3);background:var(--theme-chart-grid, #6dffb312)}
+#page-storage .vs-command .badge.warning {color:var(--theme-warn, #ffcb66);background:var(--theme-chart-grid, #ffcb6612)}
+#page-storage .vs-command .badge.failed {color:var(--theme-danger, #ff6b7a);background:var(--theme-chart-grid, #ff6b7a12)}
 #page-storage .vs-command .vs-overview {gap:14px;margin:18px 0;grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
-#page-storage .vs-command .vs-overview>div {min-width:0;padding:18px;border:1px solid #3ef0ff33;border-radius:12px;background:linear-gradient(135deg,#10425d66,#09162b99);box-shadow:inset 0 1px #bff6ff18;overflow-wrap:anywhere}
+#page-storage .vs-command .vs-overview>div {min-width:0;padding:18px;border:1px solid var(--theme-line, #3ef0ff33);border-radius:12px;background:linear-gradient(135deg,var(--theme-surface-2, #10425d66),var(--theme-surface, #09162b99));box-shadow:var(--theme-shadow, inset 0 1px #bff6ff18);overflow-wrap:anywhere}
 #page-storage .vs-command .vs-overview small {display:block;font-size:10px;letter-spacing:1px;margin-bottom:10px}
 #page-storage .vs-command .vs-overview b {display:block;font-size:17px;line-height:1.5}
 /* Explicit opaque dark backing fixes the inherited white SSD cache card. */
-#page-storage .vs-command .vs-cache-panel {background:#071a2c;border:1px solid #3ef0ff44;color:#cfefff;box-shadow:inset 0 0 40px #3ef0ff08;border-radius:12px;padding:20px}
+#page-storage .vs-command .vs-cache-panel {background:var(--theme-surface, #071a2c);border:1px solid var(--theme-line, #3ef0ff44);color:var(--theme-text, #cfefff);box-shadow:var(--theme-shadow, inset 0 0 40px #3ef0ff08);border-radius:12px;padding:20px}
 #page-storage .vs-command .vs-cache-panel .actions {gap:12px}
-#page-storage .vs-command .vs-erase {background:#401b2a99;border-color:#ff6b7a55;color:#ffc2cd;padding:16px;border-radius:10px}
-#page-storage .vs-command .vs-job {background:#0b3044;border:1px solid #3ef0ff55;padding:18px;border-radius:12px;margin-bottom:18px}
+#page-storage .vs-command .vs-erase {background:var(--theme-surface, #401b2a99);border-color:var(--theme-line, #ff6b7a55);color:var(--theme-text, #ffc2cd);padding:16px;border-radius:10px}
+#page-storage .vs-command .vs-job {background:var(--theme-surface, #0b3044);border:1px solid var(--theme-line, #3ef0ff55);padding:18px;border-radius:12px;margin-bottom:18px}
 #page-storage .vs-command .vs-replicas {display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
-#page-storage .vs-command .vs-replica {min-width:0;border:1px solid #3ef0ff33;border-radius:12px;padding:18px;background:#020a1466}
+#page-storage .vs-command .vs-replica {min-width:0;border:1px solid var(--theme-line, #3ef0ff33);border-radius:12px;padding:18px;background:var(--theme-surface, #020a1466)}
 #page-storage .vs-command .vs-replica header {display:flex;align-items:start;justify-content:space-between;gap:12px;flex-wrap:wrap;background:none;padding:0}
 #page-storage .vs-command .vs-replica .vs-overview {grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}
 #page-storage .vs-command .vs-replica .vs-overview>div {padding:10px}
 #page-storage .vs-command .vs-replica .vs-overview b {font-size:12px}
-#page-storage .vs-command .vs-peer {border-top:1px solid #3ef0ff22;padding-top:14px;margin-top:14px;overflow-wrap:anywhere;font-size:12px}
+#page-storage .vs-command .vs-peer {border-top:1px solid var(--theme-line, #3ef0ff22);padding-top:14px;margin-top:14px;overflow-wrap:anywhere;font-size:12px}
 #page-storage .vs-command .vs-replicas.vs-list {grid-template-columns:1fr}
 #page-storage .vs-command .vs-list .vs-replica {border-radius:0}
 #page-storage .vs-command .vs-view-switch {display:flex;gap:0}
 #page-storage .vs-command .vs-view-switch button {clip-path:none}
 /* Two concentric hologram rings with glyphs anchored in the annulus. */
-.vs-scene {position:relative;isolation:isolate;overflow:hidden;border:1px solid #3ef0ff33;border-radius:16px;background:radial-gradient(ellipse at center,#0c334b88,#020c18 72%);touch-action:pan-y;user-select:none}
+.vs-scene {position:relative;isolation:isolate;overflow:hidden;border:1px solid var(--theme-line, #3ef0ff33);border-radius:16px;background:radial-gradient(ellipse at center,var(--theme-surface-2, #0c334b88),var(--theme-surface, #020c18) 72%);touch-action:pan-y;user-select:none}
 .vs-scene .vs-hologram {display:block;width:100%;max-width:840px;height:auto;margin:auto;cursor:grab;touch-action:none}
 .vs-scene .vs-hologram:active {cursor:grabbing}
-.vs-scene text {text-anchor:middle;fill:#dcfaff;font:14px ui-monospace,SFMono-Regular,Menlo,monospace;stroke:none;pointer-events:none}
-.vs-ring-base {fill:none;stroke:#3ef0ff;stroke-width:2;filter:drop-shadow(0 0 4px #3ef0ff55)}
-.vs-ring-base .vs-ring-shadow {stroke:#3ef0ff12;stroke-width:12}
-.vs-ring-base .vs-ring-ticks {stroke:#3ef0ff66;stroke-width:5;stroke-dasharray:2 12}
-.vs-ring-base .vs-progress-track {stroke:#3ef0ff22;stroke-width:7}
-.vs-ring-base .vs-ring-used {stroke:#7df9ff;stroke-width:7;stroke-linecap:round}
-.vs-ring-base .vs-beam {stroke:#ff637c;stroke-width:3;stroke-dasharray:1 14 1 74;stroke-linecap:round}
-.vs-linked .vs-beam {stroke:#3ef0ff;animation:vs-stream 10s linear infinite}
+.vs-scene text {text-anchor:middle;fill:var(--theme-accent, #dcfaff);font:14px ui-monospace,SFMono-Regular,Menlo,monospace;stroke:none;pointer-events:none}
+.vs-ring-base {fill:none;stroke:var(--theme-accent, #3ef0ff);stroke-width:2;filter:var(--theme-filter, drop-shadow(0 0 4px #3ef0ff55))}
+.vs-ring-base .vs-ring-shadow {stroke:var(--theme-chart-grid, #3ef0ff12);stroke-width:12}
+.vs-ring-base .vs-ring-ticks {stroke:var(--theme-accent, #3ef0ff66);stroke-width:5;stroke-dasharray:2 12}
+.vs-ring-base .vs-progress-track {stroke:var(--theme-chart-grid, #3ef0ff22);stroke-width:7}
+.vs-ring-base .vs-ring-used {stroke:var(--theme-accent, #7df9ff);stroke-width:7;stroke-linecap:round}
+.vs-ring-base .vs-beam {stroke:var(--theme-danger, #ff637c);stroke-width:3;stroke-dasharray:1 14 1 74;stroke-linecap:round}
+.vs-linked .vs-beam {stroke:var(--theme-accent, #3ef0ff);animation:vs-stream 10s linear infinite}
 @keyframes vs-stream {to {stroke-dashoffset:-360}}
-.vs-ring-node {color:#3ef0ff;text-decoration:none;cursor:pointer}
-.vs-tone-alert {color:#ff637c}
-.vs-tone-warning {color:#ffcb66}
-.vs-tone-unknown {color:#89aaca}
-.vs-node-pad {fill:#051727;stroke:currentColor;stroke-opacity:.55;stroke-width:1.5}
-.vs-node-icon {fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 3px currentColor)}
+.vs-ring-node {color:var(--theme-accent, #3ef0ff);text-decoration:none;cursor:pointer}
+.vs-tone-alert {color:var(--theme-danger, #ff637c)}
+.vs-tone-warning {color:var(--theme-warn, #ffcb66)}
+.vs-tone-unknown {color:var(--theme-muted, #89aaca)}
+.vs-node-pad {fill:var(--theme-accent, #051727);stroke:currentColor;stroke-opacity:.55;stroke-width:1.5}
+.vs-node-icon {fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;filter:var(--theme-filter, drop-shadow(0 0 3px currentColor))}
 .vs-scene .vs-node-name {font-weight:700;font-size:15px}
-.vs-scene .vs-node-detail {fill:#89aaca;font-size:11px}
+.vs-scene .vs-node-detail {fill:var(--theme-accent, #89aaca);font-size:11px}
 .vs-scene .vs-node-status {fill:currentColor;font-size:11px}
-.vs-ring-node:hover .vs-node-pad,.vs-ring-node:focus-visible .vs-node-pad {fill:#113249;stroke-width:3;stroke-opacity:1}
+.vs-ring-node:hover .vs-node-pad,.vs-ring-node:focus-visible .vs-node-pad {fill:var(--theme-accent, #113249);stroke-width:3;stroke-opacity:1}
 .vs-ring-core {cursor:pointer;text-decoration:none}
-.vs-ring-core circle {fill:#041321;stroke:#3ef0ff22}
-.vs-ring-core:hover circle,.vs-ring-core:focus-visible circle {stroke:#cfffff}
-.vs-scene .vs-core-brand {font-size:11px;letter-spacing:1px;fill:#3ef0ff}
+.vs-ring-core circle {fill:var(--theme-accent, #041321);stroke:var(--theme-chart-grid, #3ef0ff22)}
+.vs-ring-core:hover circle,.vs-ring-core:focus-visible circle {stroke:var(--theme-accent, #cfffff)}
+.vs-scene .vs-core-brand {font-size:11px;letter-spacing:1px;fill:var(--theme-accent, #3ef0ff)}
 .vs-scene .vs-core-pool {font-size:15px;font-weight:700}
 .vs-scene .vs-core-usage {font-size:28px;font-weight:700}
 .vs-scene .vs-core-vip {font-size:14px}
-.vs-scene .vs-missing {font-size:12px;fill:#89aaca}
-.vs-scene .vs-ring-hint {font-size:10px;fill:#89aaca;letter-spacing:2px}
+.vs-scene .vs-missing {font-size:12px;fill:var(--theme-accent, #89aaca)}
+.vs-scene .vs-ring-hint {font-size:10px;fill:var(--theme-accent, #89aaca);letter-spacing:2px}
 .vs-ring-rotation:focus-visible {outline:none}
-.vs-ring-rotation:focus-visible .vs-node-pad {stroke:#fff;stroke-width:3}
+.vs-ring-rotation:focus-visible .vs-node-pad {stroke:var(--theme-muted, #fff);stroke-width:3}
 .vs-motion-paused * {animation-play-state:paused!important}
 @media(max-width:720px) {
   #page-storage .vs-command {padding:14px}
@@ -106,56 +106,56 @@
 #page-storage .vs-command .vs-replica-table {display:none;min-width:0;max-width:100%}
 #page-storage .vs-command .vs-list .vs-replica {display:none}
 #page-storage .vs-command .vs-list .vs-replica-table {display:block}
-#page-storage .vs-command .vs-replica-table table {min-width:780px;background:#020a1466;color:#cfefff;border-collapse:collapse}
+#page-storage .vs-command .vs-replica-table table {min-width:780px;background:var(--theme-surface, #020a1466);color:var(--theme-text, #cfefff);border-collapse:collapse}
 #page-storage .vs-command .vs-replica-table :is(thead,tbody,tr,th,td) {background:transparent}
-#page-storage .vs-command .vs-replica-table :is(th,td) {padding:14px 12px;border-bottom:1px solid #3ef0ff22;text-align:left;font-size:12px}
-#page-storage .vs-command .vs-replica-table th {color:#89aaca;font-size:10px;letter-spacing:1px}
-#page-storage .vs-command .vs-replica-table tr:hover td {background:#3ef0ff08}
+#page-storage .vs-command .vs-replica-table :is(th,td) {padding:14px 12px;border-bottom:1px solid var(--theme-line, #3ef0ff22);text-align:left;font-size:12px}
+#page-storage .vs-command .vs-replica-table th {color:var(--theme-muted, #89aaca);font-size:10px;letter-spacing:1px}
+#page-storage .vs-command .vs-replica-table tr:hover td {background:var(--theme-chart-grid, #3ef0ff08)}
 #page-storage .vs-command .vs-replica-table small {display:block;margin-top:6px;font-size:10px}
 /* Workspace hierarchy is explicit: only one primary panel can be visible. */
-#page-storage {--vs-cyan:#3ef0ff;--vs-text:#cfefff;--vs-dim:#89aaca;color:var(--vs-text)}
+#page-storage {--vs-cyan:var(--theme-accent, #3ef0ff);--vs-text:var(--theme-text, #cfefff);--vs-dim:var(--theme-muted, #89aaca);color:var(--vs-text)}
 #page-storage [hidden] {display:none!important}
 #page-storage .storage-heading {display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:24px;background:none;padding:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-#page-storage .storage-heading small {font-size:10px;letter-spacing:3px;color:#89aaca}
-#page-storage .storage-heading h1 {margin:8px 0 0;font-size:30px;color:#e8fbff;letter-spacing:2px}
-#page-storage .storage-heading>span {font-size:11px;color:#89aaca}
-#storage-tabs {display:flex;gap:8px;margin-bottom:18px;padding:6px;border:1px solid #3ef0ff33;border-radius:12px;background:#020d1cee}
-#page-storage #storage-tabs button {flex:1;min-height:52px;padding:12px;border:1px solid transparent;border-radius:6px;background:transparent;color:#89aaca;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:1.5px}
-#page-storage #storage-tabs button[aria-selected="true"] {color:#e8fbff;border-color:#3ef0ff77;background:linear-gradient(130deg,#0e577166,#092136);box-shadow:inset 0 -2px #3ef0ff}
-#page-storage #storage-tabs button:focus-visible {outline:2px solid #cfffff;outline-offset:2px}
+#page-storage .storage-heading small {font-size:10px;letter-spacing:3px;color:var(--theme-muted, #89aaca)}
+#page-storage .storage-heading h1 {margin:8px 0 0;font-size:30px;color:var(--theme-text, #e8fbff);letter-spacing:2px}
+#page-storage .storage-heading>span {font-size:11px;color:var(--theme-muted, #89aaca)}
+#storage-tabs {display:flex;gap:8px;margin-bottom:18px;padding:6px;border:1px solid var(--theme-line, #3ef0ff33);border-radius:12px;background:var(--theme-surface, #020d1cee)}
+#page-storage #storage-tabs button {flex:1;min-height:52px;padding:12px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--theme-muted, #89aaca);font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:1.5px}
+#page-storage #storage-tabs button[aria-selected="true"] {color:var(--theme-text, #e8fbff);border-color:var(--theme-line-strong, #3ef0ff77);background:linear-gradient(130deg,var(--theme-surface-2, #0e577166),var(--theme-surface, #092136));box-shadow:var(--theme-shadow, inset 0 -2px #3ef0ff)}
+#page-storage #storage-tabs button:focus-visible {outline:2px solid var(--theme-line-strong, #cfffff);outline-offset:2px}
 #page-storage .vs-command {margin:0}
 #page-storage .vs-command .table-wrap {border:0;background:transparent}
-#page-storage .vs-command table {width:100%;background:transparent;color:#cfefff;border-collapse:collapse}
+#page-storage .vs-command table {width:100%;background:transparent;color:var(--theme-text, #cfefff);border-collapse:collapse}
 #page-storage .vs-command :is(thead,tbody,tr,td,th) {background:transparent}
-#page-storage .vs-command th {color:#89aaca;font-size:10px;letter-spacing:1px;background:#04121f66;text-transform:uppercase}
-#page-storage .vs-command :is(th,td) {padding:14px 12px;border-bottom:1px dashed #3ef0ff33;font-size:11px;overflow-wrap:anywhere}
-#page-storage .vs-command tr:hover td {background:#3ef0ff08}
-#page-storage .vs-command .vm-sub {color:#89aaca}
-#page-storage .vs-command .avatar {background:#3ef0ff12;color:#3ef0ff;border-color:#3ef0ff55}
-#page-storage .vs-command .bar {background:#3ef0ff14}
-#page-storage .vs-command .bar>i {background:linear-gradient(90deg,#1f8fff,#3ef0ff)}
-#page-storage .vs-command .danger {color:#ffadb9;border-color:#ff6b7a66;background:#ff6b7a0b}
-#page-storage .vs-view-switch {display:inline-flex;flex-shrink:0;gap:0;border:1px solid #3ef0ff55;background:#020a1466}
+#page-storage .vs-command th {color:var(--theme-muted, #89aaca);font-size:10px;letter-spacing:1px;background:var(--theme-surface, #04121f66);text-transform:uppercase}
+#page-storage .vs-command :is(th,td) {padding:14px 12px;border-bottom:1px dashed var(--theme-line, #3ef0ff33);font-size:11px;overflow-wrap:anywhere}
+#page-storage .vs-command tr:hover td {background:var(--theme-chart-grid, #3ef0ff08)}
+#page-storage .vs-command .vm-sub {color:var(--theme-muted, #89aaca)}
+#page-storage .vs-command .avatar {background:var(--theme-chart-grid, #3ef0ff12);color:var(--theme-accent, #3ef0ff);border-color:var(--theme-line, #3ef0ff55)}
+#page-storage .vs-command .bar {background:var(--theme-chart-grid, #3ef0ff14)}
+#page-storage .vs-command .bar>i {background:linear-gradient(90deg,var(--theme-accent, #1f8fff),var(--theme-accent, #3ef0ff))}
+#page-storage .vs-command .danger {color:var(--theme-muted, #ffadb9);border-color:var(--theme-line, #ff6b7a66);background:var(--theme-chart-grid, #ff6b7a0b)}
+#page-storage .vs-view-switch {display:inline-flex;flex-shrink:0;gap:0;border:1px solid var(--theme-line, #3ef0ff55);background:var(--theme-surface, #020a1466)}
 #page-storage .vs-view-switch button {min-width:38px;min-height:36px;padding:8px;border:0;clip-path:none;border-radius:0;background:transparent}
-#page-storage .vs-view-switch button+button {border-left:1px solid #3ef0ff33}
+#page-storage .vs-view-switch button+button {border-left:1px solid var(--theme-line, #3ef0ff33)}
 #page-storage .vs-view-switch svg {display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linejoin:round}
 #page-storage .storage-panels .table-wrap {overflow:visible}
 #page-storage .storage-panels table {display:block;min-width:0}
 #page-storage .storage-panels thead {display:none}
 #page-storage .storage-panels tbody {display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:16px}
-#page-storage .storage-panels tr {display:flex;flex-direction:column;position:relative;min-width:0;padding:18px;background:linear-gradient(160deg,#0b344599,#04121faa);border:1px solid #3ef0ff44;border-radius:4px 18px 4px 18px;box-shadow:inset 0 1px #bff6ff18}
+#page-storage .storage-panels tr {display:flex;flex-direction:column;position:relative;min-width:0;padding:18px;background:linear-gradient(160deg,var(--theme-surface, #0b344599),var(--theme-surface, #04121faa));border:1px solid var(--theme-line, #3ef0ff44);border-radius:4px 18px 4px 18px;box-shadow:var(--theme-shadow, inset 0 1px #bff6ff18)}
 #page-storage .storage-panels td {display:block!important;border:0;padding:9px 0}
-#page-storage .storage-panels td[data-label]::before {content:attr(data-label);display:block;color:#89aaca;font-size:9px;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:7px}
-#page-storage .storage-panels td:first-child {border-bottom:1px solid #3ef0ff22;padding-bottom:16px;margin-bottom:6px}
+#page-storage .storage-panels td[data-label]::before {content:attr(data-label);display:block;color:var(--theme-muted, #89aaca);font-size:9px;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:7px}
+#page-storage .storage-panels td:first-child {border-bottom:1px solid var(--theme-line, #3ef0ff22);padding-bottom:16px;margin-bottom:6px}
 #page-storage .storage-panels td:first-child::before {display:none}
 #page-storage .storage-panels td:last-child {margin-top:auto}
 #page-storage .storage-panels tr:hover td {background:transparent}
 #page-storage .vs-capacity-layout {display:grid;grid-template-columns:minmax(180px,.7fr) 2fr;gap:20px;align-items:center}
 #page-storage .vs-gauge {position:relative;width:154px;height:154px;margin:12px auto 18px;display:grid;place-items:center}
-#page-storage .vs-gauge svg {position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:#3ef0ff19;stroke-width:5}
-#page-storage .vs-gauge .vs-gauge-fill {stroke:#3ef0ff;stroke-linecap:round}
+#page-storage .vs-gauge svg {position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:var(--theme-chart-grid, #3ef0ff19);stroke-width:5}
+#page-storage .vs-gauge .vs-gauge-fill {stroke:var(--theme-accent, #3ef0ff);stroke-linecap:round}
 #page-storage .vs-gauge div {position:relative;text-align:center}
-#page-storage .vs-gauge b {display:block;font-size:19px;color:#e8fbff}
+#page-storage .vs-gauge b {display:block;font-size:19px;color:var(--theme-text, #e8fbff)}
 #page-storage .vs-gauge small {display:block;font-size:9px;letter-spacing:1px;margin-top:7px}
 #page-storage .vs-cache-panel {margin-top:20px}
 @media(max-width:720px) {
@@ -172,59 +172,59 @@
   #page-storage #storage-tabs button {min-width:0;font-size:8px;letter-spacing:0;padding:10px 2px;overflow-wrap:anywhere}
   #page-storage .storage-heading h1 {font-size:26px}
 }
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(header,footer,.wiz-steps,.tabs,.type-card,.pv-cache,.vs-node-head,.vs-protection,.card) {background:#061b2ccc;border-color:#3ef0ff33;color:#cfefff}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(h3,b,summary) {color:#dffbff}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.type-card:has(input:checked),.tabs button.active) {background:#3ef0ff19;border-color:#3ef0ff;color:#e8fbff}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.vs-erase,#vs-review) {background:#401b2a66;border-color:#ff6b7a55;color:#ffc2cd}
-:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn):focus-visible {outline:2px solid #bffaff;outline-offset:2px}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(header,footer,.wiz-steps,.tabs,.type-card,.pv-cache,.vs-node-head,.vs-protection,.card) {background:var(--theme-surface, #061b2ccc);border-color:var(--theme-line, #3ef0ff33);color:var(--theme-text, #cfefff)}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(h3,b,summary) {color:var(--theme-text, #dffbff)}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.type-card:has(input:checked),.tabs button.active) {background:var(--theme-tint, #3ef0ff19);border-color:var(--theme-line-strong, #3ef0ff);color:var(--theme-text, #e8fbff)}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.vs-erase,#vs-review) {background:var(--theme-surface, #401b2a66);border-color:var(--theme-line, #ff6b7a55);color:var(--theme-text, #ffc2cd)}
+:is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn):focus-visible {outline:2px solid var(--theme-line-strong, #bffaff);outline-offset:2px}
 @media(max-width:720px) {#page-storage .vs-scene>svg {min-width:0}}
 /* Mirror: one operational story, two real data copies, one separate voter. */
 #virtual-storage-status:has(#vs-panel-mirror:not([hidden]))>.vs-section-head:first-child {display:none}
-#page-storage .vs-command .mirror-dashboard {--mirror-tone:#69f3c3;position:relative;isolation:isolate;margin-top:6px;font-family:Inter,system-ui,sans-serif;letter-spacing:normal;color:#e4f7ff}
-#page-storage .vs-command .mirror-dashboard.attention {--mirror-tone:#f7cc80}
-#page-storage .vs-command .mirror-dashboard.bad {--mirror-tone:#ff8fa2}
-#page-storage .vs-command .mirror-dashboard.unknown {--mirror-tone:#9fb9d1}
-#page-storage .vs-command .mirror-hero {position:relative;overflow:hidden;display:flex;align-items:center;gap:28px;padding:30px;border:1px solid #6ee5ff44;border-radius:20px;background:radial-gradient(ellipse at 5% 30%,#50ffc71c,transparent 50%),linear-gradient(110deg,#08283bec,#15203bea);box-shadow:inset 0 1px #ffffff0d,0 14px 50px #0002}
-#page-storage .vs-command .mirror-hero::after {content:"";position:absolute;inset:0;z-index:-1;opacity:.25;background:linear-gradient(90deg,transparent 49.5%,#71c5ff33 50%,transparent 50.5%);background-size:42px 100%;transform:skewX(-18deg);pointer-events:none}
-#page-storage .vs-command .mirror-emblem {color:var(--mirror-tone);flex:0 0 82px;filter:drop-shadow(0 0 16px #51e8c433)}
+#page-storage .vs-command .mirror-dashboard {--mirror-tone:var(--theme-ok, #69f3c3);position:relative;isolation:isolate;margin-top:6px;font-family:Inter,system-ui,sans-serif;letter-spacing:normal;color:var(--theme-text, #e4f7ff)}
+#page-storage .vs-command .mirror-dashboard.attention {--mirror-tone:var(--theme-warn, #f7cc80)}
+#page-storage .vs-command .mirror-dashboard.bad {--mirror-tone:var(--theme-danger, #ff8fa2)}
+#page-storage .vs-command .mirror-dashboard.unknown {--mirror-tone:var(--theme-accent, #9fb9d1)}
+#page-storage .vs-command .mirror-hero {position:relative;overflow:hidden;display:flex;align-items:center;gap:28px;padding:30px;border:1px solid var(--theme-line, #6ee5ff44);border-radius:20px;background:radial-gradient(ellipse at 5% 30%,var(--theme-tint, #50ffc71c),transparent 50%),linear-gradient(110deg,var(--theme-surface, #08283bec),var(--theme-surface, #15203bea));box-shadow:var(--theme-shadow, inset 0 1px #ffffff0d,0 14px 50px #0002)}
+#page-storage .vs-command .mirror-hero::after {content:"";position:absolute;inset:0;z-index:-1;opacity:.25;background:linear-gradient(90deg,transparent 49.5%,var(--theme-tint, #71c5ff33) 50%,transparent 50.5%);background-size:42px 100%;transform:skewX(-18deg);pointer-events:none}
+#page-storage .vs-command .mirror-emblem {color:var(--mirror-tone);flex:0 0 82px;filter:var(--theme-filter, drop-shadow(0 0 16px #51e8c433))}
 #page-storage .vs-command .mirror-emblem svg {display:block;width:82px;height:92px}
 #page-storage .vs-command .mirror-hero-copy {flex:1;min-width:0}
-#page-storage .vs-command .mirror-eyebrow {display:block;font:10px ui-monospace,SFMono-Regular,monospace;letter-spacing:2px;color:#9bbbd2}
-#page-storage .vs-command .mirror-hero h3 {margin:10px 0;font:600 clamp(22px,2.3vw,34px)/1.2 Inter,system-ui,sans-serif;letter-spacing:-.6px;text-transform:none;color:#eafaff}
-#page-storage .vs-command .mirror-hero p {margin:0;color:#acc7d9;font-size:13px;line-height:1.6;max-width:640px}
-#page-storage .vs-command .mirror-chip {display:inline-flex;align-items:center;gap:7px;align-self:center;white-space:nowrap;border:1px solid #89aac344;border-radius:30px;padding:7px 12px;font:500 11px/1.2 Inter,system-ui,sans-serif;color:#b2cbdc;background:#ffffff04}
+#page-storage .vs-command .mirror-eyebrow {display:block;font:10px ui-monospace,SFMono-Regular,monospace;letter-spacing:2px;color:var(--theme-muted, #9bbbd2)}
+#page-storage .vs-command .mirror-hero h3 {margin:10px 0;font:600 clamp(22px,2.3vw,34px)/1.2 Inter,system-ui,sans-serif;letter-spacing:-.6px;text-transform:none;color:var(--theme-text, #eafaff)}
+#page-storage .vs-command .mirror-hero p {margin:0;color:var(--theme-muted, #acc7d9);font-size:13px;line-height:1.6;max-width:640px}
+#page-storage .vs-command .mirror-chip {display:inline-flex;align-items:center;gap:7px;align-self:center;white-space:nowrap;border:1px solid var(--theme-line, #89aac344);border-radius:30px;padding:7px 12px;font:500 11px/1.2 Inter,system-ui,sans-serif;color:var(--theme-muted, #b2cbdc);background:var(--theme-chart-grid, #ffffff04)}
 #page-storage .vs-command .mirror-chip i {width:5px;height:5px;border-radius:50%;background:currentColor}
-#page-storage .vs-command .mirror-chip.good {color:#7bf1ca;border-color:#69f3c344;background:#69f3c308}
-#page-storage .vs-command .mirror-chip.attention {color:#f7cc80;border-color:#f7cc8044}
-#page-storage .vs-command .mirror-chip.bad {color:#ff8fa2;border-color:#ff8fa244}
+#page-storage .vs-command .mirror-chip.good {color:var(--theme-ok, #7bf1ca);border-color:var(--theme-line, #69f3c344);background:var(--theme-chart-grid, #69f3c308)}
+#page-storage .vs-command .mirror-chip.attention {color:var(--theme-warn, #f7cc80);border-color:var(--theme-line, #f7cc8044)}
+#page-storage .vs-command .mirror-chip.bad {color:var(--theme-danger, #ff8fa2);border-color:var(--theme-line, #ff8fa244)}
 #page-storage .vs-command .mirror-facts {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:20px 0}
-#page-storage .vs-command .mirror-fact {position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;padding:23px 26px;background:linear-gradient(140deg,#0b2d42bb,#081624ee);border:1px solid #6ee5ff25;border-radius:15px}
-#page-storage .vs-command .mirror-fact::before {content:"";position:absolute;left:26px;top:0;width:36px;height:2px;background:linear-gradient(90deg,#4be4ee,#9d89ff);box-shadow:0 0 14px #4be4ee55}
-#page-storage .vs-command .mirror-fact>span {font-size:12px;color:#b2ccdd}
-#page-storage .vs-command .mirror-fact strong {font:600 clamp(25px,2.7vw,39px)/1.15 Inter,system-ui,sans-serif;letter-spacing:-1px;color:#d8faff}
-#page-storage .vs-command .mirror-fact small {font-size:11px;line-height:1.5;color:#93b0c5}
+#page-storage .vs-command .mirror-fact {position:relative;overflow:hidden;display:flex;flex-direction:column;gap:10px;padding:23px 26px;background:linear-gradient(140deg,var(--theme-surface, #0b2d42bb),var(--theme-surface, #081624ee));border:1px solid var(--theme-line, #6ee5ff25);border-radius:15px}
+#page-storage .vs-command .mirror-fact::before {content:"";position:absolute;left:26px;top:0;width:36px;height:2px;background:linear-gradient(90deg,var(--theme-surface-2, #4be4ee),var(--theme-surface-2, #9d89ff));box-shadow:var(--theme-shadow, 0 0 14px #4be4ee55)}
+#page-storage .vs-command .mirror-fact>span {font-size:12px;color:var(--theme-muted, #b2ccdd)}
+#page-storage .vs-command .mirror-fact strong {font:600 clamp(25px,2.7vw,39px)/1.15 Inter,system-ui,sans-serif;letter-spacing:-1px;color:var(--theme-text, #d8faff)}
+#page-storage .vs-command .mirror-fact small {font-size:11px;line-height:1.5;color:var(--theme-muted, #93b0c5)}
 #page-storage .vs-command .mirror-servers {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;position:relative;margin:25px 0 18px}
-#page-storage .vs-command .mirror-servers::after {content:"⇄";position:absolute;z-index:1;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:35px;height:35px;border:1px solid #6ee5ff44;border-radius:50%;background:#0b2234;color:#80dbe8;font-size:18px}
-#page-storage .vs-command .mirror-node {min-width:0;border:1px solid #6ee5ff33;border-radius:17px;padding:24px 26px;background:radial-gradient(ellipse at right top,#9e8bff0c,transparent 70%),#041321aa;box-shadow:inset 0 1px #ffffff08}
-#page-storage .vs-command .mirror-node.bad {border-color:#ff8fa255}
+#page-storage .vs-command .mirror-servers::after {content:"⇄";position:absolute;z-index:1;left:50%;top:50%;transform:translate(-50%,-50%);display:grid;place-items:center;width:35px;height:35px;border:1px solid var(--theme-line, #6ee5ff44);border-radius:50%;background:var(--theme-surface, #0b2234);color:var(--theme-accent, #80dbe8);font-size:18px}
+#page-storage .vs-command .mirror-node {min-width:0;border:1px solid var(--theme-line, #6ee5ff33);border-radius:17px;padding:24px 26px;background:radial-gradient(ellipse at right top,var(--theme-chart-grid, #9e8bff0c),transparent 70%),var(--theme-surface, #041321aa);box-shadow:var(--theme-shadow, inset 0 1px #ffffff08)}
+#page-storage .vs-command .mirror-node.bad {border-color:var(--theme-line, #ff8fa255)}
 #page-storage .vs-command .mirror-node-top {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
-#page-storage .vs-command .mirror-node-icon {color:#72dce8;filter:drop-shadow(0 0 9px #4be4ee33)}
+#page-storage .vs-command .mirror-node-icon {color:var(--theme-accent, #72dce8);filter:var(--theme-filter, drop-shadow(0 0 9px #4be4ee33))}
 #page-storage .vs-command .mirror-node-icon svg {width:35px;height:42px}
-#page-storage .vs-command .mirror-node>small {color:#93b0c5;font-size:10px;letter-spacing:1.5px;text-transform:uppercase}
+#page-storage .vs-command .mirror-node>small {color:var(--theme-muted, #93b0c5);font-size:10px;letter-spacing:1.5px;text-transform:uppercase}
 #page-storage .vs-command .mirror-node h4 {margin:8px 0;font:600 20px/1.35 Inter,system-ui,sans-serif;letter-spacing:-.3px;overflow-wrap:anywhere}
-#page-storage .vs-command .mirror-node h4 a {color:#dff7ff;text-decoration:none}
-#page-storage .vs-command .mirror-node h4 a:focus-visible {outline:2px solid #80dbe8;outline-offset:5px}
-#page-storage .vs-command .mirror-node h4 a span {color:#789db8;font-size:15px;margin-left:6px}
-#page-storage .vs-command .mirror-node p {font-size:12px;color:#9ebcd0;line-height:1.6;margin:0 0 22px}
-#page-storage .vs-command .mirror-node-foot {border-top:1px solid #6ee5ff1c;padding-top:15px;display:flex;align-items:center;gap:8px;font-size:11px;color:#a9c8d9}
-#page-storage .vs-command .mirror-link-light {display:inline-block;width:6px;height:6px;flex-shrink:0;border-radius:50%;background:#f7cc80}
-#page-storage .vs-command .mirror-link-light.good {background:#69f3c3;box-shadow:0 0 10px #69f3c344}
-#page-storage .vs-command .mirror-arbiter {display:flex;align-items:center;gap:20px;border:1px solid #a295ff33;border-radius:15px;padding:21px 26px;background:linear-gradient(105deg,#342f5822,#081624bb)}
-#page-storage .vs-command .mirror-voter-icon {color:#b5a5fb;font-size:40px;line-height:1;filter:drop-shadow(0 0 8px #a295ff44)}
+#page-storage .vs-command .mirror-node h4 a {color:var(--theme-text, #dff7ff);text-decoration:none}
+#page-storage .vs-command .mirror-node h4 a:focus-visible {outline:2px solid var(--theme-line-strong, #80dbe8);outline-offset:5px}
+#page-storage .vs-command .mirror-node h4 a span {color:var(--theme-muted, #789db8);font-size:15px;margin-left:6px}
+#page-storage .vs-command .mirror-node p {font-size:12px;color:var(--theme-muted, #9ebcd0);line-height:1.6;margin:0 0 22px}
+#page-storage .vs-command .mirror-node-foot {border-top:1px solid var(--theme-line, #6ee5ff1c);padding-top:15px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--theme-muted, #a9c8d9)}
+#page-storage .vs-command .mirror-link-light {display:inline-block;width:6px;height:6px;flex-shrink:0;border-radius:50%;background:var(--theme-surface, #f7cc80)}
+#page-storage .vs-command .mirror-link-light.good {background:var(--theme-surface, #69f3c3);box-shadow:var(--theme-shadow, 0 0 10px #69f3c344)}
+#page-storage .vs-command .mirror-arbiter {display:flex;align-items:center;gap:20px;border:1px solid var(--theme-line, #a295ff33);border-radius:15px;padding:21px 26px;background:linear-gradient(105deg,var(--theme-tint, #342f5822),var(--theme-surface, #081624bb))}
+#page-storage .vs-command .mirror-voter-icon {color:var(--theme-muted, #b5a5fb);font-size:40px;line-height:1;filter:var(--theme-filter, drop-shadow(0 0 8px #a295ff44))}
 #page-storage .vs-command .mirror-arbiter>div {flex:1;min-width:0}
-#page-storage .vs-command .mirror-arbiter b {display:block;margin:7px 0;font-size:15px;color:#e0dcff;overflow-wrap:anywhere}
-#page-storage .vs-command .mirror-arbiter p {margin:0;color:#9fb5cf;font-size:11px;line-height:1.5}
-#page-storage .vs-command .mirror-footer {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;padding:0 2px;color:#8aabc1;font-size:10px}
+#page-storage .vs-command .mirror-arbiter b {display:block;margin:7px 0;font-size:15px;color:var(--theme-text, #e0dcff);overflow-wrap:anywhere}
+#page-storage .vs-command .mirror-arbiter p {margin:0;color:var(--theme-muted, #9fb5cf);font-size:11px;line-height:1.5}
+#page-storage .vs-command .mirror-footer {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:20px;padding:0 2px;color:var(--theme-muted, #8aabc1);font-size:10px}
 #page-storage .vs-command .mirror-footer>span:first-child {display:flex;align-items:center;gap:8px}
 @media(max-width:1050px) {#page-storage .vs-command .mirror-hero {flex-wrap:wrap;gap:18px;padding:23px}#page-storage .vs-command .mirror-hero>.mirror-chip {margin-left:100px}#page-storage .vs-command .mirror-node {padding:20px}#page-storage .vs-command .mirror-fact {padding:20px}}
 @media(max-width:720px) {#page-storage .vs-command .mirror-hero {gap:14px;padding:18px}#page-storage .vs-command .mirror-emblem {flex-basis:48px}#page-storage .vs-command .mirror-emblem svg {width:48px;height:58px}#page-storage .vs-command .mirror-hero h3 {font-size:22px}#page-storage .vs-command .mirror-hero>.mirror-chip {margin-left:62px}#page-storage .vs-command .mirror-facts {gap:8px}#page-storage .vs-command .mirror-fact {padding:16px 10px}#page-storage .vs-command .mirror-fact strong {font-size:24px}#page-storage .vs-command .mirror-fact>span {font-size:10px}#page-storage .vs-command .mirror-fact small {font-size:10px}#page-storage .vs-command .mirror-servers {grid-template-columns:1fr;gap:14px}#page-storage .vs-command .mirror-servers::after {display:none}#page-storage .vs-command .mirror-arbiter {gap:13px;padding:18px;flex-wrap:wrap}#page-storage .vs-command .mirror-arbiter>.mirror-chip {margin-left:50px}#page-storage .vs-command .mirror-footer {flex-wrap:wrap}}
