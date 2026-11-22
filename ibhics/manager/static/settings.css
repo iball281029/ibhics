@@ -32,3 +32,11 @@
 #page-system .st-job{padding:12px 0;border-bottom:1px solid #3ef0ff22;display:flex;flex-wrap:wrap;gap:10px}
 #page-system [hidden]{display:none!important}
 @media(max-width:760px){#page-system .sheet{padding:16px}#page-system .st-grid{grid-template-columns:1fr}#page-system .st-panel{padding:16px}#page-system .tabs button{flex:1 1 135px}}
+
+/* Admin password reset dialog */
+dialog.pw-reset{border:1px solid #3ef0ff55;border-radius:16px;background:linear-gradient(160deg,#0f3b55,#071629);color:#dff7ff;padding:22px;width:min(520px,92vw);box-shadow:0 0 40px -12px #3ef0ff}
+dialog.pw-reset::backdrop{background:#020812aa}
+dialog.pw-reset h3{margin:0 0 8px}
+dialog.pw-reset .pw-row{display:flex;gap:8px;margin:14px 0}
+dialog.pw-reset .pw-row input{flex:1;font:15px ui-monospace,monospace;padding:10px;border-radius:10px;border:1px solid #3ef0ff44;background:#04101c;color:#fff}
+dialog.pw-reset .pw-actions{display:flex;justify-content:flex-end;gap:8px}
