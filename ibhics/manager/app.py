@@ -1412,11 +1412,16 @@ def create_app(
 
     @api.get("/virtual-storage")
     def virtual_storage() -> dict:
+        runtime = storage_controller.status()
         nodes = []
         for member in cluster.members():
             try:
                 if member.local:
-                    probe = software_status(str(member.role), controller=True)
+                    probe = software_status(
+                        str(member.role),
+                        controller=not runtime["created"]
+                        or runtime.get("controller_node") == member.name,
+                    )
                 else:
                     response = member.client.request("GET", "/virtual-storage/readiness")
                     response.raise_for_status()
@@ -1435,7 +1440,6 @@ def create_app(
         plan = None
         if virtual_storage_path.exists():
             plan = VirtualStoragePlan.model_validate_json(virtual_storage_path.read_text())
-        runtime = storage_controller.status()
         resource = runtime["resource"]
         active = bool(resource and resource.get("status", {}).get("service") == "Started")
         phase = "planned" if plan else "unconfigured"

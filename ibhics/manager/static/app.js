@@ -235,10 +235,11 @@ addEventListener("resize", () => { if (!spatialMenu.hidden) setRailExpanded(true
 
 // ---------- navigation ----------
 
-const PAGES = ["home", "fabric", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "tasks", "templates", "recycle", "terminal", "containers"];
+const PAGES = ["home", "fabric", "compute", "storage", "network", "cluster", "backup", "migrate", "activity", "system", "alerts", "tasks", "templates", "recycle", "terminal", "containers"];
 const currentPage = () => {
   const hash = location.hash.slice(1);
   if (hash === "nodes") return "cluster"; // Preserve old node inventory bookmarks.
+  if (hash.startsWith("alerts/")) return "alerts";
   if (hash.startsWith("storage/")) return "storage";
   if (hash.startsWith("vm/")) return "vm";
   if (hash.startsWith("node/")) return "node";
@@ -257,7 +258,7 @@ function show() {
   }
   $$(".page").forEach((p) => p.classList.toggle("active", p.id === `page-${page}`));
   document.body.dataset.section = page;
-  const sectionTitle = {fabric:"Infrastructure map",home:"Overview",compute:"Virtual machines",containers:"Containers",templates:"Templates",storage:"Storage",network:"Network",cluster:"Cluster",backup:"Data protection",migrate:"Migration",activity:"Activity",system:"Settings",tasks:"Jobs",recycle:"Recycle bin",terminal:"Terminal",vm:"Virtual machine",node:"Cluster node"};
+  const sectionTitle = {fabric:"Infrastructure map",home:"Overview",compute:"Virtual machines",containers:"Containers",templates:"Templates",storage:"Storage",network:"Network",cluster:"Cluster",backup:"Data protection",migrate:"Migration",activity:"Activity",alerts:"Alerts",system:"Settings",tasks:"Jobs",recycle:"Recycle bin",terminal:"Terminal",vm:"Virtual machine",node:"Cluster node"};
   $("#workspace-section").textContent = sectionTitle[page] || page;
   const section = { vm: "compute", node: "cluster", recycle: "compute", fabric: "home" }[page] || page;
   $$(".rail a[data-page]").forEach((a) => a.classList.toggle("active", a.dataset.page === section));
@@ -878,6 +879,7 @@ async function refresh(page, auto = false) {
   if (page === "tasks") { await load("imports", "jobs", "moves", "deploys", "settingsTasks", "activity", "vms", "replications"); renderTaskPage(); renderTaskTools(); if (state.me && isAdmin()) renderOps().catch(() => {}); }
   if (page === "activity") { await load("jobs", "moves", "imports", "deploys"); $("#activity-feed").innerHTML = feed(100) || `<li class="hint">Nothing has happened yet.</li>`; }
   if (page === "system") { await load("users"); await renderSystem(); }
+  if (page === "alerts") await window.Alerts.refresh();
   fillSelects();
 }
 
