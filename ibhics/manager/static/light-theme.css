@@ -90,3 +90,25 @@
 :root[data-theme="light"] #page-storage .vs-command :is(button,.btn) {background:#f5f9ff;border-color:#bfd2e8;color:#285c89;box-shadow:none}
 :root[data-theme="light"] #page-storage .vs-command :is(button,.btn).primary {background:var(--grad);border-color:#3559db;color:#fff}
 :root[data-theme="light"] #page-storage .vs-command :is(button,.btn):disabled {background:#edf2f8;border-color:#d6e0ed;color:#697b93;opacity:1}
+/* The orbit nav is a floating arc, never a full rectangular white overlay. */
+:root[data-theme="light"] .spatial-workspace #menu {background:transparent;border:0;box-shadow:none}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item {--icon:#3a658f!important;background:#fffffff5;border:1px solid #d7e2ef;border-radius:14px;padding:4px 12px 4px 6px;max-width:250px;height:60px;box-shadow:0 5px 18px #243a5810;color:#243e60}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-label,:root[data-theme="light"] .spatial-workspace #menu .orbit-item.active .orbit-label {color:#243e60;text-shadow:none;filter:none;font-weight:600}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-label small {color:#536b86;opacity:1;text-shadow:none}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item.active {background:#eaf1ff;border-color:#b5caee}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item.active .orbit-label {color:#284da3}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item:hover,:root[data-theme="light"] .spatial-workspace #menu .orbit-item:focus-visible {background:#f0f5fd;border-color:#8eadd8;outline:2px solid #547dca;outline-offset:2px}
+:root[data-theme="light"] .spatial-workspace #menu :is(.semantic-icon,.depth-icon),:root[data-theme="light"] .spatial-workspace #menu .orbit-item.active .semantic-icon,:root[data-theme="light"] .spatial-workspace #menu .orbit-item:hover .semantic-icon {filter:none;transform:none}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-tile::after {display:none}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="home"] {--icon:#087e97!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="compute"] {--icon:#3561be!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="storage"] {--icon:#8052ba!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="network"] {--icon:#088768!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="cluster"] {--icon:#6b55b6!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="backup"] {--icon:#9a6b10!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="migrate"] {--icon:#c15b3c!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-item[data-page="system"] {--icon:#b34080!important}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-more {background:#fff;color:#315bb0;border-color:#b8cce8;box-shadow:0 3px 14px #274a7114}
+:root[data-theme="light"] .spatial-workspace #menu .orbit-more svg {filter:none}
+:root[data-theme="light"] #spatial-scrim {background:#20344b1a;backdrop-filter:blur(1px)}
+@media(max-width:700px) {:root[data-theme="light"] .spatial-workspace #menu .orbit-item {max-width:225px}}
