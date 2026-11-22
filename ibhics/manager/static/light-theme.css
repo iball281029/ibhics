@@ -1,0 +1,92 @@
+/* Daylight palette: crisp surfaces and ink-colored telemetry, scoped to light mode. */
+:root[data-theme="light"] {
+  --bg:#f4f7fb;--panel:#fff;--text:#17243b;--muted:#52647c;--faint:#8290a6;--line:#dce4ef;--hover:#eef4fc;
+  --brand:#345be5;--brand-soft:#eaf0ff;--accent:#087c96;--cyan:#087c96;--purple:#6545c0;--pink:#aa397e;
+  --ok:#087d58;--warn:#a95c07;--bad:#c53653;--radius:14px;
+  --grad:linear-gradient(115deg,#315ee5,#7151ce);--shadow:0 2px 5px #253b5b05,0 12px 30px #253b5b08;
+}
+:root[data-theme="light"] body.command-workspace {background:#f4f7fb;background-attachment:initial}
+:root[data-theme="light"] body.command-workspace::before,:root[data-theme="light"] body.command-workspace::after {display:none}
+:root[data-theme="light"] .spatial-workspace .appbar {background:#f4f7fbf5;border-color:#dce4ef;box-shadow:none}
+:root[data-theme="light"] .spatial-workspace .spatial-rail {background:#fff;border-color:#dce4ef;box-shadow:0 5px 22px #253b5b0a}
+:root[data-theme="light"] .spatial-workspace .orbit-toggle {background:#edf3ff;border-color:#d4def5;box-shadow:0 2px 8px #345be512}
+:root[data-theme="light"] .spatial-workspace .rail-caption {color:#687d96}
+:root[data-theme="light"] .spatial-workspace #menu {background:#fff;border-color:#dce4ef;box-shadow:0 15px 45px #17243b1a}
+:root[data-theme="light"] .brand-holo::before {background:linear-gradient(120deg,#e7effc,#eef0fb);box-shadow:inset 0 1px #fff}
+:root[data-theme="light"] .brand-holo::after {background:#dde6f4;border-color:#d4def0}
+:root[data-theme="light"] .brand-holo .brand-word {filter:none}
+:root[data-theme="light"] .brand-holo .brand-ib {background:none;color:#1c365b}
+:root[data-theme="light"] .brand-holo .brand-hics {background:linear-gradient(105deg,#176caa,#6545c0);background-clip:text;color:transparent}
+:root[data-theme="light"] .brand-holo small {color:#526b8b}
+:root[data-theme="light"] .brand-corner {border-color:#3b77b7;filter:none}
+:root[data-theme="light"] .command-workspace :is(.sheet,.card,.spatial-kpi,.vm-card,.vm-spatial-inspector) {background:#fff;border-color:#dce4ef;box-shadow:var(--shadow);color:var(--text)}
+:root[data-theme="light"] .spatial-workspace .sheet::before,:root[data-theme="light"] .spatial-workspace .sheet::after {display:none}
+:root[data-theme="light"] .command-workspace :is(.page-head,.toolbar,.tabs) {background:#f8faff;border-color:#e1e8f2;color:var(--text)}
+:root[data-theme="light"] .command-workspace :is(button,.btn):not(.danger) {border-color:#d4deed;background:#fff;color:#294362;box-shadow:0 1px 3px #203c5b06}
+:root[data-theme="light"] .command-workspace :is(button,.btn).primary:not(.danger) {background:var(--grad);border-color:#3559db;color:#fff;box-shadow:0 4px 12px #345be51a}
+:root[data-theme="light"] .command-workspace :is(input:not([type="checkbox"]):not([type="radio"]),select,textarea) {background:#fff;border-color:#cbd7e7;color:#17243b;color-scheme:light}
+:root[data-theme="light"] .command-workspace .tabs button.active {background:#eaf0ff;color:#244cc5;border-color:#b9caef}
+:root[data-theme="light"] .command-workspace .nexus-hero {background:linear-gradient(112deg,#fff 35%,#f2f7ff);border-color:#d7e3f2;box-shadow:0 12px 38px #253b5b0b}
+:root[data-theme="light"] .command-workspace .nexus-hero::before {border-color:#e5edf8}
+:root[data-theme="light"] .nexus-hero h1 {color:#14243f}
+:root[data-theme="light"] .nexus-hero h1 span {background:linear-gradient(100deg,#167eae,#4c5bd1 65%,#7851c7);background-clip:text;color:transparent}
+:root[data-theme="light"] .nexus-hero .command-copy p {color:#52647c}
+:root[data-theme="light"] .nexus-hero .command-eyebrow {color:#426386}
+:root[data-theme="light"] .nexus-aura {background:radial-gradient(ellipse at center,#c9dcf733,transparent 62%)}
+:root[data-theme="light"] .nexus-floor {opacity:.3;background-image:linear-gradient(#3467a52b 1px,transparent 1px),linear-gradient(90deg,#3467a52b 1px,transparent 1px)}
+:root[data-theme="light"] .nexus-connectors {color:#7a94b8;opacity:.6}
+:root[data-theme="light"] .nexus-link {background:#ffffffed;border-color:#cfdcec;box-shadow:0 6px 20px #1939570f}
+:root[data-theme="light"] .nexus-link b {color:#233d61}
+:root[data-theme="light"] .nexus-link small {color:#58708e}
+:root[data-theme="light"] .nexus-link-icon {color:#2863a4}
+:root[data-theme="light"] .nexus-motion {background:#fff;border-color:#d2dfef;color:#496584;box-shadow:none}
+:root[data-theme="light"] .nexus-open-map span {background:#fff;color:#244c87;border-color:#bfd2ed;box-shadow:0 4px 15px #19395718;text-shadow:none}
+:root[data-theme="light"] .spatial-workspace .nexus-home .command-kpi {background:#fff;border-color:#dce4ef;box-shadow:var(--shadow)}
+:root[data-theme="light"] .nexus-home .command-kpi:nth-child(1) {--metric-color:#087d93!important}
+:root[data-theme="light"] .nexus-home .command-kpi:nth-child(2) {--metric-color:#355bd3!important}
+:root[data-theme="light"] .nexus-home .command-kpi:nth-child(3) {--metric-color:#8247b6!important}
+:root[data-theme="light"] .nexus-home .command-kpi:nth-child(4) {--metric-color:#087d75!important}
+:root[data-theme="light"] .nexus-home .command-kpi em {color:var(--metric-color)}
+:root[data-theme="light"] .resource-activity {background:#fbfdff;border-color:#dce4ef;box-shadow:none}
+:root[data-theme="light"] .activity-cpu {--activity-color:#167c99}
+:root[data-theme="light"] .activity-memory {--activity-color:#9142a1}
+:root[data-theme="light"] .activity-footer b {color:#147c94}
+:root[data-theme="light"] :is(.notification-panel,.alert-detail,.st-panel) {background:#fff;color:#17243b;border-color:#dce4ef;box-shadow:var(--shadow)}
+:root[data-theme="light"] .notification-toolbar {background:#fff}
+:root[data-theme="light"] :is(.notification-item.critical b,.alert-severity.critical) {color:#b93350}
+:root[data-theme="light"] :is(.notification-item.warning b,.alert-severity.warning) {color:#9e590a}
+:root[data-theme="light"] :is(.notification-item.info b,.alert-severity.info) {color:#0b7787}
+:root[data-theme="light"] #alerts-error {color:#9e590a}
+/* Keep the new mirror dashboard consistent in both palettes. */
+:root[data-theme="light"] #page-storage {--vs-text:#1e3554;--vs-dim:#536f8d;--vs-cyan:#157c9a;color:#1e3554}
+:root[data-theme="light"] #page-storage .vs-command {background:#fff;border-color:#d6e2ef;box-shadow:var(--shadow);color:#1e3554}
+:root[data-theme="light"] #page-storage .vs-command>.page-head {background:#f5f8fd}
+:root[data-theme="light"] #page-storage .vs-command :is(h1,h2,h3,h4) {color:#1d3555}
+:root[data-theme="light"] #page-storage .vs-command .mirror-hero {background:linear-gradient(110deg,#edf9f5,#f5f8ff);border-color:#cbdfeb;box-shadow:none}
+:root[data-theme="light"] #page-storage .vs-command .mirror-dashboard {--mirror-tone:#0a8368;color:#1d3555}
+:root[data-theme="light"] #page-storage .vs-command .mirror-dashboard.attention {--mirror-tone:#9e660c}
+:root[data-theme="light"] #page-storage .vs-command .mirror-dashboard.bad {--mirror-tone:#c13b52}
+:root[data-theme="light"] #page-storage .vs-command :is(.mirror-fact,.mirror-node,.mirror-arbiter) {background:#fbfdff;border-color:#d6e2ef;box-shadow:none}
+:root[data-theme="light"] #page-storage .vs-command :is(.mirror-hero h3,.mirror-fact strong,.mirror-node h4 a,.mirror-arbiter b) {color:#1a3557}
+:root[data-theme="light"] #page-storage .vs-command :is(.mirror-eyebrow,.mirror-hero p,.mirror-fact>span,.mirror-fact small,.mirror-node>small,.mirror-node p,.mirror-node-foot,.mirror-arbiter p,.mirror-footer) {color:#526d87}
+:root[data-theme="light"] #page-storage .vs-command .mirror-chip {background:#f3f7fc;color:#456681;border-color:#c9d9e8}
+:root[data-theme="light"] #page-storage .vs-command .mirror-chip.good {color:#087b5b;background:#edf9f3;border-color:#b7dfcf}
+:root[data-theme="light"] #page-storage .vs-command .mirror-chip.attention {color:#986008;background:#fffaec;border-color:#e8d2a0}
+:root[data-theme="light"] #page-storage .vs-command .mirror-chip.bad {color:#b6324b;background:#fff2f5;border-color:#edc5d0}
+:root[data-theme="light"] #page-storage .vs-command .mirror-node-icon {color:#267398;filter:none}
+:root[data-theme="light"] #page-storage .vs-command .mirror-voter-icon {color:#7050b9;filter:none}
+:root[data-theme="light"] #page-storage .vs-command .mirror-servers::after {background:#fff;border-color:#cbdfeb;color:#267398}
+:root[data-theme="light"] #page-storage .vs-command .mirror-node-foot {border-color:#dce6ef}
+:root[data-theme="light"] #page-storage #storage-tabs {background:#edf3fa;border-color:#d6e2ef}
+:root[data-theme="light"] #page-storage #storage-tabs button {color:#536f8d}
+:root[data-theme="light"] #page-storage #storage-tabs button[aria-selected="true"] {background:#fff;border-color:#b8d1ee;color:#20588e}
+:root[data-theme="light"] #page-storage #vs-tabs button {background:#f7faff;border-color:#d0dfef;color:#486b8d}
+:root[data-theme="light"] #page-storage #vs-tabs button[aria-selected="true"] {background:#eaf3fc;border-color:#9dbfdf;color:#1b608e}
+:root[data-theme="light"] #page-storage .storage-heading h1 {color:#1d3555;text-shadow:none}
+:root[data-theme="light"] #page-storage .storage-heading :is(small,span) {color:#526d87}
+:root[data-theme="light"] #page-storage .vs-command {--vs-text:#1e3554;--vs-dim:#536f8d;--vs-cyan:#157c9a}
+:root[data-theme="light"] #page-storage .vs-command::after {display:none}
+:root[data-theme="light"] #page-storage .vs-command :is(h1,h2,h3) {text-shadow:none}
+:root[data-theme="light"] #page-storage .vs-command :is(button,.btn) {background:#f5f9ff;border-color:#bfd2e8;color:#285c89;box-shadow:none}
+:root[data-theme="light"] #page-storage .vs-command :is(button,.btn).primary {background:var(--grad);border-color:#3559db;color:#fff}
+:root[data-theme="light"] #page-storage .vs-command :is(button,.btn):disabled {background:#edf2f8;border-color:#d6e0ed;color:#697b93;opacity:1}
