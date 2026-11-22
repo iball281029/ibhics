@@ -27,3 +27,16 @@ def test_immutability_days_editable(tmp_path):
     with pytest.raises(ValueError):
         BackupManager.set_immutability(object.__new__(BackupManager), "x", -1)
     assert BackupTarget.__dataclass_fields__["immutability_days"].default == 0
+
+
+def test_old_cbt_scratch_folders_are_swept(tmp_path):
+    import os
+
+    from ibhics.hypervisor.backup_cbt import _sweep_scratch
+
+    old, new = tmp_path / "cbt-old", tmp_path / "cbt-new"
+    old.mkdir()
+    new.mkdir()
+    os.utime(old, (0, 0))
+    _sweep_scratch(tmp_path)
+    assert not old.exists() and new.exists()
