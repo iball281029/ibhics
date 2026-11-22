@@ -884,6 +884,7 @@ class UserOut(BaseModel):
     created: str
     last_login: str | None
     totp_enabled: bool = False
+    require_2fa: bool = False
     permissions: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -896,6 +897,7 @@ class UserOut(BaseModel):
             created=user.created,
             last_login=user.last_login,
             totp_enabled=bool(user.totp_secret),
+            require_2fa=bool(getattr(user, "require_totp", False)),
             permissions=user.permissions,
         )
 
@@ -916,6 +918,7 @@ class UserUpdate(BaseModel):
     role: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_.-]{1,31}$")
     enabled: bool | None = None
     password: str | None = Field(default=None, max_length=256)
+    require_2fa: bool | None = None
 
 
 class AuditOut(BaseModel):
