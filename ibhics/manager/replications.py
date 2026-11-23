@@ -315,6 +315,11 @@ class ReplicationManager:
                         if isinstance(exc, (CBTRequired, ReplicaMaintenanceRequired))
                         else "Replication operation failed; inspect node and source"
                     )
+                    if isinstance(exc, SourceNotFound):
+                        job.error = (
+                            "Source lookup failed. Check the configured source and refresh "
+                            "its VM inventory. See the active manager journal for this job."
+                        )
                     notify = getattr(self, "notify", lambda *args: None)
                     notify(
                         "critical",
