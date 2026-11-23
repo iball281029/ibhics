@@ -180,6 +180,7 @@ def main() -> None:
     app = create_app(
         cluster,
         heartbeat_interval=args.heartbeat,
+        active_manager=leader.node if leader else None,
         backups=backups,
         scheduler_interval=30,
         migrations=migrations,

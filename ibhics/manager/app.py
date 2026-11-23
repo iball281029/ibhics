@@ -283,6 +283,7 @@ def create_app(
     p2v_pin: str = "",
     replications=None,
     settings: Settings | None = None,
+    active_manager: str | None = None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -886,6 +887,7 @@ def create_app(
             cluster_id=cluster.cluster_id,
             name=cluster.cluster_name,
             topology=topology,
+            active_manager=active_manager,
             quorum=cluster.has_quorum(),
             ha_capable=topology in (Topology.TWO_NODE_WITNESS, Topology.CLUSTER),
             members=[

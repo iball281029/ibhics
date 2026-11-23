@@ -3490,6 +3490,7 @@ function renderCluster() {
   const ha = state.clusterHA, haOn = ha && ha.available;
   const tile = (cls, title, value, note) => `<div class="${cls}"><small>${title}</small><b>${value}</b><span>${note}</span></div>`;
   $("#cluster-overview").innerHTML = [
+    tile(c.active_manager ? "ok" : "warn", "Active manager", c.active_manager ? esc(nodeLabel(c.active_manager)) : "Unconfirmed", c.active_manager ? esc(c.active_manager) : "No elected manager reported"),
     tile(online === c.members.length ? "ok" : "warn", "Online", `${online} / ${c.members.length}`, online === c.members.length ? "All servers are up" : `${c.members.length - online} offline`),
     `<div class="cl-ft ${left ? "ok" : "none"}"><small>Can go down</small><b>${left} ${left === 1 ? "server" : "servers"}</b><span>${down ? `${down} already down · design allows ${ft.n}` : ft.n ? "VMs keep running" : `Limited by ${ft.limiting.map((l) => label[l.key].toLowerCase()).join(", ")}`}</span><details><summary>Why?</summary><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b> ${esc(l.text)}</li>`).join("")}</ul></details></div>`,
     tile(haOn && ha.vms.length ? "ok" : "warn", "Auto restart (HA)", haOn ? `${ha.vms.length} / ${clusterHAVMs().length}` : "Off", haOn ? `VMs restart on another server if theirs fails${typeof canOperate !== "function" || canOperate() ? '<button class="cl-ha-open" type="button">Choose VMs</button>' : ""}` : "Unavailable on this manager"),

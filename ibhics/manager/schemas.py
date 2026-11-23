@@ -557,6 +557,7 @@ class ClusterCreate(BaseModel):
 
 
 class ClusterOut(BaseModel):
+    active_manager: str | None = None
     cluster_id: str = ""
     name: str = ""
     topology: Topology
