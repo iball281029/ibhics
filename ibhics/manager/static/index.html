@@ -858,7 +858,7 @@
         </div>
         <div class="subpage" id="tab-notifications">
           <form id="notification-config" class="st-panel admin-only">
-            <h3>Email alerts</h3><p class="hint">SMTP credentials are stored privately. Times use the manager's local timezone.</p>
+            <h3>Notification delivery</h3><p class="hint">Credentials are stored privately. Times use the manager's local timezone.</p>
             <div class="form-grid">
               <label>SMTP host<input name="host" maxlength="2048"></label>
               <label>Port<input name="port" type="number" min="1" max="65535" value="587" required></label>
@@ -871,10 +871,18 @@
               <label>Daily summary time<input name="summary_at" type="time" value="08:00" required></label>
               <label class="inline"><input name="daily_summary" type="checkbox">Send daily summary</label>
             </div>
+            <h4>LINE Messaging API</h4>
+            <div class="form-grid">
+              <label class="inline"><input name="line_enabled" type="checkbox">Enable LINE alerts</label>
+              <label>Channel access token<input name="line_token" type="password" autocomplete="new-password"></label>
+              <label class="inline"><input name="line_clear_token" type="checkbox">Clear saved LINE token</label>
+              <label>Recipient ID<input name="line_recipient" maxlength="33" placeholder="User, group or room ID"></label>
+            </div>
+            <p class="hint">Add the Official Account as a friend or invite it to the recipient group. Use a LINE user, group or room ID. Test delivery uses saved settings.</p>
             <div class="actions"><button type="button" id="notification-critical">Enable all critical</button><button type="button" id="notification-defaults">Reset defaults</button></div>
             <p class="hint">Event switches control delivery. Coming soon events have no active hook. Save to apply changes. Daily summary and test email are separate.</p>
-            <div class="notification-events"><table><thead><tr><th>Event</th><th>Level</th><th>In-app</th><th>Email</th></tr></thead><tbody id="notification-events"></tbody></table></div>
-            <div class="actions"><button class="primary">Save</button><button type="button" id="notification-test">Send test email</button></div>
+            <div class="notification-events"><table><thead><tr><th>Event</th><th>Level</th><th>In-app</th><th>Email</th><th>LINE</th></tr></thead><tbody id="notification-events"></tbody></table></div>
+            <div class="actions"><button class="primary">Save</button><button type="button" id="notification-test">Send test email</button><button type="button" id="notification-test-line">Send test LINE</button></div>
             <p id="notification-result" role="status"></p>
           </form>
         </div>

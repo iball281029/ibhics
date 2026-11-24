@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import smtplib
 import ssl
@@ -12,6 +13,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from email.message import EmailMessage
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from .events import CATALOG, LEVELS, defaults, legacy_id
 from .settings import private_json
@@ -27,6 +30,7 @@ CATEGORIES = {
     "capacity",
     "subscription",
     "email",
+    "line",
     "summary",
 }
 
@@ -43,6 +47,7 @@ class Notifications:
             "signals": {},
             "summary_date": None,
             "backup_days": {},
+            "line": {"enabled": False, "token": "", "recipient": "", "events": []},
             "smtp": {
                 "host": "",
                 "port": 587,
@@ -61,8 +66,9 @@ class Notifications:
             import json
 
             saved = json.loads(path.read_text())
-            self.data.update({k: v for k, v in saved.items() if k != "smtp"})
+            self.data.update({k: v for k, v in saved.items() if k not in ("smtp", "line")})
             self.data["smtp"].update(saved.get("smtp", {}))
+            self.data["line"].update(saved.get("line", {}))
         self.data["preferences"] = {**defaults(), **self.data["preferences"]}
         self.data["events"] = self.data["events"][-500:]
 
@@ -134,6 +140,9 @@ class Notifications:
             self.data["events"] = self.data["events"][-500:]
             self.save()
             config = copy.deepcopy(self.data["smtp"])
+            line = copy.deepcopy(self.data["line"])
+        if line["enabled"] and event_id in line["events"]:
+            self.executor.submit(self.deliver_line, f"ibHiCS {level}: {category}\n{message}", line)
         if (
             email
             and config["host"]
@@ -152,11 +161,14 @@ class Notifications:
             result["catalog"] = copy.deepcopy(list(CATALOG.values()))
             result["preferences"] = copy.deepcopy(self.data["preferences"])
             result["password"] = "••• set" if result["password"] else ""
+            result["line"] = copy.deepcopy(self.data["line"])
+            result["line"]["token"] = "••• set" if result["line"]["token"] else ""
             return result
 
     def configure(self, body):
         with self.lock:
             body = dict(body)
+            line = self._line_config(body.pop("line", {}))
             preferences = copy.deepcopy(self.data["preferences"])
             supplied = body.pop("preferences", {})
             if not isinstance(supplied, dict) or set(supplied) - set(CATALOG):
@@ -208,8 +220,95 @@ class Notifications:
                 raise ValueError("Summary time must be HH:MM")
             self.data["preferences"] = preferences
             self.data["smtp"] = config
+            self.data["line"] = line
             self.save()
         return self.config()
+
+    def _line_config(self, body):
+        if not isinstance(body, dict) or set(body) - {"enabled", "token", "recipient", "events"}:
+            raise ValueError("Unknown LINE setting")
+        config = copy.deepcopy(self.data["line"])
+        body = dict(body)
+        if body.get("token") == "••• set":
+            body.pop("token")
+        config.update(body)
+        if type(config["enabled"]) is not bool:
+            raise ValueError("Invalid LINE enabled setting")
+        token = config["token"]
+        if (
+            not isinstance(token, str)
+            or not token.isascii()
+            or len(token) > 4096
+            or any(c.isspace() for c in token)
+        ):
+            raise ValueError("Invalid LINE channel access token")
+        recipient = config["recipient"]
+        if not isinstance(recipient, str) or (
+            recipient and not re.fullmatch(r"[UCR][0-9a-fA-F]{32}", recipient)
+        ):
+            raise ValueError("LINE recipient must be a user, group or room ID")
+        events = config["events"]
+        if not isinstance(events, list) or any(
+            not isinstance(event, str) or event not in CATALOG for event in events
+        ):
+            raise ValueError("Unknown LINE notification event")
+        if config["enabled"] and (not token or not recipient):
+            raise ValueError("Configure LINE channel access token and recipient first")
+        return config
+
+    def deliver_line(self, text, config=None):
+        with self.lock:
+            config = copy.deepcopy(config or self.data["line"])
+        if not config["token"] or not config["recipient"]:
+            return {
+                "ok": False,
+                "message": "Configure LINE channel access token and recipient first",
+            }
+        request = Request(
+            "https://api.line.me/v2/bot/message/push",
+            data=json.dumps(
+                {
+                    "to": config["recipient"],
+                    "messages": [
+                        {
+                            "type": "text",
+                            "text": text.encode("utf-16-le")[:10000].decode(
+                                "utf-16-le", errors="ignore"
+                            ),
+                        }
+                    ],
+                }
+            ).encode(),
+            headers={
+                "Authorization": f"Bearer {config['token']}",
+                "Content-Type": "application/json",
+                "X-Line-Retry-Key": str(uuid.uuid4()),
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=20):
+                pass
+            return {
+                "ok": True,
+                "message": "LINE accepted the message; check the configured recipient",
+            }
+        except HTTPError as exc:
+            message = {
+                400: "LINE rejected the recipient or message",
+                401: "LINE channel access token is invalid",
+                403: "LINE channel is not authorized to send",
+                429: "LINE rate limit or monthly message quota reached; try later",
+            }.get(exc.code, "LINE delivery failed; check the channel settings")
+            exc.close()
+        except Exception:
+            message = "LINE connection failed; check network access"
+        # Record delivery failure locally without recursively sending another LINE alert.
+        self.emit("warning", "line", message, "line:delivery", email=False)
+        return {"ok": False, "message": message}
+
+    def test_line(self):
+        return self.executor.submit(self.deliver_line, "Your ibHiCS LINE alerts are working.")
 
     def _send(self, subject, text, config):
         if not config["host"] or not config["from"] or not config["recipients"]:

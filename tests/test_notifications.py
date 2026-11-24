@@ -509,6 +509,7 @@ def test_ui_renders_server_catalog_and_reset_defaults():
         r"""const assert = require("node:assert/strict");
 const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
 const elements = {};
+const document = {querySelectorAll: () => []};
 const $ = id => elements[id] ||= {innerHTML:"", dataset:{}};
 const esc = value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 """
@@ -519,7 +520,7 @@ const html = $("#notification-events").innerHTML;
 assert.deepEqual(
   Array.from(html.matchAll(/data-event-id="([^"]+)"/g), match => match[1]),
   input.catalog.map(event => event.id));
-assert.equal((html.match(/role="switch"/g) || []).length, input.catalog.length * 2);
+assert.equal((html.match(/role="switch"/g) || []).length, input.catalog.length * 3);
 assert.equal((html.match(/coming soon/g) || []).length,
   input.catalog.filter(event => !event.hooked).length);
 $("#notification-defaults").onclick();
@@ -554,3 +555,97 @@ def test_subscription_thresholds_and_expiry():
         "subscription.expiring",
     ]
     assert [e["level"] for e in events] == ["critical", "critical", "warning"]
+
+
+def test_line_selection_secret_masking_and_persistence(tmp_path, monkeypatch):
+    path = tmp_path / "notifications.json"
+    alerts = Notifications(path, executor=Immediate())
+    requests = []
+    from contextlib import nullcontext
+
+    def send(request, **kwargs):
+        requests.append(request)
+        return nullcontext()
+
+    monkeypatch.setattr("ibhics.manager.notifications.urlopen", send)
+    config = alerts.configure(
+        {
+            "line": {
+                "enabled": True,
+                "token": "line-secret",
+                "recipient": "C" + "a" * 32,
+                "events": ["backup.failed", "replication.failed"],
+            }
+        }
+    )
+    assert config["line"]["token"] == "••• set"
+    assert path.stat().st_mode & 0o777 == 0o600
+    alerts.event("backup.succeeded", "Healthy", "backup:1")
+    assert requests == []
+    alerts.event("backup.failed", "Failed", "backup:2")
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.full_url == "https://api.line.me/v2/bot/message/push"
+    assert request.get_header("Authorization") == "Bearer line-secret"
+    assert json.loads(request.data)["to"] == "C" + "a" * 32
+    assert "Failed" in json.loads(request.data)["messages"][0]["text"]
+    alerts.configure({"line": {"token": "••• set"}})
+    again = Notifications(path, executor=Immediate())
+    assert again.data["line"]["token"] == "line-secret"
+    assert again.test_line().result()["ok"]
+
+
+@pytest.mark.parametrize("status", [401, 429, 500])
+def test_line_failure_is_local_and_redacted(monkeypatch, status):
+    from urllib.error import HTTPError
+
+    alerts = Notifications(executor=Immediate())
+    alerts.configure(
+        {
+            "line": {
+                "enabled": True,
+                "token": "line-secret",
+                "recipient": "U" + "a" * 32,
+                "events": ["replication.failed"],
+            }
+        }
+    )
+
+    def fail(*args, **kwargs):
+        raise HTTPError("https://api.line.me", status, "line-secret", {}, None)
+
+    monkeypatch.setattr("ibhics.manager.notifications.urlopen", fail)
+    event = alerts.event("replication.failed", "Replica failed", "replication:1")
+    assert event["event_id"] == "replication.failed"
+    assert "line-secret" not in json.dumps(alerts.view())
+    result = alerts.test_line().result()
+    assert not result["ok"]
+    assert "line-secret" not in json.dumps(result)
+    if status == 429:
+        assert "quota" in result["message"]
+
+
+def test_line_configuration_validation_and_test_permissions(tmp_path):
+    alerts = Notifications(executor=Immediate())
+    for body in (
+        {"enabled": True},
+        {"token": "a\nb"},
+        {"recipient": "display-name"},
+        {"events": ["unknown"]},
+    ):
+        with pytest.raises(ValueError):
+            alerts.configure({"line": body})
+    auth = Auth(tmp_path / "users.json")
+    password = "Notification-password-42"
+    auth.bootstrap(password, must_change=False)
+    app = create_app(FakeDriver(), auth=auth)
+    app.state.notifications.executor = Immediate()
+    client = TestClient(app)
+    assert client.post("/api/v1/settings/notifications/test-line").status_code == 401
+    client.post("/api/v1/auth/login", json={"username": "admin", "password": password})
+    result = client.post("/api/v1/settings/notifications/test-line")
+    assert result.status_code == 200 and not result.json()["ok"]
+    auth.add_user("reader", "viewer", password)
+    auth.user("reader").must_change_password = False
+    client.post("/api/v1/auth/login", json={"username": "reader", "password": password})
+    assert client.post("/api/v1/settings/notifications/test-line").status_code == 403

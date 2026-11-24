@@ -164,6 +164,13 @@ def install(api, settings, auth):
         future = request.app.state.notifications.test()
         return await asyncio.wrap_future(future)
 
+    @api.post("/settings/notifications/test-line")
+    async def notification_test_line(request: Request):
+        import asyncio
+
+        admin(request)
+        return await asyncio.wrap_future(request.app.state.notifications.test_line())
+
     @api.get("/settings")
     def view(request: Request):
         result = settings.view()

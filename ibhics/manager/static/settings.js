@@ -194,6 +194,7 @@ $("#approvals-list").onclick = async e => {
 
 
 let notificationCatalog = [];
+let notificationLineEvents = [];
 function renderEventPreferences(catalog, preferences) {
   notificationCatalog = catalog;
   let category = "";
@@ -202,9 +203,9 @@ function renderEventPreferences(catalog, preferences) {
     let heading = "";
     if (event.category !== category) {
       category = event.category;
-      heading = `<tr><th colspan="4" scope="colgroup">${esc(category)}</th></tr>`;
+      heading = `<tr><th colspan="5" scope="colgroup">${esc(category)}</th></tr>`;
     }
-    return heading + `<tr data-event-id="${esc(event.id)}"><td><b>${esc(event.id)}</b>${event.hooked ? "" : ' <span class="hint">coming soon</span>'}<br><small>${esc(event.description)}</small></td><td><select data-event-level aria-label="${esc(event.id)} level">${["critical", "warning", "info"].map(level => `<option ${pref.level === level ? "selected" : ""}>${level}</option>`).join("")}</select></td>${["in_app", "email"].map(channel => `<td><input type="checkbox" role="switch" data-channel="${channel}" aria-label="${esc(event.id)} ${channel}" ${pref[channel] ? "checked" : ""}></td>`).join("")}</tr>`;
+    return heading + `<tr data-event-id="${esc(event.id)}"><td><b>${esc(event.id)}</b>${event.hooked ? "" : ' <span class="hint">coming soon</span>'}<br><small>${esc(event.description)}</small></td><td><select data-event-level aria-label="${esc(event.id)} level">${["critical", "warning", "info"].map(level => `<option ${pref.level === level ? "selected" : ""}>${level}</option>`).join("")}</select></td>${["in_app", "email", "line"].map(channel => `<td><input type="checkbox" role="switch" data-channel="${channel}" aria-label="${esc(event.id)} ${channel}" ${(channel === "line" ? notificationLineEvents.includes(event.id) : pref[channel]) ? "checked" : ""}></td>`).join("")}</tr>`;
   }).join("");
 }
 function eventPreferences() {
@@ -214,11 +215,17 @@ function eventPreferences() {
     email:row.querySelector('[data-channel="email"]').checked,
   }]));
 }
+function selectedLineEvents() {
+  return Array.from(document.querySelectorAll('#notification-events tr[data-event-id]'))
+    .filter(row => row.querySelector('[data-channel="line"]').checked).map(row => row.dataset.eventId);
+}
 $("#notification-defaults").onclick = () => {
+  notificationLineEvents = selectedLineEvents();
   renderEventPreferences(notificationCatalog, Object.fromEntries(notificationCatalog.map(event => [event.id, {level:event.level, in_app:event.in_app, email:event.email}])));
   $("#notification-config").dataset.dirty = "true";
 };
 $("#notification-critical").onclick = () => {
+  notificationLineEvents = selectedLineEvents();
   const preferences = eventPreferences();
   for (const pref of Object.values(preferences)) if (pref.level === "critical") { pref.in_app = true; pref.email = true; }
   renderEventPreferences(notificationCatalog, preferences);
@@ -235,6 +242,11 @@ async function renderNotificationConfig() {
   form.elements.password.placeholder = config.password || "No password saved";
   form.elements.recipients.value = config.recipients.join(", ");
   form.elements.daily_summary.checked = config.daily_summary;
+  notificationLineEvents = config.line.events;
+  form.elements.line_enabled.checked = config.line.enabled;
+  form.elements.line_token.value = "";
+  form.elements.line_token.placeholder = config.line.token || "No token saved";
+  form.elements.line_recipient.value = config.line.recipient;
   renderEventPreferences(config.catalog, config.preferences);
 
 }
@@ -244,7 +256,16 @@ settingsForm("#notification-config", async (f, form) => {
   Object.assign(body, {port:Number(f.get("port")), recipients:f.get("recipients").split(/[,;\s]+/).filter(Boolean), preferences:eventPreferences(), daily_summary:f.has("daily_summary")});
   if (f.has("clear_password")) body.password = "";
   else if (f.get("password")) body.password = f.get("password");
+  body.line = {
+    enabled:f.has("line_enabled"),
+    recipient:f.get("line_recipient").trim(),
+    events:selectedLineEvents(),
+  };
+  if (f.has("line_clear_token")) body.line.token = "";
+  else if (f.get("line_token")) body.line.token = f.get("line_token");
   await api("/settings/notifications", {method:"PUT", body:JSON.stringify(body)});
+  form.elements.line_token.value = "";
+  form.elements.line_clear_token.checked = false;
   form.elements.password.value = "";
   form.elements.clear_password.checked = false;
   delete form.dataset.dirty;
@@ -256,6 +277,16 @@ $("#notification-test").onclick = async e => {
   $("#notification-result").textContent = "Sending with saved settings…";
   try {
     const result = await post("/settings/notifications/test");
+    $("#notification-result").textContent = result.message;
+  } catch (err) { $("#notification-result").textContent = err.message; }
+  finally { e.target.disabled = false; }
+};
+
+$("#notification-test-line").onclick = async e => {
+  e.target.disabled = true;
+  $("#notification-result").textContent = "Sending LINE with saved settings…";
+  try {
+    const result = await post("/settings/notifications/test-line");
     $("#notification-result").textContent = result.message;
   } catch (err) { $("#notification-result").textContent = err.message; }
   finally { e.target.disabled = false; }
