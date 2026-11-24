@@ -198,6 +198,47 @@
   color:#52647c;
 }
 
+/* Node summary and sensor details must share the light surface palette. */
+:root[data-theme="light"] #page-node :is(.sheet,.card,.stats .stat) {
+  background:var(--panel);
+  color:var(--text);
+  border-color:var(--line);
+  box-shadow:var(--shadow);
+}
+:root[data-theme="light"] #page-node :is(#node-title,.card>h3,.kv dd,.stats .stat>b,summary,summary:hover) {
+  color:var(--text);
+  text-shadow:none;
+}
+:root[data-theme="light"] #page-node :is(.kv dt,.hint,.vm-sub,.stats .stat>span,.stats .stat>em,.stats .stat>b small) {color:var(--muted)}
+:root[data-theme="light"] #page-node :is(th,td,details,.card>h3) {border-color:var(--line)}
+:root[data-theme="light"] #page-node table thead th {background:var(--hover);color:var(--muted)}
+:root[data-theme="light"] #page-node table tbody tr:hover {background:var(--hover)}
+:root[data-theme="light"] #page-node .card>h3::before {background:var(--accent);box-shadow:none}
+:root[data-theme="light"] #page-node .stats .stat::before,
+:root[data-theme="light"] #page-node .stats .stat::after {background:none;animation:none}
+:root[data-theme="light"] #page-node .nd-ring {
+  background:radial-gradient(closest-side,#fff 76%,transparent 78%),conic-gradient(#087c96 calc(var(--p)*1%),#dce4ef 0);
+  filter:none;
+}
+:root[data-theme="light"] #page-node .nd-ring b {color:var(--text)}
+:root[data-theme="light"] #page-node .badge {box-shadow:none}
+:root[data-theme="light"] #page-node .tabs button.active {background:#eaf0ff;color:#2446b8;border-color:#8099e8;box-shadow:none}
+:root[data-theme="light"] #page-migrate .mg-source-data {border-color:var(--line)}
+:root[data-theme="light"] #page-migrate .mg-source-data dd {color:var(--text)}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) :is(input:not([type="checkbox"]):not([type="radio"]),select,textarea) {
+  background-color:#fff;
+  color:#17243b;
+  border-color:#b8c8ed;
+  box-shadow:none;
+}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) select {background-image:none;appearance:auto}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) select option {background:#fff;color:#17243b}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) :is(input,textarea)::placeholder {color:#52647c;opacity:1}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) :is(button,.btn) {background:#fff;color:#294362;border-color:#b8c8ed;box-shadow:none}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) :is(button:hover,button.primary) {background:#345be5;color:#fff;border-color:#345be5}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) button:disabled {background:#edf2f9;color:#52647c;border-color:#ccd8eb;opacity:1}
+:root[data-theme="light"] :is(#source-dialog,dialog.mg-dialog) :is(input,select,textarea,button):focus-visible {outline:2px solid #3153b7;outline-offset:2px}
+
 /* Network controls use the light palette; topology overlays keep explicit contrast. */
 :root[data-theme="light"] #page-network {
   --nw-cyan:#087c96;
