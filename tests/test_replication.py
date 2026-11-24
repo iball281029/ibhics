@@ -271,6 +271,8 @@ def test_resize_failure_explains_why_test_failover_cannot_finish(env, monkeypatc
     result = client.post(f"/api/v1/migrate/replications/{job['id']}/test-failover", json={}).json()
     assert result["state"] == "failed"
     assert result["error"] == "Cannot shrink xfs filesystem"
+    assert result["history"][-1]["state"] == "failed"
+    assert result["history"][-1]["error"] == result["error"]
     assert result["test_vm"] is None
     assert runtime.store(None).current() == before
 
@@ -311,6 +313,10 @@ def test_failover_uses_last_replica_after_failed_sync(env):
     assert tested["test_vm"] == "test-vm"
     assert tested["state"] == "failed"
     assert tested["error"] == failed["error"]
+    assert tested["history"][-1]["state"] == "done"
+    assert tested["history"][-1]["error"] is None
+    assert tested["history"][-2]["state"] == "failed"
+    assert tested["history"][-2]["error"] == failed["error"]
     assert runtime.calls == ["sync", (True, [])]
     assert runtime.store(None).current() == previous
 

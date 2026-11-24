@@ -8,7 +8,7 @@
 |---|---|---|
 | Backup | งานตามเวลาเมื่อวันที่ 23 พฤศจิกายนสำเร็จ งาน #9 ของวันที่ 24 พฤศจิกายนถูกยกเลิกตามคำสั่งผู้ใช้และล้าง retry แล้ว VM ยังทำงานอยู่ | หาสาเหตุความช้า กู้จาก restore point จริงเทียบ checksum และทดสอบ NFS cleanup หลัง commit |
 | Sync Now | Journal ของ Zabbix ระบุ SourceNotFound พบ job อ้าง esx01 ขณะที่ config ที่แชร์ใช้ ESX01 และตรวจชนิดต้นทาง โฮสต์ path และ transport แล้วตรงกัน เพิ่มการจับคู่ชื่อแบบไม่แยกตัวพิมพ์เมื่อมีเพียงรายการเดียวในโค้ดแล้ว | Deploy และวัด incremental จริงทั้งรอบที่ข้อมูลเปลี่ยนและรอบว่าง |
-| Test Failover | ทดสอบจริง Zabbix ผ่าน 24 พ.ย. 2026 เวลา 16:40–16:42 หลังตั้งปลายทาง 300 GiB: VM บูตถึงหน้า login AlmaLinux 8.8 ไม่มี NIC; cleanup ลบ VM ดิสก์และ workspace ครบ โดย checksum manifest และตัวตนไฟล์ replica เดิมไม่เปลี่ยน | เก็บข้อบกพร่องประวัติที่ยังใช้ state failed ของ Sync เดิมทั้งที่ test สำเร็จ; Guest Agent ไม่เชื่อมต่อและยังไม่ตรวจบริการ Zabbix ผ่านเครือข่าย |
+| Test Failover | ทดสอบจริง Zabbix ผ่าน 24 พ.ย. 2026 เวลา 16:40–16:42 หลังตั้งปลายทาง 300 GiB: VM บูตถึงหน้า login AlmaLinux 8.8 ไม่มี NIC; cleanup ลบ VM ดิสก์และ workspace ครบ โดย checksum manifest และตัวตนไฟล์ replica เดิมไม่เปลี่ยน | แก้ประวัติ Test Failover เป็น done แยกจาก Sync ที่ failed แล้วและ deploy ทั้งสองโหนด; Guest Agent ไม่เชื่อมต่อและยังไม่ตรวจบริการ Zabbix ผ่านเครือข่าย |
 | Cutover | มีแพตช์ให้ใช้ Source เดียวกับ Sync รอบสุดท้าย | ทดสอบบน VM ชุดทดสอบหลังแก้ Sync และขนาดดิสก์ |
 | พื้นที่ root | แพตช์ใน repo ครอบคลุม cache และ temp ของ conversion กับ resize รวมถึงตัวตรวจ migration scratch และ replica storage | Deploy ครบและวัดพื้นที่จริงตลอดงาน รวมกรณี mount หายและพื้นที่ไม่พอ |
 | ความเร็ว Test Failover | แพตช์ sparse copy ลง .103/.104 แล้ว รอบจริง 24 พ.ย. เข้าขั้น virt-v2v ภายในประมาณครึ่งนาทีจากการตรวจ process; รวมแปลง raw และ qcow2 จนเปิด VM ประมาณ 19 นาที | คอขวดถัดไปคือการแปลงดิสก์สองช่วง; ต้องวัดก่อนปรับ ห้ามเรียกขั้นคัดลอกนี้ว่า incremental sync |
@@ -53,3 +53,5 @@ CI ของ 3cad3e8 ผ่านครบ 8 งาน รอบแก้ล่�
 - Manifest SHA256 ก่อน/หลัง cleanup ตรงกัน: `657cd26f0c36da6760540daa0659784d4bef81b31fd2ce55558882f08aa3c7cc`; ไฟล์ raw เดิมทุกไฟล์ยังมี size/inode/mtime เดิม
 - Production ใช้แพตช์เฉพาะ `replication/store.py`, `importer/resize.py` และ method Test Failover ของ manager; ยังไม่ได้ deploy ชุด protection ทั้งหมด. มีไฟล์สำรองชื่อ `*.before-failover-20261124-*` และ manager backup บน .104
 - ข้อจำกัด: Guest Agent ไม่เชื่อมต่อ จึงยืนยันการบูตจาก console; ไม่ได้ทดสอบบริการ Zabbix หรือ Cutover และไม่ควรสรุปว่าผ่านทั้งหมด
+
+- 24 พ.ย. 2026 เวลา 16:52: แพตช์ประวัติ Test Failover ลง .103/.104 แล้ว; API ยืนยันรอบ 16:40 เป็น `done`, error null ขณะที่ Sync เดิมยัง `failed` พร้อม error เดิม; regression tests `tests/test_replication.py` ผ่าน 37 รายการ. แก้ประวัติย้อนหลังเฉพาะรอบที่ยืนยันบูตและ cleanup ด้วยหลักฐานจริง โดยสำรอง state เดิมก่อนแก้

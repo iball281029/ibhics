@@ -291,8 +291,10 @@ class ReplicationManager:
             self._save()
 
         def run():
+            completed = False
             try:
                 work(job)
+                completed = True
                 if operation in ("sync", "cutover"):
                     publish(
                         self,
@@ -351,9 +353,13 @@ class ReplicationManager:
                         {
                             "at": self.clock().isoformat(),
                             "operation": operation,
-                            "state": job.state,
+                            "state": (
+                                "done" if operation == "test-failover" and completed else job.state
+                            ),
                             "bytes_transferred": job.bytes_transferred,
-                            "error": job.error,
+                            "error": (
+                                None if operation == "test-failover" and completed else job.error
+                            ),
                             "change_tracking": (
                                 job.change_tracking
                                 if operation in ("sync", "cutover") and not job.error
