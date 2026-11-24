@@ -1,0 +1,113 @@
+{
+  "date": "2026-11-24",
+  "scope": "Desktop light theme; reported pages, forms, tables and status labels",
+  "css_sha256": "5f34012378b8034ed86641cc53a70d97c4d4e516ced53b5986e3dd2aeee830a4",
+  "deployed_nodes": [
+    "172.16.12.103",
+    "172.16.12.104"
+  ],
+  "served_css_matches": true,
+  "pages": {
+    "home": {
+      "text_samples": 121,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "compute": {
+      "text_samples": 121,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "storage": {
+      "text_samples": 18,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "fabric": {
+      "text_samples": 5,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "network": {
+      "text_samples": 28,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "cluster": {
+      "text_samples": 41,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "node/preview-node": {
+      "text_samples": 142,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "backup": {
+      "text_samples": 61,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "migrate": {
+      "text_samples": 24,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "recycle": {
+      "text_samples": 11,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "templates": {
+      "text_samples": 11,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "containers": {
+      "text_samples": 290,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "tasks": {
+      "text_samples": 361,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "activity": {
+      "text_samples": 87,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "alerts": {
+      "text_samples": 13,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "system": {
+      "text_samples": 42,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "vm/6033dd80-6ed7-46f1-9985-b08f885314ed": {
+      "text_samples": 78,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    },
+    "terminal": {
+      "text_samples": 19,
+      "contrast_failures": 0,
+      "dark_styles_unchanged": true
+    }
+  },
+  "dialog_count": 34,
+  "dialog_contrast_failures": 0,
+  "visual_checks": [
+    "Node Device health",
+    "Firewall form and service chips",
+    "Task status labels",
+    "Network topology secondary captions",
+    "Earlier preview review: VM list/panel, backup, migration, cluster, settings and menu"
+  ],
+  "method": "Computed text contrast on solid CSS backgrounds; gradients, SVG and canvas excluded from automated contrast and inspected visually for changed areas. Dark-mode comparison with daylight stylesheet enabled versus disabled. Dialogs opened without submitting forms.",
+  "production_backup": "light-theme.css.backup-20261124-171201"
+}

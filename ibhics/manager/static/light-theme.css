@@ -682,3 +682,50 @@
   border-color:var(--line);
   color:var(--text);
 }
+
+/* Shared tables, status chips and dialogs also need readable daylight colors. */
+:root[data-theme="light"] .command-workspace th {
+  background:#eef3fb;
+  color:#435a78;
+  border-color:var(--line);
+}
+:root[data-theme="light"] :is(.command-workspace,#page-migrate,#page-node) .badge:is(.running,.online,.done,.ready) {
+  background:#e6f4ed;
+  color:#076b4b;
+}
+:root[data-theme="light"] :is(.command-workspace,#page-storage,#page-migrate,#page-node) .badge:is(.warning,.waiting,.queued,.uploading) {
+  background:#fff3dd;
+  color:#804600;
+}
+:root[data-theme="light"] :is(.command-workspace,#page-migrate,#page-node) .badge:is(.failed,.offline,.cancelled) {
+  background:#fff0f3;
+  color:#b12c48;
+}
+:root[data-theme="light"] .command-workspace .t-kind.k-backup {background:#fff0f7;color:#a61e5d}
+:root[data-theme="light"] .command-workspace .t-kind.k-import {background:#e8f5fc;color:#095e78}
+:root[data-theme="light"] #page-compute summary.btn.off {background:#edf2f9;color:#52647c;opacity:1}
+:root[data-theme="light"] #page-migrate .mg-chip.bad small {background:#fff0f3;color:#b12c48}
+:root[data-theme="light"] #fw-dialog {
+  background:#fff;
+  color:#17243b;
+  border-color:#cbd7e7;
+}
+:root[data-theme="light"] #fw-dialog :is(input,select,textarea) {
+  background:#fff;
+  color:#17243b;
+  border-color:#b8c8ed;
+}
+:root[data-theme="light"] #fw-dialog :is(.nw-svc,.nw-svc-add) {
+  background:#f2f6fc;
+  color:#294362;
+  border-color:#cbd7e7;
+  box-shadow:none;
+}
+:root[data-theme="light"] #fw-dialog .nw-svc:has(input:checked) {background:#eaf0ff;border-color:#8099e8}
+:root[data-theme="light"] #fw-dialog .nw-svc small {color:#52647c}
+/* Projection sets inline opacity; keep secondary captions readable in daylight. */
+:root[data-theme="light"] #page-network #nw-three .nw-label.nw-label-dim {
+  opacity:.85!important;
+  background:#0b2034;
+  color:#d5e6f3;
+}
