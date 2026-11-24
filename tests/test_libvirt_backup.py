@@ -108,7 +108,9 @@ def test_migration_scratch_refuses_unavailable_or_root_storage(
 ):
     driver = make_driver(active=True)
     pool = types.SimpleNamespace(
-        XMLDesc=lambda _: f'<pool type="{pool_type}"><target><path>{target_path}</path></target></pool>',
+        XMLDesc=lambda _: (
+            f'<pool type="{pool_type}"><target><path>{target_path}</path></target></pool>'
+        ),
         isActive=lambda: True,
     )
     monkeypatch.setattr(driver._conn, "storagePoolLookupByName", lambda _: pool)
