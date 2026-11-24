@@ -90,3 +90,66 @@
 :root[data-theme="light"] #page-storage .vs-command :is(button,.btn) {background:#f5f9ff;border-color:#bfd2e8;color:#285c89;box-shadow:none}
 :root[data-theme="light"] #page-storage .vs-command :is(button,.btn).primary {background:var(--grad);border-color:#3559db;color:#fff}
 :root[data-theme="light"] #page-storage .vs-command :is(button,.btn):disabled {background:#edf2f8;border-color:#d6e0ed;color:#697b93;opacity:1}
+/* Module palettes also apply to dialogs mounted outside the page container. */
+:root[data-theme="light"] #page-backup {--bp-cyan:var(--accent);--bp-text:var(--text);--bp-muted:var(--muted)}
+:root[data-theme="light"] #page-backup .bp-command {--bp-cyan:var(--accent);--bp-text:var(--text);--bp-muted:var(--muted);background:var(--panel);color:var(--text);border-color:var(--line);box-shadow:var(--shadow)}
+:root[data-theme="light"] #page-backup :is(.bp-overview>div,.bp-card,.bp-lane,.bp-detail,.bp-overview>.bp-holo) {background:var(--panel);border-color:var(--line);box-shadow:var(--shadow)}
+:root[data-theme="light"] #page-backup :is(h1,.bp-holo>span) {color:var(--text);text-shadow:none}
+:root[data-theme="light"] #page-backup :is(.bp-eyebrow,.bp-holo>small,.bp-card .bp-schedule-time) {color:var(--accent)}
+:root[data-theme="light"] #page-backup :is(.bp-big,.bp-trio b,.bp-ring b) {color:var(--ok);text-shadow:none}
+:root[data-theme="light"] #page-backup .bp-holo.idle .bp-big {color:var(--muted)}
+:root[data-theme="light"] #page-backup .bp-alert {color:var(--bad)!important}
+:root[data-theme="light"] #page-backup :is(.bp-holo.bad .bp-big,.bp-holo .bp-alert b) {color:var(--bad);text-shadow:none}
+:root[data-theme="light"] #page-backup :is(.bp-holo::before,.bp-holo::after) {display:none}
+:root[data-theme="light"] #page-backup .bp-ico {filter:none}
+:root[data-theme="light"] #page-backup :is(.bp-trio span,.bp-features span) {background:var(--hover);color:var(--muted);border-color:var(--line);box-shadow:none}
+:root[data-theme="light"] #page-backup .bp-features span::before {color:var(--ok);text-shadow:none}
+:root[data-theme="light"] #page-backup .bp-ring {background:radial-gradient(closest-side,var(--panel) 79%,transparent 81%),conic-gradient(var(--ok) var(--coverage),var(--line) 0);filter:none;box-shadow:none}
+:root[data-theme="light"] #page-backup :is(.bp-meter,.bp-bar) {background:var(--line)}
+:root[data-theme="light"] #page-backup :is(.bp-meter span,.bp-bar i) {background:var(--grad);box-shadow:none}
+:root[data-theme="light"] #page-backup :is(.bp-orb,.tabs button.active,[aria-pressed="true"]) {background:var(--brand-soft);border-color:var(--brand);color:var(--brand);box-shadow:none}
+:root[data-theme="light"] #page-backup .verified .bp-orb {color:var(--ok);border-color:var(--ok)}
+:root[data-theme="light"] #page-backup .suspicious .bp-orb {color:var(--bad);border-color:var(--bad)}
+:root[data-theme="light"] #page-backup button:hover {background:var(--hover);border-color:var(--accent)}
+:root[data-theme="light"] #page-backup button:focus-visible {outline-color:var(--brand)}
+:root[data-theme="light"] #page-backup .danger {color:var(--bad);border-color:var(--bad)}
+:root[data-theme="light"] .bp-verify-options {border-color:var(--line)}
+
+:root[data-theme="light"] :is(#page-migrate,dialog.mg-dialog) {--panel:#fff;--hover:#eef4fc;--text:#17243b;--muted:#52647c;--line:#dce4ef;--brand:#345be5;--ok:#087d58;--bad:#c53653;--warn:#a95c07;color-scheme:light;--mg-cyan:var(--accent);--mg-text:var(--text);--mg-dim:var(--muted);color:var(--text)}
+:root[data-theme="light"] #page-migrate .mg-command {background:var(--panel);border-color:var(--line);box-shadow:var(--shadow)}
+:root[data-theme="light"] #page-migrate .mg-command::before {display:none}
+:root[data-theme="light"] #page-migrate :is(.mg-panel,.mg-stage,.mg-vm,.mg-source-card) {background:var(--panel);border-color:var(--line);box-shadow:none}
+:root[data-theme="light"] #page-migrate .mg-vm.selected {background:var(--brand-soft);border-color:var(--brand)}
+:root[data-theme="light"] #page-migrate :is(h1,.mg-vm-name b,.mg-requirements b,.mg-stage .meta b,.mg-source-name h4) {color:var(--text);text-shadow:none}
+:root[data-theme="light"] #page-migrate :is(.mg-spec,.mg-source-summary span:first-child,.mg-chip[aria-pressed="true"]) {color:var(--accent)}
+:root[data-theme="light"] #page-migrate :is(.mg-source-summary,.mg-source-state) {color:var(--muted)}
+:root[data-theme="light"] #page-migrate :is(.mg-stage.src h3,.mg-source-summary .testing) {color:var(--warn)}
+:root[data-theme="light"] #page-migrate :is(.mg-stage.dst h3,.mg-source-summary .ok,.ok .mg-source-state) {color:var(--ok)}
+:root[data-theme="light"] #page-migrate :is(.mg-source-summary .bad,.bad .mg-source-state,#source-error) {color:var(--bad)}
+:root[data-theme="light"] #page-migrate .mg-source-card.ok {--source-status:var(--ok)}
+:root[data-theme="light"] #page-migrate .mg-source-card.bad {--source-status:var(--bad)}
+:root[data-theme="light"] #page-migrate :is(#p2v-code,th,#imports tr) {background:var(--hover);color:var(--text)}
+:root[data-theme="light"] #page-migrate :is(button:focus-visible,.btn:focus-within) {outline-color:var(--brand)}
+:root[data-theme="light"] :is(#page-migrate,dialog.mg-dialog) input[type="checkbox"] {background:var(--panel);border-color:var(--muted)}
+:root[data-theme="light"] :is(#page-migrate,dialog.mg-dialog) input[type="checkbox"]:is(:checked,:indeterminate) {background:var(--brand);border-color:var(--brand);box-shadow:none}
+:root[data-theme="light"] dialog.mg-dialog {background:var(--panel);border-color:var(--line);box-shadow:var(--shadow)}
+:root[data-theme="light"] dialog.mg-dialog :is(header,footer,th,.edit-note,.import-log-mini,.import-log-warnings,.import-log-errors) {background:var(--hover);color:var(--text);border-color:var(--line)}
+:root[data-theme="light"] dialog.mg-dialog :is(header h3,.mg-help summary) {color:var(--text);text-shadow:none}
+:root[data-theme="light"] dialog.mg-dialog .check-ok strong {color:var(--ok)}
+:root[data-theme="light"] dialog.mg-dialog .check-failed strong {color:var(--bad)}
+:root[data-theme="light"] #import-dialog .wiz-steps {background:var(--hover);border-color:var(--line)}
+:root[data-theme="light"] #import-dialog .wiz-steps b {background:var(--panel);color:var(--muted);border-color:var(--line)}
+:root[data-theme="light"] #import-dialog .wiz-steps :is(.on,.done) b {background:var(--brand-soft);color:var(--brand);border-color:var(--brand);box-shadow:none}
+:root[data-theme="light"] #import-dialog .wiz-steps li.on {color:var(--brand)}
+:root[data-theme="light"] #import-dialog .mg-eyebrow {color:var(--accent)}
+:root[data-theme="light"] #log-dialog.mg-dialog :is(pre,.code) {background:var(--hover);color:var(--text);border-color:var(--line)}
+:root[data-theme="light"] :is(#page-migrate,dialog.mg-dialog) .badge:is(.running,.done,.online,.ready) {color:var(--ok);background:#087d5812}
+:root[data-theme="light"] :is(#page-migrate,dialog.mg-dialog) .badge:is(.queued,.waiting,.uploading) {color:var(--warn);background:#a95c0712}
+:root[data-theme="light"] :is(#page-migrate,dialog.mg-dialog) .badge:is(.failed,.offline,.cancelled) {color:var(--bad);background:#c5365312}
+
+:root[data-theme="light"] :is(#virtual-storage-dialog,#pool-dialog,#pool-view) {--vs-text:var(--text);--vs-dim:var(--muted);--vs-cyan:var(--accent);color:var(--text)}
+:root[data-theme="light"] :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(header,footer,.wiz-steps,.tabs,.type-card,.pv-cache,.vs-node-head,.vs-protection,.card) {background:var(--panel);border-color:var(--line);color:var(--text)}
+:root[data-theme="light"] :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(h3,b,summary) {color:var(--text)}
+:root[data-theme="light"] :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.type-card:has(input:checked),.tabs button.active) {background:var(--brand-soft);border-color:var(--brand);color:var(--brand)}
+:root[data-theme="light"] :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(.vs-erase,#vs-review) {background:#fff2f5;border-color:var(--bad);color:var(--bad)}
+:root[data-theme="light"] :is(#virtual-storage-dialog,#pool-dialog,#pool-view) :is(input,select,textarea,button,.btn):focus-visible {outline-color:var(--brand)}
