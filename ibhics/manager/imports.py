@@ -106,11 +106,11 @@ class ImportManager:
         discover: Callable[[Source], list[SourceVM]] = list_vms,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         executor: Executor | None = None,
-        upload_dir: Path = UPLOAD_DIR,
+        upload_dir: Path | None = None,
         tester: Callable[[Source], dict] = test_source,
     ) -> None:
         self._cluster = cluster
-        self.upload_dir = Path(upload_dir)
+        self.upload_dir = Path(upload_dir or os.environ.get("IBHICS_UPLOAD_DIR", UPLOAD_DIR))
         self._state_path = state_path
         self._tester = tester
         self._discover = discover
@@ -141,10 +141,20 @@ class ImportManager:
             builtin = [self.uploads_source] + ([self.physical_source] if self.p2v else [])
             return [*builtin, *self._sources.values()]
 
+    def require_data_storage(self, directory: Path, **kwargs) -> Path:
+        from ..hypervisor.fake import FakeDriver
+        from ..storage_paths import require_data_storage
+
+        local = next((m for m in self._cluster.compute_members() if m.local), None)
+        if local is None or not isinstance(local.driver, FakeDriver):
+            return require_data_storage(directory, **kwargs)
+        return Path(directory)
+
     def source(self, name: str) -> Source:
         if name == PHYSICAL and self.p2v is not None:
             return self.physical_source
         if name == UPLOADS:
+            self.require_data_storage(self.upload_dir)
             self.upload_dir.mkdir(parents=True, exist_ok=True)
             return self.uploads_source
         with self._lock:

@@ -50,6 +50,9 @@ class LocalRuntime:
                 replica_root = directory / ".ibhics-replicas"
                 if replica_root.is_symlink():
                     raise InvalidState("Replication storage directory must not be a symlink")
+                from ..storage_paths import require_data_storage
+
+                require_data_storage(replica_root / job.id / str(len(roots)))
             roots.append(Path(base) / ".ibhics-replicas" / job.id / str(len(roots)))
         return ReplicaStore(roots[0].parent / "metadata", roots)
 

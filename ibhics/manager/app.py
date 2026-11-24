@@ -159,13 +159,17 @@ def iso_path(folder: Path, filename: str) -> Path:
     return folder / name
 
 
-async def receive_file(request: Request, target: Path) -> int:
+async def receive_file(request: Request, target: Path, *, storage_guard=None) -> int:
     """Stream a request body to `target` through a hidden partial file; returns its size."""
+    if storage_guard:
+        storage_guard(target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(f".{target.name}.partial")
     size = 0
     try:
         with open(partial, "wb") as f:
+            if storage_guard:
+                storage_guard(target.parent, file_fd=f.fileno())
             async for chunk in request.stream():
                 await asyncio.to_thread(f.write, chunk)
                 size += len(chunk)
@@ -403,6 +407,7 @@ def create_app(
     from .p2v import P2VError, P2VSessions
 
     p2v = p2v or P2VSessions()
+    p2v.storage_guard = imports.require_data_storage
     imports.p2v = p2v
     imports.migrations = migrations
     app.state.imports = imports
@@ -2041,7 +2046,11 @@ def create_app(
     @api.put("/migrate/uploads/{filename}", response_model=UploadOut)
     async def upload(filename: str, request: Request) -> UploadOut:
         target = upload_path(imports.upload_dir, filename)
-        size = await receive_file(request, target)
+        length = request.headers.get("content-length", "")
+        imports.require_data_storage(
+            target.parent, required_bytes=int(length) if length.isdecimal() else 0
+        )
+        size = await receive_file(request, target, storage_guard=imports.require_data_storage)
         return UploadOut(name=target.name, size_bytes=size)
 
     @api.delete("/migrate/uploads/{filename}", status_code=status.HTTP_204_NO_CONTENT)

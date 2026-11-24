@@ -355,6 +355,8 @@ class V2VConverter:
     @staticmethod
     def _guestfs_env(workspace: Path) -> dict[str, str]:
         cache = workspace / ".libguestfs-cache"
+        if cache.is_symlink():
+            raise ConversionFailed("Migration guestfs cache must not be a symlink")
         cache.mkdir(mode=0o700, exist_ok=True)
         return {
             **os.environ,

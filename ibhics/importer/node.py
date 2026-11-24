@@ -56,6 +56,11 @@ class NodeImport:
                 if (d.get("pool") or pool) not in available:
                     raise PoolNotFound(d.get("pool") or pool)
         if self._scratch:
+            from ..hypervisor.fake import FakeDriver
+            from ..storage_paths import require_data_storage
+
+            if not isinstance(self._driver, FakeDriver):
+                require_data_storage(Path(self._scratch))
             Path(self._scratch).mkdir(parents=True, exist_ok=True)
             scratch = nullcontext(Path(self._scratch))
         else:
