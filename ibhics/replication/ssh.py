@@ -9,6 +9,7 @@ refuses pre-existing chains. Production hardware validation is still required.
 from __future__ import annotations
 
 import json
+import os
 import posixpath
 import re
 import shlex
@@ -20,6 +21,10 @@ from ..importer.convert import SSH_KEY, VMX_DISK, vmdk_flat_file, vmx_disk_files
 from ..importer.kvm import parse_libvirt_domain, parse_qm_config
 from ..importer.sources import Source, SourceType, SourceVM
 from .providers import ChangeProvider, Disk, Point
+
+
+class SourceScratchUnavailable(ValueError):
+    """Source storage failed validation before replication writes begin."""
 
 
 class SSH:
@@ -81,6 +86,31 @@ class SnapshotSSHProvider(ChangeProvider):
     def command(self, *args: str) -> str:
         return self.ssh.command(shlex.join(args))
 
+    def scratch_root(self, needed: int) -> str:
+        root = os.environ.get("IBHICS_REPLICATION_SOURCE_SCRATCH", "")
+        if not root.startswith("/") or posixpath.normpath(root) != root or root == "/":
+            raise SourceScratchUnavailable(
+                "Set IBHICS_REPLICATION_SOURCE_SCRATCH to a source storage mount"
+            )
+        try:
+            self.command("mountpoint", "-q", "--", root)
+            device = self.command("stat", "-Lc", "%d", "--", root).strip()
+            system = self.command("stat", "-Lc", "%d", "--", "/").strip()
+            available = int(self.command("df", "-B1", "--output=avail", "--", root).split()[-1])
+        except (RuntimeError, ValueError, IndexError):
+            raise SourceScratchUnavailable(
+                "Replication source scratch storage is unavailable"
+            ) from None
+        if not device.isdecimal() or not system.isdecimal() or device == system:
+            raise SourceScratchUnavailable(
+                "Replication source scratch must be off the root filesystem"
+            )
+        if available - needed < max(needed // 10, 2 * 1024**3):
+            raise SourceScratchUnavailable(
+                "Not enough free space on replication source scratch storage"
+            )
+        return root
+
     def begin(self) -> Point:
         if self.source.type == SourceType.KVM:
             return self._kvm()
@@ -124,13 +154,7 @@ class SnapshotSSHProvider(ChangeProvider):
                     "NBD pull unavailable; snapshot fallback requires file-backed qcow2 disks"
                 )
             needed += int(info.get("virtual-size") or 0)
-        # The snapshot is exported to /var/tmp on the source host. Never fill the
-        # source's filesystem: keep 10% (at least 2 GiB) free after the export.
-        avail = int(self.command("df", "-B1", "--output=avail", "/var/tmp").split()[-1])
-        if avail - needed < max(needed // 10, 2 * 1024**3):
-            raise ValueError(
-                "Not enough free space in /var/tmp on the source host for the snapshot export"
-            )
+        scratch = self.scratch_root(needed)
         self.snapshot_attempted = True
         if proxmox:
             self.command("qm", "snapshot", self.vm.ref, self.name, "--vmstate", "0")
@@ -159,7 +183,7 @@ class SnapshotSSHProvider(ChangeProvider):
                 f"printf %s {shlex.quote(xml)} | "
                 + shlex.join(["virsh", "snapshot-create", self.vm.ref, "/dev/stdin", "--atomic"])
             )
-        export_dir = f"/var/tmp/{self.name}"
+        export_dir = posixpath.join(scratch, self.name)
         self.command("mkdir", "-m", "700", "--", export_dir)
         self.export_dir = export_dir
         result = []

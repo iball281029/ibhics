@@ -12,6 +12,23 @@ from ibhics.replication.cow import CowReplicaStore
 from ibhics.replication.runtime import ClusterRuntime
 
 
+def test_replication_destination_on_root_is_rejected_before_writes():
+    from types import SimpleNamespace
+
+    from ibhics.hypervisor import InvalidState
+    from ibhics.replication.runtime import LocalRuntime
+
+    driver = SimpleNamespace(pool_path=lambda _: "/")
+    member = SimpleNamespace(local=True, driver=driver)
+    cluster = SimpleNamespace(member=lambda _: member)
+    job = SimpleNamespace(
+        node="node", id="1" * 32, destination={"pool": "storage", "disks": [{}]}
+    )
+    runtime = LocalRuntime(cluster, Path("/unused"))
+    with pytest.raises(InvalidState, match="root filesystem"):
+        runtime.store(job)
+
+
 class Delta(Provider):
     tracking = "cbt"
 
@@ -76,6 +93,11 @@ def test_known_remote_cbt_error_remains_actionable():
 
     job = ReplicationJob("1" * 32, "src", "vm", "name", "node", {}, {}, "now", {}, {})
     with pytest.raises(CBTRequired, match="full scan not started"):
+        runtime._call(member, "sync", job)
+    from ibhics.replication.ssh import SourceScratchUnavailable
+
+    response.json = lambda: {"detail": "SOURCE_SCRATCH_UNAVAILABLE"}
+    with pytest.raises(SourceScratchUnavailable, match="IBHICS_REPLICATION_SOURCE_SCRATCH"):
         runtime._call(member, "sync", job)
 
 

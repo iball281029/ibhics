@@ -218,6 +218,10 @@ class FakeV2V:
     def __call__(self, cmd, **kw):
         self.cmds.append(cmd)
         assert kw["env"]["LIBGUESTFS_BACKEND"] == "direct"
+        workspace = Path(cmd[cmd.index("-os") + 1]).resolve()
+        for key in ("LIBGUESTFS_CACHEDIR", "LIBGUESTFS_TMPDIR", "TMPDIR"):
+            assert Path(kw["env"][key]) == workspace / ".libguestfs-cache"
+            assert Path(kw["env"][key]).is_dir()
         if "-ip" in cmd:
             self.password_seen = Path(cmd[cmd.index("-ip") + 1]).read_text()
         if self.fail:
@@ -773,6 +777,8 @@ def test_keep_nic_names_runs_the_pin_script_in_the_guest(tmp_path):
     def run(cmd, **kw):
         seen["cmd"] = cmd
         seen["script"] = Path(cmd[cmd.index("--run") + 1]).read_text()
+        assert Path(cmd[cmd.index("--run") + 1]).parent == tmp_path
+        assert Path(kw["env"]["LIBGUESTFS_TMPDIR"]) == tmp_path.resolve() / ".libguestfs-cache"
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     images = [tmp_path / "x-sda", tmp_path / "x-sdb"]

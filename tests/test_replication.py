@@ -228,6 +228,46 @@ def test_api_lifecycle_cutover_and_cleanup(env):
     assert client.get(url).status_code == 404
 
 
+def test_sync_and_cutover_resolve_unique_source_case_change(env):
+    client, manager, runtime, _ = env
+    job = create(client)
+    url = f"/api/v1/migrate/replications/{job['id']}"
+    manager.imports.remove_source("kvm")
+    manager.imports.add_source(Source("KVM", SourceType.KVM, host="host", password="SECRET"))
+    manager.imports.add_source(Source("Kvm", SourceType.KVM, host="other-host", password="SECRET"))
+
+    failed = client.post(url + "/sync").json()
+    assert failed["state"] == "failed"
+    assert "matches multiple configured names" in failed["error"]
+    assert runtime.calls == ["sync"]
+
+    manager.imports.remove_source("Kvm")
+    assert client.post(url + "/sync").json()["state"] == "idle"
+    result = client.post(url + "/cutover", json={"source_powered_off": True})
+    assert result.json()["state"] == "done"
+    assert runtime.calls == ["sync", "sync", "sync", (False, None)]
+
+
+def test_failover_uses_last_replica_after_failed_sync(env):
+    client, manager, runtime, now = env
+    job = create(client)
+    url = f"/api/v1/migrate/replications/{job['id']}"
+    previous = runtime.store(None).current()
+    manager.imports.remove_source("kvm")
+    failed = client.post(url + "/sync").json()
+    assert failed["state"] == "failed"
+    assert "source 'kvm' is missing" in failed["error"]
+
+    response = client.post(url + "/test-failover", json={})
+    assert response.status_code == 202
+    tested = response.json()
+    assert tested["test_vm"] == "test-vm"
+    assert tested["state"] == "failed"
+    assert tested["error"] == failed["error"]
+    assert runtime.calls == ["sync", (True, [])]
+    assert runtime.store(None).current() == previous
+
+
 def test_schedule_pause_rpo_and_restart(env):
     client, manager, runtime, now = env
     job = create(client)

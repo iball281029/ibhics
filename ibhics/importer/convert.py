@@ -352,13 +352,28 @@ class V2VConverter:
         self.ssh = ssh or EsxiSSH(run)
         self.host_ssh = host_ssh or HostSSH(run)
 
+    @staticmethod
+    def _guestfs_env(workspace: Path) -> dict[str, str]:
+        cache = workspace / ".libguestfs-cache"
+        cache.mkdir(mode=0o700, exist_ok=True)
+        return {
+            **os.environ,
+            "LIBGUESTFS_BACKEND": "direct",
+            "LIBGUESTFS_CACHEDIR": str(cache.resolve()),
+            "LIBGUESTFS_TMPDIR": str(cache.resolve()),
+            "TMPDIR": str(cache.resolve()),
+        }
+
     def keep_nic_names(self, images: list[Path], macs: list[str]) -> str:
         """Pin the guest's old NIC names to macs. Best effort: returns a note for the log
         (Windows guests and guests without such configs are left as they are)."""
         macs = [m for m in macs if m and MAC_RE.match(m)]
         if not macs:
             return "no MAC addresses to pin NIC names to"
-        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as script:
+        workspace = images[0].parent
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".sh", dir=workspace, delete=False
+        ) as script:
             script.write(PIN_NIC_NAMES % {"macs": " ".join(macs)})
         try:
             cmd = ["virt-customize", "--no-network"]
@@ -368,7 +383,7 @@ class V2VConverter:
                 [*cmd, "--run", script.name],
                 capture_output=True,
                 text=True,
-                env={**os.environ, "LIBGUESTFS_BACKEND": "direct"},
+                env=self._guestfs_env(workspace),
             )
         finally:
             os.unlink(script.name)
@@ -444,7 +459,7 @@ class V2VConverter:
                 cmd = ["virt-v2v", "-i", "ova", vm.ref]
             else:
                 cmd = ["virt-v2v", "-i", "disk", vm.ref]
-            env = {**os.environ, "LIBGUESTFS_BACKEND": "direct"}
+            env = self._guestfs_env(out_dir)
             if self.run is subprocess.run:
                 result, log = self._run_streaming(cmd + output, env, name, progress)
             else:
@@ -544,7 +559,7 @@ class V2VConverter:
                     if (kind.stdout or "").strip() != "ntfs":
                         continue
                     self.run(["ntfsfix", "-d", part], capture_output=True, text=True)
-                    mount = tempfile.mkdtemp(prefix="ibhics-ntfs-")
+                    mount = tempfile.mkdtemp(prefix="ibhics-ntfs-", dir=image.parent)
                     try:
                         mounted = self.run(
                             ["mount", "-t", "ntfs-3g", "-o", "remove_hiberfile", part, mount],

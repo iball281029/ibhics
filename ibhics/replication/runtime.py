@@ -6,7 +6,8 @@ import json
 import shutil
 from pathlib import Path
 
-from ..hypervisor import DiskSpec, NicSpec, VMSpec
+from ..hypervisor import DiskSpec, InvalidState, NicSpec, VMSpec
+from ..hypervisor.fake import FakeDriver
 from ..importer.convert import V2VConverter
 from ..importer.resize import resize_image
 from ..importer.sources import SourceType
@@ -40,6 +41,15 @@ class LocalRuntime:
             base = member.driver.pool_path(disk.get("pool") or job.destination["pool"])
             if not base:
                 raise ValueError("Replication requires a mounted directory/file pool")
+            if not isinstance(member.driver, FakeDriver):
+                directory = Path(base).resolve()
+                if not directory.is_dir() or directory.stat().st_dev == Path("/").stat().st_dev:
+                    raise InvalidState(
+                        "Replication destination storage is unavailable or on the root filesystem"
+                    )
+                replica_root = directory / ".ibhics-replicas"
+                if replica_root.is_symlink():
+                    raise InvalidState("Replication storage directory must not be a symlink")
             roots.append(Path(base) / ".ibhics-replicas" / job.id / str(len(roots)))
         return ReplicaStore(roots[0].parent / "metadata", roots)
 
@@ -239,6 +249,13 @@ class ClusterRuntime(LocalRuntime):
             from .cow import CBTRequired, ReplicaMaintenanceRequired
 
             detail = response.json().get("detail")
+            if detail == "SOURCE_SCRATCH_UNAVAILABLE":
+                from .ssh import SourceScratchUnavailable
+
+                raise SourceScratchUnavailable(
+                    "Replication source storage is unavailable, on root, or lacks free space. "
+                    "Check IBHICS_REPLICATION_SOURCE_SCRATCH on the execution node."
+                )
             if detail == "CBT_REQUIRED":
                 raise CBTRequired
             if detail == "REPLICA_MAINTENANCE_REQUIRED":

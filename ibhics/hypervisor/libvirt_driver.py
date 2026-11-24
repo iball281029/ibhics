@@ -1550,20 +1550,28 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             raise PoolNotFound(pool) from None
         root = ET.fromstring(target.XMLDesc(0))
-        if root.get("type") in ("dir", "netfs", "fs"):
-            # Raw images are sparse, so this takes only the data actually copied.
-            base = Path(root.findtext("target/path")) / ".ibhics-scratch"
-            base.mkdir(parents=True, exist_ok=True)
+        pool_type = root.get("type")
+        if pool_type in ("dir", "netfs", "fs"):
+            location = root.findtext("target/path")
+            if not location or not target.isActive():
+                raise InvalidState(f"Storage pool {pool!r} is unavailable for migration scratch")
+            directory = Path(location).resolve()
+            if pool_type in ("netfs", "fs") and not directory.is_mount():
+                raise InvalidState(f"Storage pool {pool!r} is not mounted at {directory}")
+            self._check_migration_scratch(pool, directory, size_gb)
+            base = directory / ".ibhics-scratch"
+            if base.is_symlink():
+                raise InvalidState(f"Storage pool {pool!r} migration scratch must not be a symlink")
+            base.mkdir(exist_ok=True)
+            self._check_migration_scratch(pool, base, size_gb)
             path = Path(tempfile.mkdtemp(dir=base))
             try:
                 yield path
             finally:
                 shutil.rmtree(path, ignore_errors=True)
             return
-        if root.get("type") != "logical" or size_gb <= 0:
-            with super().scratch_space(pool, size_gb) as path:
-                yield path
-            return
+        if pool_type != "logical" or size_gb <= 0:
+            raise InvalidState(f"Storage pool {pool!r} cannot provide migration scratch")
         # LVM pool: a temporary logical volume with a filesystem, removed afterwards.
         name = f"ibhics-scratch-{uuidlib.uuid4().hex[:8]}"
         vol = target.createXML(
@@ -1575,12 +1583,25 @@ class LibvirtDriver(HypervisorDriver):
             self.run(["mkfs.xfs", "-q", vol.path()])
             self.run(["mount", vol.path(), str(mount)])
             try:
+                self._check_migration_scratch(pool, mount, size_gb)
                 yield mount
             finally:
                 self.run(["umount", str(mount)])
         finally:
             mount.rmdir()
             vol.delete(0)
+
+    @staticmethod
+    def _check_migration_scratch(pool: str, directory: Path, size_gb: int) -> None:
+        if not directory.is_dir() or directory.stat().st_dev == Path("/").stat().st_dev:
+            raise InvalidState(
+                f"Storage pool {pool!r} scratch at {directory} "
+                "is unavailable or on the root filesystem"
+            )
+        if shutil.disk_usage(directory).free < size_gb * 1024**3:
+            raise InvalidState(
+                f"Storage pool {pool!r} needs {size_gb} GiB of free migration scratch"
+            )
 
     def delete_pool(self, name: str) -> None:
         pool = self._pool(name)

@@ -10,6 +10,7 @@ from ..hypervisor import InvalidState
 from ..importer import Source, SourceVM
 from .cow import CBTRequired, ReplicaMaintenanceRequired
 from .runtime import LocalRuntime
+from .ssh import SourceScratchUnavailable
 from .store import operation_lock
 
 
@@ -83,6 +84,8 @@ def install(api, name, driver, root: Path, guard=Path("/run/lock/ibhics-replicat
                 if action == "delete":
                     runtime.delete(job)
                     return {"ok": True}
+            except SourceScratchUnavailable:
+                raise HTTPException(409, "SOURCE_SCRATCH_UNAVAILABLE") from None
             except (CBTRequired, ReplicaMaintenanceRequired) as exc:
                 code = (
                     "CBT_REQUIRED"

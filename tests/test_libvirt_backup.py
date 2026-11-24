@@ -95,6 +95,27 @@ def make_driver(monkeypatch, tmp_path):
     return make
 
 
+@pytest.mark.parametrize(
+    ("pool_type", "target_path", "error"),
+    [
+        ("dir", "/", "root filesystem"),
+        ("netfs", "/ibhics-unmounted-pool", "is not mounted"),
+        ("disk", "/dev/example", "cannot provide migration scratch"),
+    ],
+)
+def test_migration_scratch_refuses_unavailable_or_root_storage(
+    make_driver, monkeypatch, pool_type, target_path, error
+):
+    driver = make_driver(active=True)
+    pool = types.SimpleNamespace(
+        XMLDesc=lambda _: f'<pool type="{pool_type}"><target><path>{target_path}</path></target></pool>',
+        isActive=lambda: True,
+    )
+    monkeypatch.setattr(driver._conn, "storagePoolLookupByName", lambda _: pool)
+    with pytest.raises(InvalidState, match=error), driver.scratch_space("migration", 1):
+        pytest.fail("Migration must stop before writing scratch")
+
+
 @pytest.mark.parametrize("tuned", [False, True])
 def test_running_vm_uses_push_backup(make_driver, monkeypatch, tuned):
     if tuned:
