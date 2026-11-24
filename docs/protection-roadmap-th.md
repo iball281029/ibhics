@@ -7,7 +7,7 @@
 | ส่วนงาน | หลักฐานล่าสุด | เกณฑ์ที่ยังต้องผ่าน |
 |---|---|---|
 | Backup | งานตามเวลาเมื่อวันที่ 23 พฤศจิกายนสำเร็จ งาน #9 ของวันที่ 24 พฤศจิกายนถูกยกเลิกตามคำสั่งผู้ใช้และล้าง retry แล้ว VM ยังทำงานอยู่ | หาสาเหตุความช้า กู้จาก restore point จริงเทียบ checksum และทดสอบ NFS cleanup หลัง commit |
-| Sync Now | Journal ของ Zabbix ระบุ SourceNotFound พบ job อ้าง esx01 ขณะที่ config ที่แชร์ใช้ ESX01 และตรวจชนิดต้นทาง โฮสต์ path และ transport แล้วตรงกัน เพิ่มการจับคู่ชื่อแบบไม่แยกตัวพิมพ์เมื่อมีเพียงรายการเดียวในโค้ดแล้ว | Deploy และวัด incremental จริงทั้งรอบที่ข้อมูลเปลี่ยนและรอบว่าง |
+| Sync Now | Deploy ตัวจับคู่ชื่อ Source บน .103/.104 แล้ว ทดสอบจริง Zabbix ผ่าน 2 รอบ: CBT ส่ง 16 MiB และรอบติดกันส่ง 0 bytes ใน 16.53 วินาที ไม่มี fallback ไป Full; API idle/error null | Cutover และการบูต generation หลัง Sync รอบใหม่นี้ยังไม่ทดสอบ |
 | Test Failover | ทดสอบจริง Zabbix ผ่าน 24 พ.ย. 2026 เวลา 16:40–16:42 หลังตั้งปลายทาง 300 GiB: VM บูตถึงหน้า login AlmaLinux 8.8 ไม่มี NIC; cleanup ลบ VM ดิสก์และ workspace ครบ โดย checksum manifest และตัวตนไฟล์ replica เดิมไม่เปลี่ยน | แก้ประวัติ Test Failover เป็น done แยกจาก Sync ที่ failed แล้วและ deploy ทั้งสองโหนด; Guest Agent ไม่เชื่อมต่อและยังไม่ตรวจบริการ Zabbix ผ่านเครือข่าย |
 | Cutover | มีแพตช์ให้ใช้ Source เดียวกับ Sync รอบสุดท้าย | ทดสอบบน VM ชุดทดสอบหลังแก้ Sync และขนาดดิสก์ |
 | พื้นที่ root | แพตช์ใน repo ครอบคลุม cache และ temp ของ conversion กับ resize รวมถึงตัวตรวจ migration scratch และ replica storage | Deploy ครบและวัดพื้นที่จริงตลอดงาน รวมกรณี mount หายและพื้นที่ไม่พอ |
@@ -55,3 +55,11 @@ CI ของ 3cad3e8 ผ่านครบ 8 งาน รอบแก้ล่�
 - ข้อจำกัด: Guest Agent ไม่เชื่อมต่อ จึงยืนยันการบูตจาก console; ไม่ได้ทดสอบบริการ Zabbix หรือ Cutover และไม่ควรสรุปว่าผ่านทั้งหมด
 
 - 24 พ.ย. 2026 เวลา 16:52: แพตช์ประวัติ Test Failover ลง .103/.104 แล้ว; API ยืนยันรอบ 16:40 เป็น `done`, error null ขณะที่ Sync เดิมยัง `failed` พร้อม error เดิม; regression tests `tests/test_replication.py` ผ่าน 37 รายการ. แก้ประวัติย้อนหลังเฉพาะรอบที่ยืนยันบูตและ cleanup ด้วยหลักฐานจริง โดยสำรอง state เดิมก่อนแก้
+
+### Sync Now evidence - 2026-11-24
+
+- Production source resolution patched on .103/.104: job `esx01` resolves uniquely to `ESX01`; source configuration and credentials unchanged. Backup: `replications.py.before-source-fix-20261124-*`.
+- First sync completed at 16:56:15: CBT, 16,777,216 bytes transferred (16 MiB), no fallback.
+- Repeat started 16:57:40.438 and completed 16:57:56.966 (16.53 seconds): CBT, zero bytes transferred, no fallback. Final API state: idle, operation null, error null.
+- These runs did not resend the full 300 GiB disk. This does not certify every provider or failure scenario. Source resolution tests were included in the previously passing 37-test replication suite.
+- Original 720-minute schedule retained. Cutover and boot validation of the newly synced generation remain outstanding.
