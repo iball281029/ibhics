@@ -371,9 +371,7 @@ class V2VConverter:
         if not macs:
             return "no MAC addresses to pin NIC names to"
         workspace = images[0].parent
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".sh", dir=workspace, delete=False
-        ) as script:
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", dir=workspace, delete=False) as script:
             script.write(PIN_NIC_NAMES % {"macs": " ".join(macs)})
         try:
             cmd = ["virt-customize", "--no-network"]

@@ -21,9 +21,7 @@ def test_replication_destination_on_root_is_rejected_before_writes():
     driver = SimpleNamespace(pool_path=lambda _: "/")
     member = SimpleNamespace(local=True, driver=driver)
     cluster = SimpleNamespace(member=lambda _: member)
-    job = SimpleNamespace(
-        node="node", id="1" * 32, destination={"pool": "storage", "disks": [{}]}
-    )
+    job = SimpleNamespace(node="node", id="1" * 32, destination={"pool": "storage", "disks": [{}]})
     runtime = LocalRuntime(cluster, Path("/unused"))
     with pytest.raises(InvalidState, match="root filesystem"):
         runtime.store(job)
