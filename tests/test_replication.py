@@ -18,6 +18,35 @@ from ibhics.replication.providers import ChangeProvider, Disk, Point, capability
 from ibhics.replication.store import ReplicaStore
 
 
+def test_sparse_clone_preserves_holes_and_falls_back_without_seek_data(tmp_path, monkeypatch):
+    import errno
+    import subprocess
+
+    from ibhics.replication import store as storage
+
+    source = tmp_path / "source"
+    with source.open("wb") as image:
+        image.write(b"head")
+        image.seek(1024 * 1024)
+        image.write(b"tail")
+        image.truncate(2 * 1024 * 1024)
+    monkeypatch.setattr(
+        storage.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 1)
+    )
+    expected = source.read_bytes()
+    fast = tmp_path / "fast"
+    storage.sparse_copy(source, fast, chunk=4096)
+    assert fast.read_bytes() == expected
+
+    def unsupported(*args):
+        raise OSError(errno.EINVAL, "SEEK_DATA unavailable")
+
+    monkeypatch.setattr(storage.os, "lseek", unsupported)
+    fallback = tmp_path / "fallback"
+    storage.sparse_copy(source, fallback, chunk=4096)
+    assert fallback.read_bytes() == expected
+
+
 class Provider(ChangeProvider):
     def __init__(self, data, *, fail=False, source_hash=True, fail_begin=False, fail_end=False):
         self.data = data

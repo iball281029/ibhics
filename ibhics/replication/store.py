@@ -7,6 +7,7 @@ or its hashes. Space usage can temporarily be twice the VM's allocated disk spac
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -83,14 +84,31 @@ def sparse_copy(source: Path, target: Path, chunk: int = CHUNK) -> None:
         target.unlink(missing_ok=True)
     except OSError:
         target.unlink(missing_ok=True)
-    with source.open("rb") as src, target.open("xb") as dst:
+    with source.open("rb", buffering=0) as src, target.open("xb") as dst:
         os.chmod(target, 0o600)
-        while data := src.read(chunk):
+        size = os.fstat(src.fileno()).st_size
+        seek_data = getattr(os, "SEEK_DATA", None)
+        while src.tell() < size:
+            if seek_data is not None:
+                try:
+                    offset = os.lseek(src.fileno(), src.tell(), seek_data)
+                except OSError as exc:
+                    if exc.errno == errno.ENXIO:
+                        break
+                    if exc.errno not in (errno.EINVAL, errno.ENOTSUP):
+                        raise
+                    seek_data = None
+                else:
+                    src.seek(offset)
+                    dst.seek(offset)
+            data = src.read(chunk)
+            if not data:
+                raise ValueError("Replica source became shorter while cloning")
             if any(data):
                 dst.write(data)
             else:
                 dst.seek(len(data), 1)
-        dst.truncate(src.tell())
+        dst.truncate(size)
         dst.flush()
         os.fsync(dst.fileno())
 
