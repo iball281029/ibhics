@@ -9,6 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from .convert import V2VConverter
 from .sources import GIB
 
 
@@ -27,10 +28,13 @@ def resize_image(image: Path, size_gb: int, runner=None) -> None:
     cannot fit are rejected by pvresize, never forcibly truncated or discarded.
     """
     runner = runner or subprocess.run
+    environment = V2VConverter._guestfs_env(image.parent)
 
     def run(args, *, script=None):
         try:
-            result = runner(args, input=script, text=True, capture_output=True, check=True)
+            result = runner(
+                args, input=script, text=True, capture_output=True, check=True, env=environment
+            )
         except FileNotFoundError as exc:
             raise ResizeError(
                 f"Disk resize requires {exc.filename}; install libguestfs tools on this node"
