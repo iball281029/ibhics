@@ -69,10 +69,10 @@ def fsync_dir(path: Path) -> None:
 
 def sparse_copy(source: Path, target: Path, chunk: int = CHUNK) -> None:
     """Independent copy, including zero holes; never hardlink a writable replica."""
-    # A reflink keeps generation creation cheap on XFS/btrfs; sparse copy is universal.
+    # Let cp use reflinks or a sparse copy without holding an output fd in the manager.
     try:
         result = subprocess.run(
-            ["cp", "--reflink=always", "--sparse=always", "--", str(source), str(target)],
+            ["cp", "--reflink=auto", "--sparse=always", "--", str(source), str(target)],
             capture_output=True,
             check=False,
         )
