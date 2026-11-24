@@ -97,6 +97,11 @@ def test_known_remote_cbt_error_remains_actionable():
     response.json = lambda: {"detail": "SOURCE_SCRATCH_UNAVAILABLE"}
     with pytest.raises(SourceScratchUnavailable, match="IBHICS_REPLICATION_SOURCE_SCRATCH"):
         runtime._call(member, "sync", job)
+    from ibhics.importer.resize import ResizeError
+
+    response.json = lambda: {"detail": "REPLICA_RESIZE_FAILED"}
+    with pytest.raises(ResizeError, match="destination disk size"):
+        runtime._call(member, "materialize", job)
 
 
 @pytest.mark.skipif(

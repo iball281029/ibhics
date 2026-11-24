@@ -19,6 +19,7 @@ from pathlib import Path
 from ..hypervisor import InvalidState, PoolNotFound, VMExists
 from ..importer import Source, SourceNotFound, SourceVM
 from ..importer.nics import validate_nics
+from ..importer.resize import ResizeError
 from ..replication.providers import capability
 from ..replication.runtime import ClusterRuntime
 from ..replication.ssh import SourceScratchUnavailable
@@ -325,6 +326,7 @@ class ReplicationManager:
                                 ReplicaMaintenanceRequired,
                                 ReplicationSourceMissing,
                                 SourceScratchUnavailable,
+                                ResizeError,
                             ),
                         )
                         else "Replication operation failed; inspect node and source"

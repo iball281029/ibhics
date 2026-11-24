@@ -63,7 +63,6 @@ def resize_image(image: Path, size_gb: int, runner=None) -> None:
                 str(image),
                 "--long",
                 "--all",
-                "--blocksize",
                 "--csv",
             ]
         )

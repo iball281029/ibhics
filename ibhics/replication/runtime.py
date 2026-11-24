@@ -9,7 +9,7 @@ from pathlib import Path
 from ..hypervisor import DiskSpec, InvalidState, NicSpec, VMSpec
 from ..hypervisor.fake import FakeDriver
 from ..importer.convert import V2VConverter
-from ..importer.resize import resize_image
+from ..importer.resize import ResizeError, resize_image
 from ..importer.sources import SourceType
 from .bitmap import KVMPullProvider
 from .cbt import ESXiCBTProvider
@@ -249,6 +249,11 @@ class ClusterRuntime(LocalRuntime):
             from .cow import CBTRequired, ReplicaMaintenanceRequired
 
             detail = response.json().get("detail")
+            if detail == "REPLICA_RESIZE_FAILED":
+                raise ResizeError(
+                    "Replica disk resize failed. Match the destination disk size to the source "
+                    "or use a supported offline shrink layout."
+                )
             if detail == "SOURCE_SCRATCH_UNAVAILABLE":
                 from .ssh import SourceScratchUnavailable
 

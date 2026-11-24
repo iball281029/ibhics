@@ -257,6 +257,24 @@ def test_api_lifecycle_cutover_and_cleanup(env):
     assert client.get(url).status_code == 404
 
 
+def test_resize_failure_explains_why_test_failover_cannot_finish(env, monkeypatch):
+    from ibhics.importer.resize import ResizeError
+
+    client, manager, runtime, _ = env
+    job = create(client)
+    before = runtime.store(None).current()
+
+    def cannot_shrink(*args, **kwargs):
+        raise ResizeError("Cannot shrink xfs filesystem")
+
+    monkeypatch.setattr(runtime, "materialize", cannot_shrink)
+    result = client.post(f"/api/v1/migrate/replications/{job['id']}/test-failover", json={}).json()
+    assert result["state"] == "failed"
+    assert result["error"] == "Cannot shrink xfs filesystem"
+    assert result["test_vm"] is None
+    assert runtime.store(None).current() == before
+
+
 def test_sync_and_cutover_resolve_unique_source_case_change(env):
     client, manager, runtime, _ = env
     job = create(client)

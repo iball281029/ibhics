@@ -27,6 +27,9 @@ class Runner:
         self.environments = []
 
     def __call__(self, args, **kwargs):
+        if args[0] == "virt-filesystems" and "--blocksize" in args:
+            if args.index("--blocksize") > args.index("-a"):
+                raise subprocess.CalledProcessError(1, args)
         self.calls.append((args, kwargs.get("input")))
         self.environments.append(kwargs.get("env", {}))
         if args[0] == self.fail:
