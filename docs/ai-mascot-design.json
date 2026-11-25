@@ -1,0 +1,11 @@
+{
+  "tool": "built-in image_gen.imagegen",
+  "asset": "ibhics/manager/static/ai-elephant.png",
+  "dimensions": [
+    1312,
+    1199
+  ],
+  "mode": "RGBA",
+  "transparent_background": true,
+  "prompt": "Use case: stylized-concept. Asset type: preview of an adorable elephant mascot for the ibHiCS AI support chat assistant. Create ONE extremely cute original baby elephant, full body, sitting with tiny round feet and a gently raised waving trunk, enormous soft floppy ears, chubby cheeks with a little pink blush, large sparkling kind eyes, a tiny smile. Premium stylized 3D plush-toy character with soft matte fabric-like finish, subtle seams, rounded shapes, lovely soft studio lighting. Pastel powder-blue body, delicate lavender-pink inside ears, a small simple turquoise neck scarf to match a cyan/lavender infrastructure dashboard. Friendly, comforting, approachable, instantly readable even as a small chat launcher. Front three-quarter view, centered, generous clear margins, coherent anatomy, no extra limbs. Genuine transparent background. No text, no watermark, no UI, no background scene. Original character, not based on any existing branded cartoon."
+}

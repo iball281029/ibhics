@@ -287,6 +287,7 @@ def create_app(
     replications=None,
     settings: Settings | None = None,
     active_manager: str | None = None,
+    assistant=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -472,7 +473,11 @@ def create_app(
         if route not in SELF_ROUTES:
             area = category(route)
             sensitive_read = (request.method, route) in ADMIN_ROUTES
-            changes = request.method not in ("GET", "HEAD", "OPTIONS")
+            # Chat consumes a paid allowance but only reads infrastructure context.
+            changes = (
+                request.method not in ("GET", "HEAD", "OPTIONS")
+                and route != f"{API}/assistant/chat"
+            )
             if (changes or sensitive_read) and area not in auth.permissions(user):
                 raise Forbidden(
                     f"this needs operator/admin permission for {area}; you are {user.role}"
@@ -2374,6 +2379,9 @@ def create_app(
     from . import settings_api
 
     settings_api.install(api, settings, auth)
+    from .assistant import install as install_assistant
+
+    install_assistant(api, app, settings, auth, cluster, backups, assistant)
     app.include_router(public)
     app.include_router(api)
     app.mount("/", ConsoleFiles(directory=STATIC_DIR, html=True), name="console")

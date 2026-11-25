@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-25",
+  "phase": "local prototype, provider not provisioned",
+  "ai_tests_passed": 9,
+  "auth_and_settings_regression_passed": 88,
+  "browser_checks": {
+    "desktop_1600x1050": "panel and mascot inside viewport",
+    "mobile_390x844": "panel and mascot inside viewport",
+    "narrow_800x600": "panel and mascot inside viewport",
+    "click_doll": "opens chat",
+    "second_click": "collapses chat",
+    "initial_state": "collapsed",
+    "animation": "3D-rendered plush image with CSS perspective/bobbing/shadow",
+    "context_preview": "HTTP 200",
+    "light_theme": "uses light palette",
+    "reduced_motion": "animations disabled by prefers-reduced-motion media rule"
+  },
+  "integration": "MockTransport: Manager -> enrolled/licensed gateway -> fake provider; real provider HTTP format separately tested",
+  "live_claude_verified": false,
+  "production_deployed": false,
+  "remaining": [
+    "Company HTTPS gateway host",
+    "Provider API credentials/model and billing limits",
+    "Per-installation enrollment",
+    "Live provider acceptance test before enabling for customers"
+  ]
+}
