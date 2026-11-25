@@ -3,6 +3,7 @@
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -19,11 +20,51 @@ from ibhics.backup import (
     service,
 )
 from ibhics.hypervisor import VMSpec
-from ibhics.hypervisor.backup_cbt import NBDReader
+from ibhics.hypervisor.backup_cbt import CBTUnavailable, NBDReader
 from ibhics.hypervisor.fake import FakeDriver
 from ibhics.hypervisor.serialize import spec_to_json
 
 api = test_backup.api
+
+
+def test_broken_incremental_checkpoint_retries_full_pull_without_exporting_disk(tmp_path):
+    driver = FakeDriver()
+    vm = driver.create_vm(VMSpec(name="checkpoint-recovery"))
+    target = BackupTarget(name="repo", type=TargetType.LOCAL, path=str(tmp_path / "repo"))
+    repo = Repository(DirStore(tmp_path / "repo"), CHUNK)
+    parent_data = b"a" * CHUNK
+    parent = repo.backup_readers(
+        vm,
+        [NBDReader(Allocation(parent_data, [(CHUNK, 0)]), False)],
+        spec_to_json(vm.spec),
+        {"checkpoint": "broken", "incremental": False},
+    )
+    current = b"b" * CHUNK + b"\0" * CHUNK
+    calls = []
+
+    @contextmanager
+    def capture(uuid, previous):
+        calls.append(previous)
+        if previous is not None:
+            raise CBTUnavailable("missing or broken bitmap")
+        yield (
+            [NBDReader(Allocation(current, [(CHUNK, 0), (CHUNK, 2)]), False)],
+            {"checkpoint": "fresh", "incremental": False},
+        )
+
+    @contextmanager
+    def export(uuid):
+        pytest.fail("Full disk export must not be used when full pull works")
+        yield []
+
+    driver.export_backup = capture
+    driver.export_disks = export
+    node = NodeBackup(driver, chunk_size=CHUNK)
+    point = node.backup(vm.uuid, target)
+    assert len(calls) == 2 and calls[0]["id"] == parent.id and calls[1] is None
+    assert point.read_bytes == CHUNK and point.size_bytes == len(current)
+    repo.restore_disk(repo.manifest(point.id), 0, tmp_path / "restored")
+    assert (tmp_path / "restored").read_bytes() == current
 
 
 class Allocation:

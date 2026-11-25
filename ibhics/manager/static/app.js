@@ -4570,7 +4570,7 @@ function backupLiveDetails(j) {
   if (p.read_mib_per_second > 0) parts.push(`Average ${Number(p.read_mib_per_second).toFixed(1)} MiB/s`);
   const age = p.updated_at ? Math.max(0, Date.now() / 1000 - p.updated_at) : null;
   if (age != null) parts.push(`Last progress ${Math.floor(age)}s ago`);
-  const bar = j.percent != null ? `<progress max="100" value="${Math.max(0, Math.min(100, Number(j.percent)))}"></progress> ${Number(j.percent).toFixed(1)}%` : "";
+  const bar = j.percent != null ? `<progress max="100" value="${Math.max(0, Math.min(100, Number(j.percent)))}"></progress> ${Number(j.percent).toFixed(1)}%` : `<progress max="100" aria-label="Backup in progress"></progress> ${esc(p.phase === "waiting" ? "Waiting for repository" : p.phase === "exporting" ? "Exporting disk image; total progress not yet available" : p.phase === "reading" ? "Reading changed blocks; total size not yet known" : "Preparing backup")}`;
   const waiting = age > 120 && p.phase !== "waiting" ? '<span class="badge warning">No new progress reported for over 2 minutes; check storage/node</span>' : "";
   return `<div class="backup-kind">${parts.map(esc).join(" · ")}</div>${bar}${waiting}`;
 }

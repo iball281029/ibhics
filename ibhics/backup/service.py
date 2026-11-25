@@ -207,6 +207,31 @@ class NodeBackup:
                             )
                     except CBTUnavailable as exc:
                         reason = f"Full fallback: {exc}"
+                        # An unusable incremental bitmap does not make full pull
+                        # backup unavailable. Establish a fresh checkpoint first,
+                        # retaining allocation-aware reads and observable progress.
+                        if parent is not None:
+                            progress(
+                                "Incremental checkpoint unavailable; starting a fresh full backup",
+                                None,
+                            )
+                            metrics(
+                                {"phase": "preparing", "mode": "full", "fallback_reason": reason}
+                            )
+                            try:
+                                with self._driver.export_backup(uuid, None) as (readers, capture):
+                                    metrics({"backup_socket": capture.get("socket")})
+                                    return repo.backup_readers(
+                                        vm,
+                                        readers,
+                                        spec_to_json(vm.spec),
+                                        capture,
+                                        None,
+                                        progress,
+                                        metrics=metrics,
+                                    )
+                            except CBTUnavailable as full_exc:
+                                reason += f"; full pull unavailable: {full_exc}"
                 progress(reason + "; exporting a full point-in-time image", None)
                 metrics({"phase": "exporting", "mode": "full", "fallback_reason": reason})
                 with self._driver.export_disks(uuid) as images:

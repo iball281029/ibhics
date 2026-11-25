@@ -16,6 +16,13 @@
   },
   "manager_api_test": {"job_id": "13", "cancel_http_status": 202, "final_state": "cancelled"},
   "production_jobs": {"11": "cancelled", "12": "cancelled"},
+  "follow_up": {
+    "stale_lease": "The lease left at 11:07 by the interrupted pre-deployment backup was archived after both managers and agents stopped and all QEMU jobs were verified inactive; acquire/release succeeded afterward.",
+    "job_14": "Failed before stale lease recovery.",
+    "job_15": "Broken incremental bitmap caused push-mode full export; cancelled through manager API and matching QEMU backup abort, VM remained active.",
+    "additional_fix": "Retry allocation-aware full pull with a fresh checkpoint before full disk export; show indeterminate progress when total is unknown.",
+    "targeted_tests_passed": 66
+  },
   "live_javascript": {"cancel_button_code_present": true, "progress_details_code_present": true},
   "validation": {"merged_production_payload_tests_passed": 74, "backup_progress_tests_passed": 13},
   "limitations": [
