@@ -6348,7 +6348,7 @@ function renderContainers() {
       ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
       <button class="small" data-act="edit">Settings</button>
       ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
-      <button class="small danger" data-act="delete">Delete</button>
+      ${on ? "" : `<button class="small danger" data-act="delete">Delete</button>`}
     </td></tr>`;
   }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
 }

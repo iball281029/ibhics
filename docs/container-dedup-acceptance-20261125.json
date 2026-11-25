@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-25",
+  "problem": "Both nodes report the same shared-storage container metadata, with only its runtime owner reporting running. Name-only routing previously selected the first stopped alias.",
+  "changes": [
+    "Coalesce matching name, nonempty storage path and MAC observations; prefer the running node for listing and commands.",
+    "Reject ambiguous different copies, simultaneous running owners, and ownership lookups when a compute node cannot be inspected.",
+    "Reject deletion unless stopped; recheck ownership and state after taking the task lock.",
+    "Hide Delete for running containers."
+  ],
+  "validation": {"targeted_tests": 23, "shared_container_regressions": 5, "exact_merged_production_payload_tests": 23, "both_node_payloads_identical": true, "lint": "passed", "javascript_syntax": "passed"},
+  "production_observation": {"name": "ubututest", "running_node": "ibhics-node2", "stopped_alias_node": "ibhics-test", "storage_path": "/mnt/ibhics/virtualstorage/containers/ubututest"},
+  "activation": {"103": "waiting_for_protection_job", "104": "waiting_for_protection_job", "timer": "ibhics-container-dedup.timer", "status_path": "/var/lib/ibhics-container-dedup-stage/status-NODE.json", "interval_seconds": 60, "policy": "Acquire exclusive protection guard before installing and restarting Manager; leave VM, container and active backup processes untouched."},
+  "out_of_scope": ["Container backup", "Changing container data", "Live delete testing"]
+}

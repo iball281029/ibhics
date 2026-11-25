@@ -82,20 +82,41 @@ class ContainerSnapIn(BaseModel):
 
 
 def install(api, cluster, backups) -> None:
-    def everywhere():
+    def everywhere(strict=False):
+        found = {}
         for member in cluster.compute_members():
             try:
                 cts = member.driver.containers().list()
             except (NodeUnavailable, NotImplementedError) as exc:
                 member.last_error = str(exc) or member.last_error
+                if strict:
+                    raise NodeUnavailable(
+                        f"Cannot verify container ownership on {member.name}; retry when reachable"
+                    ) from exc
                 continue
             for ct in cts:
-                yield member, ct
+                # Both hosts see the same metadata on shared storage. A matching
+                # path alone is insufficient: independent local pools can use it too.
+                key = (
+                    (ct.spec.name, ct.path, ct.spec.mac)
+                    if ct.path and ct.spec.mac
+                    else (member.name, ct.spec.name)
+                )
+                previous = found.get(key)
+                if previous and previous[1].state == "running" and ct.state == "running":
+                    raise InvalidState(f"Container {ct.spec.name!r} is running on multiple nodes")
+                if previous is None or ct.state == "running":
+                    found[key] = (member, ct)
+        yield from found.values()
 
     def find(name: str):
-        for member, ct in everywhere():
-            if ct.spec.name == name:
-                return member, ct
+        matches = [(m, c) for m, c in everywhere(strict=True) if c.spec.name == name]
+        if len(matches) > 1:
+            raise InvalidState(
+                f"Ambiguous container {name!r}; different node copies require review"
+            )
+        if matches:
+            return matches[0]
         raise ContainerNotFound(name)
 
     def out(member, ct) -> dict:
@@ -231,8 +252,19 @@ def install(api, cluster, backups) -> None:
     @api.delete("/containers/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def ct_delete(name: str) -> None:
         cluster.require_quorum()
-        member, _ = find(name)
-        task("container-delete", name, name, member, lambda: cts(member).delete(name))
+        member, ct = find(name)
+        if ct.state != "stopped":
+            raise InvalidState("Stop the container before deleting it")
+
+        def remove():
+            # Recheck after acquiring the task lock; another request may have
+            # started it while this deletion was waiting.
+            owner, current = find(name)
+            if owner.name != member.name or current.state != "stopped":
+                raise InvalidState("Container ownership or state changed; refresh before deleting")
+            return cts(owner).delete(name)
+
+        task("container-delete", name, name, member, remove)
 
     @api.post("/containers/{name}/exec")
     def ct_exec(name: str, body: ContainerExec) -> dict:
