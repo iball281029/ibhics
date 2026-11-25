@@ -33,8 +33,9 @@
     "ruff": "passed"
   },
   "remaining": [
-    "Gateway eno1 uplink is physically negotiated at 100 Mbps; restore 1 Gbps connectivity and verify full-backup throughput",
-    "No forced link speed, driver reload, storage failover or network restart performed without approval"
+    "Restore .103 network link through console/BMC or physical cable/port inspection; no further disruptive changes without evidence",
+    "Verify DRBD peer reconnect and VM/container state on .103",
+    "Then validate Full Backup throughput under the recovered network topology"
   ],
   "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py",
   "real_vm_validation": {
@@ -130,6 +131,23 @@
     },
     "action_required": "Restore the gateway uplink to 1 Gbps via cable/switch diagnosis or an explicitly approved auto-negotiation restart, then rerun the same full-backup data comparison",
     "proposed_lowest_config_change": "ethtool -r eno1 (restart existing auto-negotiation, without forcing a speed); requires approval because NFS/cluster link can drop briefly",
-    "port_restart_executed": false
+    "port_restart_executed": true,
+    "operator_authorized_renegotiation": {
+      "command": "systemd-run --unit=ibhics-eno1-renegotiate --on-active=3s --collect /usr/sbin/ethtool -r eno1",
+      "result": "Gateway host .103 became unreachable and has not returned as of immediate recovery checks; no forced speed or bridge changes were made",
+      "ha_recovery": {
+        "storage_primary": "172.16.12.104",
+        "nfs_vip": "172.16.12.106 on .104",
+        "manager_vip": "172.16.12.111 on .104",
+        "nfs_repository_read_verified": true,
+        "vm_domains_104_running": [
+          "npm-vm",
+          "OpenP9",
+          "PNetLab-27H1-V8.12"
+        ],
+        "peer_103": "unreachable; console/cable inspection requested"
+      },
+      "completion": "Not complete. Restore .103 network access and verify physical link before claiming resolution."
+    }
   }
 }
