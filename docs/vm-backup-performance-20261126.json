@@ -33,8 +33,62 @@
     "ruff": "passed"
   },
   "remaining": [
-    "End-to-end timing of a real VM backup after deployment",
-    "Investigate broken checkpoint full fallback separately if reproduced"
+    "Large full backup still depends on NFS gateway throughput; not claimed fixed to a guaranteed runtime",
+    "Live browser session expired; operator login required for browser Jobs acceptance"
   ],
-  "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py"
+  "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py",
+  "real_vm_validation": {
+    "npm_full": {
+      "job": "33",
+      "seconds": 342.846,
+      "kind": "full",
+      "logical_bytes": 21474836480,
+      "read_bytes": 3808428032,
+      "stored_bytes": 0,
+      "vm_running_after": true,
+      "comparison_note": "Earlier full took about 973 seconds but wrote 1.16 GB; this run deduplicated all data, so not a controlled pipeline-only comparison"
+    },
+    "pnetlab_incremental": {
+      "seconds": 181.107,
+      "kind": "incremental",
+      "read_bytes": 817889280,
+      "stored_bytes": 132248916,
+      "restore_point": "PNetLab-27H1-V8.12@20261125T230749Z",
+      "vm_state_after": "running",
+      "scope": "Direct node-level integration verification, not a Manager Jobs request"
+    },
+    "pnetlab_full_rebaseline": {
+      "job": "35",
+      "state": "done",
+      "read_bytes": 113229430784,
+      "logical_bytes": 536870912000,
+      "note": "Fresh persistent recording bitmap exists; full scan remains limited by NFS throughput"
+    },
+    "openp9_full": {
+      "job": "36",
+      "state": "done",
+      "fresh_persistent_recording_bitmap": true
+    },
+    "pnetlab_incremental_after_immutable_fix": {
+      "seconds": 80.815,
+      "kind": "incremental",
+      "read_bytes": 239075328,
+      "stored_bytes": 36334813,
+      "restore_point": "PNetLab-27H1-V8.12@20261125T231512Z",
+      "vm_state_after": "running",
+      "comparison_note": "Different dirty workload from the 181-second run; not a controlled end-to-end percentage comparison"
+    }
+  },
+  "immutable_capability_optimization": {
+    "change": "Use Linux immutable ioctls, preserving unrelated flags; cache explicit unsupported capability per filesystem device. Permission errors are retried. Soft retention metadata and S3 behavior unchanged.",
+    "nfs_files": 256,
+    "old_seconds": 0.6486,
+    "new_seconds": 0.1286,
+    "scope": "Native-lock capability attempts only, not whole-backup elapsed time",
+    "tests_passed": 113,
+    "installed_nodes": [
+      "172.16.12.103",
+      "172.16.12.104"
+    ]
+  }
 }

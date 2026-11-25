@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import abc
+import array
+import errno
+import fcntl
 import os
 import subprocess
 import tempfile
@@ -78,6 +81,7 @@ class DirStore(Store):
     def __init__(self, root: Path) -> None:
         self.root = Path(root).resolve()
         self._lease_mutex = threading.RLock()
+        self._immutable_unsupported_devices: set[int] = set()
         self._lease_state = threading.local()
 
     def _acquire_lease(self, token):
@@ -131,20 +135,33 @@ class DirStore(Store):
             if p.is_file() and not p.name.startswith(".tmp-")
         )
 
-    def protect(self, key, until) -> bool:
+    def _immutable(self, key, enabled):
+        # Linux FS_IOC_*FLAGS: preserve unrelated flags and avoid a chattr process
+        # per deduplicated chunk. NFS rejects this ioctl; cache only that explicit
+        # capability failure, per filesystem device (not permission errors).
+        device = None
         try:
-            result = subprocess.run(
-                ["chattr", "+i", str(self._path(key))], capture_output=True, timeout=10
-            )
-            return result.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
+            with self._path(key).open("rb") as stream:
+                device = os.fstat(stream.fileno()).st_dev
+                if device in self._immutable_unsupported_devices:
+                    return False
+                flags = array.array("L", [0])
+                fcntl.ioctl(stream.fileno(), 0x80086601, flags, True)
+                old = flags[0]
+                flags[0] = old | 0x10 if enabled else old & ~0x10
+                if flags[0] != old:
+                    fcntl.ioctl(stream.fileno(), 0x40086602, flags, True)
+                return True
+        except OSError as exc:
+            if device is not None and exc.errno in (errno.ENOTTY, errno.EOPNOTSUPP, errno.ENOSYS):
+                self._immutable_unsupported_devices.add(device)
             return False
 
+    def protect(self, key, until) -> bool:
+        return self._immutable(key, True)
+
     def release(self, key) -> None:
-        try:
-            subprocess.run(["chattr", "-i", str(self._path(key))], capture_output=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        self._immutable(key, False)
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
