@@ -71,6 +71,7 @@ def test_lxc_rename_moves_folder_and_paths(tmp_path):
     (home / "ibhics.json").write_text(json.dumps(spec.public() | {"password": ""}))
     (home / "config").write_text(lxc_config(spec, "br0", f"{home}/rootfs.img"))
     (home / "snaps/s1/config").write_text(f"lxc.rootfs.path = loop:{home}/snaps/s1/rootfs\n")
+    lxc.claim_owner("old")
     assert lxc.rename("old", "new").spec.name == "new"
     new = tmp_path / "default/containers/new"
     cfg = (new / "config").read_text()

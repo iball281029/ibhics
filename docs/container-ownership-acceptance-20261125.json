@@ -1,0 +1,23 @@
+{
+  "date": "2026-11-25",
+  "status": "complete",
+  "scope": "Persistent container ownership enforced by node inventory and lifecycle operations, beyond Manager list coalescing.",
+  "implementation": [
+    "Creation uses a shared filesystem reservation and refuses existing container directories.",
+    "Owner is atomically claimed in .ibhics-owner.json and retained in existing settings metadata for NFS negative lookup compatibility.",
+    "A non-owner does not list the container and cannot get, start or delete it.",
+    "Legacy running containers register their actual runtime host; legacy stopped containers require verified Manager assignment before node lifecycle operations.",
+    "Ownership survives stopped state, new backend instances, rename and pool move; conflicting or unreadable metadata fails closed."
+  ],
+  "validation": {"container_tests_passed": 29, "production_payload_tests_before_metadata_followup": 27, "nfs_negative_lookup_regression": "passed", "lint": "passed"},
+  "shared_storage_probe": {"nodes": ["172.16.12.103", "172.16.12.104"], "owner_inventory_count": 1, "peer_inventory_count": 0, "foreign_get_start_delete_rejected": true, "simultaneous_create_reservation_rejected": true, "data_unchanged": true, "probe_directory_cleaned": true},
+  "production_acceptance": {
+    "user_authorized_test_container": "ubututest",
+    "persistent_owner": "ibhics-node2",
+    "stop_via_manager": "200; one stopped inventory entry remained on ibhics-node2",
+    "non_owner_104": "Native backend get/start/delete all rejected while stopped; rootfs preserved; native inventory empty",
+    "start_via_manager": "200; running on ibhics-node2; IP 172.16.12.178",
+    "deployments": {"103": "Installed; Manager health passed", "104": "Installed; Manager health passed"}
+  },
+  "limitations": ["Ownership is not automatically transferred to another node on host failure; an explicit future relocation protocol must verify the previous owner is no longer running."]
+}

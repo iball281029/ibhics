@@ -76,3 +76,11 @@ def test_delete_rechecks_state_after_waiting_for_task_lock(monkeypatch):
     monkeypatch.setattr(client.app.state.backups, "run_task", started_while_waiting)
     assert client.delete("/api/v1/containers/shared").status_code == 409
     assert "shared" in first._cts and "shared" in second._cts
+
+
+def test_stopped_owner_is_preferred_over_a_stale_unowned_alias():
+    client, first, second = setup_shared()
+    second.get("shared").state = "stopped"
+    second.get("shared").owner_node = "second"
+    rows = client.get("/api/v1/containers").json()
+    assert len(rows) == 1 and rows[0]["node"] == "second"

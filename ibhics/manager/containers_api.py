@@ -105,18 +105,26 @@ def install(api, cluster, backups) -> None:
                 previous = found.get(key)
                 if previous and previous[1].state == "running" and ct.state == "running":
                     raise InvalidState(f"Container {ct.spec.name!r} is running on multiple nodes")
-                if previous is None or ct.state == "running":
+                if (
+                    previous is None
+                    or ct.state == "running"
+                    or (ct.owner_node and not previous[1].owner_node)
+                ):
                     found[key] = (member, ct)
         yield from found.values()
 
-    def find(name: str):
+    def find(name: str, *, claim=True):
         matches = [(m, c) for m, c in everywhere(strict=True) if c.spec.name == name]
         if len(matches) > 1:
             raise InvalidState(
                 f"Ambiguous container {name!r}; different node copies require review"
             )
         if matches:
-            return matches[0]
+            member, ct = matches[0]
+            backend = member.driver.containers()
+            if claim and not ct.owner_node and hasattr(backend, "claim_owner"):
+                ct = backend.claim_owner(name)
+            return member, ct
         raise ContainerNotFound(name)
 
     def out(member, ct) -> dict:
@@ -149,7 +157,7 @@ def install(api, cluster, backups) -> None:
 
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
-        return out(*find(name))
+        return out(*find(name, claim=False))
 
     @api.post("/containers", status_code=status.HTTP_202_ACCEPTED)
     def ct_create(body: ContainerIn) -> dict:

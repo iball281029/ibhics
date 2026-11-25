@@ -4,6 +4,7 @@
 
 - Alert ภาษาอังกฤษเปิดใช้ทั้งสองโหนด: Email HTML/ข้อความธรรมดา, LINE Flex, ข้อมูล Compression/Deduplication และสรุปรายวัน ผู้ใช้ยืนยันได้รับทั้ง LINE และอีเมล รวมถึงทดสอบอีเมลที่ระบุทั้งกลุ่มและส่วนตัวแล้ว
 - Container ซ้ำ: เปิดใช้สองโหนดและตรวจ API จริงเหลือ `ubututest` หนึ่งรายการ Running บน ibhics-node2; บล็อกการลบขณะทำงานและตรวจสถานะซ้ำหลังได้ task lock ชุดทดสอบผ่าน 23 รายการ
+- เจ้าของ Container ถาวร: เพิ่ม ownership ที่ node backend และล็อกกันสร้างชื่อเดียวกันบน Shared Storage พร้อม metadata รองรับ NFS cache; ทดสอบผ่าน 29 รายการ และทดสอบหยุด–เปิด `ubututest` จริงแล้วเจ้าของยังเป็น ibhics-node2 อีกโหนดปฏิเสธ get/start/delete โดยตรง; หลักฐาน docs/container-ownership-acceptance-20261125.json
 - Backup: เพิ่ม Cancel, รายละเอียดความคืบหน้า และ full pull เมื่อ CBT เดิมเสียแล้ว; npm-vm #23 สำเร็จ แต่ PNetLab #24 ล้มเหลวด้วย JSONDecodeError และความเร็วงานใหญ่ยังไม่ผ่านเกณฑ์ จึงยังไม่ปิดงาน Backup
 - Active Manager ปิดงานแล้ว: ติดตั้งสองโหนด ทดสอบผ่าน 9 รายการ และตรวจหน้า Cluster หลังรีโหลดเต็มหน้า ชื่อบนการ์ด/API/leader.json ตรงกันเป็น ibhics-node2; หลักฐาน docs/active-manager-acceptance-20261125.json
 - Network Advanced ถอดออกครบแล้วทั้งเมนู/API และการสั่งเปิด Gateway ผ่าน Agent; ตรวจระบบจริงเหลือ Topology 3D, Firewall และ Virtual switches เครือข่ายเดิมยังอยู่ 3 รายการ; ชุดทดสอบผ่าน 21 รายการ
