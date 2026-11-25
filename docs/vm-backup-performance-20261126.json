@@ -33,8 +33,8 @@
     "ruff": "passed"
   },
   "remaining": [
-    "Large full backup still depends on NFS gateway throughput; not claimed fixed to a guaranteed runtime",
-    "Live browser session expired; operator login required for browser Jobs acceptance"
+    "Gateway eno1 uplink is physically negotiated at 100 Mbps; restore 1 Gbps connectivity and verify full-backup throughput",
+    "No forced link speed, driver reload, storage failover or network restart performed without approval"
   ],
   "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py",
   "real_vm_validation": {
@@ -90,5 +90,46 @@
       "172.16.12.103",
       "172.16.12.104"
     ]
+  },
+  "full_backup_root_cause": {
+    "verified": true,
+    "gateway_ip": "172.16.12.106",
+    "physical_host": "172.16.12.103 / ibhics-node2",
+    "interface": "eno1",
+    "driver": "igb",
+    "supported_mbps": 1000,
+    "advertised_mbps": [
+      10,
+      100,
+      1000
+    ],
+    "negotiated_mbps": 100,
+    "duplex": "Full",
+    "auto_negotiation": true,
+    "client_104_negotiated_mbps": 1000,
+    "theoretical_100mbps_ceiling_MB_per_s": 12.5,
+    "controlled_nbd_test": {
+      "bytes": 100663296,
+      "depth_1_seconds": [
+        8.418,
+        8.456
+      ],
+      "depth_8_seconds": [
+        8.356,
+        8.199
+      ],
+      "all_data_byte_compared": true,
+      "test_vm_removed": true,
+      "conclusion": "Extra NBD queue depth does not bypass the 100 Mbps gateway link; no speculative asynchronous-read patch deployed"
+    },
+    "storage_health": {
+      "drbd_gateway_role": "Primary",
+      "local_disks": "UpToDate",
+      "peer_disks": "UpToDate",
+      "filesystem": "xfs"
+    },
+    "action_required": "Restore the gateway uplink to 1 Gbps via cable/switch diagnosis or an explicitly approved auto-negotiation restart, then rerun the same full-backup data comparison",
+    "proposed_lowest_config_change": "ethtool -r eno1 (restart existing auto-negotiation, without forcing a speed); requires approval because NFS/cluster link can drop briefly",
+    "port_restart_executed": false
   }
 }
