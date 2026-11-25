@@ -11,7 +11,17 @@ from fastapi.testclient import TestClient
 
 from ibhics.cluster import Cluster
 from ibhics.hypervisor.fake import FakeDriver
+from ibhics.manager import create_app
 from ibhics.manager.leader import Leadership, Replicator, replicate, restore, standby_app
+
+
+def test_cluster_reports_the_elected_manager_without_guessing_local_node():
+    cluster = Cluster.standalone("node1", FakeDriver())
+    response = TestClient(create_app(cluster, active_manager="node1")).get("/api/v1/cluster")
+    assert response.status_code == 200
+    assert response.json()["active_manager"] == "node1"
+    unknown = TestClient(create_app(cluster)).get("/api/v1/cluster")
+    assert unknown.json()["active_manager"] is None
 
 
 def test_notification_channels_survive_manager_takeover(tmp_path):
