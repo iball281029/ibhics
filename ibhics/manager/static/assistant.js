@@ -12,7 +12,7 @@
     const width=Math.min(document.documentElement.clientWidth, viewport?.width || innerWidth);
     const height=viewport?.height || document.documentElement.clientHeight;
     const offsetX=viewport?.offsetLeft || 0, offsetY=viewport?.offsetTop || 0;
-    const dollWidth=width<600 ? 100 : 128, dollHeight=dollWidth*1.12;
+    const dollWidth=width<600 ? 50 : 64, dollHeight=dollWidth*1.12+10;
     const dollLeft=offsetX+Math.max(margin,width-margin-dollWidth);
     const dollTop=offsetY+Math.max(margin,height-margin-dollHeight);
     Object.assign(launcher.style,{left:`${dollLeft}px`,top:`${dollTop}px`,right:"auto",bottom:"auto",width:`${dollWidth}px`,height:`${dollHeight}px`});

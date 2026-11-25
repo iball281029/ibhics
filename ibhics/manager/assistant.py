@@ -3,6 +3,7 @@
 import asyncio
 import os
 import threading
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException, Request, Response
@@ -24,7 +25,16 @@ class GatewayClient:
             https_url(self.url)
             return bool(self.token)
         except ValueError:
-            return False
+            parts = urlsplit(self.url)
+            # SSH reverse forwards terminate on loopback; public gateways require HTTPS.
+            return bool(
+                self.token
+                and parts.scheme == "http"
+                and parts.hostname in ("127.0.0.1", "::1")
+                and not parts.username
+                and not parts.password
+                and not parts.fragment
+            )
 
     def chat(self, payload):
         if not self.configured():

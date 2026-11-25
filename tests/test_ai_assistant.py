@@ -245,3 +245,18 @@ def test_thai_question_and_reply_roundtrip(env, tmp_path):
     assert response.status_code == 200
     assert received == [question]
     assert response.json()["reply"] == reply
+
+
+@pytest.mark.parametrize(
+    "url, allowed",
+    [
+        ("http://127.0.0.1:8891/v1/chat", True),
+        ("http://[::1]:8891/v1/chat", True),
+        ("http://ai.example/v1/chat", False),
+        ("http://127.0.0.1.evil.example/v1/chat", False),
+        ("http://user:password@127.0.0.1/v1/chat", False),
+        ("https://ai.example/v1/chat", True),
+    ],
+)
+def test_gateway_plain_http_is_allowed_only_for_literal_loopback(url, allowed):
+    assert GatewayClient(url, "enrollment").configured() is allowed

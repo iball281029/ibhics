@@ -1,6 +1,6 @@
 {
   "date": "2026-11-25",
-  "phase": "local prototype, provider not provisioned",
+  "phase": "real-cluster operator Codex bridge acceptance",
   "ai_tests_passed": 10,
   "auth_and_settings_regression_passed": 88,
   "browser_checks": {
@@ -16,17 +16,15 @@
     "reduced_motion": "animations disabled by prefers-reduced-motion media rule",
     "thai_ui": "Panel, buttons, status, errors and name badge localized",
     "thai_chat": "Thai question and reply roundtrip via gateway test and simulated website",
-    "display_name": "\u0e19\u0e49\u0e2d\u0e07 ib",
+    "display_name": "น้อง ib",
     "thai_mobile_390x844": "panel and mascot inside viewport"
   },
   "integration": "MockTransport: Manager -> enrolled/licensed gateway -> fake provider; real provider HTTP format separately tested",
   "live_claude_verified": false,
-  "production_deployed": false,
+  "production_deployed": true,
   "remaining": [
-    "Company HTTPS gateway host",
-    "Provider API credentials/model and billing limits",
-    "Per-installation enrollment",
-    "Live provider acceptance test before enabling for customers"
+    "Permanent company HTTPS gateway and provider credentials/billing",
+    "Customer service acceptance beyond temporary operator testing"
   ],
   "codex_local_preview": {
     "live_verified": true,
@@ -38,5 +36,30 @@
     "additional_unit_tests_passed": 3,
     "tools": "shell/execution/apps/browser/computer/image/memory/subagent features disabled; read-only sandbox",
     "scope": "Local preview only; uses existing operator login and account allowance"
+  },
+  "exact_merged_release_tests_passed": 107,
+  "real_cluster": {
+    "managers": [
+      "172.16.12.103",
+      "172.16.12.104"
+    ],
+    "console": "https://172.16.12.111:8888",
+    "health_checks_passed": true,
+    "support_verified": true,
+    "enabled": true,
+    "thai_server_reply_verified": true,
+    "provider": "operator Mac Codex CLI over loopback SSH reverse tunnels",
+    "dependency": "Mac, gateway process and tunnels must stay running; manually restart after Mac reboot",
+    "launcher_width_px": {
+      "desktop": 64,
+      "mobile": 50
+    },
+    "browser_verified": {
+      "authenticated_live_vip": true,
+      "launcher_width": 64,
+      "within_viewport": true,
+      "click_open_and_close": true,
+      "live_thai_chat_response": true
+    }
   }
 }

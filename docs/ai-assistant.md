@@ -47,7 +47,7 @@ To revoke an installation independently of license expiry, set its gateway profi
 
 The interface says messages are processed by an external AI service. Common token, authorization-header, password-assignment and private-key patterns receive best-effort redaction before forwarding; this cannot guarantee detection of every secret. Users should not paste secrets. Resource names and job status may still be sensitive, so automatic system context is opt-in. Review the company's privacy terms and provider configuration before offering the service to customers.
 
-Internet connectivity is required for AI replies. No provider credential or hosting endpoint was supplied during implementation, so the website preview and integration tests use simulated providers; no real Claude response or live provider billing has been verified. No production AI gateway was deployed or enabled. Infrastructure remains unchanged by chat.
+Internet connectivity is required for AI replies. No provider credential or hosting endpoint was supplied during implementation, so the website preview and integration tests use simulated providers; no real Claude response or live provider billing has been verified. The real cluster now uses the temporary operator Codex bridge described below. Claude API remains unprovisioned. Infrastructure remains unchanged by chat.
 
 ## Responsive mascot behavior
 
@@ -55,15 +55,25 @@ The mascot keeps the original 3D-rendered plush image and uses CSS perspective, 
 
 ## Visual assets
 
-`ibhics/manager/static/ai-elephant.png` is the original transparent mascot generated with the built-in imagegen tool. Preview screenshots are in `deliverables/ai-elephant-floating-closed.png` and `deliverables/ai-elephant-floating-chat.png`. The local preview uses simulated infrastructure and visibly simulated replies. Prompt and asset metadata are in `docs/ai-mascot-design.json`.
+`ibhics/manager/static/ai-elephant.png` is the original transparent mascot generated with the built-in imagegen tool. Preview screenshots are in `deliverables/ai-elephant-floating-closed.png` and `deliverables/ai-elephant-floating-chat.png`. The local preview uses simulated infrastructure; its optional Codex adapter returns live model replies. Prompt and asset metadata are in `docs/ai-mascot-design.json`.
 
 
 ## Local Codex test adapter
 
-The operator requested testing with the already logged-in Codex account before provisioning Claude. `ibhics.ai.codex_preview.CodexLocalPreview` is an explicitly opt-in adapter for that local development preview. It is not selected by any production environment setting or installed as a company AI gateway.
+The operator requested testing with the already logged-in Codex account before provisioning Claude. `ibhics.ai.codex_preview.CodexLocalPreview` is an explicitly opt-in adapter for that local development preview. The standard production gateway factory still uses Claude; the temporary operator bridge below explicitly wraps the Codex adapter.
 
 It invokes the supported `codex exec` interface using the operator's existing managed login. Authentication tokens are handled by Codex and are never read or copied by this adapter. Calls use an isolated temporary working directory, replacement assistant instructions, ephemeral sessions, read-only sandbox, no approvals, disabled shell/execution/apps/browser/computer/image/memory/subagent features and no inherited project configuration. Only the question, bounded conversation and explicitly opted-in summary are provided as context. Temporary prompt/reply files are removed after each call. Codex may still retain its own operational logs according to its configuration; this adapter does not promise removal of provider/CLI telemetry.
 
 The local test serializes requests, limits history to four turns, requests short replies, enforces a timeout with process-group cleanup and applies a persistent five-question daily allowance by default. Failed attempts count toward that allowance. It uses the same ChatGPT/Codex account allowance as the operator, not separate API credit. This path is for one operator's local testing; customer-facing service remains the independently enrolled, signed-Support-gated API gateway described above.
 
 One live question was tested through the browser: the assistant explained Backup versus Snapshot in Thai. This verifies the local Codex path only; Claude API and company hosting remain unprovisioned.
+
+## Real-cluster operator acceptance (2026-11-26)
+
+Installed on both Manager nodes (.103 and .104), accessed at https://172.16.12.111:8888. Both passed health checks. The existing signed Support entitlement is active and AI is enabled in shared Manager state. The exact merged release passed 107 AI, authentication and settings tests.
+
+Temporary test route: Manager -> HTTP loopback port 8891 -> SSH reverse tunnel -> operator Mac loopback port 8771 -> enrolled, license-checking gateway -> Codex CLI. Plain HTTP is allowed only for literal loopback addresses; external gateways still require HTTPS. Per-installation credentials are private service environment files; no Codex OAuth credential was copied to either node.
+
+A real server question returned a Thai Backup versus Snapshot explanation through this route. The authenticated live VIP browser session loaded the real cluster, verified the 64 px launcher stays within the viewport, opened and collapsed the panel, enabled AI through the normal admin control, and received a live Thai answer. The adapter shares the operator account allowance and a five-attempt daily adapter limit with the local preview. This is an operator test, not a permanent customer AI service: the Mac, bridge process and both SSH tunnels must remain running and connected. Restarting the Mac requires restarting the bridge and tunnels. Company Claude API provisioning remains pending.
+
+The floating launcher is now half its original character size (64 px desktop / 50 px mobile); its readable name badge and chat panel remain independently sized.
