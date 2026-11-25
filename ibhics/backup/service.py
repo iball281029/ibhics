@@ -12,11 +12,14 @@ from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
-from ..hypervisor import HypervisorDriver, InvalidState, VMInfo
+from ..hypervisor import HypervisorDriver, InvalidState, VMInfo, VMSpec
+from ..hypervisor.containers import ContainerRestartFailed, ContainerSpec
 from ..hypervisor.serialize import spec_from_json, spec_to_json
 from .console import console_png
+from .container_image import RawImageReader
 from .repository import CHUNK_SIZE, BackupInfo, Repository, RepositoryBusy
 from .store import Mounter, S3Store, open_store
 from .targets import BackupTarget, repository_identity
@@ -161,7 +164,9 @@ class NodeBackup:
                 )
             return info
         except BaseException as exc:
-            stopped = cancel.is_set() or isinstance(exc, BackupCancelled)
+            stopped = (cancel.is_set() or isinstance(exc, BackupCancelled)) and not isinstance(
+                exc, ContainerRestartFailed
+            )
             with self._progress_lock:
                 self._progress[key].update(
                     state="cancelled" if stopped else "failed",
@@ -174,6 +179,8 @@ class NodeBackup:
             raise
 
     def _backup(self, uuid, target, mode, progress, metrics, check_cancel) -> BackupInfo:
+        if uuid.startswith("ct:"):
+            return self._backup_container(uuid[3:], target, mode, progress, metrics, check_cancel)
         if mode not in ("incremental", "active_full"):
             raise ValueError("Backup mode must be incremental or active_full")
         vm = self._driver.get_vm(uuid)
@@ -246,6 +253,60 @@ class NodeBackup:
                         metrics=metrics,
                     )
 
+    def _backup_container(self, name, target, mode, progress, metrics, check_cancel):
+        if mode not in ("incremental", "active_full", "container_stop"):
+            raise ValueError("Invalid container backup mode")
+        check_quota(target)
+        with self._repository_turn(target, check_cancel), self._open(target) as store:
+            repo = Repository(
+                store,
+                self._chunk_size,
+                compression=target.compression,
+                immutability_days=target.immutability_days,
+            )
+            with repo.reading():
+                progress("Preparing stopped container filesystem", None)
+                with self._driver.containers().backup_source(
+                    name, allow_stop=mode == "container_stop"
+                ) as (image, definition):
+                    reader = RawImageReader(image)
+                    try:
+                        entity = SimpleNamespace(uuid=f"ct:{name}", spec=VMSpec(name=name))
+                        return repo.backup_readers(
+                            entity,
+                            [reader],
+                            definition,
+                            {
+                                "incremental": False,
+                                "note": "Consistent stopped container filesystem",
+                            },
+                            progress=progress,
+                            metrics=metrics,
+                        )
+                    finally:
+                        reader.close()
+
+    @protected
+    def restore_container(self, target, backup_id, name=None, pool=None):
+        with self._locks[target.name], self._open(target) as store, Repository(store).reading():
+            repo = Repository(store)
+            manifest = repo.manifest(backup_id)
+            definition = manifest["spec"]
+            if definition.get("entity_type") != "container" or len(manifest["disks"]) != 1:
+                raise InvalidState("This restore point is not a container backup")
+            spec = ContainerSpec(**definition["container"])
+            if name and name != spec.name:
+                spec.name = name
+                cards = [{**card, "mac": ""} for card in spec.interfaces()]
+                spec = spec.with_interfaces(cards)
+            if pool:
+                spec.pool = pool
+            return self._driver.containers().import_rootfs(
+                spec,
+                lambda path: repo.restore_disk(manifest, 0, path),
+                definition.get("includes", []),
+            )
+
     @protected
     def synthetic_full(self, target, backup_id, progress=None):
         check_quota(target)
@@ -301,6 +362,8 @@ class NodeBackup:
         with self._locks[target.name], self._open(target) as store, Repository(store).reading():
             repo = Repository(store)
             manifest = repo.manifest(backup_id)
+            if manifest["spec"].get("entity_type") == "container":
+                raise InvalidState("Use container restore for this restore point")
             spec = spec_from_json(manifest["spec"])
             if name and name != spec.name:
                 spec.name = name
@@ -338,6 +401,8 @@ class NodeBackup:
     def _verify_capacity(self, target, backup_id, pool):
         with self._open(target) as store:
             manifest = Repository(store).manifest(backup_id)
+        if manifest["spec"].get("entity_type") == "container":
+            raise VerificationSkipped("VM boot verification does not apply to container backups")
         spec = spec_from_json(manifest["spec"])
         host = self._driver.host_info()
         reserved = sum(vm.spec.memory_mb for vm in self._driver.list_vms())

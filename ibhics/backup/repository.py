@@ -62,6 +62,7 @@ class BackupInfo:
     lock_status: str = "none"
     suspicious: bool = False
     anomaly_reason: str = ""
+    entity_type: str = "vm"
 
 
 def parse_id(backup_id: str) -> tuple[str, str]:
@@ -574,6 +575,7 @@ def _info(manifest: dict) -> BackupInfo:
         id=manifest["id"],
         vm_name=manifest["vm_name"],
         vm_uuid=manifest["vm_uuid"],
+        entity_type=manifest.get("spec", {}).get("entity_type", "vm"),
         created=manifest["created"],
         size_bytes=sum(d["size_bytes"] for d in manifest["disks"]),
         stored_bytes=manifest["stored_bytes"],

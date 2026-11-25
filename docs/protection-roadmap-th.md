@@ -9,7 +9,8 @@
 - Active Manager ปิดงานแล้ว: ติดตั้งสองโหนด ทดสอบผ่าน 9 รายการ และตรวจหน้า Cluster หลังรีโหลดเต็มหน้า ชื่อบนการ์ด/API/leader.json ตรงกันเป็น ibhics-node2; หลักฐาน docs/active-manager-acceptance-20261125.json
 - Network Advanced ถอดออกครบแล้วทั้งเมนู/API และการสั่งเปิด Gateway ผ่าน Agent; ตรวจระบบจริงเหลือ Topology 3D, Firewall และ Virtual switches เครือข่ายเดิมยังอยู่ 3 รายการ; ชุดทดสอบผ่าน 21 รายการ
 - งานค้าง: Backup ความเร็ว/JSONDecodeError และหาสาเหตุ VM ค้างหลังเน็ตหลุดหรือ Migration ข้ามโหนด
-- Container Backup ผู้ใช้รับเข้าคิวต่อจาก Network Advanced แล้ว; Test Failover — Zabbix และ Cutover ผู้ใช้รับไปทำเอง ไม่นับเป็นงานค้างของเรา
+- Container Backup/Restore เปิดใช้ทั้งสองโหนดแล้ว: Backup ด้วยตนเองหรือ Schedule รายวัน/ทุกกี่ชั่วโมง พร้อม compression/dedup, retention, progress และ Cancel; ต้องอนุญาตให้หยุดชั่วคราวและเปิดกลับอัตโนมัติ กู้คืนเป็นตัวใหม่ที่ยัง Stopped พร้อมเจ้าของและ MAC ใหม่ ทดสอบผ่าน 111 รายการ; ระบบจริง Backup #26 และ Schedule #31 สำเร็จ, Restore #27 เปิดอ่านไฟล์ตรงต้นฉบับ, Cancel #32 แสดง Cancelled และต้นฉบับ Running หนึ่งรายการ ลบตัวกู้คืนและตารางทดสอบแล้ว หลักฐาน docs/container-backup-acceptance-20261125.json และวิธีใช้ docs/container-backup-restore.md
+- งานอื่นหยุดตามคำสั่งผู้ใช้: Backup VM ความเร็ว/JSONDecodeError, VM ค้าง และ Container Migration; Test Failover — Zabbix และ Cutover ผู้ใช้รับไปทำเอง ไม่นับเป็นงานค้างของเรา
 
 รายละเอียดด้านล่างเป็นประวัติการตรวจรับก่อนอัปเดตนี้
 

@@ -4515,7 +4515,7 @@ function renderProtectionTimeline(backups) {
 function protectionDetail(b) {
   protection.selected = b;
   const el = $("#backup-detail"); el.hidden = false;
-  el.innerHTML = `<div class="bp-card-head"><h3>${esc(b.vm_name)}</h3><button data-bp-close aria-label="Close restore point details">×</button></div><p>${esc(when(b.created))}</p>${protectionBadges(b)}<dl><dt>Logical size</dt><dd>${size(b.size_bytes)}</dd><dt>New stored data</dt><dd>${size(b.stored_bytes)}</dd><dt>Verification</dt><dd>${esc(b.verification?.reason || "No boot verification has run")}</dd>${b.verification?.screenshot_error ? `<dt>Screenshot</dt><dd>${esc(b.verification.screenshot_error)}</dd>` : ""}<dt>Locked until</dt><dd>${esc(when(b.immutable_until))}</dd><dt>Change analysis</dt><dd>${esc(b.anomaly_reason || "No anomaly flag. This does not prove the data is safe.")}</dd></dl>${pointLocked(b) && b.lock_status !== "native" ? '<p class="bp-alert">Soft lock: API deletion is blocked. Host root and storage administrators can still alter data.</p>' : ""}<div class="actions">${canOperate() ? `<button class="primary" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button><button data-bp-recover>Recover &amp; power on</button>` : ""}${b.verification?.screenshot_path ? '<button data-bp-evidence>View boot screenshot</button>' : ""}</div><p class="hint">Instant recovery is unavailable for dedup chunks. Recovery reconstructs all disks into the pool, then powers on. Actual duration appears in Jobs. No live finalize is needed.</p><div id="bp-evidence"></div>`;
+  el.innerHTML = `<div class="bp-card-head"><h3>${esc(b.vm_name)}</h3><button data-bp-close aria-label="Close restore point details">×</button></div><p>${esc(when(b.created))}</p>${protectionBadges(b)}<dl><dt>Logical size</dt><dd>${size(b.size_bytes)}</dd><dt>New stored data</dt><dd>${size(b.stored_bytes)}</dd><dt>Verification</dt><dd>${esc(b.entity_type === "container" ? "Boot verification is not available for container filesystem backups" : b.verification?.reason || "No boot verification has run")}</dd>${b.verification?.screenshot_error ? `<dt>Screenshot</dt><dd>${esc(b.verification.screenshot_error)}</dd>` : ""}<dt>Locked until</dt><dd>${esc(when(b.immutable_until))}</dd><dt>Change analysis</dt><dd>${esc(b.anomaly_reason || "No anomaly flag. This does not prove the data is safe.")}</dd></dl>${pointLocked(b) && b.lock_status !== "native" ? '<p class="bp-alert">Soft lock: API deletion is blocked. Host root and storage administrators can still alter data.</p>' : ""}<div class="actions">${canOperate() ? `<button class="primary" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button>${b.entity_type === "container" ? "" : `<button data-bp-recover>Recover &amp; power on</button>`}` : ""}${b.verification?.screenshot_path ? '<button data-bp-evidence>View boot screenshot</button>' : ""}</div><p class="hint">${b.entity_type === "container" ? "Container filesystem backup. Restore creates a new, stopped container; review its network before starting it." : "Instant recovery is unavailable for dedup chunks. Recovery reconstructs all disks into the pool, then powers on. Actual duration appears in Jobs. No live finalize is needed."}</p><div id="bp-evidence"></div>`;
 }
 
 async function renderBackups() {
@@ -4530,7 +4530,7 @@ async function renderBackups() {
     protection.current = backups;
     renderProtectionTimeline(backups);
     tbody.innerHTML = backups.length ? backups.slice().reverse().map((b) => `<tr>
-      <td class="vm-name">${esc(b.vm_name)}<span class="backup-kind" title="${esc(b.note || "")}">${esc(({full:"Full",incremental:"Incremental (CBT)",synthetic_full:"Synthetic full",copy:"Backup copy",archive:"Archive"})[b.kind] || "Full")}</span></td>
+      <td class="vm-name">${esc(b.vm_name)}<span class="backup-kind" title="${esc(b.note || "")}">${b.entity_type === "container" ? "Container · " : ""}${esc(({full:"Full",incremental:"Incremental (CBT)",synthetic_full:"Synthetic full",copy:"Backup copy",archive:"Archive"})[b.kind] || "Full")}</span></td>
       <td><button class="small" data-bp-point="${esc(b.id)}" data-node="${esc(b.node || "")}">${esc(when(b.created))}</button>${protectionBadges(b)}</td>
       <td>${esc(b.node || "shared")}</td>
       <td>${size(b.size_bytes)}</td>
@@ -4554,7 +4554,7 @@ function renderPolicies() {
   $("#policies").innerHTML = state.policies.map(p => {
     const jobs = state.jobs.filter(j => j.policy === p.name && j.kind === "backup").sort((a,b)=>String(a.created).localeCompare(String(b.created))).slice(-14);
     const dots = Array.from({length:14-jobs.length},()=>'<span class="bp-history-dot empty" title="No recorded run" aria-label="No recorded run"></span>').join("") + jobs.map(j => `<span class="bp-history-dot ${esc(j.state)}" title="${esc(`${j.vm} · ${when(j.created)} · ${j.state}${j.error ? ` · ${j.error}` : ""}`)}" aria-label="${esc(`${j.vm}: ${j.state}`)}">${j.report?.verification?.verified === "passed" ? "✓" : ""}</span>`).join("");
-    return `<article class="bp-card"><div class="bp-card-head"><h3>${esc(p.name)}</h3><span class="badge ${p.enabled ? "online" : "plain"}">${p.enabled ? "Enabled" : "Disabled"}</span></div><p class="bp-schedule-time">${p.at ? `Daily · ${esc(p.at)}` : `Every ${p.every_hours} hours`}</p><p>${p.vms.length ? esc(p.vms.join(", ")) : "Every VM, including new ones"}</p><small>${esc(p.target)} · Keep ${p.keep_last} recent + GFS</small><div class="bp-history" aria-label="Last 14 VM backup jobs">${dots}</div><small>Last 14 VM runs · green success / red failed / grey no run</small><p>${p.verify_after_backup ? `✓ Verify after backup · ${esc(p.verify_pool)} · ${p.verify_timeout}s` : "Boot verification is off"}</p><div class="actions">${canOperate() ? `<button data-policy-run="${esc(p.name)}">Run now</button>` : ""}${isAdmin() ? `<button data-policy-edit="${esc(p.name)}">Edit</button><button class="danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}</div></article>`;
+    return `<article class="bp-card"><div class="bp-card-head"><h3>${p.entity_type === "container" ? "Container · " : ""}${esc(p.name)}</h3><span class="badge ${p.enabled ? "online" : "plain"}">${p.enabled ? "Enabled" : "Disabled"}</span></div><p class="bp-schedule-time">${p.at ? `Daily · ${esc(p.at)}` : `Every ${p.every_hours} hours`}</p><p>${p.vms.length ? esc(p.vms.join(", ")) : "Every VM, including new ones"}</p><small>${esc(p.target)} · Keep ${p.keep_last} recent + GFS</small><div class="bp-history" aria-label="Last 14 VM backup jobs">${dots}</div><small>Last 14 runs · green success / red failed / grey no run</small><p>${p.entity_type === "container" ? (p.allow_stop ? "Full filesystem · temporary stop allowed" : "Full filesystem · stopped containers only") : p.verify_after_backup ? `✓ Verify after backup · ${esc(p.verify_pool)} · ${p.verify_timeout}s` : "Boot verification is off"}</p><div class="actions">${canOperate() ? `<button data-policy-run="${esc(p.name)}">Run now</button>` : ""}${isAdmin() ? `<button data-policy-edit="${esc(p.name)}">Edit</button><button class="danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}</div></article>`;
   }).join("") || `<p class="hint">No schedules yet. Create one to protect VMs automatically.</p>`;
 }
 
@@ -4641,7 +4641,9 @@ $("#page-backup").addEventListener("click", async (e) => {
     } else if (d.policyEdit) {
       await load("vms", "targets", "policies");
       if (!state.policies.some(p => p.name === d.policyEdit)) throw new Error("This schedule no longer exists. Refresh the list.");
-      openDialog("policy-dialog", {policyName:d.policyEdit});
+      const policy = state.policies.find(p => p.name === d.policyEdit);
+      if (policy.entity_type === "container") await openCtSchedule(policy.vms[0], policy);
+      else openDialog("policy-dialog", {policyName:d.policyEdit});
       return;
     } else if (d.policyRun) {
       const jobs = await post(`/backup/policies/${enc(d.policyRun)}/run`);
@@ -4650,7 +4652,9 @@ $("#page-backup").addEventListener("click", async (e) => {
       if (!confirm(`Delete schedule ${d.policyDel}?`)) return;
       await del(`/backup/policies/${enc(d.policyDel)}`);
     } else if (d.restore) {
-      openDialog("restore-dialog", { target, id: d.restore, sourceNode: d.node }, { name: `${d.vm}-restore` });
+      const point = protection.current.find(p => p.id === d.restore && (p.node || "") === (d.node || ""));
+      if (point?.entity_type === "container") await openCtRestore(point, target);
+      else openDialog("restore-dialog", { target, id: d.restore, sourceNode: d.node }, { name: `${d.vm}-restore` });
       return;
     } else if (d.backupOp) {
       const select = $("#backup-operation-form select[name=destination]");
@@ -4866,7 +4870,7 @@ function rsVmGone(name) { return !state.vms.some((v) => v.name === name); }
 async function rsLoad() {
   const lists = await Promise.all(state.targets.map((t) =>
     api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
-  rs.points = lists.flat().sort((a, b) => String(b.created).localeCompare(String(a.created)));
+  rs.points = lists.flat().filter(p => p.entity_type !== "container").sort((a, b) => String(b.created).localeCompare(String(a.created)));
 }
 function rsRenderVms() {
   const q = $(".rs-search", rsForm).value.trim().toLowerCase();
@@ -6307,12 +6311,81 @@ function renderContainers() {
     <td class="actions" data-ct="${esc(c.name)}">
       ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
       ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
+      ${canOperate() ? `<button class="small" data-act="backup">Backup</button><button class="small" data-act="schedule">Schedule</button>` : ""}
       <button class="small" data-act="edit">Settings</button>
       ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
       ${on ? "" : `<button class="small danger" data-act="delete">Delete</button>`}
     </td></tr>`;
   }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
 }
+async function openCtSchedule(name, policy = null) {
+  await load("containers", "targets", "policies");
+  const form = $("#ct-schedule-form");
+  const names = [...new Set([...state.containers.map(c => c.name), ...(policy?.vms || [])])];
+  form.elements.container.innerHTML = names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  form.elements.target.innerHTML = state.targets.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  openDialog("ct-schedule-dialog", {policy}, {name:policy?.name || `${name.slice(0,48)}-nightly`, container:name, target:policy?.target, at:policy?.at || "02:00", frequency:policy?.every_hours ? "interval" : "daily", every_hours:policy?.every_hours || 24, keep_last:policy?.keep_last || 7});
+  form.elements.name.readOnly = Boolean(policy);
+  form.elements.allow_stop.checked = policy?.allow_stop || false;
+  form.elements.enabled.checked = policy?.enabled ?? true;
+  ctScheduleFrequency();
+}
+function ctScheduleFrequency() {
+  const f = $("#ct-schedule-form").elements, daily = f.frequency.value === "daily";
+  f.at.disabled = !daily;
+  f.at.closest("label").hidden = !daily;
+  f.every_hours.disabled = daily;
+  f.every_hours.closest("label").hidden = daily;
+}
+$("#ct-schedule-form select[name=frequency]").addEventListener("change", ctScheduleFrequency);
+handlers["ct-schedule-dialog"] = async (f, ctx) => {
+  const body = {...(ctx.policy || {}), name:f.get("name"), target:f.get("target"), entity_type:"container", vms:[f.get("container")], mode:"active_full", verify_after_backup:false, allow_stop:f.get("allow_stop") === "on", enabled:f.get("enabled") === "on", keep_last:Number(f.get("keep_last")), at:f.get("frequency") === "daily" ? f.get("at") : null, every_hours:f.get("frequency") === "interval" ? Number(f.get("every_hours")) : null};
+  if (ctx.policy) await api(`/backup/policies/${enc(ctx.policy.name)}`, {method:"PUT", body:JSON.stringify(body)});
+  else await post("/backup/policies", body);
+  toast("Container backup schedule saved. Manage it in Data protection → Schedules.");
+  await load("policies");
+};
+async function openCtBackup(c) {
+  await load("targets");
+  if (!state.targets.length) throw new Error("Add a repository in Data protection first.");
+  const form = $("#ct-backup-form");
+  form.elements.target.innerHTML = state.targets.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  openDialog("ct-backup-dialog", {name:c.name});
+  form.elements.allow_stop.required = c.state === "running";
+  $("#ct-backup-summary").textContent = `${c.name} · ${c.node} · ${c.state}`;
+}
+handlers["ct-backup-dialog"] = async (f, ctx) => {
+  await post(`/containers/${enc(ctx.name)}/backup`, {target:f.get("target"), allow_stop:f.get("allow_stop") === "on"});
+  toast(`Backup started for ${ctx.name}. Follow progress in Data protection → Jobs.`);
+  await load("jobs");
+  renderTasks();
+};
+function ctRestorePools() {
+  const form = $("#ct-restore-form"), previous = form.elements.pool.value;
+  const pools = state.pools.filter(p => p.active && p.node === form.elements.node.value);
+  form.elements.pool.innerHTML = pools.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("");
+  if (pools.some(p => p.name === previous)) form.elements.pool.value = previous;
+}
+async function openCtRestore(point, target) {
+  await load("targets", "pools");
+  state.cluster = await api("/cluster");
+  const repository = state.targets.find(t => t.name === target);
+  if (!repository) throw new Error("Repository no longer exists. Refresh and retry.");
+  const members = (state.cluster?.members || []).filter(m => m.role === "compute" && m.healthy && !m.maintenance && (repository.shared || m.name === point.node));
+  if (!members.length) throw new Error("The restore node is unavailable. Local repositories restore on their source node.");
+  const form = $("#ct-restore-form");
+  form.elements.node.innerHTML = members.map(m => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+  openDialog("ct-restore-dialog", {target, id:point.id, sourceNode:point.node}, {name:`${point.vm_name.slice(0,55)}-restore`});
+  ctRestorePools();
+  $("#ct-restore-summary").textContent = `${point.vm_name} · ${when(point.created)} · ${target}`;
+}
+$("#ct-restore-form select[name=node]").addEventListener("change", ctRestorePools);
+handlers["ct-restore-dialog"] = async (f, ctx) => {
+  await post(`/backup/targets/${enc(ctx.target)}/backups/${enc(ctx.id)}/restore-container`, {name:f.get("name").trim(), node:f.get("node"), pool:f.get("pool"), source_node:ctx.sourceNode || null});
+  toast("Container restore started. It will remain stopped; follow progress in Jobs.");
+  await load("jobs");
+  renderTasks();
+};
 function openCtWizard(tpl = "debian-13") {
   const label = { app: "Applications", os: "Popular systems", image: "All images" };
   const opts = ["app", "os", "image"].map((k) => {
@@ -6350,6 +6423,14 @@ $("#ct-rows").addEventListener("click", async (e) => {
   const name = b.closest("[data-ct]").dataset.ct, act = b.dataset.act;
   const c = state.containers.find((x) => x.name === name);
   try {
+    if (act === "schedule") {
+      await openCtSchedule(c.name);
+      return;
+    }
+    if (act === "backup") {
+      await openCtBackup(c);
+      return;
+    }
     if (act === "edit") {
       ctCurrent = name;
       openDialog("ct-edit-dialog", { name }, { vcpus: c.vcpus, memory_mb: c.memory_mb, disk_gb: c.disk_gb, description: c.description });

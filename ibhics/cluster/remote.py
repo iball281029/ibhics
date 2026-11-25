@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ..backup import BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
+from ..backup import BackupCancelled, BackupInfo, BackupNotFound, BackupTarget, TargetUnavailable
 from ..hypervisor import (
     CloneSpec,
     GuestInfo,
@@ -459,6 +459,12 @@ class RemoteBackup:
             {"target": target.to_dict(), "backup_id": backup_id, "pool": pool, "timeout": timeout},
         ).json()
 
+    def restore_container(self, target, backup_id, name=None, pool=None):
+        from ..hypervisor.containers import info_from_dict
+
+        body = {"target": target.to_dict(), "backup_id": backup_id, "name": name, "pool": pool}
+        return info_from_dict(self._call("/backups/restore-container", body).json())
+
     def usage(self, target):
         return self._call("/backups/usage", {"target": target.to_dict()}).json()
 
@@ -488,7 +494,12 @@ class RemoteBackup:
         resp = self._client.request("POST", path, json=body, timeout=None)
         if resp.status_code < 400:
             return resp
-        detail = str(resp.json().get("detail", "")) if resp.content else ""
+        try:
+            detail = str(resp.json().get("detail", "")) if resp.content else ""
+        except ValueError:
+            detail = "Agent returned a non-JSON error response"
+        if resp.status_code == 409 and detail.startswith("backup cancelled: "):
+            raise BackupCancelled(detail.removeprefix("backup cancelled: "))
         if resp.status_code == 404:
             if detail.startswith("backup not found: "):
                 raise BackupNotFound(detail.removeprefix("backup not found: "))

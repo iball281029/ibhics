@@ -120,7 +120,7 @@ def event_notice(event, details=None):
     d = details or {}
     rows = [("Event", event_id or event["category"]), ("Detected at", event["time"])]
     for key, label in [
-        ("vm", "Virtual machine"),
+        ("vm", "Container" if d.get("entity_type") == "container" else "Virtual machine"),
         ("node", "Node"),
         ("target", "Repository"),
         ("policy", "Schedule"),
@@ -153,7 +153,12 @@ def event_notice(event, details=None):
                 if isinstance(new, int) and isinstance(saved, int)
                 else "N/A",
             ),
-            ("Boot verification", r.get("verified") or "Not performed"),
+            (
+                "Boot verification",
+                "N/A — container filesystem backup"
+                if r.get("entity_type") == "container"
+                else r.get("verified") or "Not performed",
+            ),
         ]
     notes = {
         "backup": "Review the backup job and restore points. Backup completion and boot verification are separate checks.",

@@ -713,6 +713,7 @@ class BackupTargetOut(BaseModel):
 
 
 class BackupOut(BaseModel):
+    entity_type: Literal["vm", "container"] = "vm"
     id: str
     vm_name: str
     vm_uuid: str
@@ -760,6 +761,8 @@ class RestoreRequest(BaseModel):
 
 
 class PolicyIn(BaseModel):
+    entity_type: Literal["vm", "container"] = "vm"
+    allow_stop: bool = False
     name: str = Field(pattern=NAME_PATTERN)
     target: str
     vms: list[str] = Field(default_factory=list, description="VM names; empty means every VM")
@@ -794,6 +797,7 @@ class PolicyOut(PolicyIn):
 
 
 class JobOut(BaseModel):
+    entity_type: Literal["vm", "container"] = "vm"
     id: str
     kind: str
     state: str
@@ -818,7 +822,7 @@ class JobOut(BaseModel):
 class AgentBackupRun(BaseModel):
     uuid: str
     target: dict
-    mode: Literal["incremental", "active_full"] = "incremental"
+    mode: Literal["incremental", "active_full", "container_stop"] = "incremental"
 
 
 class AgentBackupOperation(BaseModel):

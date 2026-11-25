@@ -66,7 +66,14 @@ class Policy:
     retry_delay_minutes: int = 15
     rpo_hours: float | None = None
 
+    entity_type: str = "vm"
+    allow_stop: bool = False
+
     def validate(self) -> None:
+        if self.entity_type not in ("vm", "container"):
+            raise ValueError("Unknown backup entity type")
+        if self.entity_type == "container" and self.verify_after_backup:
+            raise ValueError("Container backups do not support VM boot verification")
         if type(self.retries) is not int or not 0 <= self.retries <= 10:
             raise ValueError("Retries must be 0 through 10")
         if type(self.retry_delay_minutes) is not int or not 1 <= self.retry_delay_minutes <= 1440:
@@ -151,6 +158,7 @@ class Job:
     retry_at: str | None = None
     vm_uuid: str | None = None
     scheduled: bool = False
+    entity_type: str = "vm"
 
 
 class BackupManager:
@@ -315,14 +323,20 @@ class BackupManager:
                 continue
             job.attempt += 1
             try:
-                member, vm = self._cluster.find_vm(job.vm_uuid)
+                if job.entity_type == "container":
+                    member = self._cluster.member(job.node)
+                    vm = member.driver.containers().get(job.vm_uuid.removeprefix("ct:"))
+                    entity_id = job.vm_uuid
+                else:
+                    member, vm = self._cluster.find_vm(job.vm_uuid)
+                    entity_id = vm.uuid
             except Exception:
                 self._retry_failed(job, policy)
                 continue
             job.retry_at = None
             self._backup_job(
                 member,
-                vm.uuid,
+                entity_id,
                 vm.spec.name,
                 policy.target,
                 policy.keep_last,
@@ -347,6 +361,28 @@ class BackupManager:
             policy.last_run = (now or self._clock()).isoformat()
             self._save()
         jobs = []
+        if policy.entity_type == "container":
+            found = set()
+            for member in self._cluster.compute_members():
+                for ct in member.driver.containers().list():
+                    if policy.vms and ct.spec.name not in policy.vms:
+                        continue
+                    if ct.spec.name in found:
+                        raise ValueError("Ambiguous container ownership; refresh inventory first")
+                    found.add(ct.spec.name)
+                    jobs.append(
+                        self._backup_job(
+                            member,
+                            f"ct:{ct.spec.name}",
+                            ct.spec.name,
+                            policy.target,
+                            policy.keep_last,
+                            policy.name,
+                            settings=policy,
+                            scheduled=scheduled,
+                        )
+                    )
+            return jobs
         for member, vm in self._cluster.all_vms():
             if vm.spec.recycled or vm.spec.template:
                 continue  # deleted, or never changes
@@ -426,6 +462,47 @@ class BackupManager:
         member, vm = self._cluster.find_vm(uuid)
         return self._backup_job(member, uuid, vm.spec.name, target_name, keep_last, None, mode)
 
+    def start_container_backup(self, member, name, target, allow_stop=False, keep_last=None):
+        self.target(target)
+        return self._backup_job(
+            member,
+            f"ct:{name}",
+            name,
+            target,
+            keep_last,
+            None,
+            "container_stop" if allow_stop else "active_full",
+        )
+
+    def start_container_restore(
+        self, target_name, backup_id, name, node=None, pool=None, source_node=None
+    ):
+        self._cluster.require_quorum()
+        target = self.target(target_name)
+        if target.shared:
+            member = self._cluster.member(node) if node else self._cluster.pick_node(0)
+        else:
+            if not source_node or (node and node != source_node):
+                raise ValueError("A local repository must be restored on its source node")
+            member = self._cluster.member(source_node)
+        self._cluster.require_in_service(member)
+        job = self._new_job("restore", target_name, name, member.name, None)
+        job.entity_type = "container"
+
+        def work():
+            with self._using(target, wait=True), self.vm_busy(f"ct:{name}"):
+                job.step = "Restoring container filesystem into destination pool"
+                restored = member.backups.restore_container(target, backup_id, name, pool)
+                job.report = {
+                    "entity_type": "container",
+                    "reason": "Restored stopped; review network settings before starting",
+                }
+                job.step, job.percent = "Container restored stopped", 100
+                return restored.spec.name
+
+        self._submit(job, work)
+        return job
+
     def _backup_job(
         self,
         member: Member,
@@ -442,6 +519,7 @@ class BackupManager:
         job = existing or self._new_job("backup", target_name, vm_name, member.name, policy)
         job.node, job.target = member.name, target_name
         job.vm_uuid = uuid
+        job.entity_type = "container" if uuid.startswith("ct:") else "vm"
         job.scheduled = scheduled or job.scheduled
 
         def work() -> str:
@@ -470,6 +548,8 @@ class BackupManager:
                 stack.enter_context(self._backup_lock(job, self.vm_busy(uuid)))
                 job.step = "Waiting for node backup worker"
                 selected = "active_full" if full else p.mode if p else mode
+                if uuid.startswith("ct:") and p:
+                    selected = "container_stop" if p.allow_stop else "active_full"
                 done = threading.Event()
                 requested_at = time.time()
 
@@ -770,6 +850,7 @@ class BackupManager:
         )
         return {
             "vm": job.vm,
+            "entity_type": job.entity_type,
             "node": job.node,
             "target": job.target,
             "policy": job.policy,

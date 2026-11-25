@@ -39,6 +39,10 @@ class ContainerNotFound(LookupError):
     pass
 
 
+class ContainerRestartFailed(InvalidState):
+    """A temporarily stopped container could not be returned to service."""
+
+
 # Templates: distribution images from images.linuxcontainers.org (lxc "download"), and
 # app templates that are a distribution plus a first-boot script.
 DISTROS = {
@@ -621,6 +625,82 @@ class LxcContainers:
         self._claim_owner(base / name)
         return self._info(base, spec)
 
+    @contextmanager
+    def backup_source(self, name: str, allow_stop=False):
+        base, spec = self._find(name)
+        home = base / name
+        image = home / "rootfs.img"
+        if image.is_symlink() or not image.is_file() or image.stat().st_size == 0:
+            raise InvalidState("Container backup requires a regular rootfs image")
+        running = self._info(base, spec).state == "running"
+        if running and not allow_stop:
+            raise InvalidState("Allow a temporary stop or stop the container before backup")
+        try:
+            if running:
+                self.action(name, "stop")
+            if self._info(base, spec).state != "stopped":
+                raise InvalidState("Container did not stop; no backup was started")
+            includes = []
+            rootfs = []
+            for line in (home / "config").read_text().splitlines():
+                if line.strip().startswith("lxc.rootfs.path"):
+                    rootfs.append(line.partition("=")[2].strip())
+                if line.strip().startswith("lxc.include"):
+                    value = line.partition("=")[2].strip()
+                    if re.fullmatch(r"/usr/share/lxc/config/[A-Za-z0-9_.-]+\.conf", value):
+                        includes.append(value)
+                if line.strip().startswith("lxc.mount.entry") and "/dev/fuse " not in line:
+                    raise InvalidState("Back up custom container mounts separately")
+            if rootfs != [f"loop:{image}"]:
+                raise InvalidState("Container rootfs configuration does not match its backup image")
+            yield (
+                image,
+                {"entity_type": "container", "container": spec.public(), "includes": includes},
+            )
+        finally:
+            if running and self._info(base, spec).state == "stopped":
+                try:
+                    self.action(name, "start")
+                except Exception as exc:
+                    raise ContainerRestartFailed(
+                        f"Backup cleanup could not restart {name}"
+                    ) from exc
+
+    def import_rootfs(self, spec: ContainerSpec, write_image, includes=()) -> ContainerInfo:
+        spec = replace(spec, password="", owner_node=self.node_name, autostart=False)
+        spec.validate()
+        for card in spec.interfaces():
+            self._bridge_of(card["network"])
+        base = self._dir(spec.pool)
+        base.mkdir(parents=True, exist_ok=True)
+        home = base / spec.name
+        with self._creation_lock(base, spec.name):
+            if home.exists():
+                raise InvalidState("A container with this name already exists; choose another name")
+            temp = Path(tempfile.mkdtemp(prefix=f".{spec.name}-restore-", dir=base))
+            try:
+                write_image(temp / "rootfs.img")
+                safe_includes = [
+                    p
+                    for p in includes
+                    if isinstance(p, str)
+                    and re.fullmatch(r"/usr/share/lxc/config/[A-Za-z0-9_.-]+\.conf", p)
+                ]
+                (temp / "config").write_text("\n".join(f"lxc.include = {p}" for p in safe_includes))
+                config = lxc_config(spec, self._bridge_of, str(home / "rootfs.img"))
+                (temp / "config").write_text(_keep_template_lines(temp / "config", config))
+                (temp / "ibhics.json").write_text(json.dumps(asdict(spec)))
+                self._claim_owner(temp)
+                if home.exists():
+                    raise InvalidState("Container destination appeared during restore")
+                temp.rename(home)
+            finally:
+                if temp.exists():
+                    import shutil
+
+                    shutil.rmtree(temp)
+        return self._info(base, spec)
+
     def _dir(self, pool: str) -> Path:
         path = self._pool_path(pool)
         if not path:
@@ -659,6 +739,8 @@ class LxcContainers:
             if not base.is_dir():
                 continue
             for meta in sorted(base.glob("*/ibhics.json")):
+                if meta.parent.name.startswith("."):
+                    continue
                 owner = self._owner(meta.parent)
                 if owner and owner != self.node_name:
                     continue
@@ -1022,6 +1104,7 @@ class FakeContainers:
         self._jobs: dict[str, dict] = {}
         self._networks = networks
         self._pools = pools
+        self._rootfs = {}
 
     def list(self) -> list[ContainerInfo]:
         return list(self._cts.values())
@@ -1034,6 +1117,38 @@ class FakeContainers:
     def claim_owner(self, name: str) -> ContainerInfo:
         # Fake stores are private to one driver rather than shared across hosts.
         return self.get(name)
+
+    @contextmanager
+    def backup_source(self, name: str, allow_stop=False):
+        info = self.get(name)
+        running = info.state == "running"
+        if running and not allow_stop:
+            raise InvalidState("Allow a temporary stop or stop the container before backup")
+        try:
+            if running:
+                self.action(name, "stop")
+            with tempfile.TemporaryDirectory(prefix="fake-ct-backup-") as directory:
+                image = Path(directory) / "rootfs.img"
+                image.write_bytes(self._rootfs.get(name, ("Fake rootfs " + name).encode() * 512))
+                yield (
+                    image,
+                    {"entity_type": "container", "container": info.spec.public(), "includes": []},
+                )
+        finally:
+            if running:
+                self.action(name, "start")
+
+    def import_rootfs(self, spec: ContainerSpec, write_image, includes=()) -> ContainerInfo:
+        if spec.name in self._cts:
+            raise InvalidState("Container already exists")
+        with tempfile.TemporaryDirectory(prefix="fake-ct-restore-") as directory:
+            image = Path(directory) / "rootfs.img"
+            write_image(image)
+            content = image.read_bytes()
+        info = self.create(replace(spec, autostart=False))
+        self._rootfs[spec.name] = content
+        info.state = "stopped"
+        return info
 
     def create(self, spec: ContainerSpec) -> ContainerInfo:
         spec.validate()

@@ -18,6 +18,7 @@ from ..hypervisor.containers import (
     catalog,
     parse_image_index,
 )
+from .schemas import JobOut
 
 
 class ContainerIn(BaseModel):
@@ -79,6 +80,19 @@ class ContainerNetworkIn(BaseModel):
 
 class ContainerSnapIn(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
+
+
+class ContainerBackupIn(BaseModel):
+    target: str = Field(min_length=1)
+    allow_stop: bool = False
+    keep_last: int | None = Field(default=None, ge=1, le=1000)
+
+
+class ContainerRestoreIn(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    node: str | None = None
+    pool: str | None = None
+    source_node: str | None = None
 
 
 def install(api, cluster, backups) -> None:
@@ -158,6 +172,35 @@ def install(api, cluster, backups) -> None:
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
         return out(*find(name, claim=False))
+
+    @api.post("/containers/{name}/backup", response_model=JobOut, status_code=202)
+    def ct_backup(name: str, body: ContainerBackupIn) -> JobOut:
+        cluster.require_quorum()
+        member, ct = find(name)
+        if ct.state == "running" and not body.allow_stop:
+            raise InvalidState("Allow a temporary stop or stop the container before backup")
+        return JobOut(
+            **backups.start_container_backup(
+                member, name, body.target, body.allow_stop, body.keep_last
+            ).__dict__
+        )
+
+    @api.post(
+        "/backup/targets/{target}/backups/{backup_id}/restore-container",
+        response_model=JobOut,
+        status_code=202,
+    )
+    def ct_restore_backup(target: str, backup_id: str, body: ContainerRestoreIn) -> JobOut:
+        cluster.require_quorum()
+        names = {c.spec.name for _, c in everywhere(strict=True)}
+        names |= {vm.spec.name for _, vm in cluster.all_vms()}
+        if body.name in names:
+            raise InvalidState("A VM or container with this name already exists")
+        return JobOut(
+            **backups.start_container_restore(
+                target, backup_id, body.name, body.node, body.pool, body.source_node
+            ).__dict__
+        )
 
     @api.post("/containers", status_code=status.HTTP_202_ACCEPTED)
     def ct_create(body: ContainerIn) -> dict:

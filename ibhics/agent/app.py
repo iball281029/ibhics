@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request, WebSocket, status
 
 from .. import __version__, console
-from ..backup import BackupTarget, NodeBackup
+from ..backup import BackupCancelled, BackupTarget, NodeBackup
 from ..cluster.remote import TOKEN_HEADER
 from ..cluster.topology import NodeRole
 from ..hypervisor import HypervisorDriver, InvalidState, VMNotFound
@@ -569,7 +569,12 @@ def create_agent_app(
 
         @api.post("/backups/run", response_model=BackupOut)
         def run_backup(body: AgentBackupRun) -> BackupOut:
-            return BackupOut.from_info(backups.backup(body.uuid, target(body.target), body.mode))
+            try:
+                return BackupOut.from_info(
+                    backups.backup(body.uuid, target(body.target), body.mode)
+                )
+            except BackupCancelled as exc:
+                raise HTTPException(409, "backup cancelled: " + str(exc)) from exc
 
         @api.post("/backups/synthetic", response_model=BackupOut)
         def synthetic_backup(body: AgentBackupOperation) -> BackupOut:
@@ -593,6 +598,12 @@ def create_agent_app(
         def restore(body: AgentRestore) -> VMOut:
             vm = backups.restore(target(body.target), body.backup_id, body.name, body.pool)
             return VMOut.from_info(vm)
+
+        @api.post("/backups/restore-container")
+        def restore_container(body: AgentRestore) -> dict:
+            return backups.restore_container(
+                target(body.target), body.backup_id, body.name, body.pool
+            ).to_dict()
 
         @api.post("/backups/verify")
         def verify_backup(body: AgentVerify) -> dict:

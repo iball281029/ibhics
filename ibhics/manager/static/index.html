@@ -1588,6 +1588,53 @@
   </form>
 </dialog>
 
+<dialog id="ct-schedule-dialog">
+  <form method="dialog" id="ct-schedule-form">
+    <header><h3>Container backup schedule</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label class="wide">Schedule name <input name="name" required maxlength="63" pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]*"></label>
+      <label>Container <select name="container" required></select></label>
+      <label>Repository <select name="target" required></select></label>
+      <label>Frequency <select name="frequency"><option value="daily">Daily</option><option value="interval">Every N hours</option></select></label>
+      <label>Daily time <input type="time" name="at" value="02:00" required></label>
+      <label>Interval (hours) <input type="number" name="every_hours" min="1" max="168" value="24" required></label>
+      <label>Keep recent restore points <input type="number" name="keep_last" min="1" max="1000" value="7" required></label>
+      <label class="check wide"><input type="checkbox" name="allow_stop"> Allow a temporary stop during each backup</label>
+      <label class="check wide"><input type="checkbox" name="enabled" checked> Enable schedule</label>
+      <p class="hint wide">Times use the manager timezone. Each run creates a full filesystem restore point with compression and deduplication. Running containers require permission to stop, then restart automatically after success, failure or cancellation. Without permission, a running container is left untouched and the job fails safely. VM boot verification is not used.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save schedule</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-backup-dialog">
+  <form method="dialog" id="ct-backup-form">
+    <header><h3>Back up container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p id="ct-backup-summary"></p>
+      <label>Repository <select name="target" required></select></label>
+      <label class="check"><input type="checkbox" name="allow_stop"> Allow a temporary stop for this backup</label>
+      <p class="hint">Full filesystem backup with compression and deduplication. A running container must stop while its disk is copied. It restarts automatically after completion, failure or cancellation. An already stopped container stays stopped.</p>
+      <p class="hint">Progress and Cancel job are available in Data protection → Jobs. Restoring creates a separate, stopped container. External mounts and memory state are not included.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start backup</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-restore-dialog">
+  <form method="dialog" id="ct-restore-form">
+    <header><h3>Restore container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <p class="wide" id="ct-restore-summary"></p>
+      <label class="wide">New container name <input name="name" required maxlength="63" pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off"></label>
+      <label>Node <select name="node" required></select></label>
+      <label>Storage pool <select name="pool" required></select></label>
+      <p class="hint wide">Restores files and container settings into a new container with a new MAC address. The container stays stopped. Review its network and any static IP before starting it. Existing containers are never overwritten.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Restore container</button></footer>
+  </form>
+</dialog>
+
 <dialog id="ct-dialog" class="wide-dialog">
   <form method="dialog" id="ct-form">
     <header><h3>New container</h3><button value="cancel" formnovalidate>×</button></header>
