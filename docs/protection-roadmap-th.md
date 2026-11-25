@@ -83,3 +83,12 @@ CI ของ 3cad3e8 ผ่านครบ 8 งาน รอบแก้ล่�
 - Job finished done/error null in 18m24s. VM started only after NIC removal; console reached AlmaLinux 8.8 appliance login. VM, destination disk, source test copy, workspace and short temp directory were removed afterward.
 - Root free before the run: 11,930,640,384 bytes; after cleanup: 11,930,624,000 bytes (16 KiB difference, no bulk image growth on root). Original two VMs remained running and services active.
 - Existing limitations about production mount fault injection and unconfigured KVM/Proxmox source scratch still apply. This closes the migration storage-placement acceptance, not every provider or guest-application test.
+
+### LINE delivery and notification-state recovery - 2026-11-25
+
+- Deployed the four LINE-only files (`notifications.py`, `settings_api.py`, `settings.js`, `index.html`) to both nodes, retaining backups under `/mnt/ibhics/virtualstorage/.ibhics-maintenance/line-notifications/{103,104}/`. Notification tests: 30 passed.
+- The user configured a free LINE OA and confirmed receipt of the test message in the intended personal chat. API acceptance alone was not treated as recipient delivery. Current selected event is `backup.succeeded`; acceptance of an actual backup event is pending the user's manual Run now test.
+- Investigated missing SMTP settings: .103 retained the configured SMTP settings, while the active .104 manager had empty SMTP fields. Recovered only SMTP through the authenticated API, preserving LINE token, recipient and event selection. Verified again after the manager restarts: SMTP host/sender/password and one email recipient configured; LINE enabled with saved token and backup.succeeded selected. No credentials are recorded here.
+- Added notifications.json to manager state replication/takeover. Seeded the shared copy from the active manager after recovery, patched both nodes, and restarted managers one at a time with no active backup/import/replication jobs. Backups: `/mnt/ibhics/virtualstorage/.ibhics-maintenance/line-state/`.
+- Regression validates SMTP and LINE settings both survive the actual replicate/restore helpers and keep private permissions. `tests/test_leader.py tests/test_notifications.py`: 38 passed; Ruff and diff checks passed.
+- User requested removal of Network Advanced (isolated gateway/NAT/DHCP) as a separate follow-up; it has not yet been removed.

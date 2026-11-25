@@ -251,6 +251,7 @@ def _state_files(args) -> list[Path]:
         args.users_file,
         args.users_file.with_name("sessions.json"),
         args.users_file.with_name("settings.json"),
+        args.users_file.with_name("notifications.json"),
         args.users_file.with_name("users-security.json"),
         args.users_file.with_name("approvals.json"),
         args.groups_file,

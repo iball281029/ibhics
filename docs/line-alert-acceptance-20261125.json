@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-25",
+  "deployed_nodes": [
+    "103",
+    "104"
+  ],
+  "test_delivery": "user confirmed received in personal LINE chat",
+  "event_selected": [
+    "backup.succeeded"
+  ],
+  "real_backup_event_delivery": "pending user manual backup",
+  "smtp_recovered": true,
+  "email_recipient_count": 1,
+  "settings_verified_after_manager_restarts": true,
+  "regression_tests": {
+    "passed": 38
+  },
+  "credentials_recorded": false
+}
