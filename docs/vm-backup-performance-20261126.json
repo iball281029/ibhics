@@ -1,0 +1,40 @@
+{
+  "date": "2026-11-26",
+  "change": "Bounded pipeline of up to four DirStore compression and atomic durable chunk writes; NBD reads stay on owner thread; other stores stay synchronous",
+  "nodes": [
+    "172.16.12.103",
+    "172.16.12.104"
+  ],
+  "installed": true,
+  "services_active": [
+    "ibhics-agent",
+    "ibhics-manager"
+  ],
+  "baseline_io_profile": {
+    "logical_bytes": 100663296,
+    "compressed_bytes": 47303861,
+    "read_seconds": 4.883,
+    "compress_seconds": 4.126,
+    "durable_write_seconds": 9.151
+  },
+  "same_data_repository_comparison": {
+    "logical_bytes": 100663296,
+    "compressed_bytes": 47303861,
+    "serial_seconds": 14.548,
+    "pipeline_seconds": 8.345,
+    "elapsed_reduction_percent": 42.64,
+    "restore_exact_both": true,
+    "scope": "24 existing chunks backed up into isolated fresh repositories on actual NFS, then restored and byte-compared; not an end-to-end VM runtime measurement"
+  },
+  "validation": {
+    "existing_tests_passed": 130,
+    "new_integrity_tests_passed": 2,
+    "additional_protection_container_libvirt_tests_passed": 47,
+    "ruff": "passed"
+  },
+  "remaining": [
+    "End-to-end timing of a real VM backup after deployment",
+    "Investigate broken checkpoint full fallback separately if reproduced"
+  ],
+  "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py"
+}

@@ -282,3 +282,43 @@ def test_cancel_endpoint_requires_backup_permission(tmp_path):
     client.post("/api/v1/auth/login", json={"username": "operator", "password": password})
     assert client.post(endpoint).status_code == 202
     assert job.state == "cancelled"
+
+
+def test_overlapping_writes_deduplicate_and_restore_exactly(tmp_path):
+    class PairedStore(DirStore):
+        def __init__(self, root):
+            super().__init__(root)
+            self.barrier = threading.Barrier(2)
+            self.writes = []
+
+        def put(self, key, data):
+            if key.startswith("chunks/"):
+                self.writes.append(key)
+                self.barrier.wait(timeout=3)
+            super().put(key, data)
+
+    store = PairedStore(tmp_path / "repo")
+    repo = Repository(store, CHUNK)
+    data = b"a" * CHUNK + b"b" * CHUNK + b"a" * CHUNK
+    vm = make_vm()
+    info = repo.backup_readers(vm, [NBDReader(Allocation(data, [(len(data), 0)]), False)], {}, {})
+    assert len(store.writes) == 2
+    assert info.new_data_bytes == 2 * CHUNK and info.dedup_saved_bytes == CHUNK
+    repo.restore_disk(repo.manifest(info.id), 0, tmp_path / "restored")
+    assert (tmp_path / "restored").read_bytes() == data
+
+
+def test_failed_background_chunk_write_never_publishes_restore_point(tmp_path):
+    class FailingStore(DirStore):
+        def put(self, key, data):
+            if key.startswith("chunks/"):
+                raise OSError("storage write failed")
+            super().put(key, data)
+
+    repo = Repository(FailingStore(tmp_path / "repo"), CHUNK)
+    data = b"a" * CHUNK + b"b" * CHUNK
+    with pytest.raises(OSError, match="storage write failed"):
+        repo.backup_readers(
+            make_vm(), [NBDReader(Allocation(data, [(len(data), 0)]), False)], {}, {}
+        )
+    assert repo.list() == []

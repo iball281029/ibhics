@@ -17,8 +17,9 @@ import copy
 import hashlib
 import json
 import re
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -29,7 +30,7 @@ from uuid import uuid4
 
 from ..hypervisor.base import NAME_RE, InvalidState, VMInfo
 from .compression import codec, compress, decompress
-from .store import RepositoryBusy, Store
+from .store import DirStore, RepositoryBusy, Store
 
 CHUNK_SIZE = 4 * 1024 * 1024
 STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -176,7 +177,22 @@ class Repository:
                 )
 
         update("reading", "Reading point-in-time backup data")
-        with self.reading():
+        # Keep NBD reads on their owning thread. Only independent, atomic local
+        # chunk writes run concurrently; four chunks bound buffered input to 16 MiB.
+        pending, submitted = deque(), set()
+
+        def write_chunk(key, block):
+            data = compress(block, self.compression)
+            self.store.put(key, data)
+            return len(block), len(data)
+
+        def finish_one():
+            nonlocal stored, new_data
+            logical, physical = pending.popleft().result()
+            new_data += logical
+            stored += physical
+
+        with self.reading(), ThreadPoolExecutor(max_workers=4) as writers:
             for index, reader in enumerate(readers):
                 count = (reader.size + self.chunk_size - 1) // self.chunk_size
                 old = parent["disks"][index] if incremental else None
@@ -198,6 +214,8 @@ class Repository:
                             new_data += len(block)
                             nonzero += len(block)
                 for offset in reader.changed_chunks(self.chunk_size):
+                    if len(pending) >= 4:
+                        finish_one()
                     if offset < 0 or offset >= count:
                         raise ValueError("Changed block lies outside disk")
                     length = min(self.chunk_size, reader.size - offset * self.chunk_size)
@@ -212,16 +230,23 @@ class Repository:
                     if has_data:
                         nonzero += len(block)
                     digest = hashlib.sha256(block).hexdigest() if has_data else None
-                    if digest and not self.store.exists(_chunk_key(digest)):
+                    if (
+                        digest
+                        and digest not in submitted
+                        and not self.store.exists(_chunk_key(digest))
+                    ):
                         update(
                             "writing",
                             f"Compressing and writing disk {index + 1}/{len(readers)}",
                             index + 1,
                         )
-                        data = compress(block, self.compression)
-                        new_data += len(block)
-                        self.store.put(_chunk_key(digest), data)
-                        stored += len(data)
+                        if isinstance(self.store, DirStore):
+                            pending.append(writers.submit(write_chunk, _chunk_key(digest), block))
+                        else:
+                            logical, physical = write_chunk(_chunk_key(digest), block)
+                            new_data += logical
+                            stored += physical
+                        submitted.add(digest)
                     chunks[offset] = digest
                     scanned_bytes = sum(r.size for r in readers[:index]) + min(
                         reader.size, (offset + 1) * self.chunk_size
@@ -230,6 +255,9 @@ class Repository:
                 scanned_bytes = sum(r.size for r in readers[: index + 1])
                 update("reading", f"Scanned disk {index + 1}/{len(readers)}", index + 1)
                 disks.append({"size_bytes": reader.size, "chunks": chunks})
+            while pending:
+                update("writing", "Finishing compressed chunk writes")
+                finish_one()
             manifest = {
                 "format": 1,
                 "id": backup_id,
