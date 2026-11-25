@@ -557,6 +557,14 @@ def create_agent_app(
 
         # Backup jobs are long; they run in FastAPI's worker threads, one request each.
 
+        @api.post("/backups/cancel/{uuid}")
+        def cancel_backup(uuid: str, target: str) -> dict:
+            return {"accepted": backups.cancel_backup(uuid, target)}
+
+        @api.get("/backups/progress/{uuid}")
+        def backup_progress(uuid: str, target: str = "") -> dict:
+            return backups.backup_progress(uuid, target)
+
         @api.post("/backups/run", response_model=BackupOut)
         def run_backup(body: AgentBackupRun) -> BackupOut:
             return BackupOut.from_info(backups.backup(body.uuid, target(body.target), body.mode))

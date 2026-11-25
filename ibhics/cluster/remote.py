@@ -403,6 +403,22 @@ class RemoteBackup:
         body = {"uuid": uuid, "target": target.to_dict(), "mode": mode}
         return _backup_info(self._call("/backups/run", body, uuid).json())
 
+    def cancel_backup(self, uuid: str, target: str) -> bool:
+        response = self._client.request(
+            "POST", f"/backups/cancel/{uuid}", params={"target": target}, timeout=3
+        )
+        response.raise_for_status()
+        return bool(response.json().get("accepted"))
+
+    def backup_progress(self, uuid: str, target: str = "") -> dict:
+        response = self._client.request(
+            "GET", f"/backups/progress/{uuid}", params={"target": target}, timeout=3
+        )
+        if response.status_code == 404:
+            return {}  # rolling upgrades: old agent has no progress endpoint
+        response.raise_for_status()
+        return response.json()
+
     def synthetic_full(self, target, backup_id):
         return _backup_info(
             self._call(

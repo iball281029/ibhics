@@ -819,6 +819,8 @@ class JobOut(BaseModel):
     step: str = ""
     percent: float | None = None
     report: dict = Field(default_factory=dict)
+    progress: dict = Field(default_factory=dict)
+    cancel_requested: bool = False
 
 
 # Agent-only request bodies: the manager sends the whole target, credentials included.

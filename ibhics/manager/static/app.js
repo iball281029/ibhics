@@ -4558,6 +4558,23 @@ function renderPolicies() {
   }).join("") || `<p class="hint">No schedules yet. Create one to protect VMs automatically.</p>`;
 }
 
+function backupLiveDetails(j) {
+  if (j.kind !== "backup" || !["queued", "running", "retry_wait"].includes(j.state)) return "";
+  const p = j.progress || {}, duration = Math.max(0, (Date.now() - Date.parse(j.created)) / 1000);
+  const size = n => `${(Number(n) / 2 ** 30).toFixed(2)} GiB`;
+  const parts = [`Elapsed ${Math.floor(duration / 60)}m ${Math.floor(duration % 60)}s`];
+  if (p.mode) parts.push(p.mode === "incremental" ? "Incremental CBT" : "Full scan");
+  if (p.read_bytes != null) parts.push(`Read ${size(p.read_bytes)}`);
+  if (p.mode === "full" && p.total_bytes && p.scanned_bytes != null) parts.push(`Disk scan ${size(p.scanned_bytes)} / ${size(p.total_bytes)}`);
+  if (p.stored_bytes != null) parts.push(`New data stored ${size(p.stored_bytes)}`);
+  if (p.read_mib_per_second > 0) parts.push(`Average ${Number(p.read_mib_per_second).toFixed(1)} MiB/s`);
+  const age = p.updated_at ? Math.max(0, Date.now() / 1000 - p.updated_at) : null;
+  if (age != null) parts.push(`Last progress ${Math.floor(age)}s ago`);
+  const bar = j.percent != null ? `<progress max="100" value="${Math.max(0, Math.min(100, Number(j.percent)))}"></progress> ${Number(j.percent).toFixed(1)}%` : "";
+  const waiting = age > 120 && p.phase !== "waiting" ? '<span class="badge warning">No new progress reported for over 2 minutes; check storage/node</span>' : "";
+  return `<div class="backup-kind">${parts.map(esc).join(" · ")}</div>${bar}${waiting}`;
+}
+
 function renderJobs() {
   const jobs = state.jobs.slice(0, 50);
   $("#jobs").innerHTML = jobs.length ? jobs.map((j) => `<tr>
@@ -4567,9 +4584,20 @@ function renderJobs() {
     <td>${esc(j.node || "")}</td>
     <td>${esc(when(j.created))}</td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.state === "retry_wait" ? j.step : j.error || j.step || j.result || "")}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
+    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.state === "retry_wait" ? j.step : j.error || j.step || j.result || "")}${backupLiveDetails(j)}${j.kind === "backup" && ["queued", "running", "retry_wait"].includes(j.state) && canOperate() && !Object.keys(j.report || {}).length && !["committing", "complete"].includes(j.progress?.phase) ? `<button class="small danger" data-backup-cancel="${esc(j.id)}" ${j.cancel_requested ? "disabled" : ""}>${j.cancel_requested ? "Cancelling…" : "Cancel job"}</button>` : ""}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
   </tr>`).join("") : empty(7, "No jobs yet");
 }
+
+$("#jobs").addEventListener("click", async e => {
+  const b = e.target.closest("[data-backup-cancel]");
+  if (!b || !confirm("Cancel this backup job? The VM stays running and previous restore points are kept.")) return;
+  b.disabled = true;
+  try {
+    await post(`/backup/jobs/${enc(b.dataset.backupCancel)}/cancel`);
+    await load("jobs"); renderJobs();
+    toast("Cancellation requested; waiting for safe cleanup.");
+  } catch (err) { fail(err); b.disabled = false; }
+});
 
 $("#browse-target").addEventListener("change", () => { protection.selected = null; $("#backup-detail").hidden = true; renderBackups(); });
 $("#refresh-backups").addEventListener("click", async () => { await protectionOverview(); await renderBackups(); });

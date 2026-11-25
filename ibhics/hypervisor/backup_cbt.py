@@ -32,7 +32,12 @@ class NBDReader:
 
     def changed_chunks(self, chunk_size):
         if not self.incremental:
-            yield from range((self.size + chunk_size - 1) // chunk_size)
+            if hasattr(self.handle, "can_meta_context") and self.handle.can_meta_context(
+                "base:allocation"
+            ):
+                yield from self._nonzero_chunks(chunk_size)
+            else:
+                yield from range((self.size + chunk_size - 1) // chunk_size)
             return
         context = "qemu:dirty-bitmap:changes"
         if not self.handle.can_meta_context(context):
@@ -66,6 +71,40 @@ class NBDReader:
                 cursor = end
             if cursor <= offset:
                 raise CBTUnavailable("No dirty bitmap progress; refusing incomplete backup")
+            offset = cursor
+
+    def _nonzero_chunks(self, chunk_size):
+        """Skip only NBD STATE_ZERO extents; a hole alone does not imply zero data."""
+        offset, last = 0, -1
+        while offset < self.size:
+            ranges = []
+
+            def extent(meta, start, entries, error, ranges=ranges):
+                if meta == "base:allocation":
+                    if len(entries) % 2:
+                        raise RuntimeError("Malformed allocation metadata response")
+                    for length, flags in zip(entries[::2], entries[1::2], strict=True):
+                        if length <= 0:
+                            raise RuntimeError("Invalid allocation metadata extent")
+                        ranges.append((start, length, flags))
+                        start += length
+                return 0
+
+            self.handle.block_status(min(self.size - offset, 1 << 30), offset, extent)
+            cursor = offset
+            for start, length, flags in ranges:
+                if start != cursor:
+                    raise RuntimeError("Allocation metadata response contains a gap")
+                end = min(start + length, self.size)
+                # NBD_STATE_ZERO is bit 1. Ignore all other flags, including HOLE.
+                if not flags & 2:
+                    for index in range(start // chunk_size, (end + chunk_size - 1) // chunk_size):
+                        if index > last:
+                            yield index
+                            last = index
+                cursor = end
+            if cursor <= offset:
+                raise RuntimeError("No allocation metadata progress")
             offset = cursor
 
 
@@ -156,6 +195,8 @@ def capture(driver, uuid, parent=None):
                 handle = nbd.NBD()
                 handles.append(handle)
                 handle.set_export_name(f"disk{index}")
+                if hasattr(handle, "add_meta_context"):
+                    handle.add_meta_context("base:allocation")
                 if checkpoint:
                     handle.add_meta_context("qemu:dirty-bitmap:changes")
                 handle.connect_unix(socket)
@@ -164,6 +205,7 @@ def capture(driver, uuid, parent=None):
                 readers,
                 {
                     "checkpoint": new,
+                    "socket": socket,
                     "disk_fingerprint": fingerprint,
                     "incremental": bool(checkpoint),
                 },

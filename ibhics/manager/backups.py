@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..backup import BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
+from ..backup import BackupCancelled, BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
 from ..backup.repository import parse_id
 from ..backup.targets import repository_identity
 from ..backup.upgrade_guard import GUARD_PATH, upgrade_guard
@@ -145,6 +145,8 @@ class Job:
     step: str = ""  # long tasks: what runs now, and how far (move-disks)
     percent: float | None = None
     report: dict = field(default_factory=dict)
+    progress: dict = field(default_factory=dict)
+    cancel_requested: bool = False
     attempt: int = 0
     retry_at: str | None = None
     vm_uuid: str | None = None
@@ -382,6 +384,41 @@ class BackupManager:
         with self._lock:
             return list(reversed(self._jobs))
 
+    def cancel(self, job_id: str) -> Job:
+        with self._lock:
+            job = next((j for j in self._jobs if j.id == job_id), None)
+            if job is None:
+                raise ValueError("Backup job not found")
+            if job.kind != "backup" or job.state not in ("queued", "running", "retry_wait"):
+                raise ValueError("Only queued, running or retrying backups can be cancelled")
+            if job.report or job.progress.get("phase") in ("committing", "complete"):
+                raise ValueError("Restore point is already being saved; wait for completion")
+            job.cancel_requested, job.retry_at = True, None
+            job.step = "Cancellation requested; waiting for safe cleanup"
+            if job.state in ("queued", "retry_wait"):
+                job.state, job.finished, job.error = "cancelled", self._clock().isoformat(), None
+                job.step = "Cancelled by operator"
+            self._save()
+        if job.state == "running" and job.vm_uuid:
+            try:
+                self._cluster.member(job.node).backups.cancel_backup(job.vm_uuid, job.target)
+            except Exception:
+                # Keep the request pending; the observer retries until the worker acknowledges.
+                pass
+        return job
+
+    @contextmanager
+    def _backup_lock(self, job, lock):
+        while not lock.acquire(timeout=0.25):
+            if job.cancel_requested:
+                raise BackupCancelled("Cancelled by operator")
+        try:
+            if job.cancel_requested:
+                raise BackupCancelled("Cancelled by operator")
+            yield
+        finally:
+            lock.release()
+
     def start_backup(
         self, uuid: str, target_name: str, keep_last: int | None = None, mode="incremental"
     ) -> Job:
@@ -425,17 +462,50 @@ class BackupManager:
                 if p
                 else [target]
             )
+            job.step = "Waiting for repository or VM lock"
             with ExitStack() as stack:
                 for t in sorted(targets, key=lambda t: t.name):
-                    stack.enter_context(self._using(t, wait=True))
-                stack.enter_context(self.vm_busy(uuid))
-                job.step = (
-                    "Reading changed blocks"
-                    if (p.mode if p else mode) == "incremental"
-                    else "Active full backup"
-                )
+                    if t.exclusive:
+                        stack.enter_context(self._backup_lock(job, self._target_locks[t.name]))
+                stack.enter_context(self._backup_lock(job, self.vm_busy(uuid)))
+                job.step = "Waiting for node backup worker"
                 selected = "active_full" if full else p.mode if p else mode
-                info = member.backups.backup(uuid, target, selected)
+                done = threading.Event()
+                requested_at = time.time()
+
+                def watch():
+                    while not done.wait(PROGRESS_POLL):
+                        try:
+                            if job.cancel_requested:
+                                member.backups.cancel_backup(uuid, target.name)
+                            status = member.backups.backup_progress(uuid, target.name)
+                            if (
+                                not status
+                                or status.get("started_at", 0) < requested_at - 1
+                                or status.get("state") != "running"
+                            ):
+                                continue
+                            job.progress = status
+                            job.step = (
+                                "Cancellation requested; waiting for safe cleanup"
+                                if job.cancel_requested
+                                else status.get("step", job.step)
+                            )
+                            job.percent = status.get("percent")
+                        except Exception:
+                            # Progress is observational; losing it must not abort a backup.
+                            continue
+
+                watcher = threading.Thread(
+                    target=watch, daemon=True, name=f"backup-progress-{job.id}"
+                )
+                watcher.start()
+                try:
+                    if job.cancel_requested:
+                        raise BackupCancelled("Cancelled by operator")
+                    info = member.backups.backup(uuid, target, selected)
+                finally:
+                    done.set()
                 job.report = asdict(info)
                 if full:
                     self._maintenance[f"{policy}/{uuid}/full"] = date
@@ -711,6 +781,8 @@ class BackupManager:
             self._save()
 
         def run() -> None:
+            if job.cancel_requested:
+                return
             job.state = "running"
             previous = next(
                 (
@@ -744,6 +816,11 @@ class BackupManager:
                         f"Backup recovered: {job.vm}",
                         f"backup:{job.target}:{job.vm}",
                     )
+            except BackupCancelled:
+                job.state, job.retry_at, job.error = "cancelled", None, None
+                job.step = "Cancelled by operator"
+                job.percent = None
+                self.record_backup(job)
             except Exception as exc:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.state = "failed"

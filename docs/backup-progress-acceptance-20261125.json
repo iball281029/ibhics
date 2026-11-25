@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-25",
+  "deployment": {"nodes": ["172.16.12.103", "172.16.12.104"], "services": ["ibhics-manager", "ibhics-agent"]},
+  "isolated_vm_test": {
+    "name": "BackupCheck-3919ccd2",
+    "network_interfaces": 0,
+    "logical_bytes": 1073741824,
+    "read_bytes": 8388608,
+    "stored_bytes": 8174,
+    "full_seconds": 1.642,
+    "restore_compare": true,
+    "running_backup_cancelled": true,
+    "vm_remained_active_after_cancel": true,
+    "previous_restore_point_preserved": true,
+    "test_vm_and_files_removed": true
+  },
+  "manager_api_test": {"job_id": "13", "cancel_http_status": 202, "final_state": "cancelled"},
+  "production_jobs": {"11": "cancelled", "12": "cancelled"},
+  "live_javascript": {"cancel_button_code_present": true, "progress_details_code_present": true},
+  "validation": {"merged_production_payload_tests_passed": 74, "backup_progress_tests_passed": 13},
+  "limitations": [
+    "Measured runtime applies only to the isolated sparse 1 GiB test disk.",
+    "Large production VM backup runtime has not been measured after this deployment.",
+    "Cancellation waits for a safe checkpoint; a blocked storage operation may delay completion."
+  ]
+}

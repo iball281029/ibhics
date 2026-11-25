@@ -377,7 +377,7 @@ def test_checkpoint_pull_capture_establishes_base_and_incremental(monkeypatch, t
     with capture(driver, "uuid", baseline) as (readers, inc):
         assert inc["incremental"]
         assert ET.fromstring(dom.xml).find("incremental").text == baseline["checkpoint"]
-        assert handles[-1].contexts == ["qemu:dirty-bitmap:changes"]
+        assert handles[-1].contexts == ["base:allocation", "qemu:dirty-bitmap:changes"]
     with capture(driver, "uuid", {**baseline, "disk_fingerprint": "changed"}) as (_, fresh):
         assert not fresh["incremental"]
 

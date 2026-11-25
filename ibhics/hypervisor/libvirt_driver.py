@@ -1942,6 +1942,22 @@ class LibvirtDriver(HypervisorDriver):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def abort_backup(self, uuid: str, backup_socket: str) -> bool:
+        """Abort only a currently active backup, keeping the domain running."""
+        dom = self._lookup(uuid)
+        try:
+            backup = ET.fromstring(dom.backupGetXMLDesc(0))
+        except libvirt.libvirtError:
+            return False
+        server = backup.find("server")
+        if server is None or server.get("socket") != backup_socket:
+            return False  # never abort a backup owned by another operation
+        try:
+            dom.abortJob()
+        except libvirt.libvirtError:
+            return False  # it may have completed between inspection and abort
+        return True
+
     def export_backup(self, uuid, parent=None):
         from .backup_cbt import capture
 

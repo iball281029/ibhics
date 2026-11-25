@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +21,10 @@ from .repository import CHUNK_SIZE, BackupInfo, Repository, RepositoryBusy
 from .store import Mounter, S3Store, open_store
 from .targets import BackupTarget, repository_identity
 from .upgrade_guard import protected
+
+
+class BackupCancelled(RuntimeError):
+    """An operator stopped a backup before the restore-point commit."""
 
 
 class VerificationSkipped(RuntimeError):
@@ -45,6 +49,55 @@ class NodeBackup:
         # Jobs on one target run one at a time on this node, so garbage collection never
         # races a backup started from the same node.
         self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._progress_lock = threading.RLock()
+        self._progress: dict[tuple[str, str], dict] = {}
+        self._cancel: dict[tuple[str, str], threading.Event] = {}
+        self._usage_lock = threading.Lock()
+        self._usage_cache: dict[str, tuple[float, int]] = {}
+
+    def backup_progress(self, uuid: str, target: str = "") -> dict:
+        with self._progress_lock:
+            matches = [
+                v
+                for (vm, name), v in self._progress.items()
+                if vm == uuid and (not target or name == target)
+            ]
+            if not matches:
+                return {}
+            result = dict(max(matches, key=lambda item: item["started_at"]))
+        now = time.time()
+        result["elapsed_seconds"] = max(0, now - result["started_at"])
+        result["idle_seconds"] = max(0, now - result["updated_at"])
+        result["read_mib_per_second"] = (
+            result.get("read_bytes", 0) / 1024**2 / max(1, result["elapsed_seconds"])
+        )
+        return result
+
+    def cancel_backup(self, uuid: str, target: str) -> bool:
+        key = (uuid, target)
+        with self._progress_lock:
+            current = self._progress.get(key, {})
+            if current.get("state") != "running" or current.get("phase") == "committing":
+                return False
+            self._cancel[key].set()
+            current.update(
+                cancel_requested=True, step="Cancellation requested; waiting for safe cleanup"
+            )
+        # Only the backup job may be aborted, never VM power or another domain job.
+        if current.get("backup_socket") and hasattr(self._driver, "abort_backup"):
+            self._driver.abort_backup(uuid, current["backup_socket"])
+        return True
+
+    @contextmanager
+    def _repository_turn(self, target, check_cancel):
+        lock = self._locks[target.name]
+        while not lock.acquire(timeout=0.25):
+            check_cancel()
+        try:
+            check_cancel()
+            yield
+        finally:
+            lock.release()
 
     def cleanup(self) -> list[str]:
         """Detach targets left attached by a crash; call once when the node starts."""
@@ -58,11 +111,76 @@ class NodeBackup:
     def backup(
         self, uuid: str, target: BackupTarget, mode="incremental", progress=None
     ) -> BackupInfo:
+        key = (uuid, target.name)
+        now = time.time()
+        with self._progress_lock:
+            cancel = self._cancel[key] = threading.Event()
+            self._progress[key] = {
+                "state": "running",
+                "phase": "waiting",
+                "step": "Waiting for repository lock",
+                "percent": None,
+                "started_at": now,
+                "updated_at": now,
+                "target": target.name,
+            }
+            # Bound retained progress independently of the task history.
+            for old in list(self._progress):
+                if len(self._progress) <= 200:
+                    break
+                if self._progress[old]["state"] != "running":
+                    del self._progress[old]
+                    self._cancel.pop(old, None)
+
+        def check_cancel():
+            if cancel.is_set():
+                raise BackupCancelled("Cancelled by operator")
+
+        def metrics(data):
+            with self._progress_lock:
+                check_cancel()
+                self._progress[key].update(data, updated_at=time.time())
+
+        def report(step, percent):
+            metrics({"step": step, "percent": percent})
+            if progress:
+                progress(step, percent)
+
+        try:
+            info = self._backup(uuid, target, mode, report, metrics, check_cancel)
+            # A completed manifest wins a late cancel request; it cannot be unpublished.
+            with self._progress_lock:
+                self._progress[key].update(
+                    state="done",
+                    phase="complete",
+                    step="Complete",
+                    percent=100,
+                    read_bytes=info.read_bytes,
+                    stored_bytes=info.stored_bytes,
+                    updated_at=time.time(),
+                )
+            return info
+        except BaseException as exc:
+            stopped = cancel.is_set() or isinstance(exc, BackupCancelled)
+            with self._progress_lock:
+                self._progress[key].update(
+                    state="cancelled" if stopped else "failed",
+                    phase="cancelled" if stopped else "failed",
+                    step="Cancelled by operator" if stopped else "Backup failed",
+                    updated_at=time.time(),
+                )
+            if stopped:
+                raise BackupCancelled("Cancelled by operator") from exc
+            raise
+
+    def _backup(self, uuid, target, mode, progress, metrics, check_cancel) -> BackupInfo:
         if mode not in ("incremental", "active_full"):
             raise ValueError("Backup mode must be incremental or active_full")
         vm = self._driver.get_vm(uuid)
         check_quota(target)
-        with self._locks[target.name], self._open(target) as store:
+        with self._repository_turn(target, check_cancel), self._open(target) as store:
+            progress("Inspecting previous restore point and CBT checkpoint", None)
+            metrics({"phase": "preparing"})
             from ..hypervisor.backup_cbt import CBTUnavailable
 
             repo = Repository(
@@ -77,13 +195,31 @@ class NodeBackup:
                 if hasattr(self._driver, "export_backup"):
                     try:
                         with self._driver.export_backup(uuid, parent) as (readers, capture):
+                            metrics({"backup_socket": capture.get("socket")})
                             return repo.backup_readers(
-                                vm, readers, spec_to_json(vm.spec), capture, parent, progress
+                                vm,
+                                readers,
+                                spec_to_json(vm.spec),
+                                capture,
+                                parent,
+                                progress,
+                                metrics=metrics,
                             )
                     except CBTUnavailable as exc:
                         reason = f"Full fallback: {exc}"
+                progress(reason + "; exporting a full point-in-time image", None)
+                metrics({"phase": "exporting", "mode": "full", "fallback_reason": reason})
                 with self._driver.export_disks(uuid) as images:
-                    return repo.backup(vm, images, spec_to_json(vm.spec), note=reason)
+                    progress("Export complete; reading full backup into repository", None)
+                    metrics({"phase": "writing"})
+                    return repo.backup(
+                        vm,
+                        images,
+                        spec_to_json(vm.spec),
+                        note=reason,
+                        progress=progress,
+                        metrics=metrics,
+                    )
 
     @protected
     def synthetic_full(self, target, backup_id, progress=None):
@@ -268,7 +404,24 @@ class NodeBackup:
             }
         with self._open(target) as store:
             if hasattr(store, "root"):
-                used = dir_bytes(store.root) if store.root.is_dir() else 0
+                key = str(store.root)
+                # Single-flight and cached accounting avoid repeated full NFS tree walks.
+                # A live backup must not compete with a capacity scanner.
+                with self._usage_lock:
+                    with self._progress_lock:
+                        busy = any(
+                            v["state"] == "running" and v["target"] == target.name
+                            for v in self._progress.values()
+                        )
+                    cached = self._usage_cache.get(key)
+                    if not busy and (not cached or time.monotonic() - cached[0] >= 60):
+                        cached = (
+                            time.monotonic(),
+                            dir_bytes(store.root) if store.root.is_dir() else 0,
+                        )
+                        self._usage_cache[key] = cached
+                    used = cached[1] if cached else None
+                    age = max(0, time.monotonic() - cached[0]) if cached else None
                 existing = store.root
                 while not existing.exists():
                     existing = existing.parent
@@ -276,11 +429,18 @@ class NodeBackup:
                 physical_free = disk_usage.free
                 free = physical_free
                 if target.quota_gb:
-                    free = min(free, max(0, target.quota_gb * 1024**3 - used))
+                    free = (
+                        min(free, max(0, target.quota_gb * 1024**3 - used))
+                        if used is not None
+                        else None
+                    )
                 return {
                     "used_bytes": used,
                     "free_bytes": free,
                     "basis": "filesystem",
+                    "used_bytes_age_seconds": age,
+                    "used_bytes_cached": bool(cached),
+                    "accounting_deferred": busy,
                     "capacity_scope": str(existing.stat().st_dev),
                     "filesystem_free_bytes": physical_free,
                     "filesystem_total_bytes": disk_usage.total,

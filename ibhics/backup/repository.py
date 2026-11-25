@@ -133,7 +133,9 @@ class Repository:
         return self.manifest(max(matches, key=lambda b: (b.created, b.id)).id) if matches else None
 
     @_exclusive
-    def backup_readers(self, vm, readers, spec_json, capture, parent=None, progress=None):
+    def backup_readers(
+        self, vm, readers, spec_json, capture, parent=None, progress=None, metrics=None
+    ):
         """Publish a complete block map; only dirty chunks are read from an incremental source."""
         incremental = bool(capture.get("incremental"))
         if incremental and (
@@ -145,6 +147,34 @@ class Repository:
         backup_id = self._new_id(vm.spec.name)
         stored = read_bytes = new_data = nonzero = 0
         disks = []
+        total_bytes = sum(reader.size for reader in readers)
+        scanned_bytes = 0
+
+        def update(phase, step, disk=None):
+            percent = (
+                min(99.9, 100 * scanned_bytes / total_bytes)
+                if total_bytes and not incremental
+                else None
+            )
+            if progress:
+                progress(step, percent)
+            if metrics:
+                metrics(
+                    {
+                        "phase": phase,
+                        "step": step,
+                        "percent": percent,
+                        "mode": "incremental" if incremental else "full",
+                        "read_bytes": read_bytes,
+                        "scanned_bytes": scanned_bytes,
+                        "stored_bytes": stored,
+                        "total_bytes": total_bytes,
+                        "disk": disk,
+                        "disks": len(readers),
+                    }
+                )
+
+        update("reading", "Reading point-in-time backup data")
         with self.reading():
             for index, reader in enumerate(readers):
                 count = (reader.size + self.chunk_size - 1) // self.chunk_size
@@ -170,23 +200,34 @@ class Repository:
                     if offset < 0 or offset >= count:
                         raise ValueError("Changed block lies outside disk")
                     length = min(self.chunk_size, reader.size - offset * self.chunk_size)
+                    update("reading", f"Reading disk {index + 1}/{len(readers)}", index + 1)
                     block = reader.read(offset * self.chunk_size, length)
                     if len(block) != length:
                         raise RuntimeError(
                             "Short read from backup source; restore point not published"
                         )
                     read_bytes += len(block)
-                    if block.strip(b"\0"):
+                    has_data = bool(block.strip(b"\0"))
+                    if has_data:
                         nonzero += len(block)
-                    digest = hashlib.sha256(block).hexdigest() if block.strip(b"\0") else None
+                    digest = hashlib.sha256(block).hexdigest() if has_data else None
                     if digest and not self.store.exists(_chunk_key(digest)):
+                        update(
+                            "writing",
+                            f"Compressing and writing disk {index + 1}/{len(readers)}",
+                            index + 1,
+                        )
                         data = compress(block, self.compression)
                         new_data += len(block)
                         self.store.put(_chunk_key(digest), data)
                         stored += len(data)
                     chunks[offset] = digest
-                    if progress:
-                        progress(f"Reading disk {index + 1}/{len(readers)}", None)
+                    scanned_bytes = sum(r.size for r in readers[:index]) + min(
+                        reader.size, (offset + 1) * self.chunk_size
+                    )
+                    update("reading", f"Reading disk {index + 1}/{len(readers)}", index + 1)
+                scanned_bytes = sum(r.size for r in readers[: index + 1])
+                update("reading", f"Scanned disk {index + 1}/{len(readers)}", index + 1)
                 disks.append({"size_bytes": reader.size, "chunks": chunks})
             manifest = {
                 "format": 1,
@@ -209,6 +250,7 @@ class Repository:
                 dedup_saved_bytes=max(0, nonzero - new_data),
                 compression=codec(self.compression),
             )
+            update("committing", "Saving restore point manifest; confirming durable backup")
             self._publish(manifest)
         return _info(manifest)
 
@@ -277,7 +319,15 @@ class Repository:
     # Writing
 
     @_exclusive
-    def backup(self, vm: VMInfo, disk_paths: list[Path], spec_json: dict, note="") -> BackupInfo:
+    def backup(
+        self,
+        vm: VMInfo,
+        disk_paths: list[Path],
+        spec_json: dict,
+        note="",
+        progress=None,
+        metrics=None,
+    ) -> BackupInfo:
         if not NAME_RE.match(vm.spec.name):
             raise ValueError(f"cannot back up VM with name {vm.spec.name!r}")
         backup_id = self._new_id(vm.spec.name)
@@ -286,8 +336,36 @@ class Repository:
         try:
             disks, stored = [], 0
             self._new_data = self._nonzero = 0
+            total = sum(Path(path).stat().st_size for path in disk_paths)
+            completed = 0
+
+            def update(read, added, phase="reading"):
+                current = completed + read
+                percent = min(99.9, current / total * 100) if total else None
+                step = (
+                    "Saving restore point manifest"
+                    if phase == "committing"
+                    else "Reading full backup into repository"
+                )
+                if progress:
+                    progress(step, percent)
+                if metrics:
+                    metrics(
+                        {
+                            "phase": phase,
+                            "step": step,
+                            "percent": percent,
+                            "mode": "full",
+                            "read_bytes": current,
+                            "scanned_bytes": current,
+                            "stored_bytes": stored + added,
+                            "total_bytes": total,
+                        }
+                    )
+
             for path in disk_paths:
-                chunks, size, added = self._write_disk(Path(path))
+                chunks, size, added = self._write_disk(Path(path), update)
+                completed += size
                 disks.append({"size_bytes": size, "chunks": chunks})
                 stored += added
             manifest = {
@@ -309,6 +387,7 @@ class Repository:
             }
             # The manifest goes last: a backup that dies halfway leaves only unreferenced
             # chunks, which the next garbage collection removes.
+            update(0, 0, "committing")
             self._publish(manifest)
         finally:
             self.store.delete(lock_key)
@@ -372,11 +451,13 @@ class Repository:
             )
             manifest["lock_status"] = status
 
-    def _write_disk(self, path: Path) -> tuple[list[str | None], int, int]:
+    def _write_disk(self, path: Path, progress=None) -> tuple[list[str | None], int, int]:
         chunks: list[str | None] = []
         size = added = 0
         with open(path, "rb") as f:
             while block := f.read(self.chunk_size):
+                if progress:
+                    progress(size, added)
                 size += len(block)
                 if not block.strip(b"\0"):
                     chunks.append(None)
@@ -387,9 +468,13 @@ class Repository:
                 if not self.store.exists(key):
                     data = compress(block, self.compression)
                     self._new_data += len(block)
+                    if progress:
+                        progress(size, added, "writing")
                     self.store.put(key, data)
                     added += len(data)
                 chunks.append(digest)
+        if progress:
+            progress(size, added)
         return chunks, size, added
 
     def _new_id(self, vm_name: str) -> str:

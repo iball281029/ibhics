@@ -2318,6 +2318,12 @@ def create_app(
     def list_jobs() -> list[JobOut]:
         return [JobOut(**job.__dict__) for job in backups.jobs()]
 
+    @api.post(
+        "/backup/jobs/{job_id}/cancel", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED
+    )
+    def cancel_backup_job(job_id: str) -> JobOut:
+        return JobOut(**backups.cancel(job_id).__dict__)
+
     @api.get("/backup/jobs/{job_id}/report")
     def export_backup_report(job_id: str, format: str = "json"):
         from ..backup.report import backup_report
