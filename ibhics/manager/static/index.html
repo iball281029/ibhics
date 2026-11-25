@@ -1609,6 +1609,20 @@
   </form>
 </dialog>
 
+<dialog id="ct-migrate-dialog">
+  <form method="dialog" id="ct-migrate-form">
+    <header><h3>Migrate container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p id="ct-migrate-summary"></p>
+      <label>Destination node <select name="node" required></select></label>
+      <label class="check"><input type="checkbox" name="allow_stop"> Allow a temporary stop for migration</label>
+      <p class="hint">Shared storage only: both nodes must see this same pool and container folder. The filesystem, name, MAC and snapshots stay intact. A running container stops and starts on the destination; an already stopped container stays stopped. Memory and live connections are not transferred.</p>
+      <p class="hint">Migration is fenced against duplicate starts. Use Recover migration if a handover is interrupted.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Migrate</button></footer>
+  </form>
+</dialog>
+
 <dialog id="ct-backup-dialog">
   <form method="dialog" id="ct-backup-form">
     <header><h3>Back up container</h3><button value="cancel" formnovalidate>×</button></header>

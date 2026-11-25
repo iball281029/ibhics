@@ -6311,13 +6311,29 @@ function renderContainers() {
     <td class="actions" data-ct="${esc(c.name)}">
       ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
       ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
-      ${canOperate() ? `<button class="small" data-act="backup">Backup</button><button class="small" data-act="schedule">Schedule</button>` : ""}
+      ${canOperate() ? `<button class="small" data-act="backup">Backup</button><button class="small" data-act="schedule">Schedule</button><button class="small" data-act="migrate">Migrate</button>${c.migration_pending ? `<button class="small" data-act="migration-recover">Recover migration</button>` : ""}` : ""}
       <button class="small" data-act="edit">Settings</button>
       ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
       ${on ? "" : `<button class="small danger" data-act="delete">Delete</button>`}
     </td></tr>`;
   }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
 }
+async function openCtMigrate(c) {
+  state.cluster = await api("/cluster");
+  const nodes = (state.cluster.members || []).filter(n => n.role === "compute" && n.name !== c.node && n.healthy && !n.maintenance);
+  if (!nodes.length) throw new Error("No healthy destination node is available.");
+  const form = $("#ct-migrate-form");
+  form.elements.node.innerHTML = nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("");
+  openDialog("ct-migrate-dialog", {name:c.name});
+  form.elements.allow_stop.required = c.state === "running";
+  $("#ct-migrate-summary").textContent = `${c.name} · ${c.node} · ${c.state}`;
+}
+handlers["ct-migrate-dialog"] = async (f, ctx) => {
+  await post(`/containers/${enc(ctx.name)}/migrate`, {node:f.get("node"), allow_stop:f.get("allow_stop") === "on"});
+  toast("Container migrated. Name, MAC, data and snapshots preserved.");
+  await refresh("containers");
+  await load("jobs"); renderTasks();
+};
 async function openCtSchedule(name, policy = null) {
   await load("containers", "targets", "policies");
   const form = $("#ct-schedule-form");
@@ -6423,6 +6439,12 @@ $("#ct-rows").addEventListener("click", async (e) => {
   const name = b.closest("[data-ct]").dataset.ct, act = b.dataset.act;
   const c = state.containers.find((x) => x.name === name);
   try {
+    if (act === "migrate") { await openCtMigrate(c); return; }
+    if (act === "migration-recover") {
+      if (!confirm(`Recover interrupted migration for ${name}? The current owner resumes it; the other node remains fenced.`)) return;
+      await post(`/containers/${enc(name)}/migration-recover`, {});
+      await refresh("containers"); return;
+    }
     if (act === "schedule") {
       await openCtSchedule(c.name);
       return;

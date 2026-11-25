@@ -95,6 +95,11 @@ class ContainerRestoreIn(BaseModel):
     source_node: str | None = None
 
 
+class ContainerMigrateIn(BaseModel):
+    node: str = Field(min_length=1, max_length=253)
+    allow_stop: bool = False
+
+
 def install(api, cluster, backups) -> None:
     def everywhere(strict=False):
         found = {}
@@ -172,6 +177,55 @@ def install(api, cluster, backups) -> None:
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
         return out(*find(name, claim=False))
+
+    @api.post("/containers/{name}/migrate")
+    def ct_migrate(name: str, body: ContainerMigrateIn) -> dict:
+        cluster.require_quorum()
+        source, ct = find(name)
+        destination = cluster.member(body.node)
+        if destination.name == source.name:
+            raise InvalidState("Select a different destination node")
+        if (
+            destination.role != "compute"
+            or destination.maintenance
+            or not cluster.is_healthy(destination)
+        ):
+            raise InvalidState("Destination must be a healthy compute node outside maintenance")
+        if ct.state == "running" and not body.allow_stop:
+            raise InvalidState("Allow a temporary stop before migrating a running container")
+
+        def migrate():
+            receipt = None
+            committing = False
+            try:
+                receipt = cts(source).migration(
+                    "prepare", name, {"node": destination.name, "allow_stop": body.allow_stop}
+                )
+                cts(destination).migration("probe", name, receipt)
+                committing = True
+                cts(source).migration("commit", name, receipt)
+                result = cts(destination).migration("finish", name, receipt)
+                return {**result, "node": destination.name}
+            except Exception:
+                # After an uncertain commit, leave the durable fence in place.
+                # Restarting a source after a lost RPC could duplicate a running guest.
+                if receipt and not committing:
+                    cts(source).migration("abort", name, receipt)
+                raise
+
+        return task("ct-migrate", f"{source.name} → {destination.name}", name, source, migrate)
+
+    @api.post("/containers/{name}/migration-recover")
+    def ct_migration_recover(name: str) -> dict:
+        cluster.require_quorum()
+        member, ct = find(name, claim=False)
+        return task(
+            "ct-migrate-recover",
+            member.name,
+            name,
+            member,
+            lambda: {**cts(member).migration("recover", name, {}), "node": member.name},
+        )
 
     @api.post("/containers/{name}/backup", response_model=JobOut, status_code=202)
     def ct_backup(name: str, body: ContainerBackupIn) -> JobOut:

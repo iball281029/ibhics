@@ -277,6 +277,7 @@ class ContainerInfo:
     snapshots: list[str] = field(default_factory=list)
     path: str = ""  # its folder on the node: <pool>/containers/<name>
     owner_node: str = ""
+    migration_pending: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -289,6 +290,7 @@ class ContainerInfo:
             "snapshots": self.snapshots,
             "path": self.path,
             "owner_node": self.owner_node,
+            "migration_pending": self.migration_pending,
             "kind": "container",
         }
 
@@ -566,7 +568,12 @@ class LxcContainers:
         if not isinstance(data, dict) or not isinstance(data.get("node"), str) or not data["node"]:
             raise InvalidState("Invalid container ownership metadata")
         if hint and hint != data["node"]:
-            raise InvalidState("Conflicting container ownership metadata")
+            try:
+                migration = json.loads((home / ".ibhics-migration.json").read_text())
+            except (OSError, ValueError):
+                migration = {}
+            if migration.get("source") != data["node"] or migration.get("destination") != hint:
+                raise InvalidState("Conflicting container ownership metadata")
         return data["node"]
 
     def _claim_owner(self, home: Path) -> None:
@@ -619,6 +626,11 @@ class LxcContainers:
                 yield
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def migration(self, action, name, body):
+        from .container_migration import operate
+
+        return operate(self, action, name, body)
 
     def claim_owner(self, name: str) -> ContainerInfo:
         base, spec = self._find(name, require_owner=False)
@@ -717,6 +729,8 @@ class LxcContainers:
                 owner = self._owner(meta.parent)
                 if owner and owner != self.node_name:
                     continue
+                if require_owner and (meta.parent / ".ibhics-migration.json").exists():
+                    raise InvalidState("Container migration in progress; normal actions are fenced")
                 if require_owner and not owner:
                     raise InvalidState("Container has no registered owner; refresh through Manager")
                 spec = ContainerSpec(**json.loads(meta.read_text()))
@@ -771,6 +785,7 @@ class LxcContainers:
             info.memory_used_mb = self._cgroup_memory(spec.name) // 2**20
         info.path = str(base / spec.name)
         info.owner_node = self._owner(base / spec.name)
+        info.migration_pending = (base / spec.name / ".ibhics-migration.json").exists()
         if (not info.owner_node and info.state == "running") or (
             info.owner_node == self.node_name and not spec.owner_node
         ):
@@ -1310,6 +1325,9 @@ class RemoteContainers:
     def get(self, name: str) -> ContainerInfo:
         return info_from_dict(self._call("GET", f"/{name}"))
 
+    def migration(self, action, name, body):
+        return self._call("POST", f"/{name}/migration/{action}", json=body, timeout=180)
+
     def claim_owner(self, name: str) -> ContainerInfo:
         return info_from_dict(self._call("POST", f"/{name}/owner"))
 
@@ -1387,6 +1405,10 @@ def install_agent_routes(api, get_containers) -> None:
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
         return get_containers().get(name).to_dict()
+
+    @api.post("/containers/{name}/migration/{action}")
+    def ct_migration(name: str, action: str, body: dict) -> dict:
+        return get_containers().migration(action, name, body)
 
     @api.post("/containers/{name}/owner")
     def ct_claim_owner(name: str) -> dict:
