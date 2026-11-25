@@ -14,6 +14,8 @@ const AI_TEXT = Object.freeze({
   },
   usage: (used, limit) => ` วันนี้ใช้ไป ${used} จาก ${limit} คำถาม`,
   errors: {
+    "Daily AI allowance reached. Contact Support.": "วันนี้ใช้สิทธิ์ AI ครบแล้วค่ะ กรุณารอให้โควตารีเซ็ตหรือติดต่อทีม Support นะคะ",
+    "A preview question is already running. Please wait.": "น้อง ib กำลังตอบคำถามอื่นอยู่ค่ะ รอสักครู่แล้วลองใหม่นะคะ",
     "AI allowance reached. Contact Support.": "วันนี้ใช้สิทธิ์ AI ครบแล้วค่ะ กรุณาติดต่อทีม Support หากต้องการเพิ่มสิทธิ์",
     "AI access was declined. Contact Support to check your subscription.": "ยังใช้บริการ AI ไม่ได้ค่ะ กรุณาติดต่อทีม Support เพื่อตรวจสอบสิทธิ์",
     "AI service is unavailable. Check connectivity or contact Support.": "ยังติดต่อบริการ AI ไม่ได้ค่ะ ลองตรวจสอบอินเทอร์เน็ตหรือติดต่อทีม Support นะคะ",

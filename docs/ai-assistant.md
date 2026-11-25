@@ -56,3 +56,14 @@ The mascot keeps the original 3D-rendered plush image and uses CSS perspective, 
 ## Visual assets
 
 `ibhics/manager/static/ai-elephant.png` is the original transparent mascot generated with the built-in imagegen tool. Preview screenshots are in `deliverables/ai-elephant-floating-closed.png` and `deliverables/ai-elephant-floating-chat.png`. The local preview uses simulated infrastructure and visibly simulated replies. Prompt and asset metadata are in `docs/ai-mascot-design.json`.
+
+
+## Local Codex test adapter
+
+The operator requested testing with the already logged-in Codex account before provisioning Claude. `ibhics.ai.codex_preview.CodexLocalPreview` is an explicitly opt-in adapter for that local development preview. It is not selected by any production environment setting or installed as a company AI gateway.
+
+It invokes the supported `codex exec` interface using the operator's existing managed login. Authentication tokens are handled by Codex and are never read or copied by this adapter. Calls use an isolated temporary working directory, replacement assistant instructions, ephemeral sessions, read-only sandbox, no approvals, disabled shell/execution/apps/browser/computer/image/memory/subagent features and no inherited project configuration. Only the question, bounded conversation and explicitly opted-in summary are provided as context. Temporary prompt/reply files are removed after each call. Codex may still retain its own operational logs according to its configuration; this adapter does not promise removal of provider/CLI telemetry.
+
+The local test serializes requests, limits history to four turns, requests short replies, enforces a timeout with process-group cleanup and applies a persistent five-question daily allowance by default. Failed attempts count toward that allowance. It uses the same ChatGPT/Codex account allowance as the operator, not separate API credit. This path is for one operator's local testing; customer-facing service remains the independently enrolled, signed-Support-gated API gateway described above.
+
+One live question was tested through the browser: the assistant explained Backup versus Snapshot in Thai. This verifies the local Codex path only; Claude API and company hosting remain unprovisioned.

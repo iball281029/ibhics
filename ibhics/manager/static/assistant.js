@@ -44,6 +44,7 @@
     try {
       const s = await api("/assistant/status"); available = s.available;
       statusText.textContent = (copy.status[s.reason_code] || copy.errors[s.reason] || copy.status.ready) + (s.available && allowance ? copy.usage(allowance.used,allowance.limit) : ""); enable.checked = s.enabled;
+      if(s.preview_notice)statusText.textContent += " " + s.preview_notice;
       enable.closest("label").hidden = !isAdmin(); enable.disabled = busy || (!s.enabled && (!s.licensed || !s.configured));
       document.getElementById("ai-privacy").textContent = copy.privacy;
       input.disabled = !available || busy; send.disabled = !available || busy;

@@ -27,5 +27,16 @@
     "Provider API credentials/model and billing limits",
     "Per-installation enrollment",
     "Live provider acceptance test before enabling for customers"
-  ]
+  ],
+  "codex_local_preview": {
+    "live_verified": true,
+    "question": "Explain Backup versus Snapshot briefly in Thai",
+    "response": "Backup is a recovery copy; Snapshot records a point in time and depends on the original storage, so it is not a replacement for Backup.",
+    "browser_path": "http://127.0.0.1:8770/?preview=codex-local#home",
+    "daily_test_limit": 5,
+    "used_at_acceptance": 1,
+    "additional_unit_tests_passed": 3,
+    "tools": "shell/execution/apps/browser/computer/image/memory/subagent features disabled; read-only sandbox",
+    "scope": "Local preview only; uses existing operator login and account allowance"
+  }
 }
