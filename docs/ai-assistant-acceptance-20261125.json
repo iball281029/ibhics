@@ -1,7 +1,7 @@
 {
   "date": "2026-11-25",
   "phase": "local prototype, provider not provisioned",
-  "ai_tests_passed": 9,
+  "ai_tests_passed": 10,
   "auth_and_settings_regression_passed": 88,
   "browser_checks": {
     "desktop_1600x1050": "panel and mascot inside viewport",
@@ -13,7 +13,11 @@
     "animation": "3D-rendered plush image with CSS perspective/bobbing/shadow",
     "context_preview": "HTTP 200",
     "light_theme": "uses light palette",
-    "reduced_motion": "animations disabled by prefers-reduced-motion media rule"
+    "reduced_motion": "animations disabled by prefers-reduced-motion media rule",
+    "thai_ui": "Panel, buttons, status, errors and name badge localized",
+    "thai_chat": "Thai question and reply roundtrip via gateway test and simulated website",
+    "display_name": "\u0e19\u0e49\u0e2d\u0e07 ib",
+    "thai_mobile_390x844": "panel and mascot inside viewport"
   },
   "integration": "MockTransport: Manager -> enrolled/licensed gateway -> fake provider; real provider HTTP format separately tested",
   "live_claude_verified": false,

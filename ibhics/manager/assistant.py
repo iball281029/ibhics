@@ -94,6 +94,15 @@ class Assistant:
                 "enabled": self.enabled,
                 "available": licensed and configured and self.enabled,
                 "reason": reason,
+                "reason_code": (
+                    "no_support"
+                    if not licensed
+                    else "not_provisioned"
+                    if not configured
+                    else "disabled"
+                    if not self.enabled
+                    else "ready"
+                ),
                 "support_until": self.settings.subscription()["support"]["until"],
                 "context_notice": (
                     "Messages use an external AI service. Optional summaries include "

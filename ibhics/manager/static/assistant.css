@@ -14,3 +14,5 @@
 @keyframes ai-plush-shadow{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:.25;transform:scale(.78)}}
 @keyframes ai-plush-hello{0%,100%{transform:translateY(-5px) rotateZ(-7deg) rotateY(-9deg)}50%{transform:translateY(-11px) rotateZ(7deg) rotateY(9deg)}}
 @media(prefers-reduced-motion:reduce){.ai-launcher img,.ai-launcher::after,.ai-launcher:hover img,.ai-launcher[aria-expanded="true"] img{animation:none;will-change:auto}}
+
+.ai-launcher img{height:calc(100% - 20px)}.ai-launcher .ai-name{top:auto;bottom:0;right:50%;transform:translateX(50%);white-space:nowrap;font:600 12px system-ui,sans-serif;padding:3px 10px;color:var(--text,#e3f5ff);background:var(--panel,#12263a);border:1px solid #8adfe077;box-shadow:0 3px 12px #0002;pointer-events:none}.ai-launcher::after{bottom:20px}.ai-options{flex-wrap:wrap;row-gap:6px}

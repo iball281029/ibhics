@@ -227,3 +227,21 @@ def test_enrollment_secret_is_private_and_not_stored_in_gateway_profiles(tmp_pat
     with pytest.raises(ValueError, match="already enrolled"):
         enroll(profiles, token_file, "cluster-test", 3, 50)
     assert token_file.read_text() == token
+
+
+def test_thai_question_and_reply_roundtrip(env, tmp_path):
+    client, _, _, provider = link(env, tmp_path)
+    assert client.put("/api/v1/assistant/config", json={"enabled": True}).status_code == 200
+    question = "น้อง ib ช่วยแนะนำการสำรองข้อมูลคอนเทนเนอร์หน่อยค่ะ"
+    reply = "ได้เลยค่ะ เปิดหน้า Containers แล้วเลือก Backup ข้างคอนเทนเนอร์นะคะ"
+    received = []
+
+    def answer(body):
+        received.append(body.message)
+        return reply
+
+    provider.answer = answer
+    response = client.post("/api/v1/assistant/chat", json={"message": question})
+    assert response.status_code == 200
+    assert received == [question]
+    assert response.json()["reply"] == reply

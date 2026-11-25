@@ -1,6 +1,8 @@
-# Nong Chang: Support AI assistant
+# Nong ib: Support AI assistant
 
 ## Delivered first version
+
+The assistant is named Nong ib. Its panel, launcher name badge, greeting, suggested questions, status and error messages use Thai. Thai is the default reply language; an explicit request for another language is respected. Actual infrastructure menu labels stay accurate in replies.
 
 The console includes a floating elephant launcher and chat panel (click the doll to open; click again to collapse), also reachable from Settings → Support → Open AI Assistant. Administrators enable the assistant inside the panel. All signed-in roles may ask documentation questions. Optional context is off by default and can be previewed before sending. Context uses the user's existing permissions: VM counts, node health and recent backup-job status are allowlisted; credentials, full configuration, raw logs and disk contents are not automatically collected.
 
