@@ -222,6 +222,7 @@ class NodeImport:
                 raise
         finally:
             # The source VM is untouched, so a failed resize can simply be retried.
+            V2VConverter.cleanup_workspace(work)
             shutil.rmtree(work, ignore_errors=True)
         return created
 

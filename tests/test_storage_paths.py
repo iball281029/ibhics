@@ -168,3 +168,58 @@ def test_replica_full_storage_preserves_previous_generation(tmp_path, monkeypatc
     assert replica.current() == before
     assert original.read_bytes() == b"original"
     assert list((tmp_path / "disks").iterdir()) == [original]
+
+
+def test_long_guestfs_workspace_uses_short_socket_path_and_cleans_temp(monkeypatch):
+    import socket
+    import tempfile
+
+    from ibhics.importer.convert import V2VConverter
+
+    with tempfile.TemporaryDirectory(prefix="ibgt-", dir=Path("/tmp").resolve()) as directory:
+        storage = Path(directory)
+        workspace = storage / ("nested-" + "x" * 100) / "conversion"
+        workspace.mkdir(parents=True)
+        monkeypatch.setattr(V2VConverter, "_guestfs_tmp_root", staticmethod(lambda _: storage))
+        env = V2VConverter._guestfs_env(workspace)
+        temp = Path(env["TMPDIR"])
+        assert temp.parent == storage
+        assert len(str(temp).encode()) <= 65
+        assert env["LIBGUESTFS_TMPDIR"] == str(temp)
+        assert Path(env["LIBGUESTFS_CACHEDIR"]) == workspace / ".libguestfs-cache"
+        socket_dir = temp / "v2v.123456"
+        socket_dir.mkdir()
+        with socket.socket(socket.AF_UNIX) as listener:
+            listener.bind(str(socket_dir / "in0"))
+        V2VConverter.cleanup_workspace(workspace)
+        assert not temp.exists()
+        assert workspace.exists()
+
+
+def test_failed_migration_cleans_short_guestfs_temp(monkeypatch):
+    import tempfile
+
+    from ibhics.hypervisor.fake import FakeDriver
+    from ibhics.importer import Source, SourceType, SourceVM
+    from ibhics.importer.convert import ConversionFailed, V2VConverter
+    from ibhics.importer.node import NodeImport
+
+    with tempfile.TemporaryDirectory(prefix="ibgt-", dir=Path("/tmp").resolve()) as directory:
+        storage = Path(directory)
+        scratch = storage / ("workspace-" + "x" * 80)
+        untouched = storage / "unrelated"
+        untouched.write_text("keep")
+        monkeypatch.setattr(V2VConverter, "_guestfs_tmp_root", staticmethod(lambda _: storage))
+        observed = []
+
+        class FailingConverter:
+            def convert(self, source, vm, name, work, *args, **kwargs):
+                observed.append(Path(V2VConverter._guestfs_env(work)["TMPDIR"]))
+                raise ConversionFailed("fixture failure")
+
+        importer = NodeImport(FakeDriver(), FailingConverter(), scratch_dir=str(scratch))
+        with pytest.raises(ConversionFailed, match="fixture failure"):
+            importer.run(Source("fixture", SourceType.DISK), SourceVM("disk", "fixture"), "test")
+        assert observed and not observed[0].exists()
+        assert list(scratch.iterdir()) == []
+        assert untouched.read_text() == "keep"

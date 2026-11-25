@@ -1,0 +1,39 @@
+{
+  "name": "RootStorageAccept-e08f6467",
+  "uuid": "780179f5-c182-409d-841d-6b357e5ec173",
+  "logical_gib": 300,
+  "input_independent": true,
+  "root_free_before": 11930640384,
+  "root_free_min_during_conversion": 11930628096,
+  "root_free_after_cleanup": 11930624000,
+  "vm_removed": true,
+  "input_removed": true,
+  "disk_removed": true,
+  "workspace_removed": true,
+  "short_temp_removed": true,
+  "boot_evidence": "AlmaLinux 8.8 appliance login, NIC count 0",
+  "console_sha256": "c86aeb1b0efb0e00566919559028b772034e843e730b55bdd2c8ae19546208cf",
+  "services_active": true,
+  "date": "2026-11-25",
+  "scope": "Migration acceptance only; no Test Failover or Cutover was executed",
+  "job_id": "1",
+  "job_created": "2026-11-25T06:46:28+07:00",
+  "job_finished": "2026-11-25T07:04:52+07:00",
+  "job_elapsed_seconds": 1104,
+  "root_change_after_cleanup_bytes": 16384,
+  "initial_acceptance_failure": "qemu-nbd UNIX socket path exceeded platform limit after moving TMPDIR to a deeply nested storage workspace",
+  "fix": "Guestfs keeps its cache in the workspace and uses a short per-workspace .gt-* temp directory on the same storage; both directories are cleaned after success/failure",
+  "tests": {
+    "conversion_and_storage_suite_passed": 72,
+    "portable_socket_regressions_passed": 2
+  },
+  "deployment": {
+    "103_backup": "/mnt/ibhics/virtualstorage/.ibhics-maintenance/guestfs-path/103/20261125-064501",
+    "104_backup": "/mnt/ibhics/virtualstorage/.ibhics-maintenance/guestfs-path/104/20261125-064513"
+  },
+  "backup_10": "PNetLab backup aborted for authorized maintenance; state cancelled and retry_at cleared; VM kept running",
+  "exclusions": [
+    "Test Failover - Zabbix",
+    "Cutover"
+  ]
+}

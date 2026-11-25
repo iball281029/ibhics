@@ -8,9 +8,9 @@
 |---|---|---|
 | Backup | งานตามเวลาเมื่อวันที่ 23 พฤศจิกายนสำเร็จ งาน #9 ของวันที่ 24 พฤศจิกายนถูกยกเลิกตามคำสั่งผู้ใช้และล้าง retry แล้ว VM ยังทำงานอยู่ | หาสาเหตุความช้า กู้จาก restore point จริงเทียบ checksum และทดสอบ NFS cleanup หลัง commit |
 | Sync Now | Deploy ตัวจับคู่ชื่อ Source บน .103/.104 แล้ว ทดสอบจริง Zabbix ผ่าน 2 รอบ: CBT ส่ง 16 MiB และรอบติดกันส่ง 0 bytes ใน 16.53 วินาที ไม่มี fallback ไป Full; API idle/error null | Cutover และการบูต generation หลัง Sync รอบใหม่นี้ยังไม่ทดสอบ |
-| Test Failover | ทดสอบจริง Zabbix ผ่าน 24 พ.ย. 2026 เวลา 16:40–16:42 หลังตั้งปลายทาง 300 GiB: VM บูตถึงหน้า login AlmaLinux 8.8 ไม่มี NIC; cleanup ลบ VM ดิสก์และ workspace ครบ โดย checksum manifest และตัวตนไฟล์ replica เดิมไม่เปลี่ยน | แก้ประวัติ Test Failover เป็น done แยกจาก Sync ที่ failed แล้วและ deploy ทั้งสองโหนด; Guest Agent ไม่เชื่อมต่อและยังไม่ตรวจบริการ Zabbix ผ่านเครือข่าย |
-| Cutover | มีแพตช์ให้ใช้ Source เดียวกับ Sync รอบสุดท้าย | ทดสอบบน VM ชุดทดสอบหลังแก้ Sync และขนาดดิสก์ |
-| พื้นที่ root | ลงแพตช์ .103/.104 แล้ว: scratch/cache/temp/resize อยู่ storage; Upload ใช้ /mnt/ibhics/virtualstorage/.ibhics-uploads ถาวร; กัน root ก่อน mkdir/stream และตรวจ file descriptor จริง รวม P2V; ตรวจ sparse 300 GiB กับ libguestfs จริงทั้งสองโหนดแล้ว root free ก่อน–หลังเท่ากัน และ cleanup ครบ | การตรวจย้ายระบบปฏิบัติการผ่านแอปจริงรอล็อกอิน; ไม่ได้ถอด mount ของ production เพื่อทดสอบระหว่าง VM ทำงาน ดูขอบเขตหลักฐานใน docs/root-storage-audit-20261124.json |
+| Test Failover — Zabbix | ผู้ใช้รับไปทดสอบเอง ตัดออกจากรายการงานค้างของเรา ตามคำสั่งล่าสุด | ไม่รันทดสอบต่อเอง; รอผู้ใช้แจ้งหากพบปัญหา |
+| Cutover | ผู้ใช้รับไปทดสอบเอง ตัดออกจากรายการงานค้างของเรา ตามคำสั่งล่าสุด | ไม่เริ่ม Cutover เอง; รอผู้ใช้แจ้งหากพบปัญหา |
+| พื้นที่ root | ปิดการตรวจรับ Migration จริง 300 GiB ผ่านแอป 25 พ.ย.: แก้ socket path ยาวโดยใช้ temp ชื่อสั้นบน storage, บูตถึง AlmaLinux login แบบไม่มี NIC และล้างชุดทดสอบครบ; root เปลี่ยนเพียง 16 KiB หลัง cleanup; แพตช์ลงทั้ง .103/.104 แล้ว | หลักฐานใน docs/migration-root-acceptance-20261125.json; Test Failover/Cutover ผู้ใช้รับไปทดสอบเอง ไม่อยู่ในงานค้างของเรา |
 | ความเร็ว Test Failover | แพตช์ sparse copy ลง .103/.104 แล้ว รอบจริง 24 พ.ย. เข้าขั้น virt-v2v ภายในประมาณครึ่งนาทีจากการตรวจ process; รวมแปลง raw และ qcow2 จนเปิด VM ประมาณ 19 นาที | คอขวดถัดไปคือการแปลงดิสก์สองช่วง; ต้องวัดก่อนปรับ ห้ามเรียกขั้นคัดลอกนี้ว่า incremental sync |
 | LINE | เพิ่ม config ฝั่ง server, token ที่ปิดบังใน API, ผู้รับ, การเลือก event และ endpoint ทดสอบสำหรับ admin เทสต์แจ้งเตือนผ่าน 30 รายการ | ตรวจรับ Deploy และทดสอบส่งจริงด้วย channel token และผู้รับที่กำหนด |
 | ธีมสว่าง | ปิดงานตามขอบเขตที่แจ้ง: ตรวจ 18 หน้า/34 dialog, ข้อความพื้นสีทึบ 1,473 จุดไม่พบ contrast ต่ำกว่าเกณฑ์ของ audit; ตรวจภาพส่วนที่แก้และยืนยันธีมมืดไม่เปลี่ยน ลง CSS ทั้ง .103/.104 แล้วและไฟล์ที่เว็บจริงส่งตรงกับชุดทดสอบ | ไม่มีงานค้างในชุดธีมนี้; หลักฐานและข้อจำกัดการตรวจอยู่ใน docs/light-theme-audit-20261124.json |
@@ -72,3 +72,14 @@ CI ของ 3cad3e8 ผ่านครบ 8 งาน รอบแก้ล่�
 - Replication validates destination storage and nested replica paths. KVM/Proxmox exports no longer default to `/var/tmp` on the source: set `IBHICS_REPLICATION_SOURCE_SCRATCH` on the execution agent to a mounted data-storage path that exists on the source host. Missing/invalid/offline/root-backed source storage refuses export before taking the snapshot.
 - Production payload tests: 119 passed, 1 skipped. Final dedicated storage tests: 11 passed. Live placement/cleanup checks and root-space measurements are recorded in `root-storage-audit-20261124.json`.
 - The live 300 GiB check used a sparse probe and real guestfs inspection, not a full OS migration. Authenticated UI acceptance is pending login; existing production VMs were not stopped or production mounts detached for fault injection.
+
+### Migration acceptance closed - 2026-11-25
+
+- User excluded Zabbix Test Failover and Cutover from our remaining work. No such operation was run in this acceptance round.
+- The first migration attempt exposed an overlong qemu-nbd UNIX socket path. Fixed by keeping guestfs cache in the conversion workspace and placing runtime temp in a short per-workspace `.gt-*` directory on the same data storage. Cleanup removes the short directory on successful and failed conversions.
+- Regression tests: conversion/storage suite 72 passed; portable real UNIX-socket binding and failed-conversion cleanup checks 2 passed. The patch was deployed on both nodes with backups on virtualstorage.
+- User authorized installation/restart while PNetLab backup #10 was running. Its QEMU backup was aborted, VM remained running, persisted job state set cancelled and retry_at cleared before restart.
+- A new independent sparse copy of the 300 GiB replica was imported through the authenticated Migration API as job 1, RootStorageAccept-e08f6467, on ibhics-node2. The copy held no ongoing replica lock and did not alter the original.
+- Job finished done/error null in 18m24s. VM started only after NIC removal; console reached AlmaLinux 8.8 appliance login. VM, destination disk, source test copy, workspace and short temp directory were removed afterward.
+- Root free before the run: 11,930,640,384 bytes; after cleanup: 11,930,624,000 bytes (16 KiB difference, no bulk image growth on root). Original two VMs remained running and services active.
+- Existing limitations about production mount fault injection and unconfigured KVM/Proxmox source scratch still apply. This closes the migration storage-placement acceptance, not every provider or guest-application test.

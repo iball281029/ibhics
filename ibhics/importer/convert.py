@@ -8,9 +8,11 @@ on the node (/usr/share/virtio-win).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -353,17 +355,61 @@ class V2VConverter:
         self.host_ssh = host_ssh or HostSSH(run)
 
     @staticmethod
+    def _guestfs_tmp_root(workspace: Path) -> Path | None:
+        workspace = workspace.resolve()
+        device = workspace.stat().st_dev
+        if device == Path("/").stat().st_dev:
+            return None  # Standalone/fake-driver workspaces retain their existing layout.
+        for parent in workspace.parents:
+            if parent.name in (".ibhics-scratch", ".ibhics-replicas", ".ibhics-p2v"):
+                return parent.parent
+        root = workspace
+        while root.parent != root and root.parent.stat().st_dev == device:
+            root = root.parent
+        return root
+
+    @staticmethod
+    def _guestfs_tmp_path(workspace: Path) -> Path:
+        cache = (workspace / ".libguestfs-cache").resolve()
+        if len(os.fsencode(str(cache))) <= 55:
+            return cache
+        root = V2VConverter._guestfs_tmp_root(workspace)
+        if root is None:
+            return cache
+        tag = hashlib.sha256(os.fsencode(str(cache))).hexdigest()[:12]
+        temp = root / f".gt-{tag}"
+        if len(os.fsencode(str(temp))) > 65:
+            raise ConversionFailed("Storage mount path is too long for guestfs UNIX sockets")
+        return temp
+
+    @staticmethod
+    def cleanup_workspace(workspace: Path) -> None:
+        """Remove only this workspace's short storage temp directory."""
+        try:
+            if not workspace.exists():
+                return
+            temp = V2VConverter._guestfs_tmp_path(workspace)
+        except (OSError, ConversionFailed):
+            return
+        if temp != (workspace / ".libguestfs-cache").resolve() and not temp.is_symlink():
+            shutil.rmtree(temp, ignore_errors=True)
+
+    @staticmethod
     def _guestfs_env(workspace: Path) -> dict[str, str]:
         cache = workspace / ".libguestfs-cache"
         if cache.is_symlink():
             raise ConversionFailed("Migration guestfs cache must not be a symlink")
         cache.mkdir(mode=0o700, exist_ok=True)
+        temp = V2VConverter._guestfs_tmp_path(workspace)
+        if temp.is_symlink():
+            raise ConversionFailed("Migration guestfs temp directory must not be a symlink")
+        temp.mkdir(mode=0o700, exist_ok=True)
         return {
             **os.environ,
             "LIBGUESTFS_BACKEND": "direct",
             "LIBGUESTFS_CACHEDIR": str(cache.resolve()),
-            "LIBGUESTFS_TMPDIR": str(cache.resolve()),
-            "TMPDIR": str(cache.resolve()),
+            "LIBGUESTFS_TMPDIR": str(temp),
+            "TMPDIR": str(temp),
         }
 
     def keep_nic_names(self, images: list[Path], macs: list[str]) -> str:

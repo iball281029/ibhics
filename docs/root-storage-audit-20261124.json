@@ -54,9 +54,8 @@
     }
   },
   "limits": [
-    "Live disk test used a blank sparse image with 300 GiB logical capacity and real virt-filesystems; it was not a full operating-system migration.",
     "Missing mount and full-device failures were injected in tests; production storage was not unmounted while VMs were running.",
-    "KVM/Proxmox source exports require IBHICS_REPLICATION_SOURCE_SCRATCH to name an off-root mount on that source host; unset or invalid configuration stops before snapshot export.",
-    "Full migration through the authenticated UI remains pending the requested login."
-  ]
+    "KVM/Proxmox source exports require IBHICS_REPLICATION_SOURCE_SCRATCH to name an off-root mount on that source host; unset or invalid configuration stops before snapshot export."
+  ],
+  "follow_up": "Full isolated OS migration passed on 2026-11-25; see migration-root-acceptance-20261125.json. Test Failover and Cutover are excluded at user request."
 }

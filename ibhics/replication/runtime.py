@@ -188,6 +188,7 @@ class LocalRuntime:
                 member.driver.start_vm(created.uuid)
             return created.uuid
         finally:
+            V2VConverter.cleanup_workspace(folder / "converted")
             shutil.rmtree(folder)
 
     def cleanup_test(self, job):
