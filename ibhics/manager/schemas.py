@@ -180,15 +180,6 @@ class NetworkIn(BaseModel):
         return NetworkSpec(name=self.name, vlan=self.vlan)
 
 
-class RouterIn(BaseModel):
-    gateway: str = Field(description="router address with prefix, e.g. 192.168.50.1/24")
-    nat: bool = True
-    dhcp: bool = True
-    dhcp_start: str = ""
-    dhcp_end: str = ""
-    dns: str = ""
-
-
 class FirewallRuleIn(BaseModel):
     name: str = Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")
     action: str = Field(default="deny", pattern="^(allow|deny)$")
@@ -210,9 +201,7 @@ class FirewallSimulateIn(BaseModel):
 
 class EdgeOut(BaseModel):
     pending_confirm_seconds: int | None = None
-    routers: list[dict]
     rules: list[dict]
-    router_node: str
 
 
 class TerminalIn(BaseModel):

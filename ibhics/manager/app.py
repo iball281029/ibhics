@@ -43,7 +43,7 @@ from ..hypervisor import (
     VMNotFound,
     VMState,
 )
-from ..hypervisor.edge import FirewallRule, RouterSpec
+from ..hypervisor.edge import FirewallRule
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
 from ..storage import VirtualStoragePlan, save_plan
@@ -112,7 +112,6 @@ from .schemas import (
     RecycledOut,
     RenameIn,
     RestoreRequest,
-    RouterIn,
     SnapshotIn,
     SnapshotOut,
     SourceIn,
@@ -1266,19 +1265,11 @@ def create_app(
             if any(n.name == name for n in member.driver.list_networks()):
                 member.driver.delete_network(name)
 
-    # Virtual router and distributed firewall (v0.7): one config for the cluster.
+    # Distributed firewall: one config for the cluster.
 
     @api.get("/edge", response_model=EdgeOut)
     def get_edge() -> EdgeOut:
         return EdgeOut(**edge.view())
-
-    @api.put("/edge/routers/{network}", response_model=EdgeOut)
-    def set_router(network: str, body: RouterIn) -> EdgeOut:
-        return EdgeOut(**edge.set_router(RouterSpec(network=network, **body.model_dump())))
-
-    @api.delete("/edge/routers/{network}", response_model=EdgeOut)
-    def remove_router(network: str) -> EdgeOut:
-        return EdgeOut(**edge.remove_router(network))
 
     @api.put("/edge/rules", response_model=EdgeOut)
     def set_rules(body: list[FirewallRuleIn], safe: bool = False) -> EdgeOut:
@@ -1293,10 +1284,6 @@ def create_app(
     @api.post("/edge/simulate")
     def simulate_flow(body: FirewallSimulateIn) -> dict:
         return edge.simulate(body.src, body.dst, body.proto, body.port)
-
-    @api.put("/edge/router-node", response_model=EdgeOut)
-    def set_router_node(body: dict) -> EdgeOut:
-        return EdgeOut(**edge.set_router_node(str(body.get("node", ""))))
 
     # Terminal (v0.8): diagnostic commands on a node, from an allowlist; admins only,
     # and each command is written to the audit log.

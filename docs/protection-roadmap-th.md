@@ -6,8 +6,9 @@
 - Container ซ้ำ: เปิดใช้สองโหนดและตรวจ API จริงเหลือ `ubututest` หนึ่งรายการ Running บน ibhics-node2; บล็อกการลบขณะทำงานและตรวจสถานะซ้ำหลังได้ task lock ชุดทดสอบผ่าน 23 รายการ
 - Backup: เพิ่ม Cancel, รายละเอียดความคืบหน้า และ full pull เมื่อ CBT เดิมเสียแล้ว; npm-vm #23 สำเร็จ แต่ PNetLab #24 ล้มเหลวด้วย JSONDecodeError และความเร็วงานใหญ่ยังไม่ผ่านเกณฑ์ จึงยังไม่ปิดงาน Backup
 - Active Manager ปิดงานแล้ว: ติดตั้งสองโหนด ทดสอบผ่าน 9 รายการ และตรวจหน้า Cluster หลังรีโหลดเต็มหน้า ชื่อบนการ์ด/API/leader.json ตรงกันเป็น ibhics-node2; หลักฐาน docs/active-manager-acceptance-20261125.json
-- งานค้าง: Backup ความเร็ว/JSONDecodeError, เอา Network Advanced ออก และหาสาเหตุ VM ค้างหลังเน็ตหลุดหรือ Migration ข้ามโหนด
-- Container Backup ยังไม่เริ่ม รอผู้ใช้สั่งโดยเฉพาะ; Test Failover — Zabbix และ Cutover ผู้ใช้รับไปทำเอง ไม่นับเป็นงานค้างของเรา
+- Network Advanced ถอดออกครบแล้วทั้งเมนู/API และการสั่งเปิด Gateway ผ่าน Agent; ตรวจระบบจริงเหลือ Topology 3D, Firewall และ Virtual switches เครือข่ายเดิมยังอยู่ 3 รายการ; ชุดทดสอบผ่าน 21 รายการ
+- งานค้าง: Backup ความเร็ว/JSONDecodeError และหาสาเหตุ VM ค้างหลังเน็ตหลุดหรือ Migration ข้ามโหนด
+- Container Backup ผู้ใช้รับเข้าคิวต่อจาก Network Advanced แล้ว; Test Failover — Zabbix และ Cutover ผู้ใช้รับไปทำเอง ไม่นับเป็นงานค้างของเรา
 
 รายละเอียดด้านล่างเป็นประวัติการตรวจรับก่อนอัปเดตนี้
 

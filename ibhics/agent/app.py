@@ -360,7 +360,9 @@ def create_agent_app(
 
         @api.put("/edge", status_code=status.HTTP_204_NO_CONTENT)
         def apply_edge(body: dict) -> None:
-            driver.apply_edge(body["config"], bool(body["router"]))
+            if body.get("router") or body["config"].get("routers"):
+                raise ValueError("Isolated network gateways are no longer supported")
+            driver.apply_edge(body["config"], False)
 
         @api.post("/terminal")
         def terminal(body: dict) -> dict:

@@ -379,7 +379,6 @@
           <button data-tab="net-topology" class="active">TOPOLOGY 3D</button>
           <button data-tab="net-fw">FIREWALL</button>
           <button data-tab="net-list">VIRTUAL SWITCHES</button>
-          <button data-tab="net-router">ADVANCED</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
           <div class="toolbar nw-view-tools">
@@ -428,13 +427,6 @@
           <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
           <tbody id="networks"></tbody>
         </table></div>
-        </div>
-        <div class="subpage" id="tab-net-router">
-          <div class="toolbar"><span class="hint">Optional isolated network gateway. Normal VLAN routing uses your external L3 switch over a trunk uplink. Gateway runs on <b id="edge-router-node">–</b>.</span><span class="spacer"></span><button class="primary operator-only" id="router-add">+ Isolated network gateway</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Network</th><th>Gateway</th><th>NAT to the LAN</th><th>DHCP</th><th></th></tr></thead>
-            <tbody id="routers"></tbody>
-          </table></div>
         </div>
         <div class="subpage" id="tab-net-fw">
           <div class="toolbar"><div><h3>Policy studio</h3><span class="hint">First match wins · Unmatched traffic is allowed</span></div><span class="spacer"></span><span id="nw-draft-count" role="status"></span><button id="nw-discard" class="operator-only">Discard draft</button><button id="nw-apply" class="primary operator-only">Apply changes</button></div>
@@ -1136,22 +1128,6 @@
       <label class="wide">Group <select name="group" class="md-group"></select></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Move</button></footer>
-  </form>
-</dialog>
-
-<dialog id="router-dialog">
-  <form method="dialog" id="router-form">
-    <header><h3>Isolated network gateway</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>Network <select name="network" id="router-net" required></select></label>
-      <label>Gateway address <input name="gateway" required placeholder="192.168.50.1/24" autocomplete="off"></label>
-      <label class="check wide"><input name="nat" type="checkbox" checked> NAT: VMs reach the LAN and the internet through this node</label>
-      <label class="check wide"><input name="dhcp" type="checkbox" checked data-switch-check> Hand out addresses (DHCP)</label>
-      <label>DHCP from (blank = automatic) <input name="dhcp_start" placeholder="192.168.50.100"></label>
-      <label>DHCP to <input name="dhcp_end" placeholder="192.168.50.200"></label>
-      <label>DNS server for VMs <input name="dns" placeholder="1.1.1.1"></label>
-    </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save router</button></footer>
   </form>
 </dialog>
 

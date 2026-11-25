@@ -5949,50 +5949,11 @@ setInterval(() => {
 }, 10000);
 
 
-// ---------- v0.7: virtual router, firewall, connectivity test ----------
+// ---------- Firewall and connectivity test ----------
 
 function renderEdge() {
-  const edge = state.edge || { routers: [], rules: [], router_node: "" };
-  const op = canOperate();
-  $("#edge-router-node").textContent = edge.router_node || "–";
-  $("#routers").innerHTML = edge.routers.length ? edge.routers.map((r) => `<tr>
-    <td><b>${esc(r.network)}</b></td><td class="mono">${esc(r.gateway)}</td>
-    <td>${r.nat ? "Yes" : "No (routed only)"}</td>
-    <td>${r.dhcp ? esc(r.dhcp_start && r.dhcp_end ? `${r.dhcp_start} – ${r.dhcp_end}` : "Automatic range") : "Off"}</td>
-    <td><div class="actions">${op ? `<button class="small" data-router-edit="${esc(r.network)}">Edit</button><button class="small danger" data-router-del="${esc(r.network)}">Remove</button>` : ""}</div></td>
-  </tr>`).join("") : empty(5, "No isolated gateways. VLAN routing is provided by your external L3 switch.");
   renderNetworkStudio();
 }
-
-
-function openRouter(network) {
-  const r = (state.edge?.routers || []).find((x) => x.network === network);
-  const vlans = state.networks.filter((n) => n.vlan);
-  if (!vlans.length) { toast("Add a virtual switch (VLAN) first: the LAN itself keeps its own gateway.", true); return; }
-  $("#router-net").innerHTML = vlans.map((n) => `<option value="${esc(n.name)}">${esc(n.name)} (VLAN ${n.vlan})</option>`).join("");
-  const { nat, dhcp, ...fields } = r || { network: vlans[0].name };
-  openDialog("router-dialog", { edit: Boolean(r) }, fields);
-  const f = $("#router-form");
-  f.elements.network.disabled = Boolean(r);
-  f.elements.nat.checked = r ? r.nat : true;
-  f.elements.dhcp.checked = r ? r.dhcp : true;
-}
-$("#router-add").addEventListener("click", () => openRouter(null));
-handlers["router-dialog"] = async (f) => {
-  const el = $("#router-form").elements, net = el.network.value;
-  const body = { gateway: f.get("gateway").trim(), nat: el.nat.checked, dhcp: el.dhcp.checked,
-    dhcp_start: (f.get("dhcp_start") || "").trim(), dhcp_end: (f.get("dhcp_end") || "").trim(), dns: (f.get("dns") || "").trim() };
-  state.edge = await api(`/edge/routers/${enc(net)}`, { method: "PUT", body: JSON.stringify(body) });
-  toast(`Router for ${net} saved: gateway ${body.gateway}`);
-  renderEdge();
-};
-$("#routers").addEventListener("click", async (e) => {
-  const ed = e.target.closest("[data-router-edit]"), rm = e.target.closest("[data-router-del]");
-  if (ed) openRouter(ed.dataset.routerEdit);
-  if (rm && confirm(`Remove the router of ${rm.dataset.routerDel}? Its VMs lose their gateway and DHCP.`)) {
-    try { state.edge = await api(`/edge/routers/${enc(rm.dataset.routerDel)}`, { method: "DELETE" }); renderEdge(); } catch (err) { fail(err); }
-  }
-});
 
 // Network studio: firewall drafts are independent from live state and topology drafts.
 const nw = { draft: null, base: null, busy: false, conflict: false, from: null, undo: null, applied: null, expired: false, deadline: 0, dragRule: null };

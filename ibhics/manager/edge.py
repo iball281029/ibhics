@@ -1,5 +1,4 @@
-"""The cluster's virtual router and distributed firewall: one config, kept by the manager
-and pushed to every compute node. The router runs on one node; firewall rules on all."""
+"""Distributed firewall policy, kept by the manager and pushed to every compute node."""
 
 from __future__ import annotations
 
@@ -12,7 +11,7 @@ from pathlib import Path
 
 from ..cluster import Cluster, NodeUnavailable
 from ..hypervisor import InvalidState
-from ..hypervisor.edge import OBJECT_PREFIXES, EdgeConfig, FirewallRule, RouterSpec
+from ..hypervisor.edge import OBJECT_PREFIXES, EdgeConfig, FirewallRule
 
 SAFE_SECONDS = 60  # a firewall change not confirmed in time is rolled back
 
@@ -27,22 +26,19 @@ class EdgeManager:
         self._clock = clock
         self._lock = threading.Lock()
         self.config = EdgeConfig()
-        self.router_node = ""
         self._pushed: dict | None = None  # the compiled config the nodes have
         self._pending: tuple[EdgeConfig, float] | None = None  # (previous config, deadline)
         self._timers = clock is time.monotonic  # tests drive the clock and call _expire
         if state_path and state_path.is_file():
             data = json.loads(state_path.read_text())
-            self.config = EdgeConfig.from_dict(data)
-            self.router_node = data.get("router_node", "")
+            self.config = EdgeConfig.from_dict({"rules": data.get("rules", [])})
 
     def view(self) -> dict:
         pending = None
         if self._pending:
             pending = max(0, round(self._pending[1] - self._clock()))
         return {
-            **self.config.to_dict(),
-            "router_node": self._router_node(),
+            "rules": self.config.to_dict()["rules"],
             "pending_confirm_seconds": pending,
         }
 
@@ -164,10 +160,8 @@ class EdgeManager:
                 }
         return {"allowed": True, "rule": "", "index": None, "src": a["label"], "dst": b["label"]}
 
-    def _router_node(self) -> str:
+    def _test_node(self) -> str:
         names = [m.name for m in self._cluster.compute_members()]
-        if self.router_node in names:
-            return self.router_node
         return names[0] if names else ""
 
     def _networks(self) -> set[str]:
@@ -178,25 +172,23 @@ class EdgeManager:
                 continue
         return {"default"}
 
-    def _change(
-        self, config: EdgeConfig, router_node: str | None = None, safe: bool = False
-    ) -> dict:
+    def _change(self, config: EdgeConfig, safe: bool = False) -> dict:
+        if config.routers:
+            raise InvalidState("Isolated network gateways are no longer supported")
         self._cluster.require_quorum()
         self._expire()
         self._compiled(config).validate(self._networks())
         with self._lock:
-            old, old_node = self.config, self.router_node
+            old = self.config
             if safe and self._pending is None:
                 self._pending = (copy.deepcopy(old), self._clock() + SAFE_SECONDS)
             elif not safe:
                 self._pending = None
             self.config = config
-            if router_node is not None:
-                self.router_node = router_node
             try:
                 self.push()
             except Exception:
-                self.config, self.router_node = old, old_node
+                self.config = old
                 self.push(strict=False)  # put the nodes back as they were
                 raise
             self._save()
@@ -204,13 +196,12 @@ class EdgeManager:
 
     def push(self, strict: bool = True) -> list[str]:
         """Send the config to every compute node; returns the nodes that missed it."""
-        router = self._router_node()
         missed = []
         compiled = self._compiled(self.config).to_dict()
         self._pushed = compiled
         for member in self._cluster.compute_members():
             try:
-                member.driver.apply_edge(compiled, member.name == router)
+                member.driver.apply_edge(compiled, False)
             except NodeUnavailable:
                 missed.append(member.name)  # it gets the config back when it restarts
             except Exception:
@@ -222,23 +213,13 @@ class EdgeManager:
     def _save(self) -> None:
         if self._path:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            data = {**self.config.to_dict(), "router_node": self.router_node}
+            data = self.config.to_dict()
             self._path.write_text(json.dumps(data, indent=2))
-
-    def set_router(self, router: RouterSpec) -> dict:
-        routers = [r for r in self.config.routers if r.network != router.network] + [router]
-        return self._change(EdgeConfig(routers=routers, rules=list(self.config.rules)))
-
-    def remove_router(self, network: str) -> dict:
-        routers = [r for r in self.config.routers if r.network != network]
-        if len(routers) == len(self.config.routers):
-            raise InvalidState(f"network {network!r} has no router")
-        return self._change(EdgeConfig(routers=routers, rules=list(self.config.rules)))
 
     def set_rules(self, rules: list[FirewallRule], safe: bool = False) -> dict:
         """With `safe`, the change rolls back by itself unless confirmed in SAFE_SECONDS:
         a rule that cuts the browser off from the manager undoes itself."""
-        view = self._change(EdgeConfig(routers=list(self.config.routers), rules=rules), safe=safe)
+        view = self._change(EdgeConfig(rules=rules), safe=safe)
         if safe and self._timers:
             timer = threading.Timer(SAFE_SECONDS + 1, self._expire)
             timer.daemon = True
@@ -263,13 +244,8 @@ class EdgeManager:
             self.push(strict=False)
             self._save()
 
-    def set_router_node(self, node: str) -> dict:
-        if node not in {m.name for m in self._cluster.compute_members()}:
-            raise InvalidState(f"{node!r} is not a compute node")
-        return self._change(EdgeConfig(list(self.config.routers), list(self.config.rules)), node)
-
     def test(self, kind: str, target: str, network: str = "", node: str = "") -> dict:
-        node = node or self._router_node()
+        node = node or self._test_node()
         member = self._cluster.member(node)
         ok, output = member.driver.net_test(kind, target, network)
         return {"ok": ok, "output": output, "node": node}
