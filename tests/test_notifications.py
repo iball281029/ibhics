@@ -33,7 +33,7 @@ def test_retry_exhaustion_and_recovery(api, monkeypatch):
     client, _, backups, clock = api
     new_vm(client)
     events = []
-    backups.notify = lambda *args: events.append(args)
+    backups.notify = lambda *args, **kwargs: events.append(args)
     member = backups._cluster.member("node1")
     original = member.backups.backup
     monkeypatch.setattr(
@@ -122,7 +122,7 @@ def test_rpo_uses_restore_points_and_custom_limit(api, monkeypatch):
     new_vm(client)
     backups.add_policy(Policy("p", "local", every_hours=1))
     events = []
-    backups.notify = lambda *args: events.append(args)
+    backups.notify = lambda *args, **kwargs: events.append(args)
     point = SimpleNamespace(
         vm_name="web", suspicious=False, created=(clock.now - timedelta(hours=3)).isoformat()
     )
@@ -588,7 +588,8 @@ def test_line_selection_secret_masking_and_persistence(tmp_path, monkeypatch):
     assert request.full_url == "https://api.line.me/v2/bot/message/push"
     assert request.get_header("Authorization") == "Bearer line-secret"
     assert json.loads(request.data)["to"] == "C" + "a" * 32
-    assert "Failed" in json.loads(request.data)["messages"][0]["text"]
+    message = json.loads(request.data)["messages"][0]
+    assert message["type"] == "flex" and "Failed" in message["altText"]
     alerts.configure({"line": {"token": "••• set"}})
     again = Notifications(path, executor=Immediate())
     assert again.data["line"]["token"] == "line-secret"

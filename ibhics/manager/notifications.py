@@ -17,6 +17,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .events import CATALOG, LEVELS, defaults, legacy_id
+from .notification_format import Notice, event_notice, size
 from .settings import private_json
 
 CATEGORIES = {
@@ -89,11 +90,18 @@ class Notifications:
             self.save()
         return self.view()
 
-    def event(self, event_id, message, key, *, level=None):
+    def event(self, event_id, message, key, *, level=None, details=None):
         spec = CATALOG[event_id]
-        return self.emit(level or spec["level"], spec["category"], message, key, event_id=event_id)
+        return self.emit(
+            level or spec["level"],
+            spec["category"],
+            message,
+            key,
+            event_id=event_id,
+            details=details,
+        )
 
-    def emit(self, level, category, message, key, *, email=True, event_id=None):
+    def emit(self, level, category, message, key, *, email=True, event_id=None, details=None):
         event_id = event_id or legacy_id(level, category, message)
         if level not in LEVELS or (category not in CATEGORIES and event_id not in CATALOG):
             raise ValueError("Invalid alert level or category")
@@ -141,8 +149,9 @@ class Notifications:
             self.save()
             config = copy.deepcopy(self.data["smtp"])
             line = copy.deepcopy(self.data["line"])
+        notice = event_notice(event, details)
         if line["enabled"] and event_id in line["events"]:
-            self.executor.submit(self.deliver_line, f"ibHiCS {level}: {category}\n{message}", line)
+            self.executor.submit(self.deliver_line, notice, line)
         if (
             email
             and config["host"]
@@ -152,7 +161,9 @@ class Notifications:
                 else level in config["levels"] and category in config["categories"]
             )
         ):
-            self.executor.submit(self.deliver, f"ibHiCS {level}: {category}", message, config)
+            self.executor.submit(
+                self.deliver, f"[ibHiCS] {level.upper()} · {notice.title}", notice, config
+            )
         return event
 
     def config(self):
@@ -270,7 +281,9 @@ class Notifications:
                 {
                     "to": config["recipient"],
                     "messages": [
-                        {
+                        text.flex()
+                        if isinstance(text, Notice)
+                        else {
                             "type": "text",
                             "text": text.encode("utf-16-le")[:10000].decode(
                                 "utf-16-le", errors="ignore"
@@ -308,7 +321,16 @@ class Notifications:
         return {"ok": False, "message": message}
 
     def test_line(self):
-        return self.executor.submit(self.deliver_line, "Your ibHiCS LINE alerts are working.")
+        return self.executor.submit(
+            self.deliver_line,
+            Notice(
+                "Test notification",
+                "info",
+                "Your ibHiCS LINE alerts are working.",
+                [("Sent at", self.clock().isoformat())],
+                "No action required. This is a test message.",
+            ),
+        )
 
     def _send(self, subject, text, config):
         if not config["host"] or not config["from"] or not config["recipients"]:
@@ -320,6 +342,8 @@ class Notifications:
             ", ".join(config["recipients"]),
         )
         message.set_content(text)
+        if isinstance(text, Notice):
+            message.add_alternative(text.html(), subtype="html")
         factory = smtplib.SMTP_SSL if config["security"] == "SSL" else smtplib.SMTP
         kwargs = {"timeout": 20}
         if config["security"] == "SSL":
@@ -356,7 +380,15 @@ class Notifications:
 
     def test(self):
         return self.executor.submit(
-            self.deliver, "ibHiCS test email", "Your ibHiCS email alerts are working."
+            self.deliver,
+            "ibHiCS test email",
+            Notice(
+                "Test notification",
+                "info",
+                "Your ibHiCS email alerts are working.",
+                [("Sent at", self.clock().isoformat())],
+                "No action required. This is a test message.",
+            ),
         )
 
     def signal(self, key, healthy, category, name):
@@ -431,7 +463,7 @@ class Notifications:
                 total = (
                     usage.get("quota_bytes") or usage.get("filesystem_total_bytes") or free + used
                 )
-                capacity.append(f"Repository {target.name}: {free} bytes free")
+                capacity.append(f"Repository {target.name}: {size(free)} free")
                 if total and free / total < 0.1:
                     self.emit(
                         "warning",
@@ -473,6 +505,14 @@ class Notifications:
         day = self.clock().date().isoformat()
         with self.lock:
             days = self.data["backup_days"]
+            finished = getattr(job, "finished", None)
+            if finished:
+                day = (
+                    datetime.fromisoformat(finished)
+                    .astimezone(self.clock().tzinfo)
+                    .date()
+                    .isoformat()
+                )
             days.setdefault(day, {})[job.id] = job.state
             for old in sorted(days)[:-3]:
                 del days[old]
@@ -499,14 +539,45 @@ class Notifications:
             and datetime.fromisoformat(j.finished).astimezone(now.tzinfo).date() == yesterday
         ]
         with self.lock:
-            states = list(self.data["backup_days"].get(yesterday.isoformat(), {}).values())
-        if not states:
-            states = [job.state for job in jobs]
+            recorded = dict(self.data["backup_days"].get(yesterday.isoformat(), {}))
+        recorded.update({job.id: job.state for job in jobs})
+        states = list(recorded.values())
         succeeded = states.count("done")
         failed = states.count("failed")
-        lines = [f"Backup summary for {yesterday}: {succeeded} succeeded, {failed} failed."]
+        cancelled = states.count("cancelled")
+        active = [
+            j
+            for j in backups.jobs()
+            if j.kind == "backup" and j.state in {"running", "queued", "retry_wait"}
+        ]
+        lines = [
+            f"Backup summary for {yesterday}: {succeeded} succeeded, "
+            f"{failed} failed, {cancelled} cancelled."
+            if states
+            else f"Backup summary for {yesterday}: No recorded backup results."
+        ]
         lines += [f"Replication {j['name']}: {j['state']}" for j in replications.jobs()]
-        lines += capacity
-        self.executor.submit(
-            self.deliver, f"ibHiCS daily summary: {yesterday}", "\n".join(lines), config
+        lines += list(dict.fromkeys(capacity))
+        rows = [
+            ("Results for", yesterday.isoformat()),
+            ("Report generated", now.isoformat()),
+            ("Succeeded / Failed", f"{succeeded} / {failed}" if states else "No recorded results"),
+            ("Cancelled", str(cancelled) if states else "No recorded results"),
+            ("Running / Queued now", str(len(active))),
+        ]
+        for job in jobs:
+            if job.state == "failed":
+                rows.append(("Requires attention", f"{job.vm}: {job.error or job.step}"))
+        notice = Notice(
+            "Daily system summary",
+            "warning" if failed else "info",
+            "\n".join(lines),
+            rows,
+            "Completed results cover the previous calendar day. Active jobs and capacity "
+            "show status at report time. Review failed jobs before the next scheduled run.",
         )
+        self.executor.submit(self.deliver, f"ibHiCS daily summary: {yesterday}", notice, config)
+        with self.lock:
+            line = copy.deepcopy(self.data["line"])
+        if line["enabled"]:
+            self.executor.submit(self.deliver_line, notice, line)

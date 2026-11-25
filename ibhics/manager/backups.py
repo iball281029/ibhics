@@ -760,6 +760,26 @@ class BackupManager:
     def upgrade_guard(self):
         return upgrade_guard(self.guard_path)
 
+    def _notice_details(self, job):
+        finished = job.finished or self._clock().isoformat()
+        elapsed = max(
+            0,
+            (
+                datetime.fromisoformat(finished) - datetime.fromisoformat(job.created)
+            ).total_seconds(),
+        )
+        return {
+            "vm": job.vm,
+            "node": job.node,
+            "target": job.target,
+            "policy": job.policy,
+            "started": job.created,
+            "finished": finished,
+            "duration": f"{int(elapsed // 60)}m {int(elapsed % 60)}s",
+            "error": job.error,
+            "report": job.report,
+        }
+
     def _retry_failed(self, job, policy):
         if job.scheduled and policy and job.attempt < policy.retries:
             when = self._clock() + timedelta(minutes=policy.retry_delay_minutes)
@@ -770,7 +790,11 @@ class BackupManager:
             job.finished = self._clock().isoformat()
             self.record_backup(job)
             self.notify(
-                "critical", "backup", f"Backup failed: {job.vm}", f"backup:{job.target}:{job.vm}"
+                "critical",
+                "backup",
+                f"Backup failed: {job.vm}",
+                f"backup:{job.target}:{job.vm}",
+                details=self._notice_details(job),
             )
         with self._lock:
             self._save()
@@ -808,6 +832,7 @@ class BackupManager:
                         "backup.succeeded" if job.kind == "backup" else "restore.succeeded",
                         f"{job.kind.title()} completed: {job.vm}",
                         f"{job.kind}:{job.id}",
+                        details=self._notice_details(job),
                     )
                 if job.kind == "backup" and recovered:
                     self.notify(
@@ -815,6 +840,7 @@ class BackupManager:
                         "backup",
                         f"Backup recovered: {job.vm}",
                         f"backup:{job.target}:{job.vm}",
+                        details=self._notice_details(job),
                     )
             except BackupCancelled:
                 job.state, job.retry_at, job.error = "cancelled", None, None
@@ -828,7 +854,11 @@ class BackupManager:
                     self._retry_failed(job, self._policies.get(job.policy))
                 elif job.kind in ("restore", "recovery"):
                     publish(
-                        self, "restore.failed", f"Restore failed: {job.vm}", f"restore:{job.id}"
+                        self,
+                        "restore.failed",
+                        f"Restore failed: {job.vm}",
+                        f"restore:{job.id}",
+                        details=self._notice_details(job),
                     )
                 elif job.kind == "verify":
                     self.notify(
