@@ -26,7 +26,12 @@ KNOWLEDGE = {
         "that its OS boots. "
     ),
     "network": (
-        "Network contains Topology 3D, Firewall and Virtual switches. Linux bridges connect "
+        "Network contains Topology 3D, Firewall and Virtual switches. To add a VM network, "
+        "use Network → Virtual switches → + Add virtual switch (VLAN). The dialog is "
+        "Add VLAN network with Name and VLAN ID. These refer to one operation: "
+        "a virtual switch/network for VMs using a VLAN tag, not configuring a physical "
+        "switch VLAN. Keep these actual menu labels even in Thai explanations. "
+        "Linux bridges connect "
         "guests to the network; VLANs separate traffic. The external L3 switch normally "
         "routes VLANs. The former Network Advanced isolated gateway is retired. "
     ),

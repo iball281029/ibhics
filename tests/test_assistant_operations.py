@@ -137,6 +137,8 @@ def test_unsupported_or_negative_requests_cannot_generate_actions(ready):
 
     assert parse_request("Do not create VLAN 123", "en") is None
     assert parse_request("อย่าสร้าง VLAN123", "th") is None
+    assert parse_request("เพิ่ม Virtual switch (VLAN) 123", "th").vlan == 123
+    assert parse_request("Add virtual switch (VLAN) 123", "en").vlan == 123
     assert (
         client.post("/api/v1/assistant/chat", json={"message": "create VLAN 4095"}).status_code
         == 422

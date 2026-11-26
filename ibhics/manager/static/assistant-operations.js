@@ -84,8 +84,8 @@ function createAssistantOperations({list, message, api, post, getLanguage, onBus
     form.append(element("strong", text("Manage ibHiCS", "จัดการ ibHiCS")));
     const kind = element("select");kind.name = "kind";
     const choices = [["status",text("Check status", "ตรวจสถานะ")]];
-    if (inventory.can_create_vlan) choices.push(["create_vlan",text("Create VLAN", "สร้าง VLAN")]);
-    if (inventory.can_manage_vms) choices.push(["start_vm",text("Start / resume VM", "เปิด / ทำงาน VM ต่อ")],["shutdown_vm",text("Shutdown VM", "Shutdown VM")],["restart_vm",text("Restart VM", "รีสตาร์ต VM")]);
+    if (inventory.can_create_vlan) choices.push(["create_vlan",text("Add virtual switch (VLAN)", "เพิ่ม Virtual switch (VLAN)")]);
+    if (inventory.can_manage_vms) choices.push(["start_vm",text("Power on / resume VM", "Power on / ทำงาน VM ต่อ")],["shutdown_vm",text("Shutdown VM", "Shutdown VM")],["restart_vm",text("Restart VM", "รีสตาร์ต VM")]);
     choices.forEach(([value,label]) => {const option = element("option", label);option.value=value;kind.append(option);});
     const target = element("select");target.name="target";
     const all = element("option",text("System status / all VMs", "สถานะระบบ / VM ทั้งหมด"));all.value="";target.append(all);

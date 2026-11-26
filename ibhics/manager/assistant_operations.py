@@ -42,7 +42,7 @@ def parse_request(text, language):
     if re.search(r"\b(?:not|don't|never)\b|อย่า|ไม่ต้อง", text, re.I):
         return None
     if re.search(r"\b(?:create|add)\b|สร้าง|เพิ่ม", text, re.I):
-        match = re.search(r"vlan\s*[:=]?\s*([0-9]{1,5})(?![0-9])", text, re.I)
+        match = re.search(r"vlan\s*\)?\s*[:=]?\s*([0-9]{1,5})(?![0-9])", text, re.I)
         if match:
             return OperationIn(kind="create_vlan", vlan=int(match[1]), language=language)
     match = re.search(r"(?:vm|วีเอ็ม)\s*[\"']?([a-zA-Z0-9ก-๙_.-]+)", text, re.I)
@@ -171,17 +171,32 @@ class Operations:
                     raise HTTPException(409, f"{member.name} has no supported br0 LAN network")
                 facts.append({"node": member.name, "networks": [asdict(n) for n in networks]})
             return {
-                "reply": "ตรวจค่าแล้ว กรุณายืนยันก่อนสร้าง VLAN"
+                "reply": (
+                    "ตรวจค่าแล้ว นี่คือการเพิ่ม Virtual switch (VLAN) ใน "
+                    "Network → Virtual switches กรุณาตรวจรายละเอียดก่อนยืนยัน"
+                )
                 if th
-                else "Preflight complete. Review and confirm before creating the VLAN.",
+                else (
+                    "Preflight complete for Network → Virtual switches → "
+                    "+ Add virtual switch (VLAN). Review before confirming."
+                ),
                 "operation": operation.model_dump(),
                 "path": "/networks",
                 "body": {"name": name, "vlan": operation.vlan},
-                "summary": f"Create VLAN {operation.vlan} · {name}",
+                "summary": f"Add virtual switch (VLAN) · {name} · VLAN {operation.vlan}",
                 "details": [
+                    "Menu: Network → Virtual switches → + Add virtual switch (VLAN)",
+                    f"Network: {name} · VLAN: {operation.vlan}",
                     "Nodes: " + ", ".join(m.name for m in members),
-                    f"br0 → br0.{operation.vlan} → ibr{operation.vlan}",
-                    "Confirm the upstream trunk allows this VLAN. No VM NICs are moved.",
+                    f"Bridge (automatic): ibr{operation.vlan}",
+                    (
+                        "สร้างเครือข่ายให้ VM เลือกใช้ ไม่ได้ตั้งค่าสวิตช์ภายนอกหรือย้าย VM เข้าเครือข่ายนี้ "
+                        "กรุณาตรวจว่าพอร์ต trunk อนุญาต VLAN นี้แล้ว"
+                        if th
+                        else "Creates a VM network. It does not configure the physical switch "
+                        "or move VM NICs. "
+                        "Confirm the upstream trunk allows this VLAN."
+                    ),
                 ],
                 "verification": {
                     "kind": "network",

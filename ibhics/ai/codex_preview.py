@@ -33,7 +33,7 @@ DISABLED = (
 class CodexLocalPreview:
     """Explicitly constructed by the local preview, not selected by production config."""
 
-    def __init__(self, state_dir, *, enabled=False, binary=None, timeout=75, daily_limit=5):
+    def __init__(self, state_dir, *, enabled=False, binary=None, timeout=75, daily_limit=10):
         self.enabled = enabled
         self.binary = binary or shutil.which("codex")
         self.timeout, self.daily_limit = timeout, daily_limit

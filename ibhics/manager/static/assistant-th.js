@@ -3,7 +3,7 @@ const AI_TEXT = Object.freeze({
   name: "น้อง ib",
   welcome: "สวัสดีค่ะ น้อง ib พร้อมช่วยดูแล ibHiCS นะคะ 🐘\nสงสัยเรื่องเมนู การตั้งค่า หรือข้อความแจ้งเตือน ถามได้เลยค่ะ",
   mascotAlt: "น้อง ib พร้อมช่วยเหลือ",
-  questions: ["ตรวจสถานะระบบ", "ช่วยสร้าง VLAN 123", "ช่วยอธิบายข้อความแจ้งเตือน"],
+  questions: ["ตรวจสถานะระบบ", "เพิ่ม Virtual switch (VLAN) 123", "ช่วยอธิบายข้อความแจ้งเตือน"],
   thinking: "น้อง ib กำลังคิดให้นะคะ…",
   privacy: "ข้อความจะถูกประมวลผลด้วยบริการ AI ภายนอก หากแนบสรุประบบ จะมีชื่อทรัพยากรและสถานะงานด้วย กรุณาไม่ส่งรหัสผ่านหรือข้อมูลลับ ประวัติแชตจะหายเมื่อรีโหลดหรือเริ่มแชตใหม่ค่ะ",
   status: {
@@ -14,9 +14,9 @@ const AI_TEXT = Object.freeze({
   },
   usage: (used, limit) => ` วันนี้ใช้ไป ${used} จาก ${limit} คำถาม`,
   errors: {
-    "Daily AI allowance reached. Contact Support.": "วันนี้ใช้สิทธิ์ AI ครบแล้วค่ะ กรุณารอให้โควตารีเซ็ตหรือติดต่อทีม Support นะคะ",
+    "Daily AI allowance reached. Contact Support.": "ครบโควตาคำถาม AI สำหรับวันนี้แล้วค่ะ รีเซ็ตเวลา 07:00 น. (เวลาไทย) ข้อความนี้ไม่ได้หมายความว่า Support License หมดอายุ",
     "A preview question is already running. Please wait.": "น้อง ib กำลังตอบคำถามอื่นอยู่ค่ะ รอสักครู่แล้วลองใหม่นะคะ",
-    "AI allowance reached. Contact Support.": "วันนี้ใช้สิทธิ์ AI ครบแล้วค่ะ กรุณาติดต่อทีม Support หากต้องการเพิ่มสิทธิ์",
+    "AI allowance reached. Contact Support.": "ครบโควตาคำถาม AI สำหรับวันนี้แล้วค่ะ รีเซ็ตเวลา 07:00 น. (เวลาไทย) ข้อความนี้ไม่ได้หมายความว่า Support License หมดอายุ",
     "AI access was declined. Contact Support to check your subscription.": "ยังใช้บริการ AI ไม่ได้ค่ะ กรุณาติดต่อทีม Support เพื่อตรวจสอบสิทธิ์",
     "AI service is unavailable. Check connectivity or contact Support.": "ยังติดต่อบริการ AI ไม่ได้ค่ะ ลองตรวจสอบอินเทอร์เน็ตหรือติดต่อทีม Support นะคะ",
     "Contact Support to provision the AI service.": "กรุณาติดต่อทีม Support เพื่อตั้งค่าบริการ AI ให้ระบบนี้ค่ะ",
@@ -33,7 +33,7 @@ const AI_LOCALES = Object.freeze({
     name: "Nong ib",
     welcome: "Hi, I'm Nong ib! Your little ibHiCS helper.\nAsk me about menus, settings, or alerts you need help understanding.",
     mascotAlt: "Nong ib, your elephant AI assistant",
-    questions: ["Check system status", "Create VLAN 123", "Explain this alert"],
+    questions: ["Check system status", "Add virtual switch VLAN 123", "Explain this alert"],
     thinking: "Nong ib is thinking…",
     privacy: "Messages are processed by an external AI service. Optional context includes resource names and job status. Do not send passwords or secrets. Chat history is cleared on reload or New chat.",
     status: {
@@ -44,9 +44,9 @@ const AI_LOCALES = Object.freeze({
     },
     usage: (used, limit) => ` Today: ${used} of ${limit} questions used.`,
     errors: {
-      "Daily AI allowance reached. Contact Support.": "Today's AI allowance has been reached. Contact Support.",
+      "Daily AI allowance reached. Contact Support.": "Daily AI question limit reached. Resets at 07:00 Thailand time (00:00 UTC). This does not mean your Support License has expired.",
       "A preview question is already running. Please wait.": "Nong ib is answering another question. Please wait.",
-      "AI allowance reached. Contact Support.": "Today's AI allowance has been reached. Contact Support.",
+      "AI allowance reached. Contact Support.": "Daily AI question limit reached. Resets at 07:00 Thailand time (00:00 UTC). This does not mean your Support License has expired.",
       "AI access was declined. Contact Support to check your subscription.": "AI access was declined. Contact Support to check your license.",
       "AI service is unavailable. Check connectivity or contact Support.": "Unable to reach the AI service. Check connectivity or contact Support.",
       "Contact Support to provision the AI service.": "Contact Support to configure the AI service.",

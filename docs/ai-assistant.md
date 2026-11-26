@@ -64,7 +64,7 @@ The operator requested testing with the already logged-in Codex account before p
 
 It invokes the supported `codex exec` interface using the operator's existing managed login. Authentication tokens are handled by Codex and are never read or copied by this adapter. Calls use an isolated temporary working directory, replacement assistant instructions, ephemeral sessions, read-only sandbox, no approvals, disabled shell/execution/apps/browser/computer/image/memory/subagent features and no inherited project configuration. Only the question, bounded conversation and explicitly opted-in summary are provided as context. Temporary prompt/reply files are removed after each call. Codex may still retain its own operational logs according to its configuration; this adapter does not promise removal of provider/CLI telemetry.
 
-The local test serializes requests, limits history to four turns, requests short replies, enforces a timeout with process-group cleanup and applies a persistent five-question daily allowance by default. Failed attempts count toward that allowance. It uses the same ChatGPT/Codex account allowance as the operator, not separate API credit. This path is for one operator's local testing; customer-facing service remains the independently enrolled, signed-Support-gated API gateway described above.
+The local test serializes requests, limits history to four turns, requests short replies, enforces a timeout with process-group cleanup and applies a persistent ten-question daily allowance by default. Failed attempts count toward that allowance. It uses the same ChatGPT/Codex account allowance as the operator, not separate API credit. This path is for one operator's local testing; customer-facing service remains the independently enrolled, signed-Support-gated API gateway described above.
 
 One live question was tested through the browser: the assistant explained Backup versus Snapshot in Thai. This verifies the local Codex path only; Claude API and company hosting remain unprovisioned.
 
@@ -74,7 +74,7 @@ Installed on both Manager nodes (.103 and .104), accessed at https://172.16.12.1
 
 Temporary test route: Manager -> HTTP loopback port 8891 -> SSH reverse tunnel -> operator Mac loopback port 8771 -> enrolled, license-checking gateway -> Codex CLI. Plain HTTP is allowed only for literal loopback addresses; external gateways still require HTTPS. Per-installation credentials are private service environment files; no Codex OAuth credential was copied to either node.
 
-A real server question returned a Thai Backup versus Snapshot explanation through this route. The authenticated live VIP browser session loaded the real cluster, verified the 64 px launcher stays within the viewport, opened and collapsed the panel, enabled AI through the normal admin control, and received a live Thai answer. The adapter shares the operator account allowance and a five-attempt daily adapter limit with the local preview. This is an operator test, not a permanent customer AI service: the Mac, bridge process and both SSH tunnels must remain running and connected. Restarting the Mac requires restarting the bridge and tunnels. Company Claude API provisioning remains pending.
+A real server question returned a Thai Backup versus Snapshot explanation through this route. The authenticated live VIP browser session loaded the real cluster, verified the 64 px launcher stays within the viewport, opened and collapsed the panel, enabled AI through the normal admin control, and received a live Thai answer. The adapter shares the operator account allowance and a ten-attempt daily adapter limit with the local preview. This is an operator test, not a permanent customer AI service: the Mac, bridge process and both SSH tunnels must remain running and connected. Restarting the Mac requires restarting the bridge and tunnels. Company Claude API provisioning remains pending.
 
 The floating launcher is now half its original character size (64 px desktop / 50 px mobile); its readable name badge and chat panel remain independently sized.
 
@@ -127,7 +127,7 @@ Both reverse SSH connections had disappeared, producing connection-refused error
 at each Manager's loopback port 8891. They were restored and the local bridge was
 reloaded without resetting login or usage. Live questions through the real Manager
 returned Thai and English replies. The temporary adapter still uses the operator's
-ChatGPT/Codex allowance, with a separate five-question daily test guard. It does not
+ChatGPT/Codex allowance, with a separate ten-question daily test guard. It does not
 use a provider API key; no separately billed API route was enabled. The Mac, bridge
 and SSH tunnels must stay running; automatic recovery after a Mac restart is not
 implemented.
@@ -190,3 +190,21 @@ OS-readiness wording, approval pending and the sleeping mascot. No production VL
 creation or VM power operation was executed for this acceptance. Refresh the web
 console to load the new Actions button. Runtime evidence is in
 `ai-operations-acceptance-20261126.json`.
+
+
+## Test quota and menu terminology update (2026-11-26)
+
+The operator test is limited to **10 model questions per UTC day**, configured in
+both the installation Gateway profile and the Codex adapter. Existing usage is
+preserved; raising the limit from 5 to 10 does not reset counters. Reset is
+00:00 UTC / 07:00 Asia/Bangkok. Failed provider attempts still count. This guard
+is separate from the operator's ChatGPT/Codex account allowance and from Support
+license validity. Local action plans and status checks do not call the model.
+
+Quota errors now describe a daily question limit and its reset time, rather than
+suggesting the Support License expired. Network action cards and the Actions form
+use the actual console labels: **Network → Virtual switches → + Add virtual switch
+(VLAN)**. The normal dialog is **Add VLAN network**, with **Name** and **VLAN ID**.
+Adding this virtual switch creates a VLAN-backed VM network on all compute nodes;
+it neither configures a physical switch nor moves VM NICs into the new network.
+Technical bridge names are labeled as automatic implementation details.
