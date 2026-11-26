@@ -34,7 +34,7 @@
   },
   "remaining": [
     "Physical .103 uplink repair explicitly deferred by operator",
-    "test-ib-Migrate guest recovery awaits reset authorization; pre-incident BSOD timing unknown"
+    "Permanent prevention of guest crashes after network/storage interruptions is a separate task; this test guest was recovered"
   ],
   "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py",
   "real_vm_validation": {
@@ -198,7 +198,7 @@
   },
   "post_network_guest_check": {
     "EXWin2022": "guest-ping replied; no block errors",
-    "test-ib-Migrate": "Windows CRITICAL_PROCESS_DIED screenshot; guest agent timeout; reset permission requested, no reset executed",
+    "test-ib-Migrate": "Operator authorized power cycle; Windows Server 2019 lock screen visible, guest-ping and guest-osinfo respond; no block errors",
     "ubututest": "in-container proof file read successfully"
   }
 }

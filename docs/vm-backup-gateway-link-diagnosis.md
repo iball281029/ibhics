@@ -41,4 +41,8 @@ The real PNetLab-27H1-V8.12 Full Backup completed on .104 in **916.226 seconds (
 
 The prior Full #35 read the same byte count at approximately 10 MiB/s, but wrote a different unique payload and included Manager/queue/return delays. This is not a controlled code-only wall-clock comparison. The representative point-in-time read test above and the live Full run validate the current .104 gateway path. The physical .103 uplink remains 100 Mbps and was explicitly deferred by the operator. Node-level acceptance did not create a Manager Jobs request or bypass browser authentication.
 
-During recovery checks, EXWin2022 answered guest-ping. The separate test-ib-Migrate Windows VM showed CRITICAL_PROCESS_DIED and did not answer its guest agent. There is no pre-incident screenshot establishing when it crashed. It has not been reset; explicit recovery authorization was requested. Evidence: `deliverables/test-ib-migrate-bsod-20261126.png`.
+During recovery checks, EXWin2022 answered guest-ping. The separate test-ib-Migrate Windows VM showed CRITICAL_PROCESS_DIED and did not answer its guest agent. There is no pre-incident screenshot establishing when it crashed. At that check it had not been reset and explicit recovery authorization was requested. Evidence: `deliverables/test-ib-migrate-bsod-20261126.png`.
+
+## Test VM recovered after authorization
+
+The operator explicitly authorized restarting only test-ib-Migrate. Its QEMU domain was power-cycled (domain ID 11 to 18), closing stale storage descriptors. Windows Server 2019 Standard reached the lock screen; guest-ping and guest-osinfo replied and libvirt reported no block errors. No other VM was restarted. This restores the guest but does not claim a permanent fix for all guest crashes after storage/network interruptions. Recovery proof: `docs/test-vm-recovery-20261126.json`.
