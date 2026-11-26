@@ -16,3 +16,22 @@
 @media(prefers-reduced-motion:reduce){.ai-launcher img,.ai-launcher::after,.ai-launcher:hover img,.ai-launcher[aria-expanded="true"] img{animation:none;will-change:auto}}
 
 .ai-launcher img{height:calc(100% - 20px)}.ai-launcher .ai-name{top:auto;bottom:0;right:50%;transform:translateX(50%);white-space:nowrap;font:600 12px system-ui,sans-serif;padding:3px 10px;color:var(--text,#e3f5ff);background:var(--panel,#12263a);border:1px solid #8adfe077;box-shadow:0 3px 12px #0002;pointer-events:none}.ai-launcher::after{bottom:20px}.ai-options{flex-wrap:wrap;row-gap:6px}
+
+/* A missing or expired Support entitlement puts Nong ib to sleep. */
+.ai-launcher .ai-sleep-marks{display:none;background:none;border:0;padding:0;right:2px;top:-17px;width:40px;height:34px;pointer-events:none}
+.ai-launcher.is-sleeping .ai-sleep-marks{display:block}
+.ai-sleep-marks i{position:absolute;font:700 13px system-ui,sans-serif;font-style:normal;color:#b4dfff;text-shadow:0 1px 5px #07192e;animation:ai-sleep-z 3s ease-in-out infinite;opacity:0;left:0;bottom:0}
+.ai-sleep-marks i:nth-child(2){animation-delay:1s;font-size:16px}
+.ai-sleep-marks i:nth-child(3){animation-delay:2s;font-size:19px}
+.ai-launcher.is-sleeping img,.ai-launcher.is-sleeping:hover img{animation:ai-sleep-breathe 4.5s ease-in-out infinite;transform-origin:50% 85%}
+.ai-launcher.is-sleeping::after{animation:ai-plush-shadow 4.5s ease-in-out infinite}
+.ai-license-notice{position:fixed;box-sizing:border-box;padding:20px;background:var(--panel,#12263a);color:var(--text,#e3f5ff);border:1px solid #8adfe077;border-radius:18px;box-shadow:0 12px 40px #0006;z-index:106;overflow:auto;font:13px/1.6 system-ui,sans-serif;overflow-wrap:anywhere}
+.ai-license-notice[hidden]{display:none}
+.ai-license-notice strong{display:block;padding-right:22px;font-size:15px}
+.ai-license-notice p{margin:8px 0 14px}
+.ai-license-notice a{display:inline-block;color:var(--text,#e3f5ff);background:#709fe52b;border:1px solid #8adfe077;border-radius:9px;padding:8px 12px;text-decoration:none;font-weight:600}
+.ai-license-notice .ai-license-close{position:absolute;right:7px;top:7px;padding:3px 9px;border:0;background:transparent;color:inherit;font-size:22px;box-shadow:none}
+.ai-license-notice a:focus-visible,.ai-license-close:focus-visible{outline:3px solid #7ccedc;outline-offset:2px}
+@keyframes ai-sleep-breathe{0%,100%{transform:translateY(0) rotate(-5deg) scale(1)}50%{transform:translateY(-2px) rotate(-3deg) scale(1.025)}}
+@keyframes ai-sleep-z{0%{opacity:0;transform:translate(0,5px) scale(.65)}20%{opacity:1}80%{opacity:.8}100%{opacity:0;transform:translate(21px,-16px) scale(1.1)}}
+@media(prefers-reduced-motion:reduce){.ai-launcher.is-sleeping img,.ai-launcher.is-sleeping:hover img,.ai-launcher.is-sleeping::after,.ai-sleep-marks i{animation:none}.ai-sleep-marks i{opacity:1;position:static;margin-left:1px}}

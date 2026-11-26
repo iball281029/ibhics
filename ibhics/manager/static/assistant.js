@@ -7,6 +7,55 @@
   const copy = AI_TEXT;
   const errorText = err => copy.errors[err.message] || copy.unavailable;
   let history = [], busy = false, available = false, generation = 0, allowance = null;
+  let licensed = null, statusRequest = null;
+  const licenseNotice = document.createElement("section");
+  licenseNotice.className = "ai-license-notice";
+  licenseNotice.id = "ai-license-notice";
+  licenseNotice.lang = "en";
+  licenseNotice.setAttribute("aria-label", "Support license required");
+  licenseNotice.hidden = true;
+  const noticeClose = document.createElement("button");
+  noticeClose.type = "button";
+  noticeClose.className = "ai-license-close";
+  noticeClose.setAttribute("aria-label", "Dismiss license reminder");
+  noticeClose.textContent = "×";
+  const noticeTitle = document.createElement("strong");
+  noticeTitle.textContent = "Nong ib is sleeping";
+  const noticeText = document.createElement("p");
+  noticeText.setAttribute("role", "status");
+  noticeText.textContent = "Please activate or renew your Support License to wake Nong ib and use AI chat.";
+  const licenseLink = document.createElement("a");
+  licenseLink.href = "#system";
+  licenseLink.dataset.tabLink = "about";
+  licenseLink.textContent = "Manage Support License →";
+  licenseNotice.append(noticeClose, noticeTitle, noticeText, licenseLink);
+  launcher.after(licenseNotice);
+  const sleepMarks = document.createElement("span");
+  sleepMarks.className = "ai-sleep-marks";
+  sleepMarks.setAttribute("aria-hidden", "true");
+  ["z", "Z", "Z"].forEach(text => {
+    const mark = document.createElement("i"); mark.textContent = text; sleepMarks.append(mark);
+  });
+  launcher.append(sleepMarks);
+  function collapse() {
+    panel.hidden = licenseNotice.hidden = true;
+    launcher.setAttribute("aria-expanded", "false");
+  }
+  function applyLicense(value) {
+    const wasLicensed = licensed;
+    licensed = value;
+    launcher.classList.toggle("is-sleeping", !value);
+    const image = launcher.querySelector("img");
+    image.src = value ? "ai-elephant.png" : "ai-elephant-sleeping.png";
+    image.alt = value ? copy.mascotAlt : "Nong ib sleeping — Support License required";
+    launcher.setAttribute("aria-label", value ? "คุยกับน้อง ib ผู้ช่วย AI" : "Nong ib is sleeping. Manage Support License");
+    launcher.setAttribute("aria-controls", value ? "ai-panel" : licenseNotice.id);
+    if (!value) {
+      panel.hidden = true;
+      launcher.setAttribute("aria-expanded", String(!licenseNotice.hidden));
+      if (wasLicensed === true) {generation++; history = []; input.value = ""; welcome();}
+    } else if (wasLicensed !== true) {collapse();}
+  }
   function layout() {
     const viewport=window.visualViewport, margin=14, gap=12;
     const width=Math.min(document.documentElement.clientWidth, viewport?.width || innerWidth);
@@ -21,6 +70,13 @@
     const left=offsetX+Math.max(margin,width-margin-panelWidth);
     const top=offsetY+Math.max(margin,dollTop-offsetY-gap-panelHeight);
     Object.assign(panel.style,{left:`${left}px`,top:`${top}px`,right:"auto",bottom:"auto",width:`${panelWidth}px`,height:`${panelHeight}px`});
+    Object.assign(licenseNotice.style, {
+      left:`${left}px`, bottom:`${Math.max(margin, innerHeight-dollTop+gap)}px`,
+      width:`${Math.min(320, Math.max(0, width-margin*2))}px`,
+      maxHeight:`${Math.max(80,dollTop-offsetY-margin-gap)}px`
+    });
+    // Align the narrower reminder with the right edge of the chat panel.
+    licenseNotice.style.left = `${offsetX+Math.max(margin,width-margin-Math.min(320,width-margin*2))}px`;
   }
   window.addEventListener("resize",layout);
   window.visualViewport?.addEventListener("resize",layout);
@@ -41,8 +97,14 @@
     }); list.append(suggestions);
   }
   async function refreshStatus() {
+    if (statusRequest) return statusRequest;
+    statusRequest = loadStatus();
+    try {return await statusRequest;} finally {statusRequest = null;}
+  }
+  async function loadStatus() {
     try {
       const s = await api("/assistant/status"); available = s.available;
+      applyLicense(s.licensed === true);
       statusText.textContent = (copy.status[s.reason_code] || copy.errors[s.reason] || copy.status.ready) + (s.available && allowance ? copy.usage(allowance.used,allowance.limit) : ""); enable.checked = s.enabled;
       if(s.preview_notice)statusText.textContent += " " + s.preview_notice;
       enable.closest("label").hidden = !isAdmin(); enable.disabled = busy || (!s.enabled && (!s.licensed || !s.configured));
@@ -52,12 +114,35 @@
     } catch (err) {available = false; statusText.textContent = errorText(err); input.disabled = send.disabled = true;}
   }
   launcher.addEventListener("click", async () => {
-    panel.hidden = !panel.hidden; layout(); launcher.setAttribute("aria-expanded", String(!panel.hidden));
-    if (!panel.hidden) {await refreshStatus(); if (available) input.focus();}
+    if (!panel.hidden || !licenseNotice.hidden) {collapse(); return;}
+    const status = await refreshStatus();
+    if (!status) {toast(copy.unavailable, true); return;}
+    if (!licensed) {
+      licenseNotice.hidden = false;
+      layout(); launcher.setAttribute("aria-expanded", "true");
+      licenseLink.focus();
+      return;
+    }
+    panel.hidden = false; layout(); launcher.setAttribute("aria-expanded", "true");
+    if (available) input.focus();
   });
-  document.getElementById("ai-open-settings").addEventListener("click", () => {if(panel.hidden)launcher.click();});
-  document.getElementById("ai-close").addEventListener("click", () => {panel.hidden = true;launcher.setAttribute("aria-expanded", "false");launcher.focus();});
-  panel.addEventListener("keydown", e => {if(e.key === "Escape"){document.getElementById("ai-close").click();e.stopPropagation();}});
+  document.getElementById("ai-open-settings").addEventListener("click", () => {
+    if (panel.hidden && licenseNotice.hidden) launcher.click();
+  });
+  document.getElementById("ai-close").addEventListener("click", () => {collapse();launcher.focus();});
+  noticeClose.addEventListener("click", () => {collapse();launcher.focus();});
+  licenseLink.addEventListener("click", () => {
+    collapse();
+    // Also select the tab when Settings is already the current page.
+    selectTab("system-tabs", "about");
+    setTimeout(() => document.getElementById("subscription-cards")?.scrollIntoView({block:"center"}), 0);
+  });
+  [panel, licenseNotice].forEach(surface => surface.addEventListener("keydown", e => {
+    if(e.key === "Escape"){collapse();launcher.focus();e.stopPropagation();}
+  }));
+  window.addEventListener("focus", () => {refreshStatus();});
+  document.addEventListener("visibilitychange", () => {if (!document.hidden) refreshStatus();});
+  setInterval(() => {if (!document.hidden) refreshStatus();}, 60000);
   document.getElementById("ai-clear").addEventListener("click", () => {generation++;history=[];input.value="";welcome();});
   enable.addEventListener("change", async () => {
     enable.disabled = true;
@@ -87,4 +172,5 @@
     finally{busy=false;await refreshStatus();if(!panel.hidden && available)input.focus();}
   });
   welcome();
+  refreshStatus();
 })();

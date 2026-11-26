@@ -77,3 +77,33 @@ Temporary test route: Manager -> HTTP loopback port 8891 -> SSH reverse tunnel -
 A real server question returned a Thai Backup versus Snapshot explanation through this route. The authenticated live VIP browser session loaded the real cluster, verified the 64 px launcher stays within the viewport, opened and collapsed the panel, enabled AI through the normal admin control, and received a live Thai answer. The adapter shares the operator account allowance and a five-attempt daily adapter limit with the local preview. This is an operator test, not a permanent customer AI service: the Mac, bridge process and both SSH tunnels must remain running and connected. Restarting the Mac requires restarting the bridge and tunnels. Company Claude API provisioning remains pending.
 
 The floating launcher is now half its original character size (64 px desktop / 50 px mobile); its readable name badge and chat panel remain independently sized.
+
+
+## Sleeping mascot without Support (2026-11-26)
+
+When `/assistant/status` reports no active signed Support entitlement (missing,
+expired or otherwise invalid), Nong ib uses the matching closed-eye plush asset
+`ai-elephant-sleeping.png`. Gentle breathing and three floating z/Z/Z marks replace
+the awake animation. Reduced-motion preferences disable these animations.
+Clicking the sleeping mascot shows an English reminder instead of the chat panel:
+
+> Please activate or renew your Support License to wake Nong ib and use AI chat.
+
+The **Manage Support License →** link opens Settings → Overview & subscriptions
+and scrolls to the subscription cards. It also works if Settings is already open
+on another tab. Users without subscription-management permission can view the
+page and ask an administrator to apply their signed license.
+
+Status is checked at initialization, on focus/visibility return, every minute while
+the page is visible, and before opening the assistant. Restoring Support returns
+the awake mascot; normal provisioning and enablement checks still apply. Losing
+Support closes an open chat and clears its local history. A failed status request
+does not open chat. The server continues to enforce entitlement on every request.
+
+Browser checks used mocked status responses to cover missing/expired entitlement,
+renewal, revocation while open, English copy, License navigation, mobile bounds,
+Escape dismissal, reduced motion and failed status requests. Existing 16 AI tests
+passed. Both production nodes received static assets only, without changing their
+licenses or restarting services. The active node served all three exact asset
+hashes over HTTP 200; standby files matched their release hashes and the Manager
+reported its expected standby status. No production license was removed for testing.
