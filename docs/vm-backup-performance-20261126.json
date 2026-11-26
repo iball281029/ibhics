@@ -33,9 +33,8 @@
     "ruff": "passed"
   },
   "remaining": [
-    "Restore .103 network link through console/BMC or physical cable/port inspection; no further disruptive changes without evidence",
-    "Verify DRBD peer reconnect and VM/container state on .103",
-    "Then validate Full Backup throughput under the recovered network topology"
+    "Physical .103 uplink repair explicitly deferred by operator",
+    "test-ib-Migrate guest recovery awaits reset authorization; pre-incident BSOD timing unknown"
   ],
   "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py",
   "real_vm_validation": {
@@ -78,6 +77,22 @@
       "restore_point": "PNetLab-27H1-V8.12@20261125T231512Z",
       "vm_state_after": "running",
       "comparison_note": "Different dirty workload from the 181-second run; not a controlled end-to-end percentage comparison"
+    },
+    "pnetlab_full_on_gateway_104": {
+      "seconds": 916.226,
+      "kind": "full",
+      "logical_bytes": 536870912000,
+      "read_bytes": 113229430784,
+      "stored_bytes": 73916304,
+      "restore_point": "PNetLab-27H1-V8.12@20261125T235257Z",
+      "vm_state_after": "running",
+      "manifest_geometry_valid": true,
+      "sampled_chunks": 16,
+      "sample_restored_bytes": 67108864,
+      "sample_checksums_match": true,
+      "full_disk_restored": false,
+      "scope": "Node-level integration acceptance; not a Manager Jobs/UI request",
+      "comparison_note": "Earlier #35 had the same read_bytes but different changed/unique payload, gateway topology and Manager queue/return timing; do not attribute all elapsed-time difference to backup code alone"
     }
   },
   "immutable_capability_optimization": {
@@ -148,6 +163,42 @@
         "peer_103": "unreachable; console/cable inspection requested"
       },
       "completion": "Not complete. Restore .103 network access and verify physical link before claiming resolution."
+    },
+    "post_renegotiation_recovery": {
+      "host_103_reachable": true,
+      "host_103_link_mbps": 100,
+      "host_103_drbd_role": "Secondary",
+      "host_104_drbd_role": "Primary",
+      "both_data_replicas": "UpToDate",
+      "host_103_vm_block_errors": "No errors found for EXWin2022 and test-ib-Migrate",
+      "host_103_container": "ubututest Running; in-container proof file readable",
+      "gateway_stays_on": "172.16.12.104",
+      "operator_deferred_physical_cable_check": true
+    },
+    "controlled_test_on_gateway_104": {
+      "bytes": 100663296,
+      "depth_1_seconds": [
+        0.132,
+        0.124
+      ],
+      "depth_8_seconds": [
+        0.142,
+        0.134
+      ],
+      "all_data_byte_compared": true,
+      "test_vm_removed": true,
+      "comparison_note": "Same representative data and test workflow; storage gateway moved from the 100 Mbps peer to the VM host. Page/cache and topology differ; this is not a pure backup-code comparison."
     }
+  },
+  "completion": {
+    "software_and_current_gateway_path": "Full Backup completed and sampled restore verified",
+    "gateway": "172.16.12.106 on .104",
+    "physical_link_103": "100 Mbps; operator explicitly deferred cable/switch inspection",
+    "normal_manager_ui_acceptance": "Browser requires operator login; existing auth not bypassed"
+  },
+  "post_network_guest_check": {
+    "EXWin2022": "guest-ping replied; no block errors",
+    "test-ib-Migrate": "Windows CRITICAL_PROCESS_DIED screenshot; guest agent timeout; reset permission requested, no reset executed",
+    "ubututest": "in-container proof file read successfully"
   }
 }
