@@ -3,7 +3,7 @@ const AI_TEXT = Object.freeze({
   name: "น้อง ib",
   welcome: "สวัสดีค่ะ น้อง ib พร้อมช่วยดูแล ibHiCS นะคะ 🐘\nสงสัยเรื่องเมนู การตั้งค่า หรือข้อความแจ้งเตือน ถามได้เลยค่ะ",
   mascotAlt: "น้อง ib พร้อมช่วยเหลือ",
-  questions: ["สำรองข้อมูลคอนเทนเนอร์อย่างไร", "ช่วยอธิบายข้อความแจ้งเตือน", "ควรตรวจสอบระบบตรงไหนก่อน"],
+  questions: ["ตรวจสถานะระบบ", "ช่วยสร้าง VLAN 123", "ช่วยอธิบายข้อความแจ้งเตือน"],
   thinking: "น้อง ib กำลังคิดให้นะคะ…",
   privacy: "ข้อความจะถูกประมวลผลด้วยบริการ AI ภายนอก หากแนบสรุประบบ จะมีชื่อทรัพยากรและสถานะงานด้วย กรุณาไม่ส่งรหัสผ่านหรือข้อมูลลับ ประวัติแชตจะหายเมื่อรีโหลดหรือเริ่มแชตใหม่ค่ะ",
   status: {
@@ -33,7 +33,7 @@ const AI_LOCALES = Object.freeze({
     name: "Nong ib",
     welcome: "Hi, I'm Nong ib! Your little ibHiCS helper.\nAsk me about menus, settings, or alerts you need help understanding.",
     mascotAlt: "Nong ib, your elephant AI assistant",
-    questions: ["How do I back up a container?", "Explain this alert", "What should I check first?"],
+    questions: ["Check system status", "Create VLAN 123", "Explain this alert"],
     thinking: "Nong ib is thinking…",
     privacy: "Messages are processed by an external AI service. Optional context includes resource names and job status. Do not send passwords or secrets. Chat history is cleared on reload or New chat.",
     status: {

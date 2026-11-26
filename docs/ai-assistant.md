@@ -6,7 +6,7 @@ The assistant is named Nong ib. Its panel supports ENG/TH, defaulting to English
 
 The console includes a floating elephant launcher and chat panel (click the doll to open; click again to collapse), also reachable from Settings → Support → Open AI Assistant. Administrators enable the assistant inside the panel. All signed-in roles may ask documentation questions. Optional context is off by default and can be previewed before sending. Context uses the user's existing permissions: VM counts, node health and recent backup-job status are allowlisted; credentials, full configuration, raw logs and disk contents are not automatically collected.
 
-The first version provides eight curated, version-specific reference topics. It is not a complete repository-document retrieval service. The model has no tools, command executor or infrastructure mutation capability. It produces advice only. Messages render as plain text. History stays in tab memory; the latest eight turns are sent with each request and are cleared by New chat or reload. The gateway persists usage counters, not conversations. Proxy logging must likewise avoid bodies and authorization headers.
+The first version provides eight curated, version-specific reference topics. It is not a complete repository-document retrieval service. The model has no tools or command executor. Manager-generated action plans added below can change infrastructure after explicit user confirmation through the existing authenticated APIs. Model prose never becomes an executable command. Messages render as plain text. History stays in tab memory; the latest eight turns are sent with each request and are cleared by New chat or reload. The gateway persists usage counters, not conversations. Proxy logging must likewise avoid bodies and authorization headers.
 
 ## Architecture and subscription enforcement
 
@@ -47,7 +47,7 @@ To revoke an installation independently of license expiry, set its gateway profi
 
 The interface says messages are processed by an external AI service. Common token, authorization-header, password-assignment and private-key patterns receive best-effort redaction before forwarding; this cannot guarantee detection of every secret. Users should not paste secrets. Resource names and job status may still be sensitive, so automatic system context is opt-in. Review the company's privacy terms and provider configuration before offering the service to customers.
 
-Internet connectivity is required for AI replies. No provider credential or hosting endpoint was supplied during implementation, so the website preview and integration tests use simulated providers; no real Claude response or live provider billing has been verified. The real cluster now uses the temporary operator Codex bridge described below. Claude API remains unprovisioned. Infrastructure remains unchanged by chat.
+Internet connectivity is required for model replies. No provider credential or hosting endpoint was supplied during initial implementation, so those integration tests used simulated providers; no real Claude response or live provider billing has been verified. The real cluster now uses the temporary operator Codex bridge described below. Claude API remains unprovisioned. Local action planning and status checks use Manager data without a model call.
 
 ## Responsive mascot behavior
 
@@ -143,3 +143,50 @@ access for Codex testing must not be described as a confirmed commercial entitle
 to serve multiple customer organizations. Anthropic's published authentication terms
 prohibit routing third-party user requests through consumer subscription credentials:
 https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use
+
+
+## Confirmed VLAN and VM actions (2026-11-26)
+
+Open Nong ib and select **Actions / จัดการระบบ** to choose a live VM or create a VLAN.
+Supported direct messages include `Create VLAN 123`, `Start VM example`,
+`Shutdown VM example`, `Restart VM example`, and `Check status VM example`.
+Thai examples include `ช่วยสร้าง VLAN 123`, `เปิด VM example`, `ปิด VM example`
+and `ตรวจสถานะ VM example`. Names must match exactly; use Actions for names the
+bounded text recognizer cannot parse. The model is not the command parser.
+
+A mutation first produces a review card with its resource, node and impact.
+**Confirm action** rechecks Support, permissions, expiry and resource state, then
+submits the normal Network/VM API request. **Cancel** changes nothing. Plans expire
+in five minutes and are signed for the initiating user and cluster. The mutation
+API verifies the signed plan again and checks that method, target and body match.
+Normal audit and approval rules apply. Duplicate submission is rejected in the
+running Manager; this cache is not durable across a Manager restart. The browser
+does not automatically retry failed or ambiguous mutation requests.
+
+VLAN creation requires admin and uses the existing br0 LAN topology on all compute
+nodes. Existing names/tags, missing br0, unavailable nodes and lost quorum stop the
+plan. The review asks the operator to confirm upstream trunk allowance; it cannot
+inspect the physical switch. No existing VM NIC is moved. After creation the UI
+checks the VLAN configuration on every expected node before reporting success.
+
+Users with VM permissions may start/resume, gracefully shut down or restart a VM.
+Template/recycled/ambiguous targets and active backup/migration jobs are refused.
+Restart with pending hardware changes is refused here. Shutdown/restart uses
+`force: false`. A graceful restart that would apply hardware changes no longer
+silently falls back to forced power off if the guest does not shut down.
+Delete, migration and shell execution are outside this action set.
+
+Status checks query actual cluster and VM data, including OS/Guest Agent for a
+selected VM. A hypervisor running state is not reported as proof of OS readiness.
+VM mutation acceptance is reported separately from OS readiness; **Check VM status**
+performs a fresh check. These local operations make no model call or API billing.
+
+Installed and hash-verified on both .103 and .104. Active health was OK and standby
+health was standby. Read-only acceptance saw all five VMs, live Guest Agent/OS data,
+and a valid VLAN plan/review without changing networks or VMs. The feature and
+related code passed 157 tests; the exact merged active-node payload passed 48 tests.
+Browser fixtures covered cancel, duplicate clicks, stale plans, graceful shutdown,
+OS-readiness wording, approval pending and the sleeping mascot. No production VLAN
+creation or VM power operation was executed for this acceptance. Refresh the web
+console to load the new Actions button. Runtime evidence is in
+`ai-operations-acceptance-20261126.json`.

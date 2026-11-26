@@ -625,10 +625,7 @@ class LibvirtDriver(HypervisorDriver):
             if force:
                 dom.destroy()
             else:
-                try:
-                    self._power_off(dom, timeout=RESTART_TIMEOUT)
-                except InvalidState:
-                    dom.destroy()  # the guest ignored the shutdown request
+                self._power_off(dom, timeout=RESTART_TIMEOUT)
             return self.start_vm(uuid)
         if force:
             dom.reset(0)

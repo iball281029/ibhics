@@ -89,6 +89,13 @@
     const el = document.createElement("div"); el.className = `ai-message ${kind}`;
     el.textContent = text; list.append(el); list.scrollTop = list.scrollHeight; return el;
   }
+  const operations = createAssistantOperations({list,message,api,post,getLanguage:()=>language,
+    onBusy: value => {input.disabled=send.disabled=value; if(!value)refreshStatus();}
+  });
+  document.getElementById("ai-actions").addEventListener("click", async () => {
+    if (busy) return;
+    try {await operations.open();} catch (err) {message(err.message || copy.unavailable,"error");}
+  });
   function welcome() {
     list.replaceChildren();
     const mascot=document.createElement("img");mascot.src="ai-elephant.png";mascot.alt=copy.mascotAlt;mascot.className="ai-welcome";list.append(mascot);
@@ -161,14 +168,14 @@
     }
   });
   form.addEventListener("submit", async e => {
-    e.preventDefault(); if(busy || !available || !input.value.trim()) return;
+    e.preventDefault(); if(busy || operations.isBusy() || !available || !input.value.trim()) return;
     const text=input.value.trim(), requestGeneration=generation;
     busy=true;languageSelect.disabled=true;send.disabled=input.disabled=enable.disabled=true;
     message(text,"user");input.value="";const pending=message(copy.thinking);pending.setAttribute("role","status");
     try {
       const r=await post("/assistant/chat",{message:text,history:history.slice(-8),include_context:include.checked,language});
       pending.remove();
-      if(requestGeneration===generation){message(r.reply);history.push({role:"user",content:text},{role:"assistant",content:r.reply.slice(0,3000)});history=history.slice(-8);}
+      if(requestGeneration===generation){message(r.reply);if(r.proposal)operations.proposal(r.proposal);history.push({role:"user",content:text},{role:"assistant",content:r.reply.slice(0,3000)});history=history.slice(-8);}
       if(r.allowance?.limit)allowance=r.allowance;
       if(r.allowance?.limit)statusText.textContent=copy.usage(r.allowance.used,r.allowance.limit);
     } catch(err){pending.remove();if(requestGeneration===generation)message(errorText(err),"error");}
@@ -187,6 +194,7 @@
     input.setAttribute("aria-label", language === "th" ? "คำถามของคุณ" : "Your question");
     document.getElementById("ai-preview-context").textContent = language === "th" ? "ดูข้อมูลที่จะแนบ" : "Preview context";
     document.getElementById("ai-clear").textContent = language === "th" ? "เริ่มแชตใหม่" : "New chat";
+    document.getElementById("ai-actions").textContent = language === "th" ? "จัดการระบบ" : "Actions";
     send.textContent = language === "th" ? "ส่งข้อความ ↗" : "Send message ↗";
     document.getElementById("ai-close").setAttribute("aria-label", language === "th" ? "ย่อหน้าต่างแชต" : "Close chat");
     document.getElementById("ai-privacy").textContent = copy.privacy;

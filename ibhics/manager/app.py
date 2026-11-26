@@ -476,7 +476,9 @@ def create_app(
             # Chat consumes a paid allowance but only reads infrastructure context.
             changes = (
                 request.method not in ("GET", "HEAD", "OPTIONS")
-                and route != f"{API}/assistant/chat"
+                and route not in {
+                    f"{API}/assistant/chat", f"{API}/assistant/plan", f"{API}/assistant/review"
+                }
             )
             if (changes or sensitive_read) and area not in auth.permissions(user):
                 raise Forbidden(
@@ -499,6 +501,18 @@ def create_app(
             }
             if changes and admin_only and user.role != Role.ADMIN:
                 raise Forbidden("this needs the admin role")
+        assistant_plan = request.headers.get("X-IBHICS-Assistant-Plan")
+        if assistant_plan:
+            operations = app.state.assistant_operations
+            planned = await asyncio.to_thread(operations.review, assistant_plan, user)
+            if (
+                request.method != "POST"
+                or request.url.path != f"{API}{planned['path']}"
+                or await request.json() != planned["body"]
+            ):
+                raise HTTPException(409, "The request differs from the confirmed assistant plan")
+            operations.submitted(assistant_plan)
+            request.state.audit_note = "Nong ib: user-confirmed action"
         approval_context = None
         if route in (f"{API}/settings/updates/install", f"{API}/settings/updates/rollback"):
             approval_context = settings.approval_context(rollback=route.endswith("/rollback"))
@@ -2381,7 +2395,7 @@ def create_app(
     settings_api.install(api, settings, auth)
     from .assistant import install as install_assistant
 
-    install_assistant(api, app, settings, auth, cluster, backups, assistant)
+    install_assistant(api, app, settings, auth, cluster, backups, assistant, migrations=migrations)
     app.include_router(public)
     app.include_router(api)
     app.mount("/", ConsoleFiles(directory=STATIC_DIR, html=True), name="console")

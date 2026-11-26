@@ -6,7 +6,7 @@ import threading
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ValidationError
 
 from .. import __version__
@@ -168,15 +168,26 @@ class ConfigIn(BaseModel):
     enabled: bool
 
 
-def install(api, app, settings, auth, cluster, backups, assistant=None):
+def install(api, app, settings, auth, cluster, backups, assistant=None, migrations=None):
     assistant = assistant or Assistant(settings)
     app.state.assistant = assistant
+    from .assistant_operations import OperationIn, Operations, ReviewIn, parse_request
+
+    operations = Operations(cluster, auth, assistant, backups, migrations=migrations)
+    app.state.assistant_operations = operations
 
     def actor(request):
         user = getattr(request.state, "user", None)
         if auth is None or user is None:
             raise Forbidden("Sign in to use AI Assistant")
         return user
+
+    def enabled_actor(request: Request):
+        user = actor(request)
+        assistant.require()
+        return user
+
+    enabled_user = Depends(enabled_actor)
 
     def context(request):
         user = actor(request)
@@ -220,12 +231,33 @@ def install(api, app, settings, auth, cluster, backups, assistant=None):
 
     @api.post("/assistant/chat")
     async def chat(request: Request, response: Response):
-        actor(request)
+        user = actor(request)
         assistant.require()
         response.headers["Cache-Control"] = "no-store"
         try:
             body = ChatIn.model_validate(await limited_json_body(request, 32000))
         except ValidationError as exc:
             raise HTTPException(422, "Invalid chat message or history") from exc
+        try:
+            operation = parse_request(body.message, body.language)
+        except ValidationError as exc:
+            raise HTTPException(422, "Check the VLAN ID; valid IDs are 1 to 4094") from exc
+        if operation:
+            return await asyncio.to_thread(operations.plan, operation, user)
         snapshot = await asyncio.to_thread(context, request) if body.include_context else {}
         return await asyncio.to_thread(assistant.ask, body, snapshot)
+
+    @api.get("/assistant/operations")
+    def operation_inventory(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return operations.inventory(actor(request))
+
+    @api.post("/assistant/plan")
+    def operation_plan(body: OperationIn, response: Response, user=enabled_user):
+        response.headers["Cache-Control"] = "no-store"
+        return operations.plan(body, user)
+
+    @api.post("/assistant/review")
+    def operation_review(body: ReviewIn, response: Response, user=enabled_user):
+        response.headers["Cache-Control"] = "no-store"
+        return operations.review(body.token, user)

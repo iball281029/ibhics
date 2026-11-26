@@ -223,6 +223,25 @@ def test_libvirt_offline_edit_preserves_unrelated_xml(monkeypatch):
     assert ET.fromstring(defined[0]).find("devices/controller[@type='scsi']") is not None
 
 
+def test_graceful_restart_timeout_never_forces_power_off():
+    calls = []
+    dom = types.SimpleNamespace(isActive=lambda: True, destroy=lambda: calls.append("destroy"))
+    driver = object.__new__(lv.LibvirtDriver)
+    driver._lookup = lambda uuid: dom
+    driver._info = lambda domain: types.SimpleNamespace(restart_needed=True)
+    driver.start_vm = lambda uuid: calls.append("start")
+
+    def timeout(domain, **kwargs):
+        raise InvalidState("guest did not shut down")
+
+    driver._power_off = timeout
+    with pytest.raises(InvalidState, match="guest did not shut down"):
+        driver.restart_vm("uuid", force=False)
+    assert calls == []
+    driver.restart_vm("uuid", force=True)
+    assert calls == ["destroy", "start"]
+
+
 def test_legacy_capacity_topology_does_not_break_unrelated_edit():
     root = ET.fromstring(build_domain_xml(VMSpec(name="legacy", vcpus=2)))
     ET.SubElement(root.find("cpu"), "topology", sockets="1", cores="32", threads="1")
