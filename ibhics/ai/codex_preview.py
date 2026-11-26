@@ -52,7 +52,7 @@ class CodexLocalPreview:
             body = ChatIn.model_validate(
                 {
                     key: payload[key]
-                    for key in ("message", "history", "include_context")
+                    for key in ("message", "history", "include_context", "language")
                     if key in payload
                 }
             )
@@ -60,6 +60,13 @@ class CodexLocalPreview:
             body.history = body.history[-4:]
             system, messages = prompt_messages(
                 body, payload.get("snapshot", {}) if body.include_context else {}
+            )
+            # Make the selected language explicit in the CLI's user prompt too.
+            # The UI locale must not inherit the operator account's usual language.
+            language = "Thai" if body.language == "th" else "English"
+            messages[-1]["content"] = (
+                f"Reply in {language}, unless I explicitly request another language.\n"
+                + messages[-1]["content"]
             )
             system += "\nKeep the answer under 250 words. Do not use any tools or read files."
             quota = self.usage.reserve("local-codex-preview", self.daily_limit)

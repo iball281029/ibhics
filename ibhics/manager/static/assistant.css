@@ -35,3 +35,5 @@
 @keyframes ai-sleep-breathe{0%,100%{transform:translateY(0) rotate(-5deg) scale(1)}50%{transform:translateY(-2px) rotate(-3deg) scale(1.025)}}
 @keyframes ai-sleep-z{0%{opacity:0;transform:translate(0,5px) scale(.65)}20%{opacity:1}80%{opacity:.8}100%{opacity:0;transform:translate(21px,-16px) scale(1.1)}}
 @media(prefers-reduced-motion:reduce){.ai-launcher.is-sleeping img,.ai-launcher.is-sleeping:hover img,.ai-launcher.is-sleeping::after,.ai-sleep-marks i{animation:none}.ai-sleep-marks i{opacity:1;position:static;margin-left:1px}}
+
+.ai-panel header #ai-language{margin-left:auto;width:auto;min-width:65px;font:12px system-ui;padding:6px;border-radius:8px;background:var(--panel,#12263a);color:var(--text,#e3f5ff);border:1px solid #8adfe077}.ai-panel header #ai-language + button{margin-left:0}

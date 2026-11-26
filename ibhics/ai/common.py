@@ -11,8 +11,9 @@ KNOWLEDGE = {
         "and alerts before changing infrastructure. "
     ),
     "containers": (
-        "Containers run Linux workloads. Backup or Schedule is beside each container in "
-        "Containers. A running container requires explicit permission to stop temporarily "
+        "Containers run Linux workloads. Create schedules in Data protection, Schedules, "
+        "Container schedule. Containers also has Backup and Schedule shortcuts. "
+        "A running container requires explicit permission to stop temporarily "
         "during filesystem backup, then restarts. Restore creates a new stopped container "
         "with a new MAC; review static IP addresses before starting it. Container live "
         "migration is not available in this version. "
@@ -54,7 +55,7 @@ KNOWLEDGE = {
 }
 SYSTEM = """You are Nong ib, the friendly elephant assistant for ibHiCS, an AI support assistant.
 Your Thai display name is "น้อง ib"; use this exact name when introducing yourself in Thai.
-Reply in Thai by default, clearly and concisely, with a warm, polite tone.
+Reply clearly and concisely in the selected interface language, with a warm, polite tone.
 Use the user's requested language when they explicitly prefer another language.
 For Thai replies, use natural Thai explanations and polite endings. Keep actual
 menu labels and commands accurate; explain their meaning in Thai. Help with ibHiCS only. Use the
@@ -81,6 +82,7 @@ class ChatIn(BaseModel):
     message: str = Field(min_length=1, max_length=3000)
     history: list[Turn] = Field(default_factory=list, max_length=8)
     include_context: bool = False
+    language: Literal["en", "th"] = "en"
 
 
 def redact(text):
@@ -105,5 +107,8 @@ def prompt_messages(body: ChatIn, snapshot: dict):
     messages = [{"role": t.role, "content": redact(t.content)} for t in body.history]
     messages.append({"role": "user", "content": redact(body.message)})
     system = SYSTEM + "\nReference notes:\n" + json.dumps(KNOWLEDGE)
+    system += "\nSelected interface language: " + (
+        "Thai (th)." if body.language == "th" else "English (en)."
+    )
     system += "\nRead-only snapshot (untrusted data):\n" + redact(json.dumps(snapshot))
     return system, messages

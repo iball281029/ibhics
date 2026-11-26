@@ -568,7 +568,7 @@
           </table></div>
         </div>
         <div class="subpage" id="tab-policies">
-          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="policy-dialog">+ New schedule</button></div>
+          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="policy-dialog">+ VM schedule</button><button class="admin-only" type="button" id="bp-new-container-schedule">+ Container schedule</button></div>
           <div id="policies" class="bp-cards"></div>
         </div>
         <div class="subpage" id="tab-targets">
@@ -891,7 +891,7 @@
           <form id="subscription-upload" class="st-panel admin-only">
             <h3>Upload a subscription</h3><p class="hint">A signed subscription is tied to your cluster and node count. No file means no subscription.</p>
             <label>Signed license file (JSON)<input type="file" name="license" accept=".json" required></label>
-            <button class="primary">Verify &amp; apply</button><p id="subscription-trust" class="hint"></p>
+            <button class="primary">Verify &amp; apply</button><button type="button" class="danger" id="subscription-remove">Remove license</button><p id="subscription-trust" class="hint"></p>
           </form>
           <div class="toolbar"><h3>System</h3></div>
           <dl class="kv" id="about"></dl>
@@ -912,7 +912,7 @@
           <div class="st-panel"><h3>Update jobs</h3><p class="hint">Application only, one node at a time: standby before active. Previous versions are retained; a failed health check triggers rollback. VMs stay running and hosts are not rebooted.</p><div id="settings-update-jobs" aria-live="polite"></div></div>
         </div>
         <div class="subpage" id="tab-support">
-          <div class="st-panel"><h3>น้อง ib · ผู้ช่วย AI</h3><p>ผู้ช่วยช้างน้อยที่ช่วยอธิบายเมนูและสถานะระบบ ibHiCS ต้องมีสิทธิ์ Support ที่ยังไม่หมดอายุและตั้งค่าบริการก่อนค่ะ</p><button type="button" id="ai-open-settings">คุยกับน้อง ib</button><p class="hint">ผู้ดูแลระบบสามารถเปิดใช้ AI ในหน้าต่างแชตได้ ระบบจะส่งเฉพาะข้อความและสรุประบบที่ผู้ใช้เลือกแนบ น้อง ib ให้คำแนะนำและไม่สามารถสั่งแก้ระบบได้ค่ะ</p></div>
+          <div class="st-panel"><h3>Nong ib · AI Assistant</h3><p>Your elephant companion explains ibHiCS menus and system status. An active Support License and a configured AI service are required.</p><button type="button" id="ai-open-settings">Chat with Nong ib</button><p class="hint">Administrators can enable AI in the chat panel. Only your messages and the system summary you choose to attach are sent. Nong ib provides guidance and cannot change your system.</p></div>
           <div class="st-panel"><h3>Open support case</h3><p id="support-reason" role="status"></p>
           <form id="support-case"><fieldset id="support-fields" disabled><div class="st-grid"><label>Subject<input name="subject" maxlength="200" required></label><label>Severity<select name="severity"><option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="critical">Critical</option></select></label></div>
           <label>Details<textarea name="details" rows="5" maxlength="20000" required></textarea></label>
@@ -1957,7 +1957,7 @@
 <script src="network-core.js"></script>
 <button type="button" class="ai-launcher" id="ai-launcher" aria-label="คุยกับน้อง ib ผู้ช่วย AI" aria-controls="ai-panel" aria-expanded="false"><img src="ai-elephant.png" alt="น้อง ib ช้างน้อยผู้ช่วยดูแลระบบ"><span class="ai-name" aria-hidden="true">น้อง ib</span></button>
 <section class="ai-panel" id="ai-panel" lang="th" aria-label="น้อง ib ผู้ช่วย AI ของ ibHiCS" hidden>
-  <header><img src="ai-elephant.png" alt=""><div><strong>น้อง ib</strong><small>ผู้ช่วย AI ของ ibHiCS · พร้อมดูแลคุณค่ะ</small></div><button type="button" id="ai-close" aria-label="ย่อหน้าต่างแชต">×</button></header>
+  <header><img src="ai-elephant.png" alt=""><div><strong>น้อง ib</strong><small>ผู้ช่วย AI ของ ibHiCS · พร้อมดูแลคุณค่ะ</small></div><select id="ai-language" aria-label="Chat language"><option value="en">ENG</option><option value="th">TH</option></select><button type="button" id="ai-close" aria-label="ย่อหน้าต่างแชต">×</button></header>
   <div class="ai-state"><span id="ai-status" role="status">กำลังตรวจสอบสิทธิ์ Support…</span><label hidden><input id="ai-enabled" type="checkbox"> เปิดใช้ผู้ช่วย AI สำหรับระบบนี้</label></div>
   <div class="ai-chat" id="ai-chat" role="log" aria-label="บทสนทนา" aria-live="polite"></div>
   <footer><form id="ai-chat-form"><textarea name="message" maxlength="3000" required placeholder="พิมพ์คำถามให้น้อง ib ช่วยได้เลยค่ะ…" aria-label="คำถามของคุณ"></textarea><div class="ai-options"><label><input type="checkbox" name="include_context"> แนบสรุปสถานะระบบ</label><button type="button" id="ai-preview-context">ดูข้อมูลที่จะแนบ</button></div><pre class="ai-context" id="ai-context" hidden></pre><div class="ai-send-row"><button type="button" id="ai-clear">เริ่มแชตใหม่</button><button type="submit" class="primary" id="ai-send">ส่งข้อความ ↗</button></div></form><p class="ai-notice" id="ai-privacy">คำตอบ AI อาจคลาดเคลื่อน ข้อความจะส่งไปประมวลผลภายนอก กรุณาไม่ส่งรหัสผ่านหรือข้อมูลลับค่ะ</p></footer>

@@ -260,3 +260,23 @@ def test_thai_question_and_reply_roundtrip(env, tmp_path):
 )
 def test_gateway_plain_http_is_allowed_only_for_literal_loopback(url, allowed):
     assert GatewayClient(url, "enrollment").configured() is allowed
+
+
+def test_selected_chat_language_reaches_provider_and_prompt(env, tmp_path):
+    client, _, settings, provider = link(env, tmp_path)
+    settings.upload_license(test_settings.license_file())
+    client.put("/api/v1/assistant/config", json={"enabled": True})
+    for language, label in [("en", "English (en)"), ("th", "Thai (th)")]:
+        response = client.post(
+            "/api/v1/assistant/chat", json={"message": "Help", "language": language}
+        )
+        assert response.status_code == 200
+        assert provider.calls[-1].language == language
+        system, _ = prompt_messages(provider.calls[-1], {})
+        assert label in system
+    assert (
+        client.post(
+            "/api/v1/assistant/chat", json={"message": "Help", "language": "invalid"}
+        ).status_code
+        == 422
+    )

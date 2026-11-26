@@ -18,6 +18,7 @@ from .base import (
     VMEdit,
     VMInfo,
     VMSpec,
+    VMState,
 )
 
 
@@ -50,7 +51,7 @@ def info_from_json(data: dict) -> VMInfo:
     return VMInfo(
         uuid=data["uuid"],
         spec=spec_from_json(data),
-        state=data["state"],
+        state=VMState(data["state"]),
         restart_needed=data.get("restart_needed", False),
         pause_reason=data.get("pause_reason", ""),
         storage_error_protection=data.get("storage_error_protection", "unknown"),

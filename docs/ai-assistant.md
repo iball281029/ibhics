@@ -2,7 +2,7 @@
 
 ## Delivered first version
 
-The assistant is named Nong ib. Its panel, launcher name badge, greeting, suggested questions, status and error messages use Thai. Thai is the default reply language; an explicit request for another language is respected. Actual infrastructure menu labels stay accurate in replies.
+The assistant is named Nong ib. Its panel supports ENG/TH, defaulting to English and remembering the selection per browser. The selected language controls the preferred reply language; an explicit request for another language is respected. The Settings → Support card remains English. Actual infrastructure menu labels stay accurate in replies.
 
 The console includes a floating elephant launcher and chat panel (click the doll to open; click again to collapse), also reachable from Settings → Support → Open AI Assistant. Administrators enable the assistant inside the panel. All signed-in roles may ask documentation questions. Optional context is off by default and can be previewed before sending. Context uses the user's existing permissions: VM counts, node health and recent backup-job status are allowlisted; credentials, full configuration, raw logs and disk contents are not automatically collected.
 
@@ -107,3 +107,39 @@ passed. Both production nodes received static assets only, without changing thei
 licenses or restarting services. The active node served all three exact asset
 hashes over HTTP 200; standby files matched their release hashes and the Manager
 reported its expected standby status. No production license was removed for testing.
+
+
+## Controls and Codex reconnection (2026-11-26)
+
+The admin-only **Remove license** button is under Settings → Overview & subscriptions.
+It asks for confirmation and removes the signed entitlement through an authenticated
+DELETE endpoint. Support and Update are removed together; notification settings and
+running workloads are preserved. Uploading a signed replacement restores entitlement.
+The mascot refreshes immediately after either operation.
+
+The chat header has ENG/TH selection. Language reaches the gateway and the Codex
+adapter; the CLI prompt also explicitly states it so the operator's usual language
+does not override the selected locale. Existing conversation content is preserved.
+The Support page itself stays English. Data protection → Schedules now offers
+**VM schedule** and **Container schedule**. Container shortcuts remain available.
+
+Both reverse SSH connections had disappeared, producing connection-refused errors
+at each Manager's loopback port 8891. They were restored and the local bridge was
+reloaded without resetting login or usage. Live questions through the real Manager
+returned Thai and English replies. The temporary adapter still uses the operator's
+ChatGPT/Codex allowance, with a separate five-question daily test guard. It does not
+use a provider API key; no separately billed API route was enabled. The Mac, bridge
+and SSH tunnels must stay running; automatic recovery after a Mac restart is not
+implemented.
+
+This test cluster currently has one operator Codex account. There is no account
+assignment UI or provider-account pool per customer organization. Signed cluster
+identity, enrollment token and daily gateway usage are separated by installation.
+Conversation history stays in browser memory; optional context is read only and
+opt in. There is no automatic historical system-data warehouse for AI analysis.
+
+The operator deferred Claude and declined additional API billing. Subscription
+access for Codex testing must not be described as a confirmed commercial entitlement
+to serve multiple customer organizations. Anthropic's published authentication terms
+prohibit routing third-party user requests through consumer subscription credentials:
+https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use

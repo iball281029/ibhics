@@ -191,6 +191,11 @@ def install(api, settings, auth):
         admin(request)
         return settings.upload_license(await limited_json_body(request, 65536))
 
+    @api.delete("/settings/subscription")
+    def license_remove(request: Request):
+        admin(request)
+        return settings.remove_license()
+
     @api.post("/settings/support/cases", status_code=201)
     async def case(request: Request):
         # Reject entitlement before accepting a diagnostic body.

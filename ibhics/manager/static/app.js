@@ -4480,7 +4480,7 @@ async function protectionOverview() {
   protection.usage = new Map(rows.map(r => [r.t.name, r.usage.status === "fulfilled" ? r.usage.value : [{error:r.usage.reason.message}]]));
   protection.errors = rows.filter(r => r.points.status === "rejected").map(r => r.t.name);
   const vms = state.vms.filter(v => !v.recycled && !v.template), policies = state.policies.filter(p => p.enabled);
-  const covered = vms.filter(v => policies.some(p => !p.vms.length || p.vms.includes(v.name))).length;
+  const covered = vms.filter(v => policies.some(p => p.entity_type !== "container" && (!p.vms.length || p.vms.includes(v.name)))).length;
   const pct = vms.length ? Math.round(covered / vms.length * 100) : 0;
   const jobs = state.jobs.filter(j => j.kind === "backup" && ["done", "failed"].includes(j.state)).sort((a,b) => String(b.finished).localeCompare(String(a.finished)));
   const next = policies.map(protectionNext).filter(Boolean).sort((a,b) => a-b)[0];
@@ -6682,3 +6682,11 @@ function askNewPassword(user) {
     input.focus();
   });
 }
+
+$("#bp-new-container-schedule").addEventListener("click", async () => {
+  try {
+    await load("containers");
+    if (!state.containers.length) {toast("No containers are available to schedule.", true); return;}
+    await openCtSchedule(state.containers[0].name);
+  } catch (err) {fail(err);}
+});

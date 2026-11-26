@@ -35,6 +35,7 @@ async function renderSettings() {
   $("#support-reason").textContent = !active ? "Locked: an active Support subscription is required." : !permitted ? "Your role cannot open support cases." : !state.me ? "Sign in to open a support case." : data.support_delivery_configured ? "Cases are saved locally, then sent to your configured support endpoint." : "Cases are saved locally. No support endpoint is configured; nothing will be sent.";
   $("#subscription-trust").textContent = data.verification_available ? "Signatures are checked with the deployment's trusted verifier." : "Signed uploads are not enabled on this installation. Ask your administrator to configure trusted verification.";
   $("#subscription-upload button").disabled = !data.verification_available;
+  $("#subscription-remove").disabled = !data.subscription.customer;
   $("#update-upload button").disabled = !data.verification_available;
   $("#update-availability").textContent = data.installation_available ? "A verified update is ready for installation when its release date is covered by your Update subscription." : "Application updates are not enabled on this installation. Ask your administrator to configure application updates before installing.";
   $("#update-check-status").textContent = data.check_error || (data.last_check ? `Last checked ${data.last_check}` : "No channel check has run.");
@@ -91,6 +92,7 @@ async function jsonFile(file) {
 }
 settingsForm("#subscription-upload", async (f, form) => {
   await post("/settings/subscription", await jsonFile(f.get("license")));
+  window.dispatchEvent(new Event("ibhics-license-changed"));
   form.reset(); await renderSettings(); toast("Subscription verified and saved");
 });
 settingsForm("#update-upload", async (f, form) => {
@@ -291,3 +293,13 @@ $("#notification-test-line").onclick = async e => {
   } catch (err) { $("#notification-result").textContent = err.message; }
   finally { e.target.disabled = false; }
 };
+
+$("#subscription-remove").addEventListener("click", async () => {
+  if (!confirm("Remove this installation's license? Support and Update entitlements will be removed. Running VMs will continue. You can upload a signed license again.")) return;
+  const button = $("#subscription-remove"); button.disabled = true;
+  try {
+    await del("/settings/subscription");
+    window.dispatchEvent(new Event("ibhics-license-changed"));
+    await renderSettings(); toast("License removed. You can upload a new signed license.");
+  } catch (err) {fail(err); button.disabled = false;}
+});

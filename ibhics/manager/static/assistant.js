@@ -4,7 +4,10 @@
   const form = document.getElementById("ai-chat-form"), list = document.getElementById("ai-chat");
   const input = form.elements.message, send = document.getElementById("ai-send"), include = form.elements.include_context;
   const statusText = document.getElementById("ai-status"), enable = document.getElementById("ai-enabled");
-  const copy = AI_TEXT;
+  let language = "en";
+  try {if (localStorage.getItem("ibhics-ai-language") === "th") language = "th";} catch {}
+  let copy = AI_LOCALES[language];
+  const languageSelect = document.getElementById("ai-language");
   const errorText = err => copy.errors[err.message] || copy.unavailable;
   let history = [], busy = false, available = false, generation = 0, allowance = null;
   let licensed = null, statusRequest = null;
@@ -48,7 +51,7 @@
     const image = launcher.querySelector("img");
     image.src = value ? "ai-elephant.png" : "ai-elephant-sleeping.png";
     image.alt = value ? copy.mascotAlt : "Nong ib sleeping — Support License required";
-    launcher.setAttribute("aria-label", value ? "คุยกับน้อง ib ผู้ช่วย AI" : "Nong ib is sleeping. Manage Support License");
+    launcher.setAttribute("aria-label", value ? copy.mascotAlt : "Nong ib is sleeping. Manage Support License");
     launcher.setAttribute("aria-controls", value ? "ai-panel" : licenseNotice.id);
     if (!value) {
       panel.hidden = true;
@@ -160,17 +163,42 @@
   form.addEventListener("submit", async e => {
     e.preventDefault(); if(busy || !available || !input.value.trim()) return;
     const text=input.value.trim(), requestGeneration=generation;
-    busy=true;send.disabled=input.disabled=enable.disabled=true;
+    busy=true;languageSelect.disabled=true;send.disabled=input.disabled=enable.disabled=true;
     message(text,"user");input.value="";const pending=message(copy.thinking);pending.setAttribute("role","status");
     try {
-      const r=await post("/assistant/chat",{message:text,history:history.slice(-8),include_context:include.checked});
+      const r=await post("/assistant/chat",{message:text,history:history.slice(-8),include_context:include.checked,language});
       pending.remove();
       if(requestGeneration===generation){message(r.reply);history.push({role:"user",content:text},{role:"assistant",content:r.reply.slice(0,3000)});history=history.slice(-8);}
       if(r.allowance?.limit)allowance=r.allowance;
       if(r.allowance?.limit)statusText.textContent=copy.usage(r.allowance.used,r.allowance.limit);
     } catch(err){pending.remove();if(requestGeneration===generation)message(errorText(err),"error");}
-    finally{busy=false;await refreshStatus();if(!panel.hidden && available)input.focus();}
+    finally{busy=false;languageSelect.disabled=false;await refreshStatus();if(!panel.hidden && available)input.focus();}
   });
-  welcome();
-  refreshStatus();
+  function applyLanguage() {
+    copy = AI_LOCALES[language];
+    panel.lang = language;
+    panel.setAttribute("aria-label", language === "th" ? "น้อง ib ผู้ช่วย AI ของ ibHiCS" : "Nong ib AI Assistant");
+    launcher.querySelector(".ai-name").textContent = copy.name;
+    panel.querySelector("header strong").textContent = copy.name;
+    panel.querySelector("header small").textContent = language === "th" ? "ผู้ช่วย AI ของ ibHiCS · พร้อมดูแลคุณค่ะ" : "ibHiCS AI Assistant · Your support companion";
+    enable.closest("label").lastChild.textContent = language === "th" ? " เปิดใช้ผู้ช่วย AI สำหรับระบบนี้" : " AI enabled for this installation";
+    include.closest("label").lastChild.textContent = language === "th" ? " แนบสรุปสถานะระบบ" : " Include system summary";
+    input.placeholder = language === "th" ? "พิมพ์คำถามให้น้อง ib ช่วยได้เลยค่ะ…" : "Ask Nong ib a question…";
+    input.setAttribute("aria-label", language === "th" ? "คำถามของคุณ" : "Your question");
+    document.getElementById("ai-preview-context").textContent = language === "th" ? "ดูข้อมูลที่จะแนบ" : "Preview context";
+    document.getElementById("ai-clear").textContent = language === "th" ? "เริ่มแชตใหม่" : "New chat";
+    send.textContent = language === "th" ? "ส่งข้อความ ↗" : "Send message ↗";
+    document.getElementById("ai-close").setAttribute("aria-label", language === "th" ? "ย่อหน้าต่างแชต" : "Close chat");
+    document.getElementById("ai-privacy").textContent = copy.privacy;
+    languageSelect.value = language;
+    if (!history.length && !busy) welcome();
+    refreshStatus();
+  }
+  languageSelect.addEventListener("change", () => {
+    language = languageSelect.value === "th" ? "th" : "en";
+    try {localStorage.setItem("ibhics-ai-language", language);} catch {}
+    applyLanguage();
+  });
+  window.addEventListener("ibhics-license-changed", () => {refreshStatus();});
+  applyLanguage();
 })();

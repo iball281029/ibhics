@@ -33,7 +33,8 @@ def test_local_prompt_is_isolated_tools_disabled_and_budget_persisted(tmp_path, 
             self.command = command
 
         def communicate(self, text, timeout):
-            assert json.loads(text)[-1]["content"] == "Help"
+            content = json.loads(text)[-1]["content"]
+            assert content.startswith("Reply in English") and content.endswith("Help")
             answer = Path(self.command[self.command.index("--output-last-message") + 1])
             answer.write_text("Useful guidance", encoding="utf-8")
             return None, None

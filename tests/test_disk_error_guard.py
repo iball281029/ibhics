@@ -60,3 +60,15 @@ def test_safety_definition_failure_prevents_unprotected_boot(monkeypatch):
     with pytest.raises(RuntimeError, match="definition failed"):
         driver.start_vm("vm")
     dom.create.assert_not_called()
+
+
+def test_remote_vm_state_remains_an_enum_for_os_context_and_migration_checks():
+    from dataclasses import asdict
+
+    from ibhics.hypervisor.base import VMInfo, VMSpec, VMState
+    from ibhics.hypervisor.serialize import info_from_json
+    vm = VMInfo(uuid="test", spec=VMSpec(name="test"), state=VMState.RUNNING)
+    payload = {**asdict(vm.spec), "uuid": vm.uuid, "state": "running"}
+    restored = info_from_json(payload)
+    assert restored.state is VMState.RUNNING
+    assert restored.state.value == "running"

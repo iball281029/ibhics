@@ -1267,3 +1267,31 @@ def test_admin_can_require_and_turn_off_2fa_per_user(tmp_path):
     again.load()
     assert again.user("bob").require_totp is True
     assert auth.update_user("bob", require_totp=False).require_totp is False
+
+
+def test_remove_license_preserves_other_settings_and_persists(env):
+    client, _, settings = env
+    settings.upload_license(license_file())
+    original_channels = dict(settings.data["channels"])
+    response = client.delete("/api/v1/settings/subscription")
+    assert response.status_code == 200
+    assert response.json()["support"]["status"] == "None"
+    assert response.json()["update"]["status"] == "None"
+    assert settings.data["channels"] == original_channels
+    assert json.loads(settings.path.read_text())["license"] is None
+    assert client.get("/api/v1/assistant/status").json()["licensed"] is False
+    assert client.delete("/api/v1/settings/subscription").status_code == 200
+    assert client.post("/api/v1/settings/subscription", json=license_file()).status_code == 200
+    assert settings.subscription()["support"]["status"] == "Active"
+
+
+def test_remove_license_requires_admin(env):
+    from test_auth import as_user
+
+    from ibhics.manager.auth import Role
+
+    client, auth, settings = env
+    settings.upload_license(license_file())
+    operator = as_user(env, "remove-license-operator", Role.OPERATOR)
+    assert operator.delete("/api/v1/settings/subscription").status_code == 403
+    assert settings.subscription()["support"]["status"] == "Active"

@@ -220,6 +220,13 @@ class Settings:
             self.save()
             return self.subscription()
 
+    def remove_license(self) -> dict:
+        """Remove the signed entitlement, preserving notification and other settings."""
+        with self.lock:
+            self.data["license"] = None
+            self.save()
+            return self.subscription()
+
     def configure(self, body: dict):
         with self.lock:
             config = {
