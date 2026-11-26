@@ -65,11 +65,13 @@ from .domain_xml import (
     build_volume_xml,
     cdrom_element,
     disk_element,
+    disk_error_protected,
     disk_iothread_ids,
     file_name,
     hotplug_ready,
     make_hotplug_ready,
     nic_element,
+    normalize_disk_error_policy,
     normalize_disk_io,
     recycled_at,
     set_recycled_mark,
@@ -538,6 +540,13 @@ class LibvirtDriver(HypervisorDriver):
     def start_vm(self, uuid: str) -> VMInfo:
         dom = self._lookup(uuid)
         if dom.isActive():
+            try:
+                paused = dom.state()[0] == libvirt.VIR_DOMAIN_PAUSED
+            except (TypeError, AttributeError):
+                paused = False
+            if paused:
+                dom.resume()
+                return self._info(dom)
             raise InvalidState("VM is already running")
         root = ET.fromstring(dom.XMLDesc(0))
         if template_facts(root)[0]:
@@ -549,6 +558,7 @@ class LibvirtDriver(HypervisorDriver):
             raise InvalidState("this VM is in the recycle bin: restore it first")
         self._nvram_qcow2(dom)
         self._add_tablet(dom)
+        self._enforce_disk_error_policy(dom)
         previous = self._normalize_disk_io(dom)
         try:
             dom.create()
@@ -560,6 +570,15 @@ class LibvirtDriver(HypervisorDriver):
             dom = self._conn.defineXML(previous)
             dom.create()
         return self._info(dom)
+
+    def _enforce_disk_error_policy(self, dom) -> None:
+        if dom.isActive():
+            raise InvalidState("Disk safety policy can only be applied while stopped")
+        root = ET.fromstring(
+            dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE)
+        )
+        if normalize_disk_error_policy(root):
+            self._conn.defineXML(ET.tostring(root, encoding="unicode"))
 
     def _normalize_disk_io(self, dom) -> str | None:
         """Best effort persistent tuning, only while inactive; never edit live XML.
@@ -2100,11 +2119,22 @@ class LibvirtDriver(HypervisorDriver):
             disk.size_gb = -(-capacity // GIB)
             disk.used_gb = round(allocation / GIB, 1)
         info = VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
+        if info.state == VMState.PAUSED:
+            info.pause_reason = (
+                "storage_io"
+                if _reason == getattr(libvirt, "VIR_DOMAIN_PAUSED_IOERROR", None)
+                else "paused"
+            )
+        info.storage_error_protection = (
+            "active" if disk_error_protected(ET.fromstring(xml)) else "not_configured"
+        )
         try:
             spec.autostart = bool(dom.autostart())
             if info.state == VMState.RUNNING:
                 saved = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
                 info.restart_needed = _restart_key(saved) != _restart_key(ET.fromstring(xml))
+                if info.storage_error_protection != "active" and disk_error_protected(saved):
+                    info.storage_error_protection = "pending_restart"
         except libvirt.libvirtError:
             pass
         return info
@@ -2227,6 +2257,10 @@ def _restart_key(root) -> tuple:
         memory.text if memory is not None else None,
         [b.get("dev") for b in root.findall("os/boot")],
         _video_of(root),
+        tuple(
+            (d.get("error_policy"), d.get("rerror_policy"))
+            for d in root.findall("devices/disk[@device='disk']/driver")
+        ),
     )
 
 

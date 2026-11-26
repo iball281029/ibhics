@@ -133,6 +133,8 @@ class VMOut(VMHardware):
     boot: list[str] | None = None
     autostart: bool = False
     restart_needed: bool = False
+    pause_reason: str = ""
+    storage_error_protection: str = "unknown"
     template: bool = False
     linked_to: str = ""  # uuid of the template a linked clone's disks are based on
     recycled: str = ""  # when it went into the recycle bin; empty: in use
@@ -165,6 +167,8 @@ class VMOut(VMHardware):
             boot=spec.boot,
             autostart=spec.autostart,
             restart_needed=info.restart_needed,
+            pause_reason=info.pause_reason,
+            storage_error_protection=info.storage_error_protection,
             template=spec.template,
             linked_to=spec.linked_to,
             recycled=spec.recycled,

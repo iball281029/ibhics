@@ -1112,12 +1112,13 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
     ${compact ? "" : summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : `<button class="small" data-vm="edit" data-id="${vm.uuid}">Settings</button>`}
     ${vm.state === "running"
       ? `<button class="small${compact ? " sq" : ""}" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Open console">${compact ? `<svg><use href="#i-compute"/></svg>` : "Console"}</button>`
-      : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="Power on">${compact ? `<svg><use href="#i-power"/></svg>` : "Power on"}</button>`}
+      : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="${vm.state === "paused" ? "Resume after storage recovery" : "Power on"}">${compact ? `<svg><use href="#i-power"/></svg>` : vm.state === "paused" ? "Resume" : "Power on"}</button>`}
     ${compact || vm.template ? "" : `<button class="small" data-vm="snapshot" data-id="${vm.uuid}" title="Take a snapshot">Snapshot</button>`}
     <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
+      ${vm.state === "paused" ? `<button data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button><button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${vm.template ? "" : `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate… (host or storage)</button>`}
       ${multi && !vm.template ? `<button data-vm="ha" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Start this VM on another node if its node fails (shared storage only)">${state.ha?.has(vm.uuid) ? "Turn off HA restart" : "Turn on HA restart"}</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
@@ -1131,7 +1132,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       ${vm.state === "running" && /windows/i.test(vm.os_type || "") ? `<button data-vm="sysprep" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Generalize (sysprep) for a template…</button>` : ""}
       ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
-      ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
+      ${vm.state === "stopped" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
     </div></details>`;
 }
 
@@ -1175,6 +1176,9 @@ function vmAlerts(vm) {
   const u = diskUsage(vm, g);
   if (u.used != null && pct(u.used, u.total) >= 90) out.push(`Disk ${pct(u.used, u.total)}% full`);
   if (vm.state === "running" && g && !g.agent) out.push("No guest agent");
+  if (vm.pause_reason === "storage_io") out.push("Paused: storage I/O interrupted. Check storage before Resume.");
+  if (vm.storage_error_protection === "pending_restart") out.push("Storage error protection needs power off/on");
+  else if (vm.storage_error_protection === "not_configured") out.push("Storage error protection not configured");
   if (vm.restart_needed) out.push("Restart to apply changes");
   return out;
 }
@@ -1559,8 +1563,8 @@ async function batch(act) {
   }
   if (act === "ungroup") { await moveToGroup(vms.map((v) => v.uuid), ""); return; }
   const fits = {
-    start: (v) => v.state !== "running", stop: (v) => v.state === "running", poweroff: (v) => v.state === "running",
-    restart: (v) => v.state === "running", delete: (v) => v.state !== "running",
+    start: (v) => v.state !== "running", stop: (v) => v.state === "running", poweroff: (v) => ["running", "paused"].includes(v.state),
+    restart: (v) => v.state === "running", delete: (v) => v.state === "stopped",
   }[act];
   const todo = vms.filter(fits), skipped = vms.length - todo.length;
   const label = { start: "Power on", stop: "Shut down", poweroff: "Power off", restart: "Restart", delete: "Delete" }[act];

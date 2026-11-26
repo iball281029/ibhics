@@ -1,6 +1,7 @@
 #!/bin/bash
 # Install the storage software only. Never partition, format, wipe or create a pool.
 set -Eeuo pipefail
+asset_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 role=${1:?compute or witness required}
 [[ $role == compute || $role == witness ]] || exit 2
 controller=${2:-no}
@@ -41,6 +42,14 @@ port = 3370
 EOF
 fi
 apt-get install -y --no-install-recommends "${packages[@]}"
+if [[ $role == compute ]]; then
+    install -d /usr/local/libexec /etc/systemd/system/nfs-server.service.d /etc/systemd/system/nfsdcld.service.d
+    install -m 755 "$asset_dir/nfs-tracking.py" /usr/local/libexec/ibhics-nfs-tracking
+    install -m 644 "$asset_dir/nfs-tracking-server.conf" /etc/systemd/system/nfs-server.service.d/40-ibhics-tracking.conf
+    install -m 644 "$asset_dir/nfs-tracking-daemon.conf" /etc/systemd/system/nfsdcld.service.d/40-ibhics-tracking.conf
+    # The new lifecycle applies at the next gateway start; never restart live NFS here.
+    systemctl daemon-reload
+fi
 if [[ ! -f /etc/linstor/linstor_satellite.toml ]]; then
     install -d /etc/linstor /etc/drbd-reactor.d
     cat >/etc/linstor/linstor_satellite.toml <<'EOF'

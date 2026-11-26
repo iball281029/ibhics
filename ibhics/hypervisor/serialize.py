@@ -52,6 +52,8 @@ def info_from_json(data: dict) -> VMInfo:
         spec=spec_from_json(data),
         state=data["state"],
         restart_needed=data.get("restart_needed", False),
+        pause_reason=data.get("pause_reason", ""),
+        storage_error_protection=data.get("storage_error_protection", "unknown"),
     )
 
 

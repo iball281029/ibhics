@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-26",
+  "requirements": [
+    "VMs must operate normally after migration between compute nodes",
+    "Gateway failover must not inject disk errors into guests on surviving compute nodes",
+    "Validate OS liveness and read/write, not only hypervisor running state"
+  ],
+  "diagnosis": {
+    "vm": "EXWin2022",
+    "failed_reads": 25285,
+    "failed_writes": 86294,
+    "failed_flushes": 4473,
+    "nfs_tracker_old_pid": 1486,
+    "stale_database_path": "/var/lib/nfs/nfsdcld/main.sqlite",
+    "open_descriptor_device": 65024,
+    "database_missing_under_shared_bind": true,
+    "tracker_journal": "attempt to write a readonly database",
+    "kernel_journal": [
+      "NFSD: Unable to end grace period: -121",
+      "NFS: 172.16.12.106: lost 1 locks"
+    ],
+    "causal_limit": "Observed NFS tracking failure and guest I/O failures establish defects; no Windows crash dump was analysed."
+  },
+  "repair": {
+    "nfs_tracker_restarted": true,
+    "new_tracker_pid": 955489,
+    "shared_database_descriptor_verified": true,
+    "nfs_server_restarted": false,
+    "existing_lost_locks_repaired_in_place": false,
+    "server_unit_verify_with_generators": "passed",
+    "new_startup_hooks_installed_on": [
+      "103",
+      "104"
+    ]
+  },
+  "fault_injection": {
+    "environment": "isolated QEMU TCG, 64 MiB synthetic disk, no NIC",
+    "read_EIO_once": true,
+    "observed_pause_status": "io-error",
+    "observed_event_action": "stop",
+    "resumed_to_running": true,
+    "production_network_interrupted": false,
+    "write_fault_injected": false
+  },
+  "exwin_recovery": {
+    "vm": "EXWin2022",
+    "uuid": "e3477cac-000a-4251-89d3-5b58f25a851a",
+    "old_domain_id": 12,
+    "new_domain_id": 19,
+    "fresh_disk_header_read": true,
+    "live_io_guard_active": true,
+    "other_vms_restarted": false,
+    "evidence": "/var/lib/ibhics-maintenance/exwin-recovery-20261126-110156",
+    "before_mime": "image/png",
+    "os_boot_verified": true,
+    "guest_agent_responding": true,
+    "domain_state": [
+      1,
+      1
+    ],
+    "block_errors": {},
+    "after_mime": "image/png",
+    "guest_os": {
+      "name": "Microsoft Windows",
+      "kernel-release": "20348",
+      "version": "Microsoft Windows Server 2022",
+      "variant": "server",
+      "pretty-name": "Windows Server 2022 Standard",
+      "version-id": "2022",
+      "variant-id": "server",
+      "kernel-version": "10.0",
+      "machine": "x86_64",
+      "id": "mswindows"
+    },
+    "guest_readback": {
+      "exited": true,
+      "exitcode": 0,
+      "stdout": "IBHICS_STORAGE_READBACK_OK\r\n",
+      "stderr": ""
+    },
+    "guest_read_write_verified": true,
+    "guest_probe_pid": 5544
+  },
+  "other_running_vms_policy_pending_power_cycle": [
+    "test-ib-Migrate",
+    "PNetLab-27H1-V8.12",
+    "npm-vm",
+    "OpenP9"
+  ],
+  "tests": {
+    "core_related": 61,
+    "additional_driver_set": 46,
+    "exact_103_merged_payload": 53,
+    "exact_104_merged_payload": 53,
+    "note": "Sets overlap; do not sum as unique tests."
+  },
+  "remaining": {
+    "full_live_gateway_failover_acceptance": false,
+    "cross_node_OS_acceptance_after_patch": false,
+    "physical_103_link": "100 Mb/s; cable/switch checks deferred by operator",
+    "active_active_or_multipath_backend_implemented": false
+  }
+}

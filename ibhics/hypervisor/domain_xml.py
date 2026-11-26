@@ -86,6 +86,8 @@ def disk_element(disk: DiskSpec, volume: str, dev: str, iothread: str | None = N
         type="raw" if block else "qcow2",
         cache="none",
         discard="unmap",
+        error_policy="stop",
+        rerror_policy="stop",
     )
     if disk.bus == "virtio":
         driver.set("io", "native")
@@ -108,6 +110,28 @@ def disk_iothread_ids(root: ET.Element) -> set[str]:
         ids.add(candidate)
         candidate += 1
     return {str(i) for i in ids} if count > 0 else set()
+
+
+def normalize_disk_error_policy(root: ET.Element) -> bool:
+    """Pause managed guests on disk errors instead of injecting failure into the OS."""
+    changed = False
+    for disk in root.findall("devices/disk[@device='disk']"):
+        driver = disk.find("driver")
+        if driver is None or driver.get("name") != "qemu":
+            continue
+        for key in ("error_policy", "rerror_policy"):
+            if driver.get(key) != "stop":
+                driver.set(key, "stop")
+                changed = True
+    return changed
+
+
+def disk_error_protected(root: ET.Element) -> bool:
+    drivers = [disk.find("driver") for disk in root.findall("devices/disk[@device='disk']")]
+    return bool(drivers) and all(
+        d is not None and d.get("error_policy") == "stop" and d.get("rerror_policy") == "stop"
+        for d in drivers
+    )
 
 
 def normalize_disk_io(root: ET.Element) -> bool:

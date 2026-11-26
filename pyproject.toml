@@ -33,7 +33,7 @@ ibhics-setup = "ibhics.installer.setup:main"
 include = ["ibhics*"]
 
 [tool.setuptools.package-data]
-"ibhics" = ["storage_assets/*.sh"]
+"ibhics" = ["storage_assets/*.sh", "storage_assets/*.py", "storage_assets/*.conf"]
 "ibhics.manager" = ["static/*", "static/**/*"]
 "ibhics.arbiter_ui" = ["static/*"]
 
