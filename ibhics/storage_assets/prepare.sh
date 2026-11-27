@@ -47,6 +47,11 @@ if [[ $role == compute ]]; then
     install -m 755 "$asset_dir/nfs-tracking.py" /usr/local/libexec/ibhics-nfs-tracking
     install -m 644 "$asset_dir/nfs-tracking-server.conf" /etc/systemd/system/nfs-server.service.d/40-ibhics-tracking.conf
     install -m 644 "$asset_dir/nfs-tracking-daemon.conf" /etc/systemd/system/nfsdcld.service.d/40-ibhics-tracking.conf
+    # After a gateway failover clients reclaim their locks during the NFSv4 grace
+    # period; keep it longer than the lease plus takeover time (lost locks pause VMs).
+    if ! grep -q '^grace-time=' /etc/nfs.conf; then
+        sed -i 's/^\[nfsd\]$/[nfsd]\ngrace-time=240\nlease-time=90/' /etc/nfs.conf
+    fi
     # The new lifecycle applies at the next gateway start; never restart live NFS here.
     systemctl daemon-reload
 fi
