@@ -1691,6 +1691,8 @@
       <label>Memory (MB) <input name="memory_mb" type="number" min="64" step="64"></label>
       <label>Disk (GB, grow only) <input name="disk_gb" type="number" min="1"></label>
       <label class="check"><input type="checkbox" name="autostart"> Start when the node boots</label>
+      <label class="check wide"><input id="ct-ha-enabled" type="checkbox" name="ha_enabled"> High availability</label>
+      <p class="hint wide">Shared storage only. If the node fails, restarts on another node in about 2 minutes. Memory and existing connections are lost.</p>
       <label class="wide">Description <input name="description" maxlength="500"></label>
       <p class="hint wide">CPU, memory and disk change live, without a restart.</p>
       <div class="wide ct-net"><b>Network</b> <button type="button" class="small" id="ct-nic-add">+ Network card</button>

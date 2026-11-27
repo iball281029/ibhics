@@ -356,6 +356,16 @@ def lxc_config(spec: ContainerSpec, bridge, rootfs: str = "") -> str:
         "lxc.apparmor.profile = generated",
         f"lxc.apparmor.allow_nesting = {1 if spec.nesting else 0}",
     ]
+    if rootfs:
+        import shlex
+        import sys
+
+        command = shlex.quote(sys.executable) + " -m ibhics.hypervisor.ct_runlock"
+        home = shlex.quote(str(Path(rootfs).parent))
+        lines += [
+            f"lxc.hook.pre-start = {command} acquire {home}",
+            f"lxc.hook.post-stop = {command} release {home}",
+        ]
     # Addresses are set inside the container (guest_network_script), so DHCP and fixed
     # IPs both work with the distribution's own network setup.
     for i, card in enumerate(spec.interfaces()):
@@ -633,6 +643,105 @@ class LxcContainers:
         from .container_migration import operate
 
         return operate(self, action, name, body)
+
+    def _runlock_acquire(self, home):
+        from .ct_runlock import acquire
+
+        acquire(home)
+
+    def _runlock_release(self, home):
+        from .ct_runlock import release
+
+        release(home)
+
+    def _shared_home(self, home):
+        code, output = self._run(["findmnt", "-T", str(home), "-n", "-o", "FSTYPE,OPTIONS"])
+        parts = output.split()
+        return (code == 0 and len(parts) == 2 and parts[0] == "nfs4"
+                and not {"local_lock=all", "local_lock=posix", "ro"}.intersection(
+                    parts[1].split(",")))
+
+    def ha_takeover(self, name: str, failed: str) -> ContainerInfo:
+        from .container_migration import MARKER, atomic
+
+        if not CT_NAME_RE.fullmatch(name) or not failed or failed == self.node_name:
+            raise InvalidState("Invalid HA takeover source")
+        matches = []
+        for pool in self._pools():
+            try:
+                home = self._dir(pool) / name
+            except InvalidState:
+                continue
+            if (home / "ibhics.json").is_file():
+                matches.append(home)
+        if len(matches) != 1:
+            raise InvalidState("Shared container home is unavailable or ambiguous")
+        home = matches[0]
+        with self._creation_lock(home.parent, name):
+            if not self._shared_home(home) or not (home / "rootfs.img").is_file():
+                raise InvalidState("HA requires visible shared NFSv4 storage with POSIX locks")
+            if (home / MARKER).exists():
+                raise InvalidState("Container migration marker pending; HA takeover refused")
+            owner = self._owner(home)
+            if owner not in (failed, self.node_name):
+                raise InvalidState("Container ownership changed; HA takeover refused")
+            try:
+                self._runlock_acquire(home)
+            except RuntimeError as exc:
+                raise InvalidState(f"still locked by {failed}: {exc}") from exc
+            if (home / MARKER).exists() or self._owner(home) not in (failed, self.node_name):
+                self._runlock_release(home)
+                raise InvalidState("Container ownership or migration changed during takeover")
+            # Each rename is atomic; disagreement after an interrupted pair fails closed.
+            data = json.loads((home / "ibhics.json").read_text())
+            data["owner_node"] = self.node_name
+            atomic(home / "ibhics.json", data)
+            atomic(home / ".ibhics-owner.json", {"node": self.node_name})
+            spec = ContainerSpec(**data)
+            self._write_config(home.parent, spec)
+            # Hook acquire reuses our holder. Keep it on uncertain start errors.
+            if self._info(home.parent, spec).state != "running":
+                self._lxc("start", home.parent, name)
+                self._wait_running(home.parent, name)
+                self._apply_network(spec)
+            return self._info(home.parent, spec)
+
+    def self_fence(self):
+        from .ct_runlock import alive
+
+        # list() deliberately hides guests owned by other nodes.
+        for pool in self._pools():
+            try:
+                base = self._dir(pool)
+            except InvalidState:
+                continue
+            for meta in base.glob("*/ibhics.json"):
+                name = meta.parent.name
+                if not CT_NAME_RE.fullmatch(name):
+                    continue
+                state = self._lxc("info", base, name, "-sH", check=False).strip().upper()
+                if state not in ("RUNNING", "FROZEN"):
+                    continue
+                if (meta.parent / ".ibhics-migration.json").exists():
+                    continue  # the migration fence owns this container until it finishes
+                try:
+                    owner = self._owner(meta.parent)
+                except Exception:
+                    continue  # unreadable metadata (storage hiccup) is not proof of a takeover
+                if owner and owner != self.node_name:
+                    log.error("Self-fencing container %s: now owned by %s", name, owner)
+                    self._lxc("stop", base, name, "-k")
+                    continue
+                # A stalled NFS server only delays the heartbeat: never kill on staleness.
+                # A dead holder (lock lost, I/O error) or a container started before run
+                # locks existed is re-locked; only a lock held elsewhere fences it.
+                if alive(meta.parent):
+                    continue
+                try:
+                    self._runlock_acquire(meta.parent)
+                except RuntimeError as exc:
+                    log.error("Self-fencing container %s: run lock unavailable (%s)", name, exc)
+                    self._lxc("stop", base, name, "-k")
 
     def claim_owner(self, name: str) -> ContainerInfo:
         base, spec = self._find(name, require_owner=False)
@@ -1327,6 +1436,9 @@ class RemoteContainers:
     def get(self, name: str) -> ContainerInfo:
         return info_from_dict(self._call("GET", f"/{name}"))
 
+    def ha_takeover(self, name, failed):
+        return info_from_dict(self._call("POST", f"/{name}/ha-takeover", json={"from": failed}))
+
     def migration(self, action, name, body):
         return self._call("POST", f"/{name}/migration/{action}", json=body, timeout=300)
 
@@ -1411,6 +1523,10 @@ def install_agent_routes(api, get_containers) -> None:
     @api.post("/containers/{name}/migration/{action}")
     def ct_migration(name: str, action: str, body: dict) -> dict:
         return get_containers().migration(action, name, body)
+
+    @api.post("/containers/{name}/ha-takeover")
+    def ct_ha_takeover(name: str, body: dict) -> dict:
+        return get_containers().ha_takeover(name, body.get("from", "")).to_dict()
 
     @api.post("/containers/{name}/owner")
     def ct_claim_owner(name: str) -> dict:

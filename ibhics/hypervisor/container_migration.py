@@ -68,6 +68,8 @@ def resume(backend, base, spec, marker):
         method = "restart"
         if backend._info(base, spec).state != "running":
             if marker.get("checkpoint"):
+                # Restore must hold the lock even if LXC skips pre-start hooks.
+                backend._runlock_acquire(base / spec.name)
                 error = (checkpoint(backend, base, spec.name, restore=True)
                          if shutil.which("criu") else
                          f"criu is not installed on {backend.node_name}")
@@ -165,6 +167,7 @@ def operate(backend, action, name, body):
                     backend._lxc("stop", base, name, "-t", "60")
             if backend._info(base, spec).state != "stopped":
                 raise InvalidState("Container did not stop; migration remains fenced")
+            backend._runlock_release(home)
             return marker
 
     if action == "recover":

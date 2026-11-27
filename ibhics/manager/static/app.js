@@ -79,6 +79,7 @@ const isAdmin = () => !state.me || state.me.role === "admin";
 const canManage = (category) => !state.me || state.me.role === "admin" || (state.me.permissions || []).includes(category);
 const canOperate = () => canManage(({storage:"storage",network:"network",backup:"backup",migrate:"replication",cluster:"cluster",node:"cluster"})[currentPage()] || "vms");
 const JOB_KINDS = { verify: "Boot verification", recovery: "Recovery", synthetic_full: "Synthetic full", backup_copy: "Backup copy", archive: "Archive", backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
+  "ct-ha-restart": "Container HA restart",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
@@ -6351,7 +6352,7 @@ function renderContainers() {
   $("#ct-rows").innerHTML = cts.length ? cts.map((c) => {
     const on = c.state === "running";
     return `<tr>
-    <td><b>${esc(c.name)}</b>${c.description ? `<br><span class="muted">${esc(c.description)}</span>` : ""}</td>
+    <td><b>${esc(c.name)}</b>${c.ha_enabled ? ` <span class="badge plain">HA</span>` : ""}${c.description ? `<br><span class="muted">${esc(c.description)}</span>` : ""}</td>
     <td><span class="badge ${on ? "running" : "plain"}">${esc(c.state)}</span></td>
     <td>${esc(c.node)}</td><td>${esc(title(c.template))}${c.unprivileged ? "" : ` <span class="badge plain">privileged</span>`}</td>
     <td>${c.vcpus}</td><td>${on ? `${gbText(c.memory_used_mb)} / ` : ""}${gbText(c.memory_mb)}</td>
@@ -6518,6 +6519,8 @@ $("#ct-rows").addEventListener("click", async (e) => {
       ctCurrent = name;
       openDialog("ct-edit-dialog", { name }, { vcpus: c.vcpus, memory_mb: c.memory_mb, disk_gb: c.disk_gb, description: c.description });
       $("#ct-edit-form").elements.autostart.checked = c.autostart;
+      $("#ct-ha-enabled").checked = Boolean(c.ha_enabled);
+      $("#ct-ha-enabled").disabled = !canManage("cluster");
       $("#ct-edit-form").elements.dns.value = c.dns || "";
       ctNics(c);
       ctStorage(c);
@@ -6614,6 +6617,10 @@ handlers["ct-edit-dialog"] = async (f, ctx) => {
     vcpus: Number(f.get("vcpus")), memory_mb: Number(f.get("memory_mb")), disk_gb: Number(f.get("disk_gb")),
     autostart: f.get("autostart") === "on", description: f.get("description"),
   });
+  const haEnabled = f.get("ha_enabled") === "on";
+  if (canManage("cluster") && haEnabled !== Boolean(c.ha_enabled)) {
+    await api(`/containers/${enc(ctx.name)}/ha`, {method: "PUT", body: JSON.stringify({enabled: haEnabled})});
+  }
   toast(`${ctx.name} changed`);
   await refresh("containers");
 };

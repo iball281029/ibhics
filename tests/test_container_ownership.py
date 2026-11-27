@@ -39,6 +39,9 @@ def nodes(tmp_path, monkeypatch):
             lambda: ["pool"],
             node_name=node,
         )
+        # LXC/CRIU are simulated here; exercise real holders in test_container_ha.
+        monkeypatch.setattr(backend, "_runlock_acquire", lambda *args: None)
+        monkeypatch.setattr(backend, "_runlock_release", lambda *args: None)
         monkeypatch.setattr(backend, "_wait_running", lambda *args: None)
         monkeypatch.setattr(backend, "_apply_network", lambda *args: None)
         return backend

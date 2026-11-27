@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import hmac
+import logging
 from dataclasses import asdict
 from pathlib import Path
 
@@ -80,7 +82,27 @@ def create_agent_app(
         if not hmac.compare_digest(x_ibhics_token.encode(), token.encode()):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="bad token")
 
-    app = FastAPI(title=f"ibHiCS Agent ({name})", version=__version__)
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        async def fence():
+            while True:
+                try:
+                    backend = driver.containers() if driver else None
+                    if backend and hasattr(backend, "self_fence"):
+                        await asyncio.to_thread(backend.self_fence)
+                except Exception:
+                    logging.getLogger(__name__).exception("Container self-fencing check failed")
+                await asyncio.sleep(5)
+
+        task = asyncio.create_task(fence())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    app = FastAPI(lifespan=lifespan, title=f"ibHiCS Agent ({name})", version=__version__)
     pool_labels = PoolLabels(pool_labels_path)
     from ..storage_jobs import StorageJobs
 

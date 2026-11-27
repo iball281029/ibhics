@@ -311,6 +311,13 @@ def create_app(
             for j in backups.jobs()
         )
 
+    from .container_ha import ContainerHA
+
+    container_ha = ContainerHA(
+        cluster, state_path=ha._path.with_name("container-ha.json")
+        if ha is not None and getattr(ha, "_path", None) else None,
+        tasks=backups,
+    )
     migrations = migrations or MigrationManager(cluster, busy=backing_up)
 
     def deployed(job: Deploy, vm: VMInfo) -> None:
@@ -348,6 +355,10 @@ def create_app(
                             await asyncio.to_thread(ha.tick)
                         except Exception:
                             logging.getLogger(__name__).exception("HA check failed")
+                    try:
+                        await asyncio.to_thread(container_ha.tick)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Container HA check failed")
                     await asyncio.sleep(heartbeat_interval)
 
             task = asyncio.create_task(beat())
@@ -420,6 +431,8 @@ def create_app(
     notifications = Notifications(
         settings.path.with_name("notifications.json") if settings.path else None
     )
+    app.state.container_ha = container_ha
+    container_ha.event = notifications.event
     app.state.notifications = notifications
     notifications.storage_status = storage_controller.status
     backups.notify = notifications.emit
@@ -2388,7 +2401,7 @@ def create_app(
 
     from . import containers_api
 
-    containers_api.install(api, cluster, backups)
+    containers_api.install(api, cluster, backups, container_ha)
 
     from . import settings_api
 

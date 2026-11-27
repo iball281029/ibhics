@@ -102,7 +102,7 @@ class ContainerMigrateIn(BaseModel):
     allow_stop: bool = False
 
 
-def install(api, cluster, backups) -> None:
+def install(api, cluster, backups, ha=None) -> None:
     def everywhere(strict=False):
         found = {}
         for member in cluster.compute_members():
@@ -149,7 +149,8 @@ def install(api, cluster, backups) -> None:
         raise ContainerNotFound(name)
 
     def out(member, ct) -> dict:
-        return {**ct.to_dict(), "node": member.name}
+        return {**ct.to_dict(), "node": member.name,
+                "ha_enabled": bool(ha and ct.spec.name in ha.enabled)}
 
     def cts(member):
         return member.driver.containers()
@@ -175,6 +176,19 @@ def install(api, cluster, backups) -> None:
     @api.get("/containers")
     def ct_list() -> list[dict]:
         return [out(m, c) for m, c in everywhere()]
+
+    @api.get("/containers/ha/status")
+    def ct_ha_status() -> dict:
+        return ha.status() if ha else {"containers": [], "events": []}
+
+    @api.put("/containers/{name}/ha")
+    def ct_ha(name: str, body: dict) -> dict:
+        if ha is None:
+            raise InvalidState("Container HA is not available here")
+        if not isinstance(body.get("enabled"), bool):
+            raise ValueError("enabled must be a boolean")
+        ha.set_enabled(name, body["enabled"])
+        return {"name": name, "enabled": name in ha.enabled}
 
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
@@ -353,7 +367,7 @@ def install(api, cluster, backups) -> None:
             taken |= {vm.spec.name for _, vm in cluster.all_vms()}
             if body.name in taken:
                 raise InvalidState(f"a VM or container named {body.name!r} already exists")
-        return out(
+        result = out(
             member,
             task(
                 "rename",
@@ -363,6 +377,10 @@ def install(api, cluster, backups) -> None:
                 lambda: cts(member).rename(name, body.name),
             ),  # fmt: skip
         )
+        if ha:
+            ha.renamed(name, body.name)
+            result["ha_enabled"] = body.name in ha.enabled
+        return result
 
     @api.delete("/containers/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def ct_delete(name: str) -> None:
@@ -380,6 +398,8 @@ def install(api, cluster, backups) -> None:
             return cts(owner).delete(name)
 
         task("container-delete", name, name, member, remove)
+        if ha and name in ha.enabled:
+            ha.set_enabled(name, False)
 
     @api.post("/containers/{name}/exec")
     def ct_exec(name: str, body: ContainerExec) -> dict:
@@ -406,6 +426,8 @@ def install(api, cluster, backups) -> None:
     @api.post("/containers/{name}/move")
     def ct_move(name: str, body: ContainerMove) -> dict:
         cluster.require_quorum()
+        if ha and name in ha.enabled:
+            raise InvalidState("Disable container HA before moving its storage pool")
         member, _ = find(name)
         return out(
             member,

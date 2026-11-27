@@ -259,6 +259,7 @@ def _state_files(args) -> list[Path]:
         state.with_name("replications.json"),
         state.with_name("pool-labels.json"),
         state.with_name("ha.json"),
+        state.with_name("container-ha.json"),
         state.with_name("p2v.json"),
         state.with_name("activity.sqlite3"),
     ]
