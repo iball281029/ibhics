@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import select
+import shutil
 import subprocess
 import sys
 import time
@@ -93,8 +94,16 @@ def acquire(home, run_dir=RUN_DIR, timeout=TIMEOUT):
         request.write_text(token)
         pidfile.with_suffix(".release").unlink(missing_ok=True)
         readfd, writefd = os.pipe()
+        # A transient systemd scope keeps the holder out of the caller's cgroup: stopping
+        # or restarting the agent (or a login session) must never drop a running lock.
+        # --scope runs the command as our child, so the readiness pipe still works.
+        scope = []
+        if shutil.which("systemd-run") and Path("/run/systemd/system").is_dir():
+            scope = ["systemd-run", "--scope", "--quiet", "--collect",
+                     f"--unit=ibhics-ctlock-{home.name}-{token[:8]}"]
         child = subprocess.Popen(
             [
+                *scope,
                 sys.executable,
                 "-m",
                 "ibhics.hypervisor.ct_runlock",
@@ -149,6 +158,14 @@ def release(home, run_dir=RUN_DIR, timeout=TIMEOUT):
             time.sleep(0.05)
 
 
+def _fence(home):
+    subprocess.run(
+        ["lxc-stop", "-P", str(home.parent), "-n", home.name, "-k"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=60, check=False,
+    )
+
+
 def _hold(home, run_dir, token, readyfd):
     home, pidfile = _paths(home, run_dir)
     request = pidfile.with_suffix(".request")
@@ -162,12 +179,16 @@ def _hold(home, run_dir, token, readyfd):
         data = dict(pid=os.getpid(), home=str(home), token=token, at=time.monotonic())
         try:
             while True:
-                # NFS I/O errors end the holder; stalled I/O makes its heartbeat
-                # stale. The agent detects either condition and requests a stop.
-                # This is detection, not synchronous fencing of rootfs.img I/O.
-                stream.seek(0)
-                stream.write(b"1")
-                os.fsync(stream.fileno())
+                # Stalled NFS I/O only blocks here. An I/O error means the server
+                # revoked our lock: fence the container ourselves, without waiting
+                # for the agent (which may be stopped or gone).
+                try:
+                    stream.seek(0)
+                    stream.write(b"1")
+                    os.fsync(stream.fileno())
+                except OSError:
+                    _fence(home)
+                    raise
                 data["at"] = time.monotonic()
                 temp = pidfile.with_suffix(".tmp")
                 temp.write_text(json.dumps(data))
