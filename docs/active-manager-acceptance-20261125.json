@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-25",
+  "status": "complete",
+  "deployed_nodes": ["172.16.12.103", "172.16.12.104"],
+  "scope": "Display the elected Active Manager on the Cluster API and Cluster page; no leader-election behavior changes.",
+  "live_verification": {
+    "cluster_api_status": 200,
+    "api_active_manager": "ibhics-node2",
+    "leader_record_node": "ibhics-node2",
+    "leader_record_address": "172.16.12.103",
+    "cluster_page_card": "Active manager: ibhics-node2",
+    "card_visible_after_full_page_reload": true,
+    "visual_review": "passed",
+    "screenshot": "deliverables/active-manager-verified.png"
+  },
+  "tests": {"leader_and_cluster_api_tests": 9, "exact_production_merged_payload_tests": 9},
+  "limitations": ["No forced failover was performed for this display-only acceptance."]
+}

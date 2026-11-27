@@ -16,8 +16,9 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ..backup import BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
+from ..backup import BackupCancelled, BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
 from ..backup.repository import parse_id
+from ..backup.store import RepositoryLock
 from ..backup.targets import repository_identity
 from ..backup.upgrade_guard import GUARD_PATH, upgrade_guard
 from ..cluster import Cluster, Member, NodeUnavailable
@@ -66,7 +67,14 @@ class Policy:
     retry_delay_minutes: int = 15
     rpo_hours: float | None = None
 
+    entity_type: str = "vm"
+    allow_stop: bool = False
+
     def validate(self) -> None:
+        if self.entity_type not in ("vm", "container"):
+            raise ValueError("Unknown backup entity type")
+        if self.entity_type == "container" and self.verify_after_backup:
+            raise ValueError("Container backups do not support VM boot verification")
         if type(self.retries) is not int or not 0 <= self.retries <= 10:
             raise ValueError("Retries must be 0 through 10")
         if type(self.retry_delay_minutes) is not int or not 1 <= self.retry_delay_minutes <= 1440:
@@ -145,10 +153,13 @@ class Job:
     step: str = ""  # long tasks: what runs now, and how far (move-disks)
     percent: float | None = None
     report: dict = field(default_factory=dict)
+    progress: dict = field(default_factory=dict)
+    cancel_requested: bool = False
     attempt: int = 0
     retry_at: str | None = None
     vm_uuid: str | None = None
     scheduled: bool = False
+    entity_type: str = "vm"
 
 
 class BackupManager:
@@ -175,9 +186,9 @@ class BackupManager:
         self._verify_lock = threading.Lock()
         # One backup or snapshot task at a time per VM: QEMU takes one state change at a time.
         self._vm_locks: dict[str, threading.Lock] = {}
-        # A SAN LUN or USB disk holds an ordinary filesystem that only one node may mount
-        # at a time, so work on such a target is serialised across the whole cluster.
-        self._target_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+        # Shared repositories allow two backups; maintenance holds an exclusive lock.
+        # SAN/USB ordinary filesystems still require one mounted node at a time.
+        self._target_locks: defaultdict[str, RepositoryLock] = defaultdict(RepositoryLock)
 
     # Targets
 
@@ -313,14 +324,20 @@ class BackupManager:
                 continue
             job.attempt += 1
             try:
-                member, vm = self._cluster.find_vm(job.vm_uuid)
+                if job.entity_type == "container":
+                    member = self._cluster.member(job.node)
+                    vm = member.driver.containers().get(job.vm_uuid.removeprefix("ct:"))
+                    entity_id = job.vm_uuid
+                else:
+                    member, vm = self._cluster.find_vm(job.vm_uuid)
+                    entity_id = vm.uuid
             except Exception:
                 self._retry_failed(job, policy)
                 continue
             job.retry_at = None
             self._backup_job(
                 member,
-                vm.uuid,
+                entity_id,
                 vm.spec.name,
                 policy.target,
                 policy.keep_last,
@@ -345,6 +362,28 @@ class BackupManager:
             policy.last_run = (now or self._clock()).isoformat()
             self._save()
         jobs = []
+        if policy.entity_type == "container":
+            found = set()
+            for member in self._cluster.compute_members():
+                for ct in member.driver.containers().list():
+                    if policy.vms and ct.spec.name not in policy.vms:
+                        continue
+                    if ct.spec.name in found:
+                        raise ValueError("Ambiguous container ownership; refresh inventory first")
+                    found.add(ct.spec.name)
+                    jobs.append(
+                        self._backup_job(
+                            member,
+                            f"ct:{ct.spec.name}",
+                            ct.spec.name,
+                            policy.target,
+                            policy.keep_last,
+                            policy.name,
+                            settings=policy,
+                            scheduled=scheduled,
+                        )
+                    )
+            return jobs
         for member, vm in self._cluster.all_vms():
             if vm.spec.recycled or vm.spec.template:
                 continue  # deleted, or never changes
@@ -365,9 +404,6 @@ class BackupManager:
 
     @contextmanager
     def _using(self, target: BackupTarget, wait: bool) -> Iterator[None]:
-        if not target.exclusive:
-            yield
-            return
         lock = self._target_locks[target.name]
         if not lock.acquire(blocking=wait):
             raise RepositoryBusy(f"a job is using target {target.name!r}; try again when it ends")
@@ -382,12 +418,88 @@ class BackupManager:
         with self._lock:
             return list(reversed(self._jobs))
 
+    def cancel(self, job_id: str) -> Job:
+        with self._lock:
+            job = next((j for j in self._jobs if j.id == job_id), None)
+            if job is None:
+                raise ValueError("Backup job not found")
+            if job.kind != "backup" or job.state not in ("queued", "running", "retry_wait"):
+                raise ValueError("Only queued, running or retrying backups can be cancelled")
+            if job.report or job.progress.get("phase") in ("committing", "complete"):
+                raise ValueError("Restore point is already being saved; wait for completion")
+            job.cancel_requested, job.retry_at = True, None
+            job.step = "Cancellation requested; waiting for safe cleanup"
+            if job.state in ("queued", "retry_wait"):
+                job.state, job.finished, job.error = "cancelled", self._clock().isoformat(), None
+                job.step = "Cancelled by operator"
+            self._save()
+        if job.state == "running" and job.vm_uuid:
+            try:
+                self._cluster.member(job.node).backups.cancel_backup(job.vm_uuid, job.target)
+            except Exception:
+                # Keep the request pending; the observer retries until the worker acknowledges.
+                pass
+        return job
+
+    @contextmanager
+    def _backup_lock(self, job, lock):
+        while not lock.acquire(timeout=0.25):
+            if job.cancel_requested:
+                raise BackupCancelled("Cancelled by operator")
+        try:
+            if job.cancel_requested:
+                raise BackupCancelled("Cancelled by operator")
+            yield
+        finally:
+            lock.release()
+
     def start_backup(
         self, uuid: str, target_name: str, keep_last: int | None = None, mode="incremental"
     ) -> Job:
         self.target(target_name)
         member, vm = self._cluster.find_vm(uuid)
         return self._backup_job(member, uuid, vm.spec.name, target_name, keep_last, None, mode)
+
+    def start_container_backup(self, member, name, target, allow_stop=False, keep_last=None):
+        self.target(target)
+        return self._backup_job(
+            member,
+            f"ct:{name}",
+            name,
+            target,
+            keep_last,
+            None,
+            "container_stop" if allow_stop else "active_full",
+        )
+
+    def start_container_restore(
+        self, target_name, backup_id, name, node=None, pool=None, source_node=None
+    ):
+        self._cluster.require_quorum()
+        target = self.target(target_name)
+        if target.shared:
+            member = self._cluster.member(node) if node else self._cluster.pick_node(0)
+        else:
+            if not source_node or (node and node != source_node):
+                raise ValueError("A local repository must be restored on its source node")
+            member = self._cluster.member(source_node)
+        self._cluster.require_in_service(member)
+        job = self._new_job("restore", target_name, name, member.name, None)
+        job.entity_type = "container"
+
+        def work():
+            with self._using(target, wait=True), self.vm_busy(f"ct:{name}"):
+                job.step = "Restoring container filesystem into destination pool"
+                restored = member.backups.restore_container(target, backup_id, name, pool)
+                job.report = {
+                    "entity_type": "container",
+                    "reason": "Restored stopped; review network settings before starting",
+                }
+                job.step, job.percent = "Container restored stopped", 100
+                return restored.spec.name
+
+        self._submit(job, work)
+        return job
 
     def _backup_job(
         self,
@@ -405,6 +517,7 @@ class BackupManager:
         job = existing or self._new_job("backup", target_name, vm_name, member.name, policy)
         job.node, job.target = member.name, target_name
         job.vm_uuid = uuid
+        job.entity_type = "container" if uuid.startswith("ct:") else "vm"
         job.scheduled = scheduled or job.scheduled
 
         def work() -> str:
@@ -425,17 +538,58 @@ class BackupManager:
                 if p
                 else [target]
             )
+            job.step = "Waiting for repository or VM lock"
             with ExitStack() as stack:
-                for t in sorted(targets, key=lambda t: t.name):
-                    stack.enter_context(self._using(t, wait=True))
-                stack.enter_context(self.vm_busy(uuid))
-                job.step = (
-                    "Reading changed blocks"
-                    if (p.mode if p else mode) == "incremental"
-                    else "Active full backup"
-                )
+                stack.enter_context(self._backup_lock(job, self.vm_busy(uuid)))
+                job.step = "Waiting for node backup worker"
                 selected = "active_full" if full else p.mode if p else mode
-                info = member.backups.backup(uuid, target, selected)
+                if uuid.startswith("ct:") and p:
+                    selected = "container_stop" if p.allow_stop else "active_full"
+                done = threading.Event()
+                requested_at = time.time()
+
+                def watch():
+                    while not done.wait(PROGRESS_POLL):
+                        try:
+                            if job.cancel_requested:
+                                member.backups.cancel_backup(uuid, target.name)
+                            status = member.backups.backup_progress(uuid, target.name)
+                            if (
+                                not status
+                                or status.get("started_at", 0) < requested_at - 1
+                                or status.get("state") != "running"
+                            ):
+                                continue
+                            job.progress = status
+                            job.step = (
+                                "Cancellation requested; waiting for safe cleanup"
+                                if job.cancel_requested
+                                else status.get("step", job.step)
+                            )
+                            job.percent = status.get("percent")
+                        except Exception:
+                            # Progress is observational; losing it must not abort a backup.
+                            continue
+
+                watcher = threading.Thread(
+                    target=watch, daemon=True, name=f"backup-progress-{job.id}"
+                )
+                watcher.start()
+                try:
+                    if job.cancel_requested:
+                        raise BackupCancelled("Cancelled by operator")
+                    with self._backup_lock(
+                        job, self._target_locks[target.name] if target.exclusive
+                        else self._target_locks[target.name].backup
+                    ):
+                        info = member.backups.backup(uuid, target, selected)
+                finally:
+                    done.set()
+                # Release shared admission before acquiring maintenance locks: never
+                # upgrade while another backup may be doing the same thing.
+                if p or keep_last:
+                    for t in sorted(targets, key=lambda t: t.name):
+                        stack.enter_context(self._using(t, wait=True))
                 job.report = asdict(info)
                 if full:
                     self._maintenance[f"{policy}/{uuid}/full"] = date
@@ -663,6 +817,8 @@ class BackupManager:
         try:
             with self.upgrade_guard(), self.vm_busy(uuid):
                 result = work()
+            if kind == "ct-migrate" and isinstance(result, dict):
+                job.result = result.get("result", "")
             job.state = "done"
             return result
         except Exception as exc:
@@ -690,6 +846,27 @@ class BackupManager:
     def upgrade_guard(self):
         return upgrade_guard(self.guard_path)
 
+    def _notice_details(self, job):
+        finished = job.finished or self._clock().isoformat()
+        elapsed = max(
+            0,
+            (
+                datetime.fromisoformat(finished) - datetime.fromisoformat(job.created)
+            ).total_seconds(),
+        )
+        return {
+            "vm": job.vm,
+            "entity_type": job.entity_type,
+            "node": job.node,
+            "target": job.target,
+            "policy": job.policy,
+            "started": job.created,
+            "finished": finished,
+            "duration": f"{int(elapsed // 60)}m {int(elapsed % 60)}s",
+            "error": job.error,
+            "report": job.report,
+        }
+
     def _retry_failed(self, job, policy):
         if job.scheduled and policy and job.attempt < policy.retries:
             when = self._clock() + timedelta(minutes=policy.retry_delay_minutes)
@@ -700,7 +877,11 @@ class BackupManager:
             job.finished = self._clock().isoformat()
             self.record_backup(job)
             self.notify(
-                "critical", "backup", f"Backup failed: {job.vm}", f"backup:{job.target}:{job.vm}"
+                "critical",
+                "backup",
+                f"Backup failed: {job.vm}",
+                f"backup:{job.target}:{job.vm}",
+                details=self._notice_details(job),
             )
         with self._lock:
             self._save()
@@ -711,6 +892,8 @@ class BackupManager:
             self._save()
 
         def run() -> None:
+            if job.cancel_requested:
+                return
             job.state = "running"
             previous = next(
                 (
@@ -736,6 +919,7 @@ class BackupManager:
                         "backup.succeeded" if job.kind == "backup" else "restore.succeeded",
                         f"{job.kind.title()} completed: {job.vm}",
                         f"{job.kind}:{job.id}",
+                        details=self._notice_details(job),
                     )
                 if job.kind == "backup" and recovered:
                     self.notify(
@@ -743,7 +927,13 @@ class BackupManager:
                         "backup",
                         f"Backup recovered: {job.vm}",
                         f"backup:{job.target}:{job.vm}",
+                        details=self._notice_details(job),
                     )
+            except BackupCancelled:
+                job.state, job.retry_at, job.error = "cancelled", None, None
+                job.step = "Cancelled by operator"
+                job.percent = None
+                self.record_backup(job)
             except Exception as exc:
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.state = "failed"
@@ -751,7 +941,11 @@ class BackupManager:
                     self._retry_failed(job, self._policies.get(job.policy))
                 elif job.kind in ("restore", "recovery"):
                     publish(
-                        self, "restore.failed", f"Restore failed: {job.vm}", f"restore:{job.id}"
+                        self,
+                        "restore.failed",
+                        f"Restore failed: {job.vm}",
+                        f"restore:{job.id}",
+                        details=self._notice_details(job),
                     )
                 elif job.kind == "verify":
                     self.notify(

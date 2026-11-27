@@ -14,7 +14,7 @@ window.SpatialUI = (() => {
       kpi('ONLINE WORKLOADS', `${running.length}<small> / ${all.length}</small>`, `${all.length-running.length} not running`, 'k-green'),
       kpi('VM CPU AVERAGE', cpu == null ? '—' : `${cpu.toFixed(1)}<small> %</small>`, `${measuredCPU.length} of ${running.length} running VMs reporting`, 'k-cyan'),
       kpi('VM MEMORY IN USE', measuredMemory.length ? gbText(memory) : '—', `${measuredMemory.length} of ${running.length} running VMs reporting`, 'k-pink'),
-      kpi('VM NETWORK', `${rate(rx)}`, `received · ${rate(tx)} sent`, 'k-violet'),
+      kpi('VM NETWORK', `${rate(rx)}`, `received · ${tx ? `${size(tx)}/s` : '0'} sent`, 'k-violet'),
     ].join('');
   }
   const observer = new MutationObserver(renderVMs);

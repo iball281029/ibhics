@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import abc
+import array
+import errno
+import fcntl
 import os
 import subprocess
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -25,12 +29,75 @@ class RepositoryBusy(RuntimeError):
     pass
 
 
+class RepositoryLock:
+    """Node/manager admission: two backups or one maintenance operation."""
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+        self.backup = _BackupLock(self)
+
+    def acquire(self, blocking=True, timeout=-1, *, shared=False):
+        deadline = time.monotonic() + timeout if timeout >= 0 else None
+        with self._condition:
+            if not shared:
+                self._waiting_writers += 1
+            try:
+                while self._writer or (
+                    self._readers >= 2 or self._waiting_writers
+                    if shared else self._readers
+                ):
+                    if not blocking:
+                        return False
+                    remaining = None if deadline is None else deadline - time.monotonic()
+                    if remaining is not None and remaining <= 0:
+                        return False
+                    self._condition.wait(remaining)
+                if shared:
+                    self._readers += 1
+                else:
+                    self._writer = True
+                return True
+            finally:
+                if not shared:
+                    self._waiting_writers -= 1
+                    self._condition.notify_all()
+
+    def release(self, *, shared=False):
+        with self._condition:
+            if shared:
+                self._readers -= 1
+            else:
+                self._writer = False
+            self._condition.notify_all()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *args):
+        self.release()
+
+
+class _BackupLock:
+    def __init__(self, lock):
+        self._lock = lock
+
+    def acquire(self, blocking=True, timeout=-1):
+        return self._lock.acquire(blocking, timeout, shared=True)
+
+    def release(self):
+        self._lock.release(shared=True)
+
+
 class Store(abc.ABC):
     """Flat keys such as 'chunks/ab/abcd...' map to bytes."""
 
     @contextmanager
-    def exclusive(self):
-        """Serialize destructive operations and writers across nodes, without timed expiry."""
+    def _gate(self):
+        """Atomic admission gate; all repository clients must use this lock protocol."""
         with self._lease_mutex:
             if getattr(self._lease_state, "depth", 0):
                 self._lease_state.depth += 1
@@ -50,6 +117,66 @@ class Store(abc.ABC):
                 if self.get(".repository-lease") == token:
                     self.delete(".repository-lease")
 
+    @contextmanager
+    def exclusive(self):
+        """Keep all backups out for the whole maintenance operation."""
+        if getattr(self._lease_state, "shared_depth", 0):
+            raise RepositoryBusy("Cannot upgrade an active backup lease to exclusive")
+        with self._gate():
+            if any(self.exists(f".repository-backup-{slot}") for slot in range(2)):
+                raise RepositoryBusy("Repository has active or uncleared backup leases")
+            yield
+
+    @contextmanager
+    def shared(self):
+        """Two durable backup slots, allocated under the cross-node atomic gate.
+
+        No expiry: a crashed holder requires operator review, just like exclusive.
+        Exclusive holders may nest backup work without allocating a separate slot.
+        """
+        state = self._lease_state
+        if getattr(state, "depth", 0) or getattr(state, "shared_depth", 0):
+            state.shared_depth = getattr(state, "shared_depth", 0) + 1
+            try:
+                yield
+            finally:
+                state.shared_depth -= 1
+            return
+        token = uuid4().hex.encode()
+        with self._gate():
+            key = next(
+                (f".repository-backup-{slot}" for slot in range(2)
+                 if not self.exists(f".repository-backup-{slot}")), None
+            )
+            if key is None:
+                raise RepositoryBusy("Both repository backup slots are occupied")
+            self.put(key, token)
+        state.shared_depth = 1
+        try:
+            yield
+        finally:
+            state.shared_depth = 0
+            # Slot ownership alone permits deletion; admission always uses the gate.
+            if self.get(key) == token:
+                self.delete(key)
+
+    @contextmanager
+    def waiting(self, shared=False, check_cancel=lambda: None):
+        """Wait for cross-node admission; never infer stale ownership from time."""
+        while True:
+            check_cancel()
+            context = (self.shared if shared else self.exclusive)()
+            try:
+                context.__enter__()
+                break
+            except RepositoryBusy:
+                time.sleep(0.25)
+        try:
+            check_cancel()
+            yield
+        finally:
+            context.__exit__(None, None, None)
+
     def protect(self, key, until) -> bool:
         """Best effort physical protection; False means application soft lock only."""
         return False
@@ -57,6 +184,11 @@ class Store(abc.ABC):
     def release(self, key) -> None:
         """Called only after retention expires and no restore point references the key."""
         return None
+
+    def put_chunk(self, key: str, data: bytes) -> bool:
+        """Publish a content-addressed object without replacing peer retention."""
+        self.put(key, data)
+        return True
 
     @abc.abstractmethod
     def put(self, key: str, data: bytes) -> None: ...
@@ -78,6 +210,7 @@ class DirStore(Store):
     def __init__(self, root: Path) -> None:
         self.root = Path(root).resolve()
         self._lease_mutex = threading.RLock()
+        self._immutable_unsupported_devices: set[int] = set()
         self._lease_state = threading.local()
 
     def _acquire_lease(self, token):
@@ -99,6 +232,12 @@ class DirStore(Store):
         return path
 
     def put(self, key: str, data: bytes) -> None:
+        self._put(key, data, only_absent=False)
+
+    def put_chunk(self, key: str, data: bytes) -> bool:
+        return self._put(key, data, only_absent=True)
+
+    def _put(self, key, data, only_absent):
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
@@ -107,7 +246,18 @@ class DirStore(Store):
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, path)
+            if only_absent:
+                # Concurrent backups may discover the same missing digest. Publish
+                # once, preserving any inode/retention already protected by a peer.
+                try:
+                    os.link(tmp, path)
+                except FileExistsError:
+                    return False
+                finally:
+                    Path(tmp).unlink(missing_ok=True)
+            else:
+                os.replace(tmp, path)
+            return True
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
@@ -131,20 +281,33 @@ class DirStore(Store):
             if p.is_file() and not p.name.startswith(".tmp-")
         )
 
-    def protect(self, key, until) -> bool:
+    def _immutable(self, key, enabled):
+        # Linux FS_IOC_*FLAGS: preserve unrelated flags and avoid a chattr process
+        # per deduplicated chunk. NFS rejects this ioctl; cache only that explicit
+        # capability failure, per filesystem device (not permission errors).
+        device = None
         try:
-            result = subprocess.run(
-                ["chattr", "+i", str(self._path(key))], capture_output=True, timeout=10
-            )
-            return result.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
+            with self._path(key).open("rb") as stream:
+                device = os.fstat(stream.fileno()).st_dev
+                if device in self._immutable_unsupported_devices:
+                    return False
+                flags = array.array("L", [0])
+                fcntl.ioctl(stream.fileno(), 0x80086601, flags, True)
+                old = flags[0]
+                flags[0] = old | 0x10 if enabled else old & ~0x10
+                if flags[0] != old:
+                    fcntl.ioctl(stream.fileno(), 0x40086602, flags, True)
+                return True
+        except OSError as exc:
+            if device is not None and exc.errno in (errno.ENOTTY, errno.EOPNOTSUPP, errno.ENOSYS):
+                self._immutable_unsupported_devices.add(device)
             return False
 
+    def protect(self, key, until) -> bool:
+        return self._immutable(key, True)
+
     def release(self, key) -> None:
-        try:
-            subprocess.run(["chattr", "-i", str(self._path(key))], capture_output=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+        self._immutable(key, False)
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
@@ -191,13 +354,28 @@ class S3Store(Store):
         return cls(client, target.bucket, target.prefix, target.storage_class)
 
     def put(self, key: str, data: bytes) -> None:
+        self._put(key, data, only_absent=False)
+
+    def put_chunk(self, key: str, data: bytes) -> bool:
+        return self._put(key, data, only_absent=True)
+
+    def _put(self, key, data, only_absent):
         # Keep manifests/locks hot. Only chunk payloads use the archive storage class.
         options = (
             {"StorageClass": self._storage_class}
             if (self._storage_class != "STANDARD" and key.startswith(("chunks/", "fulls/")))
             else {}
         )
-        self._s3.put_object(Bucket=self._bucket, Key=self._prefix + key, Body=data, **options)
+        if only_absent:
+            options["IfNoneMatch"] = "*"
+        try:
+            self._s3.put_object(Bucket=self._bucket, Key=self._prefix + key, Body=data, **options)
+        except Exception as exc:
+            status = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if only_absent and status == 412:
+                return False
+            raise
+        return True
 
     def get(self, key: str) -> bytes:
         try:

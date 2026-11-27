@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-25",
+  "phase": "real-cluster operator Codex bridge acceptance",
+  "ai_tests_passed": 10,
+  "auth_and_settings_regression_passed": 88,
+  "browser_checks": {
+    "desktop_1600x1050": "panel and mascot inside viewport",
+    "mobile_390x844": "panel and mascot inside viewport",
+    "narrow_800x600": "panel and mascot inside viewport",
+    "click_doll": "opens chat",
+    "second_click": "collapses chat",
+    "initial_state": "collapsed",
+    "animation": "3D-rendered plush image with CSS perspective/bobbing/shadow",
+    "context_preview": "HTTP 200",
+    "light_theme": "uses light palette",
+    "reduced_motion": "animations disabled by prefers-reduced-motion media rule",
+    "thai_ui": "Panel, buttons, status, errors and name badge localized",
+    "thai_chat": "Thai question and reply roundtrip via gateway test and simulated website",
+    "display_name": "น้อง ib",
+    "thai_mobile_390x844": "panel and mascot inside viewport"
+  },
+  "integration": "MockTransport: Manager -> enrolled/licensed gateway -> fake provider; real provider HTTP format separately tested",
+  "live_claude_verified": false,
+  "production_deployed": true,
+  "remaining": [
+    "Permanent company HTTPS gateway and provider credentials/billing",
+    "Customer service acceptance beyond temporary operator testing"
+  ],
+  "codex_local_preview": {
+    "live_verified": true,
+    "question": "Explain Backup versus Snapshot briefly in Thai",
+    "response": "Backup is a recovery copy; Snapshot records a point in time and depends on the original storage, so it is not a replacement for Backup.",
+    "browser_path": "http://127.0.0.1:8770/?preview=codex-local#home",
+    "daily_test_limit": 5,
+    "used_at_acceptance": 1,
+    "additional_unit_tests_passed": 3,
+    "tools": "shell/execution/apps/browser/computer/image/memory/subagent features disabled; read-only sandbox",
+    "scope": "Local preview only; uses existing operator login and account allowance"
+  },
+  "exact_merged_release_tests_passed": 107,
+  "real_cluster": {
+    "managers": [
+      "172.16.12.103",
+      "172.16.12.104"
+    ],
+    "console": "https://172.16.12.111:8888",
+    "health_checks_passed": true,
+    "support_verified": true,
+    "enabled": true,
+    "thai_server_reply_verified": true,
+    "provider": "operator Mac Codex CLI over loopback SSH reverse tunnels",
+    "dependency": "Mac, gateway process and tunnels must stay running; manually restart after Mac reboot",
+    "launcher_width_px": {
+      "desktop": 64,
+      "mobile": 50
+    },
+    "browser_verified": {
+      "authenticated_live_vip": true,
+      "launcher_width": 64,
+      "within_viewport": true,
+      "click_open_and_close": true,
+      "live_thai_chat_response": true
+    }
+  }
+}

@@ -138,7 +138,7 @@ def restore(files: list[Path], shared: Path, backup_root: Path) -> list[str]:
         if path.exists():
             backup.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copy2(path, backup / path.name)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         tmp = path.with_name(path.name + ".takeover")
         shutil.copyfile(copy, tmp)
         os.chmod(tmp, 0o600)

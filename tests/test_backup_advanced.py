@@ -1,12 +1,15 @@
 """Recovery properties of incremental, synthetic, copy and GFS backups."""
 
+import builtins
 import zlib
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from test_backup import CHUNK, Clock, Inline, image, make_vm
 
 from ibhics.backup import BackupTarget, DirStore, NodeBackup, Repository, TargetType
+from ibhics.backup.compression import ZSTD_MAGIC, codec, compress, decompress
 from ibhics.backup.repository import RepositoryBusy
 from ibhics.backup.retention import retained_ids
 from ibhics.cluster import Cluster
@@ -377,7 +380,7 @@ def test_checkpoint_pull_capture_establishes_base_and_incremental(monkeypatch, t
     with capture(driver, "uuid", baseline) as (readers, inc):
         assert inc["incremental"]
         assert ET.fromstring(dom.xml).find("incremental").text == baseline["checkpoint"]
-        assert handles[-1].contexts == ["qemu:dirty-bitmap:changes"]
+        assert handles[-1].contexts == ["base:allocation", "qemu:dirty-bitmap:changes"]
     with capture(driver, "uuid", {**baseline, "disk_fingerprint": "changed"}) as (_, fresh):
         assert not fresh["incremental"]
 
@@ -403,6 +406,123 @@ def test_s3_archive_class_only_applies_to_chunk_payloads():
     store.put("backups/vm/time.json", b"manifest")
     store.put("locks/job", b"lock")
     assert [w.get("StorageClass") for w in writes] == ["GLACIER_IR", "GLACIER_IR", None, None]
+
+
+@pytest.mark.parametrize("profile,level", [("fast", 1), ("balanced", 3), ("maximum", 19)])
+def test_compression_selects_zstd_level_and_prefix(monkeypatch, profile, level):
+    original_import = builtins.__import__
+    levels = []
+    block = b"backup payload"
+
+    def compressor(*, level):
+        levels.append(level)
+
+        def encode(data):
+            assert data == block
+            return b"encoded frame"
+
+        return SimpleNamespace(compress=encode)
+
+    module = SimpleNamespace(ZstdCompressor=compressor)
+
+    def with_zstandard(name, *args, **kwargs):
+        if name == "zstandard":
+            return module
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", with_zstandard)
+    assert codec(profile) == f"zstd-{level}"
+    assert compress(block, profile) == ZSTD_MAGIC + b"encoded frame"
+    assert compress(block, profile) == ZSTD_MAGIC + b"encoded frame"
+    assert levels == [level, level]  # Each call owns a separate compressor.
+
+
+@pytest.mark.parametrize("profile,level", [("fast", 1), ("balanced", 3), ("maximum", 19)])
+def test_compression_uses_zstd_when_available(profile, level):
+    zstandard = pytest.importorskip("zstandard")
+    block = b"backup payload\0" * 100
+    data = compress(block, profile)
+    assert codec(profile) == f"zstd-{level}"
+    assert data == ZSTD_MAGIC + zstandard.ZstdCompressor(level=level).compress(block)
+    assert decompress(data, len(block)) == block
+    with pytest.raises(RuntimeError, match="exceeds configured size"):
+        decompress(data, len(block) - 1)
+
+
+@pytest.mark.parametrize("profile,level", [("fast", 1), ("balanced", 6), ("maximum", 9)])
+def test_compression_falls_back_without_zstandard(monkeypatch, profile, level):
+    original_import = builtins.__import__
+
+    def without_zstandard(name, *args, **kwargs):
+        if name == "zstandard":
+            raise ImportError("zstandard unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_zstandard)
+    block = b"backup payload\0" * 100
+    assert codec(profile) == f"zlib-{level}"
+    data = compress(block, profile)
+    assert data == zlib.compress(block, level)
+    assert decompress(data, len(block)) == block
+
+
+@pytest.mark.parametrize("level", [1, 6, 9])
+def test_compression_restores_legacy_zlib(level):
+    block = b"legacy backup payload\0" * 100
+    assert decompress(zlib.compress(block, level), len(block)) == block
+
+
+@pytest.mark.parametrize("cpu,workers", [(None, 1), (1, 1), (4, 4), (64, 8)])
+@pytest.mark.parametrize("incremental", [False, True])
+def test_backup_readers_bounds_pending_writes(tmp_path, monkeypatch, cpu, workers, incremental):
+    from ibhics.backup import repository
+
+    class DeferredWrite:
+        def __init__(self, fn, args):
+            self.fn, self.args = fn, args
+
+        def result(self):
+            executor.outstanding -= 1
+            return self.fn(*self.args)
+
+    class Writers:
+        outstanding = peak = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            assert self.outstanding == 0
+
+        def submit(self, fn, *args):
+            self.outstanding += 1
+            self.peak = max(self.peak, self.outstanding)
+            assert self.outstanding <= workers * 2
+            return DeferredWrite(fn, args)
+
+    executor = Writers()
+
+    def make_executor(max_workers):
+        assert max_workers == workers
+        return executor
+
+    monkeypatch.setattr(repository.os, "cpu_count", lambda: cpu)
+    monkeypatch.setattr(repository, "ThreadPoolExecutor", make_executor)
+    repo = Repository(DirStore(tmp_path / "repo"), CHUNK)
+    vm = make_vm()
+    data = b"".join(bytes([i + 1]) * CHUNK for i in range(20))
+    parent = {"chunk_size": CHUNK, "disks": [{"size_bytes": len(data), "chunks": [None] * 20}]}
+    info = repo.backup_readers(
+        vm,
+        [Reader(data, range(20))],
+        spec_to_json(vm.spec),
+        {"incremental": incremental},
+        parent=parent if incremental else None,
+    )
+    assert executor.peak == workers * 2
+    assert info.kind == ("incremental" if incremental else "full")
+    repo.restore_disk(repo.manifest(info.id), 0, tmp_path / "restored")
+    assert (tmp_path / "restored").read_bytes() == data
 
 
 @pytest.mark.parametrize("profile", ["fast", "balanced", "maximum"])

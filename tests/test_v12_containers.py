@@ -58,10 +58,13 @@ def make_lxc(tmp_path, state="RUNNING", pools=("default", "fast"), log=None):
 
 
 def put(tmp_path, name, pool="default"):
+    import socket
+
     home = tmp_path / pool / "containers" / name
     (home / "snaps/s1").mkdir(parents=True)
     spec = ContainerSpec(name, pool=pool)
     (home / "ibhics.json").write_text(json.dumps(spec.public() | {"password": ""}))
+    (home / ".ibhics-owner.json").write_text(json.dumps({"node": socket.gethostname()}))
     (home / "config").write_text(lxc_config(spec, "br0", f"{home}/rootfs.img"))
     (home / "snaps/s1/config").write_text(f"lxc.rootfs.path = loop:{home}/snaps/s1/rootfs\n")
     return home

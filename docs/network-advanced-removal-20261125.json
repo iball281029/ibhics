@@ -1,0 +1,11 @@
+{
+  "date": "2026-11-25",
+  "status": "complete",
+  "scope": "Remove Network Advanced and isolated gateway/NAT/DHCP creation, retaining Topology 3D, Firewall and Virtual switches.",
+  "production_preflight": {"configured_isolated_gateways": 0, "firewall_rules": 0},
+  "changes": ["Removed Advanced tab and gateway dialog/handlers", "Removed public gateway and router-node routes and request schema", "Manager loads firewall rules without reactivating legacy gateways", "Agent rejects gateway activation while continuing to accept firewall policy"],
+  "deployment": {"103": "Installed; Manager and Agent active; health passed", "104": "Installed; Manager and Agent active; health passed"},
+  "validation": {"edge_firewall_network_tests": 21, "exact_merged_payload_tests": 21, "network_javascript_checks": "passed", "lint_and_javascript_syntax": "passed"},
+  "live_verification": {"tabs": ["TOPOLOGY 3D", "FIREWALL", "VIRTUAL SWITCHES"], "advanced_tab_present": false, "gateway_dialog_present": false, "gateway_routes_in_openapi": [], "remaining_networks": 3, "edge_api_fields": ["pending_confirm_seconds", "rules"], "screenshot": "deliverables/network-advanced-removed.png"},
+  "compatibility": "Low-level legacy configuration parsers remain for existing data compatibility; gateway configuration and activation are unavailable through Manager and Agent APIs."
+}

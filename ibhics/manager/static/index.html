@@ -20,6 +20,7 @@
 <link rel="stylesheet" href="alerts.css">
 <link rel="stylesheet" href="backup.css">
 <link rel="stylesheet" href="light-theme.css">
+<link rel="stylesheet" href="assistant.css">
 </head>
 <body class="command-workspace spatial-workspace">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -379,7 +380,6 @@
           <button data-tab="net-topology" class="active">TOPOLOGY 3D</button>
           <button data-tab="net-fw">FIREWALL</button>
           <button data-tab="net-list">VIRTUAL SWITCHES</button>
-          <button data-tab="net-router">ADVANCED</button>
         </div>
         <div class="subpage active" id="tab-net-topology">
           <div class="toolbar nw-view-tools">
@@ -428,13 +428,6 @@
           <thead><tr><th>Network</th><th>VLAN</th><th>Bridge</th><th>Nodes</th><th>VMs</th><th></th></tr></thead>
           <tbody id="networks"></tbody>
         </table></div>
-        </div>
-        <div class="subpage" id="tab-net-router">
-          <div class="toolbar"><span class="hint">Optional isolated network gateway. Normal VLAN routing uses your external L3 switch over a trunk uplink. Gateway runs on <b id="edge-router-node">–</b>.</span><span class="spacer"></span><button class="primary operator-only" id="router-add">+ Isolated network gateway</button></div>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Network</th><th>Gateway</th><th>NAT to the LAN</th><th>DHCP</th><th></th></tr></thead>
-            <tbody id="routers"></tbody>
-          </table></div>
         </div>
         <div class="subpage" id="tab-net-fw">
           <div class="toolbar"><div><h3>Policy studio</h3><span class="hint">First match wins · Unmatched traffic is allowed</span></div><span class="spacer"></span><span id="nw-draft-count" role="status"></span><button id="nw-discard" class="operator-only">Discard draft</button><button id="nw-apply" class="primary operator-only">Apply changes</button></div>
@@ -575,7 +568,7 @@
           </table></div>
         </div>
         <div class="subpage" id="tab-policies">
-          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="policy-dialog">+ New schedule</button></div>
+          <div class="toolbar"><span class="spacer"></span><button class="primary admin-only" data-open="policy-dialog">+ VM schedule</button><button class="admin-only" type="button" id="bp-new-container-schedule">+ Container schedule</button></div>
           <div id="policies" class="bp-cards"></div>
         </div>
         <div class="subpage" id="tab-targets">
@@ -858,7 +851,7 @@
         </div>
         <div class="subpage" id="tab-notifications">
           <form id="notification-config" class="st-panel admin-only">
-            <h3>Email alerts</h3><p class="hint">SMTP credentials are stored privately. Times use the manager's local timezone.</p>
+            <h3>Notification delivery</h3><p class="hint">Credentials are stored privately. Times use the manager's local timezone.</p>
             <div class="form-grid">
               <label>SMTP host<input name="host" maxlength="2048"></label>
               <label>Port<input name="port" type="number" min="1" max="65535" value="587" required></label>
@@ -871,10 +864,18 @@
               <label>Daily summary time<input name="summary_at" type="time" value="08:00" required></label>
               <label class="inline"><input name="daily_summary" type="checkbox">Send daily summary</label>
             </div>
+            <h4>LINE Messaging API</h4>
+            <div class="form-grid">
+              <label class="inline"><input name="line_enabled" type="checkbox">Enable LINE alerts</label>
+              <label>Channel access token<input name="line_token" type="password" autocomplete="new-password"></label>
+              <label class="inline"><input name="line_clear_token" type="checkbox">Clear saved LINE token</label>
+              <label>Recipient ID<input name="line_recipient" maxlength="33" placeholder="User, group or room ID"></label>
+            </div>
+            <p class="hint">Add the Official Account as a friend or invite it to the recipient group. Use a LINE user, group or room ID. Test delivery uses saved settings.</p>
             <div class="actions"><button type="button" id="notification-critical">Enable all critical</button><button type="button" id="notification-defaults">Reset defaults</button></div>
-            <p class="hint">Event switches control delivery. Coming soon events have no active hook. Save to apply changes. Daily summary and test email are separate.</p>
-            <div class="notification-events"><table><thead><tr><th>Event</th><th>Level</th><th>In-app</th><th>Email</th></tr></thead><tbody id="notification-events"></tbody></table></div>
-            <div class="actions"><button class="primary">Save</button><button type="button" id="notification-test">Send test email</button></div>
+            <p class="hint">Event switches control delivery. Coming soon events have no active hook. Save to apply changes. Daily summaries use configured email recipients and LINE when enabled. Test buttons send a separate test notification.</p>
+            <div class="notification-events"><table><thead><tr><th>Event</th><th>Level</th><th>In-app</th><th>Email</th><th>LINE</th></tr></thead><tbody id="notification-events"></tbody></table></div>
+            <div class="actions"><button class="primary">Save</button><button type="button" id="notification-test">Send test email</button><button type="button" id="notification-test-line">Send test LINE</button></div>
             <p id="notification-result" role="status"></p>
           </form>
         </div>
@@ -890,7 +891,7 @@
           <form id="subscription-upload" class="st-panel admin-only">
             <h3>Upload a subscription</h3><p class="hint">A signed subscription is tied to your cluster and node count. No file means no subscription.</p>
             <label>Signed license file (JSON)<input type="file" name="license" accept=".json" required></label>
-            <button class="primary">Verify &amp; apply</button><p id="subscription-trust" class="hint"></p>
+            <button class="primary">Verify &amp; apply</button><button type="button" class="danger" id="subscription-remove">Remove license</button><p id="subscription-trust" class="hint"></p>
           </form>
           <div class="toolbar"><h3>System</h3></div>
           <dl class="kv" id="about"></dl>
@@ -911,6 +912,7 @@
           <div class="st-panel"><h3>Update jobs</h3><p class="hint">Application only, one node at a time: standby before active. Previous versions are retained; a failed health check triggers rollback. VMs stay running and hosts are not rebooted.</p><div id="settings-update-jobs" aria-live="polite"></div></div>
         </div>
         <div class="subpage" id="tab-support">
+          <div class="st-panel"><h3>Nong ib · AI Assistant</h3><p>Your elephant companion explains ibHiCS menus and system status. An active Support License and a configured AI service are required.</p><button type="button" id="ai-open-settings">Chat with Nong ib</button><p class="hint">Administrators can enable AI in the chat panel. Only your messages and the system summary you choose to attach are sent. Nong ib can prepare VLAN and VM actions for your confirmation. Your permissions and approval rules still apply.</p></div>
           <div class="st-panel"><h3>Open support case</h3><p id="support-reason" role="status"></p>
           <form id="support-case"><fieldset id="support-fields" disabled><div class="st-grid"><label>Subject<input name="subject" maxlength="200" required></label><label>Severity<select name="severity"><option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option><option value="critical">Critical</option></select></label></div>
           <label>Details<textarea name="details" rows="5" maxlength="20000" required></textarea></label>
@@ -1128,22 +1130,6 @@
       <label class="wide">Group <select name="group" class="md-group"></select></label>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Move</button></footer>
-  </form>
-</dialog>
-
-<dialog id="router-dialog">
-  <form method="dialog" id="router-form">
-    <header><h3>Isolated network gateway</h3><button value="cancel" formnovalidate>×</button></header>
-    <div class="body form-grid">
-      <label>Network <select name="network" id="router-net" required></select></label>
-      <label>Gateway address <input name="gateway" required placeholder="192.168.50.1/24" autocomplete="off"></label>
-      <label class="check wide"><input name="nat" type="checkbox" checked> NAT: VMs reach the LAN and the internet through this node</label>
-      <label class="check wide"><input name="dhcp" type="checkbox" checked data-switch-check> Hand out addresses (DHCP)</label>
-      <label>DHCP from (blank = automatic) <input name="dhcp_start" placeholder="192.168.50.100"></label>
-      <label>DHCP to <input name="dhcp_end" placeholder="192.168.50.200"></label>
-      <label>DNS server for VMs <input name="dns" placeholder="1.1.1.1"></label>
-    </div>
-    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save router</button></footer>
   </form>
 </dialog>
 
@@ -1604,6 +1590,70 @@
   </form>
 </dialog>
 
+<dialog id="ct-schedule-dialog">
+  <form method="dialog" id="ct-schedule-form">
+    <header><h3>Container backup schedule</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <label class="wide">Schedule name <input name="name" required maxlength="63" pattern="[a-zA-Z0-9][a-zA-Z0-9_.\-]*"></label>
+      <label>Container <select name="container" required></select></label>
+      <label>Repository <select name="target" required></select></label>
+      <label>Frequency <select name="frequency"><option value="daily">Daily</option><option value="interval">Every N hours</option></select></label>
+      <label>Daily time <input type="time" name="at" value="02:00" required></label>
+      <label>Interval (hours) <input type="number" name="every_hours" min="1" max="168" value="24" required></label>
+      <label>Keep recent restore points <input type="number" name="keep_last" min="1" max="1000" value="7" required></label>
+      <label class="check wide"><input type="checkbox" name="allow_stop"> Allow a temporary stop during each backup</label>
+      <label class="check wide"><input type="checkbox" name="enabled" checked> Enable schedule</label>
+      <p class="hint wide">Times use the manager timezone. Each run creates a full filesystem restore point with compression and deduplication. Running containers require permission to stop, then restart automatically after success, failure or cancellation. Without permission, a running container is left untouched and the job fails safely. VM boot verification is not used.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Save schedule</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-migrate-dialog">
+  <form method="dialog" id="ct-migrate-form">
+    <header><h3>Migrate container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p id="ct-migrate-summary"></p>
+      <label>Destination node <select name="node" required></select></label>
+      <label class="check"><input type="radio" name="mode" value="live" checked> Live migration (keeps memory; falls back to a short stop and restart on the destination if the container cannot be checkpointed)</label>
+      <label class="check"><input type="radio" name="mode" value="offline"> Offline migration (stop, then start on destination)</label>
+      <label class="check" id="ct-migrate-stop" hidden><input type="checkbox" name="allow_stop" disabled> Allow a temporary stop for migration</label>
+      <p class="hint" id="ct-migrate-mode-hint"></p>
+      <p class="hint">Shared storage only: both nodes must see this same pool and container folder. The filesystem, name, MAC and snapshots stay intact. An already stopped container stays stopped.</p>
+      <p class="hint">Migration is fenced against duplicate starts. Use Recover migration if a handover is interrupted.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Migrate</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-backup-dialog">
+  <form method="dialog" id="ct-backup-form">
+    <header><h3>Back up container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body">
+      <p id="ct-backup-summary"></p>
+      <label>Repository <select name="target" required></select></label>
+      <label class="check"><input type="checkbox" name="allow_stop"> Allow a temporary stop for this backup</label>
+      <p class="hint">Full filesystem backup with compression and deduplication. A running container must stop while its disk is copied. It restarts automatically after completion, failure or cancellation. An already stopped container stays stopped.</p>
+      <p class="hint">Progress and Cancel job are available in Data protection → Jobs. Restoring creates a separate, stopped container. External mounts and memory state are not included.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Start backup</button></footer>
+  </form>
+</dialog>
+
+<dialog id="ct-restore-dialog">
+  <form method="dialog" id="ct-restore-form">
+    <header><h3>Restore container</h3><button value="cancel" formnovalidate>×</button></header>
+    <div class="body form-grid">
+      <p class="wide" id="ct-restore-summary"></p>
+      <label class="wide">New container name <input name="name" required maxlength="63" pattern="[a-z0-9][a-z0-9\-]*" autocomplete="off"></label>
+      <label>Node <select name="node" required></select></label>
+      <label>Storage pool <select name="pool" required></select></label>
+      <p class="hint wide">Restores files and container settings into a new container with a new MAC address. The container stays stopped. Review its network and any static IP before starting it. Existing containers are never overwritten.</p>
+    </div>
+    <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Restore container</button></footer>
+  </form>
+</dialog>
+
 <dialog id="ct-dialog" class="wide-dialog">
   <form method="dialog" id="ct-form">
     <header><h3>New container</h3><button value="cancel" formnovalidate>×</button></header>
@@ -1641,6 +1691,8 @@
       <label>Memory (MB) <input name="memory_mb" type="number" min="64" step="64"></label>
       <label>Disk (GB, grow only) <input name="disk_gb" type="number" min="1"></label>
       <label class="check"><input type="checkbox" name="autostart"> Start when the node boots</label>
+      <label class="check wide"><input id="ct-ha-enabled" type="checkbox" name="ha_enabled"> High availability</label>
+      <p class="hint wide">Shared storage only. If the node fails, restarts on another node in about 2 minutes. Memory and existing connections are lost.</p>
       <label class="wide">Description <input name="description" maxlength="500"></label>
       <p class="hint wide">CPU, memory and disk change live, without a restart.</p>
       <div class="wide ct-net"><b>Network</b> <button type="button" class="small" id="ct-nic-add">+ Network card</button>
@@ -1908,8 +1960,19 @@
 <script src="history-time.js"></script>
 <script src="storage-view.js"></script>
 <script src="network-core.js"></script>
+<button type="button" class="ai-launcher" id="ai-launcher" aria-label="คุยกับน้อง ib ผู้ช่วย AI" aria-controls="ai-panel" aria-expanded="false"><img src="ai-elephant.png" alt="น้อง ib ช้างน้อยผู้ช่วยดูแลระบบ"><span class="ai-name" aria-hidden="true">น้อง ib</span></button>
+<section class="ai-panel" id="ai-panel" lang="th" aria-label="น้อง ib ผู้ช่วย AI ของ ibHiCS" hidden>
+  <header><img src="ai-elephant.png" alt=""><div><strong>น้อง ib</strong><small>ผู้ช่วย AI ของ ibHiCS · พร้อมดูแลคุณค่ะ</small></div><select id="ai-language" aria-label="Chat language"><option value="en">ENG</option><option value="th">TH</option></select><button type="button" id="ai-close" aria-label="ย่อหน้าต่างแชต">×</button></header>
+  <div class="ai-state"><span id="ai-status" role="status">กำลังตรวจสอบสิทธิ์ Support…</span><label hidden><input id="ai-enabled" type="checkbox"> เปิดใช้ผู้ช่วย AI สำหรับระบบนี้</label></div>
+  <div class="ai-chat" id="ai-chat" role="log" aria-label="บทสนทนา" aria-live="polite"></div>
+  <footer><form id="ai-chat-form"><textarea name="message" maxlength="3000" required placeholder="พิมพ์คำถามให้น้อง ib ช่วยได้เลยค่ะ…" aria-label="คำถามของคุณ"></textarea><div class="ai-options"><label><input type="checkbox" name="include_context"> แนบสรุปสถานะระบบ</label><button type="button" id="ai-actions">Actions</button><button type="button" id="ai-preview-context">ดูข้อมูลที่จะแนบ</button></div><pre class="ai-context" id="ai-context" hidden></pre><div class="ai-send-row"><button type="button" id="ai-clear">เริ่มแชตใหม่</button><button type="submit" class="primary" id="ai-send">ส่งข้อความ ↗</button></div></form><p class="ai-notice" id="ai-privacy">คำตอบ AI อาจคลาดเคลื่อน ข้อความจะส่งไปประมวลผลภายนอก กรุณาไม่ส่งรหัสผ่านหรือข้อมูลลับค่ะ</p></footer>
+</section>
+
 <script src="app.js"></script>
 <script src="settings.js"></script>
+<script src="assistant-th.js"></script>
+<script src="assistant-operations.js"></script>
+<script src="assistant.js"></script>
 <script src="alerts.js"></script>
 <script src="virtual-storage.js"></script>
 <script src="storage-navigation.js"></script>

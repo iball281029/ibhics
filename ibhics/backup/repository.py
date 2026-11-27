@@ -1,7 +1,7 @@
 """Deduplicating backup repository on top of a Store.
 
 Layout:
-  chunks/<aa>/<sha256>          zlib-compressed fixed-size pieces of disk images
+  chunks/<aa>/<sha256>          zlib/zstd-compressed fixed-size pieces of disk images
   backups/<vm>/<stamp>.json     one manifest per backup: the VM's spec and its disks' chunk lists
   locks/<vm>@<stamp>            present while a backup is being written
 
@@ -16,9 +16,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
-from collections import Counter
+import threading
+from collections import Counter, deque
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -62,6 +65,7 @@ class BackupInfo:
     lock_status: str = "none"
     suspicious: bool = False
     anomaly_reason: str = ""
+    entity_type: str = "vm"
 
 
 def parse_id(backup_id: str) -> tuple[str, str]:
@@ -78,6 +82,15 @@ def _manifest_key(backup_id: str) -> str:
 
 def _chunk_key(digest: str) -> str:
     return f"chunks/{digest[:2]}/{digest}"
+
+
+def _shared(method):
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        with self.store.shared():
+            return method(self, *args, **kwargs)
+
+    return run
 
 
 def _exclusive(method):
@@ -106,9 +119,13 @@ class Repository:
         codec(compression)
 
     @contextmanager
-    def reading(self):
+    def reading(self, shared=False, check_cancel=None):
         """Keep GC away from source chunks while verifying, copying or restoring."""
-        with self.store.exclusive():
+        lease = (
+            self.store.waiting(shared, check_cancel) if check_cancel is not None
+            else (self.store.shared if shared else self.store.exclusive)()
+        )
+        with lease:
             key = f"locks/operation-{uuid4().hex}"
             self.store.put(key, self._clock().isoformat().encode())
             try:
@@ -132,8 +149,10 @@ class Repository:
         ]
         return self.manifest(max(matches, key=lambda b: (b.created, b.id)).id) if matches else None
 
-    @_exclusive
-    def backup_readers(self, vm, readers, spec_json, capture, parent=None, progress=None):
+    @_shared
+    def backup_readers(
+        self, vm, readers, spec_json, capture, parent=None, progress=None, metrics=None
+    ):
         """Publish a complete block map; only dirty chunks are read from an incremental source."""
         incremental = bool(capture.get("incremental"))
         if incremental and (
@@ -145,7 +164,70 @@ class Repository:
         backup_id = self._new_id(vm.spec.name)
         stored = read_bytes = new_data = nonzero = 0
         disks = []
-        with self.reading():
+        total_bytes = sum(reader.size for reader in readers)
+        scanned_bytes = 0
+
+        def update(phase, step, disk=None):
+            percent = (
+                min(99.9, 100 * scanned_bytes / total_bytes)
+                if total_bytes and not incremental
+                else None
+            )
+            if progress:
+                progress(step, percent)
+            if metrics:
+                metrics(
+                    {
+                        "phase": phase,
+                        "step": step,
+                        "percent": percent,
+                        "mode": "incremental" if incremental else "full",
+                        "read_bytes": read_bytes,
+                        "scanned_bytes": scanned_bytes,
+                        "stored_bytes": stored,
+                        "total_bytes": total_bytes,
+                        "disk": disk,
+                        "disks": len(readers),
+                    }
+                )
+
+        update("reading", "Reading point-in-time backup data")
+        # All libnbd calls (including changed_chunks metadata) stay on their owner.
+        # Workers process blocks while the owner reads ahead. At most 2*workers
+        # blocks are in flight plus one reader block: <=68 MiB at 4 MiB/8 workers.
+        # Up to 8 strip temporaries and compressed outputs/codec workspaces are extra.
+        workers = min(8, os.cpu_count() or 1)
+        max_pending = workers * 2
+        pending, submitted = deque(), set()
+        submitted_lock = threading.Lock()
+
+        def process_chunk(block):
+            has_data = bool(block.strip(b"\0"))
+            digest = hashlib.sha256(block).hexdigest() if has_data else None
+            write = False
+            if digest:
+                with submitted_lock:
+                    if digest not in submitted:
+                        submitted.add(digest)
+                        write = True
+                if write:
+                    write = not self.store.exists(_chunk_key(digest))
+            if write:
+                data = compress(block, self.compression)
+                if self.store.put_chunk(_chunk_key(digest), data) is not False:
+                    return digest, len(block), len(block), len(data)
+            return digest, len(block) if has_data else 0, 0, 0
+
+        def finish_one():
+            nonlocal stored, new_data, nonzero
+            offset, future = pending.popleft()
+            digest, used, logical, physical = future.result()
+            chunks[offset] = digest
+            nonzero += used
+            new_data += logical
+            stored += physical
+
+        with ThreadPoolExecutor(max_workers=workers) as writers:
             for index, reader in enumerate(readers):
                 count = (reader.size + self.chunk_size - 1) // self.chunk_size
                 old = parent["disks"][index] if incremental else None
@@ -162,31 +244,34 @@ class Repository:
                         if not self.store.exists(key):
                             _, block = self._chunk(parent, digest)
                             data = compress(block, self.compression)
-                            self.store.put(key, data)
-                            stored += len(data)
-                            new_data += len(block)
+                            if self.store.put_chunk(key, data) is not False:
+                                stored += len(data)
+                                new_data += len(block)
                             nonzero += len(block)
                 for offset in reader.changed_chunks(self.chunk_size):
+                    if len(pending) >= max_pending:
+                        finish_one()
                     if offset < 0 or offset >= count:
                         raise ValueError("Changed block lies outside disk")
                     length = min(self.chunk_size, reader.size - offset * self.chunk_size)
+                    update("reading", f"Reading disk {index + 1}/{len(readers)}", index + 1)
                     block = reader.read(offset * self.chunk_size, length)
                     if len(block) != length:
                         raise RuntimeError(
                             "Short read from backup source; restore point not published"
                         )
                     read_bytes += len(block)
-                    if block.strip(b"\0"):
-                        nonzero += len(block)
-                    digest = hashlib.sha256(block).hexdigest() if block.strip(b"\0") else None
-                    if digest and not self.store.exists(_chunk_key(digest)):
-                        data = compress(block, self.compression)
-                        new_data += len(block)
-                        self.store.put(_chunk_key(digest), data)
-                        stored += len(data)
-                    chunks[offset] = digest
-                    if progress:
-                        progress(f"Reading disk {index + 1}/{len(readers)}", None)
+                    pending.append((offset, writers.submit(process_chunk, block)))
+                    del block
+                    scanned_bytes = sum(r.size for r in readers[:index]) + min(
+                        reader.size, (offset + 1) * self.chunk_size
+                    )
+                    update("reading", f"Reading disk {index + 1}/{len(readers)}", index + 1)
+                scanned_bytes = sum(r.size for r in readers[: index + 1])
+                update("reading", f"Scanned disk {index + 1}/{len(readers)}", index + 1)
+                while pending:
+                    update("writing", "Finishing compressed chunk writes", index + 1)
+                    finish_one()
                 disks.append({"size_bytes": reader.size, "chunks": chunks})
             manifest = {
                 "format": 1,
@@ -209,6 +294,7 @@ class Repository:
                 dedup_saved_bytes=max(0, nonzero - new_data),
                 compression=codec(self.compression),
             )
+            update("committing", "Saving restore point manifest; confirming durable backup")
             self._publish(manifest)
         return _info(manifest)
 
@@ -239,9 +325,14 @@ class Repository:
                     )
                 else:
                     data = compress(block, destination.compression)
-                    destination.store.put(key, data)
-                    stored += len(data)
-                    new_data += len(block)
+                    if prefix == "chunks":
+                        added = destination.store.put_chunk(key, data) is not False
+                    else:
+                        destination.store.put(key, data)
+                        added = True
+                    if added:
+                        stored += len(data)
+                        new_data += len(block)
                 if progress:
                     progress(
                         "Verifying and writing backup chunks",
@@ -276,8 +367,16 @@ class Repository:
 
     # Writing
 
-    @_exclusive
-    def backup(self, vm: VMInfo, disk_paths: list[Path], spec_json: dict, note="") -> BackupInfo:
+    @_shared
+    def backup(
+        self,
+        vm: VMInfo,
+        disk_paths: list[Path],
+        spec_json: dict,
+        note="",
+        progress=None,
+        metrics=None,
+    ) -> BackupInfo:
         if not NAME_RE.match(vm.spec.name):
             raise ValueError(f"cannot back up VM with name {vm.spec.name!r}")
         backup_id = self._new_id(vm.spec.name)
@@ -286,8 +385,36 @@ class Repository:
         try:
             disks, stored = [], 0
             self._new_data = self._nonzero = 0
+            total = sum(Path(path).stat().st_size for path in disk_paths)
+            completed = 0
+
+            def update(read, added, phase="reading"):
+                current = completed + read
+                percent = min(99.9, current / total * 100) if total else None
+                step = (
+                    "Saving restore point manifest"
+                    if phase == "committing"
+                    else "Reading full backup into repository"
+                )
+                if progress:
+                    progress(step, percent)
+                if metrics:
+                    metrics(
+                        {
+                            "phase": phase,
+                            "step": step,
+                            "percent": percent,
+                            "mode": "full",
+                            "read_bytes": current,
+                            "scanned_bytes": current,
+                            "stored_bytes": stored + added,
+                            "total_bytes": total,
+                        }
+                    )
+
             for path in disk_paths:
-                chunks, size, added = self._write_disk(Path(path))
+                chunks, size, added = self._write_disk(Path(path), update)
+                completed += size
                 disks.append({"size_bytes": size, "chunks": chunks})
                 stored += added
             manifest = {
@@ -309,6 +436,7 @@ class Repository:
             }
             # The manifest goes last: a backup that dies halfway leaves only unreferenced
             # chunks, which the next garbage collection removes.
+            update(0, 0, "committing")
             self._publish(manifest)
         finally:
             self.store.delete(lock_key)
@@ -372,11 +500,13 @@ class Repository:
             )
             manifest["lock_status"] = status
 
-    def _write_disk(self, path: Path) -> tuple[list[str | None], int, int]:
+    def _write_disk(self, path: Path, progress=None) -> tuple[list[str | None], int, int]:
         chunks: list[str | None] = []
         size = added = 0
         with open(path, "rb") as f:
             while block := f.read(self.chunk_size):
+                if progress:
+                    progress(size, added)
                 size += len(block)
                 if not block.strip(b"\0"):
                     chunks.append(None)
@@ -386,10 +516,14 @@ class Repository:
                 key = _chunk_key(digest)
                 if not self.store.exists(key):
                     data = compress(block, self.compression)
-                    self._new_data += len(block)
-                    self.store.put(key, data)
-                    added += len(data)
+                    if progress:
+                        progress(size, added, "writing")
+                    if self.store.put_chunk(key, data) is not False:
+                        self._new_data += len(block)
+                        added += len(data)
                 chunks.append(digest)
+        if progress:
+            progress(size, added)
         return chunks, size, added
 
     def _new_id(self, vm_name: str) -> str:
@@ -489,6 +623,7 @@ def _info(manifest: dict) -> BackupInfo:
         id=manifest["id"],
         vm_name=manifest["vm_name"],
         vm_uuid=manifest["vm_uuid"],
+        entity_type=manifest.get("spec", {}).get("entity_type", "vm"),
         created=manifest["created"],
         size_bytes=sum(d["size_bytes"] for d in manifest["disks"]),
         stored_bytes=manifest["stored_bytes"],

@@ -43,7 +43,7 @@ from ..hypervisor import (
     VMNotFound,
     VMState,
 )
-from ..hypervisor.edge import FirewallRule, RouterSpec
+from ..hypervisor.edge import FirewallRule
 from ..hypervisor.serialize import guest_to_json
 from ..importer import SourceNotFound
 from ..storage import VirtualStoragePlan, save_plan
@@ -112,7 +112,6 @@ from .schemas import (
     RecycledOut,
     RenameIn,
     RestoreRequest,
-    RouterIn,
     SnapshotIn,
     SnapshotOut,
     SourceIn,
@@ -159,13 +158,17 @@ def iso_path(folder: Path, filename: str) -> Path:
     return folder / name
 
 
-async def receive_file(request: Request, target: Path) -> int:
+async def receive_file(request: Request, target: Path, *, storage_guard=None) -> int:
     """Stream a request body to `target` through a hidden partial file; returns its size."""
+    if storage_guard:
+        storage_guard(target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(f".{target.name}.partial")
     size = 0
     try:
         with open(partial, "wb") as f:
+            if storage_guard:
+                storage_guard(target.parent, file_fd=f.fileno())
             async for chunk in request.stream():
                 await asyncio.to_thread(f.write, chunk)
                 size += len(chunk)
@@ -283,6 +286,8 @@ def create_app(
     p2v_pin: str = "",
     replications=None,
     settings: Settings | None = None,
+    active_manager: str | None = None,
+    assistant=None,
 ) -> FastAPI:
     """Without `auth` every request is allowed: for tests and embedding only. The
     ibhics-manager command always passes one."""
@@ -306,6 +311,13 @@ def create_app(
             for j in backups.jobs()
         )
 
+    from .container_ha import ContainerHA
+
+    container_ha = ContainerHA(
+        cluster, state_path=ha._path.with_name("container-ha.json")
+        if ha is not None and getattr(ha, "_path", None) else None,
+        tasks=backups,
+    )
     migrations = migrations or MigrationManager(cluster, busy=backing_up)
 
     def deployed(job: Deploy, vm: VMInfo) -> None:
@@ -343,6 +355,10 @@ def create_app(
                             await asyncio.to_thread(ha.tick)
                         except Exception:
                             logging.getLogger(__name__).exception("HA check failed")
+                    try:
+                        await asyncio.to_thread(container_ha.tick)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Container HA check failed")
                     await asyncio.sleep(heartbeat_interval)
 
             task = asyncio.create_task(beat())
@@ -402,6 +418,7 @@ def create_app(
     from .p2v import P2VError, P2VSessions
 
     p2v = p2v or P2VSessions()
+    p2v.storage_guard = imports.require_data_storage
     imports.p2v = p2v
     imports.migrations = migrations
     app.state.imports = imports
@@ -414,6 +431,8 @@ def create_app(
     notifications = Notifications(
         settings.path.with_name("notifications.json") if settings.path else None
     )
+    app.state.container_ha = container_ha
+    container_ha.event = notifications.event
     app.state.notifications = notifications
     notifications.storage_status = storage_controller.status
     backups.notify = notifications.emit
@@ -467,7 +486,13 @@ def create_app(
         if route not in SELF_ROUTES:
             area = category(route)
             sensitive_read = (request.method, route) in ADMIN_ROUTES
-            changes = request.method not in ("GET", "HEAD", "OPTIONS")
+            # Chat consumes a paid allowance but only reads infrastructure context.
+            changes = (
+                request.method not in ("GET", "HEAD", "OPTIONS")
+                and route not in {
+                    f"{API}/assistant/chat", f"{API}/assistant/plan", f"{API}/assistant/review"
+                }
+            )
             if (changes or sensitive_read) and area not in auth.permissions(user):
                 raise Forbidden(
                     f"this needs operator/admin permission for {area}; you are {user.role}"
@@ -489,6 +514,18 @@ def create_app(
             }
             if changes and admin_only and user.role != Role.ADMIN:
                 raise Forbidden("this needs the admin role")
+        assistant_plan = request.headers.get("X-IBHICS-Assistant-Plan")
+        if assistant_plan:
+            operations = app.state.assistant_operations
+            planned = await asyncio.to_thread(operations.review, assistant_plan, user)
+            if (
+                request.method != "POST"
+                or request.url.path != f"{API}{planned['path']}"
+                or await request.json() != planned["body"]
+            ):
+                raise HTTPException(409, "The request differs from the confirmed assistant plan")
+            operations.submitted(assistant_plan)
+            request.state.audit_note = "Nong ib: user-confirmed action"
         approval_context = None
         if route in (f"{API}/settings/updates/install", f"{API}/settings/updates/rollback"):
             approval_context = settings.approval_context(rollback=route.endswith("/rollback"))
@@ -886,6 +923,7 @@ def create_app(
             cluster_id=cluster.cluster_id,
             name=cluster.cluster_name,
             topology=topology,
+            active_manager=active_manager,
             quorum=cluster.has_quorum(),
             ha_capable=topology in (Topology.TWO_NODE_WITNESS, Topology.CLUSTER),
             members=[
@@ -1259,19 +1297,11 @@ def create_app(
             if any(n.name == name for n in member.driver.list_networks()):
                 member.driver.delete_network(name)
 
-    # Virtual router and distributed firewall (v0.7): one config for the cluster.
+    # Distributed firewall: one config for the cluster.
 
     @api.get("/edge", response_model=EdgeOut)
     def get_edge() -> EdgeOut:
         return EdgeOut(**edge.view())
-
-    @api.put("/edge/routers/{network}", response_model=EdgeOut)
-    def set_router(network: str, body: RouterIn) -> EdgeOut:
-        return EdgeOut(**edge.set_router(RouterSpec(network=network, **body.model_dump())))
-
-    @api.delete("/edge/routers/{network}", response_model=EdgeOut)
-    def remove_router(network: str) -> EdgeOut:
-        return EdgeOut(**edge.remove_router(network))
 
     @api.put("/edge/rules", response_model=EdgeOut)
     def set_rules(body: list[FirewallRuleIn], safe: bool = False) -> EdgeOut:
@@ -1286,10 +1316,6 @@ def create_app(
     @api.post("/edge/simulate")
     def simulate_flow(body: FirewallSimulateIn) -> dict:
         return edge.simulate(body.src, body.dst, body.proto, body.port)
-
-    @api.put("/edge/router-node", response_model=EdgeOut)
-    def set_router_node(body: dict) -> EdgeOut:
-        return EdgeOut(**edge.set_router_node(str(body.get("node", ""))))
 
     # Terminal (v0.8): diagnostic commands on a node, from an allowlist; admins only,
     # and each command is written to the audit log.
@@ -2039,7 +2065,11 @@ def create_app(
     @api.put("/migrate/uploads/{filename}", response_model=UploadOut)
     async def upload(filename: str, request: Request) -> UploadOut:
         target = upload_path(imports.upload_dir, filename)
-        size = await receive_file(request, target)
+        length = request.headers.get("content-length", "")
+        imports.require_data_storage(
+            target.parent, required_bytes=int(length) if length.isdecimal() else 0
+        )
+        size = await receive_file(request, target, storage_guard=imports.require_data_storage)
         return UploadOut(name=target.name, size_bytes=size)
 
     @api.delete("/migrate/uploads/{filename}", status_code=status.HTTP_204_NO_CONTENT)
@@ -2307,6 +2337,12 @@ def create_app(
     def list_jobs() -> list[JobOut]:
         return [JobOut(**job.__dict__) for job in backups.jobs()]
 
+    @api.post(
+        "/backup/jobs/{job_id}/cancel", response_model=JobOut, status_code=status.HTTP_202_ACCEPTED
+    )
+    def cancel_backup_job(job_id: str) -> JobOut:
+        return JobOut(**backups.cancel(job_id).__dict__)
+
     @api.get("/backup/jobs/{job_id}/report")
     def export_backup_report(job_id: str, format: str = "json"):
         from ..backup.report import backup_report
@@ -2365,11 +2401,14 @@ def create_app(
 
     from . import containers_api
 
-    containers_api.install(api, cluster, backups)
+    containers_api.install(api, cluster, backups, container_ha)
 
     from . import settings_api
 
     settings_api.install(api, settings, auth)
+    from .assistant import install as install_assistant
+
+    install_assistant(api, app, settings, auth, cluster, backups, assistant, migrations=migrations)
     app.include_router(public)
     app.include_router(api)
     app.mount("/", ConsoleFiles(directory=STATIC_DIR, html=True), name="console")

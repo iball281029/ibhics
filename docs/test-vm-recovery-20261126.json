@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-26",
+  "vm": "test-ib-Migrate",
+  "uuid": "0a49cf45-9779-45fe-9715-ea59640ad5b2",
+  "node": "172.16.12.103",
+  "authorization": "Operator explicitly authorized restart of this BSOD VM only",
+  "before": "Windows CRITICAL_PROCESS_DIED; guest agent unresponsive",
+  "action": "Power cycle to replace QEMU and reopen NFS disk descriptors",
+  "domain_id_before": 11,
+  "domain_id_after": 18,
+  "after": {
+    "running": true,
+    "windows": "Windows Server 2019 Standard",
+    "lock_screen_visible": true,
+    "guest_ping_replied": true,
+    "guest_osinfo_replied": true,
+    "block_errors": "No errors found"
+  },
+  "other_vms_restarted": false,
+  "permanent_crash_root_cause_resolved": false,
+  "image": "deliverables/test-ib-migrate-recovered-20261126.png"
+}

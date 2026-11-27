@@ -165,6 +165,16 @@ CATALOG = {
         "in_app": False,
         "email": False,
     },
+    "container.ha_restarted": {
+        "id": "container.ha_restarted", "category": "Container", "level": "warning",
+        "description": "HA restarted a container", "hooked": True,
+        "in_app": True, "email": True,
+    },
+    "container.ha_failed": {
+        "id": "container.ha_failed", "category": "Container", "level": "critical",
+        "description": "Container HA takeover failed; retry pending", "hooked": True,
+        "in_app": True, "email": True,
+    },
     "ha.restarted": {
         "id": "ha.restarted",
         "category": "VM",

@@ -1,0 +1,257 @@
+{
+  "date": "2026-11-26",
+  "requirements": [
+    "VMs must operate normally after migration between compute nodes",
+    "Gateway failover must not inject disk errors into guests on surviving compute nodes",
+    "Validate OS liveness and read/write, not only hypervisor running state"
+  ],
+  "diagnosis": {
+    "vm": "EXWin2022",
+    "failed_reads": 25285,
+    "failed_writes": 86294,
+    "failed_flushes": 4473,
+    "nfs_tracker_old_pid": 1486,
+    "stale_database_path": "/var/lib/nfs/nfsdcld/main.sqlite",
+    "open_descriptor_device": 65024,
+    "database_missing_under_shared_bind": true,
+    "tracker_journal": "attempt to write a readonly database",
+    "kernel_journal": [
+      "NFSD: Unable to end grace period: -121",
+      "NFS: 172.16.12.106: lost 1 locks"
+    ],
+    "causal_limit": "Observed NFS tracking failure and guest I/O failures establish defects; no Windows crash dump was analysed."
+  },
+  "repair": {
+    "nfs_tracker_restarted": true,
+    "new_tracker_pid": 955489,
+    "shared_database_descriptor_verified": true,
+    "nfs_server_restarted": false,
+    "existing_lost_locks_repaired_in_place": false,
+    "server_unit_verify_with_generators": "passed",
+    "new_startup_hooks_installed_on": [
+      "103",
+      "104"
+    ]
+  },
+  "fault_injection": {
+    "environment": "isolated QEMU TCG, 64 MiB synthetic disk, no NIC",
+    "read_EIO_once": true,
+    "observed_pause_status": "io-error",
+    "observed_event_action": "stop",
+    "resumed_to_running": true,
+    "production_network_interrupted": false,
+    "write_fault_injected": false
+  },
+  "exwin_recovery": {
+    "vm": "EXWin2022",
+    "uuid": "e3477cac-000a-4251-89d3-5b58f25a851a",
+    "old_domain_id": 12,
+    "new_domain_id": 19,
+    "fresh_disk_header_read": true,
+    "live_io_guard_active": true,
+    "other_vms_restarted": false,
+    "evidence": "/var/lib/ibhics-maintenance/exwin-recovery-20261126-110156",
+    "before_mime": "image/png",
+    "os_boot_verified": true,
+    "guest_agent_responding": true,
+    "domain_state": [
+      1,
+      1
+    ],
+    "block_errors": {},
+    "after_mime": "image/png",
+    "guest_os": {
+      "name": "Microsoft Windows",
+      "kernel-release": "20348",
+      "version": "Microsoft Windows Server 2022",
+      "variant": "server",
+      "pretty-name": "Windows Server 2022 Standard",
+      "version-id": "2022",
+      "variant-id": "server",
+      "kernel-version": "10.0",
+      "machine": "x86_64",
+      "id": "mswindows"
+    },
+    "guest_readback": {
+      "exited": true,
+      "exitcode": 0,
+      "stdout": "IBHICS_STORAGE_READBACK_OK\r\n",
+      "stderr": ""
+    },
+    "guest_read_write_verified": true,
+    "guest_probe_pid": 5544
+  },
+  "other_running_vms_policy_pending_power_cycle": [],
+  "tests": {
+    "core_related": 61,
+    "additional_driver_set": 46,
+    "exact_103_merged_payload": 53,
+    "exact_104_merged_payload": 53,
+    "note": "Sets overlap; do not sum as unique tests."
+  },
+  "remaining": {
+    "full_live_gateway_failover_acceptance": false,
+    "cross_node_OS_acceptance_after_patch": true,
+    "physical_103_link": "100 Mb/s; cable/switch checks deferred by operator",
+    "active_active_or_multipath_backend_implemented": false,
+    "cross_node_OS_acceptance_note": "Round trip live migration passed with Windows Agent and filesystem query. No host network was disrupted.",
+    "nfs_tracking_note": "Shared tracker descriptor fixed; full NFS reclaim continuity after a real gateway handover has not been validated. Current record table was empty when sampled."
+  },
+  "rolling_power_cycle_acceptance": {
+    "103": {
+      "host": "ibhics-node2",
+      "vms": [
+        {
+          "name": "test-ib-Migrate",
+          "uuid": "0a49cf45-9779-45fe-9715-ea59640ad5b2",
+          "os_before": "Windows Server 2019 Standard",
+          "phase": "verified",
+          "started": 1795667198.3230686,
+          "live_io_guard_active": true,
+          "os_after": "Windows Server 2019 Standard",
+          "guest_read_write_verified": true,
+          "block_errors": {},
+          "seconds": 61.74
+        }
+      ]
+    },
+    "104": {
+      "host": "ibhics-test",
+      "vms": [
+        {
+          "name": "PNetLab-27H1-V8.12",
+          "uuid": "099fe3a2-c606-448e-8067-70686caefaf1",
+          "os_before": "Ubuntu 26.04 LTS",
+          "phase": "verified",
+          "started": 1795667141.808316,
+          "live_io_guard_active": true,
+          "os_after": "Ubuntu 26.04 LTS",
+          "guest_read_write_verified": true,
+          "block_errors": {},
+          "seconds": 122.95
+        },
+        {
+          "name": "npm-vm",
+          "uuid": "50d7cc51-7d23-4ff0-99f0-01ab5324c15e",
+          "os_before": null,
+          "phase": "verified",
+          "started": 1795667264.7663796,
+          "live_io_guard_active": true,
+          "os_after": "Debian GNU/Linux 13 (trixie)",
+          "guest_read_write_verified": true,
+          "block_errors": {},
+          "seconds": 331.92
+        },
+        {
+          "name": "OpenP9",
+          "uuid": "33aae567-c46e-46ec-b1f2-aeb4f69e4f66",
+          "os_before": "Windows Server 2022 Standard",
+          "phase": "verified",
+          "started": 1795667684.2367582,
+          "live_io_guard_active": true,
+          "os_after": "Windows Server 2022 Standard",
+          "guest_read_write_verified": true,
+          "block_errors": {},
+          "seconds": 34.57
+        }
+      ]
+    }
+  },
+  "migration_round_trip": {
+    "vm": "test-ib-Migrate",
+    "uuid": "0a49cf45-9779-45fe-9715-ea59640ad5b2",
+    "mode": "live round trip on shared storage",
+    "legs": [
+      {
+        "source": "ibhics-node2",
+        "target": "ibhics-test",
+        "state_after": "running",
+        "guest_agent_after": true,
+        "os_after": "Windows Server 2019 Standard",
+        "note": "First live migration completed; acceptance script failed formatting a str state before writing the completion record. Destination ownership and OS verified on resume."
+      },
+      {
+        "source": "ibhics-test",
+        "target": "ibhics-node2",
+        "before_os": "Windows Server 2019 Standard",
+        "started": 1795666822.3966568,
+        "job": {
+          "id": "1",
+          "vm": "test-ib-Migrate",
+          "uuid": "0a49cf45-9779-45fe-9715-ea59640ad5b2",
+          "source": "ibhics-test",
+          "target": "ibhics-node2",
+          "copy_storage": false,
+          "live": true,
+          "created": "2026-11-26T11:20:22+07:00",
+          "state": "done",
+          "finished": "2026-11-26T11:25:53+07:00",
+          "error": null,
+          "step": "",
+          "disk_pools": null,
+          "cancel_requested": false
+        },
+        "seconds": 332.14,
+        "state_after": "running",
+        "os_after": "Windows Server 2019 Standard",
+        "guest_agent_after": true,
+        "filesystem_total_gb": 90.0,
+        "storage_policy_after": "pending_restart"
+      }
+    ],
+    "host_network_interrupted": false,
+    "scope": "Uses MigrationManager and normal Agent RPCs; not a browser Jobs request",
+    "passed": true
+  },
+  "live_vm_check": {
+    "103": [
+      {
+        "name": "EXWin2022",
+        "state": "running",
+        "io_guard": "active",
+        "guest_agent": true,
+        "os": "Windows Server 2022 Standard",
+        "block_errors": {}
+      },
+      {
+        "name": "test-ib-Migrate",
+        "state": "running",
+        "io_guard": "active",
+        "guest_agent": true,
+        "os": "Windows Server 2019 Standard",
+        "block_errors": {}
+      }
+    ],
+    "104": [
+      {
+        "name": "PNetLab-27H1-V8.12",
+        "state": "running",
+        "io_guard": "active",
+        "guest_agent": true,
+        "os": "Ubuntu 26.04 LTS",
+        "block_errors": {}
+      },
+      {
+        "name": "npm-vm",
+        "state": "running",
+        "io_guard": "active",
+        "guest_agent": true,
+        "os": "Debian GNU/Linux 13 (trixie)",
+        "block_errors": {}
+      },
+      {
+        "name": "OpenP9",
+        "state": "running",
+        "io_guard": "active",
+        "guest_agent": true,
+        "os": "Windows Server 2022 Standard",
+        "block_errors": {}
+      }
+    ]
+  },
+  "nfs_tracking_counts_after_verification": {
+    "parameters": 2,
+    "grace": 1,
+    "rec-0000000000000001": 0
+  }
+}

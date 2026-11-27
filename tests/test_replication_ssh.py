@@ -19,6 +19,11 @@ XML = """<domain><name>vm</name><memory unit='MiB'>2048</memory><vcpu>2</vcpu>
 <target dev='vda'/></disk></devices></domain>"""
 
 
+@pytest.fixture(autouse=True)
+def source_scratch(monkeypatch):
+    monkeypatch.setenv("IBHICS_REPLICATION_SOURCE_SCRATCH", "/mnt/repl")
+
+
 class Commands:
     def __init__(self, kind="libvirt", fail_export=False, existing=False, avail=100 * 1024**3):
         self.kind, self.fail_export, self.existing = kind, fail_export, existing
@@ -65,6 +70,10 @@ class Commands:
             if self.fail_export:
                 raise RuntimeError("export failed")
             return ""
+        if words[0] == "mountpoint":
+            return ""
+        if words[:3] == ["stat", "-Lc", "%d"]:
+            return "1" if words[-1] == "/" else "2"
         if words[0] == "df":
             return f"Avail\n{self.avail}\n"
         if words[0] == "stat":
@@ -73,12 +82,12 @@ class Commands:
             assert words[1].startswith("if=/")
             return self.data if binary else hashlib.sha256(self.data).hexdigest() + "  -\n"
         if words[0] in ("mkdir", "rmdir"):
-            assert words[-1].startswith("/var/tmp/ibhics-repl-")
+            assert words[-1].startswith("/mnt/repl/ibhics-repl-")
             if words[0] == "mkdir":
                 assert words[1:3] == ["-m", "700"]
             return ""
         if words[0] == "rm":
-            assert words[-1].startswith("/var/tmp/ibhics-repl-")
+            assert words[-1].startswith("/mnt/repl/ibhics-repl-")
             return ""
         if words[:2] == ["vim-cmd", "vmsvc/snapshot.get"]:
             if self.existing:
@@ -129,7 +138,7 @@ def test_failed_begin_still_cleans_snapshot_and_partial_exports(tmp_path):
     with pytest.raises(RuntimeError, match="export failed"):
         ReplicaStore(tmp_path / "metadata", [tmp_path / "pool"]).sync(provider)
     assert commands.snapshot is None
-    assert any(c.startswith("rm -f -- /var/tmp/ibhics-repl-") for c in commands.commands)
+    assert any(c.startswith("rm -f -- /mnt/repl/ibhics-repl-") for c in commands.commands)
 
 
 def test_esxi_refuses_existing_snapshots_without_mutation(tmp_path):
@@ -183,3 +192,27 @@ def test_refuses_to_fill_the_source_host():
         provider.begin()
     assert commands.snapshot is None
     assert not any(c.startswith("qemu-img convert") for c in commands.commands)
+
+
+@pytest.mark.parametrize(
+    ("problem", "error"),
+    [("unset", "Set IBHICS"), ("unmounted", "unavailable"), ("root", "root filesystem")],
+)
+def test_source_scratch_guard_stops_before_snapshot(monkeypatch, problem, error):
+    if problem == "unset":
+        monkeypatch.delenv("IBHICS_REPLICATION_SOURCE_SCRATCH")
+
+    class UnsafeStorage(Commands):
+        def command(self, command, binary=False):
+            words = shlex.split(command)
+            if problem == "unmounted" and words[0] == "mountpoint":
+                raise RuntimeError("not a mountpoint")
+            if problem == "root" and words[:3] == ["stat", "-Lc", "%d"]:
+                return "1"
+            return super().command(command, binary=binary)
+
+    commands = UnsafeStorage()
+    with pytest.raises(ValueError, match=error):
+        SnapshotSSHProvider(SOURCE, VM, commands).begin()
+    assert commands.snapshot is None
+    assert not any(c.startswith("mkdir ") for c in commands.commands)

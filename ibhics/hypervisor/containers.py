@@ -9,16 +9,21 @@ VMs, and they are unprivileged by default (root in the container is nobody on th
 
 from __future__ import annotations
 
+import fcntl
 import ipaddress
 import json
 import logging
+import os
 import re
 import shlex
+import socket
 import subprocess
+import tempfile
 import threading
 import time
 import uuid as uuidlib
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
@@ -32,6 +37,10 @@ SNAP_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 class ContainerNotFound(LookupError):
     pass
+
+
+class ContainerRestartFailed(InvalidState):
+    """A temporarily stopped container could not be returned to service."""
 
 
 # Templates: distribution images from images.linuxcontainers.org (lxc "download"), and
@@ -184,6 +193,7 @@ class ContainerSpec:
     mac: str = ""  # eth0's; made at create
     # More network cards (eth1, eth2, ...): {"network", "ip", "gateway", "mac"} each.
     nics: list[dict] = field(default_factory=list)
+    owner_node: str = ""  # persisted authority hint, never supplied by the Manager create form
 
     def interfaces(self) -> list[dict]:
         """Every network card, eth0 first."""
@@ -266,6 +276,8 @@ class ContainerInfo:
     disk_used_gb: float = 0.0
     snapshots: list[str] = field(default_factory=list)
     path: str = ""  # its folder on the node: <pool>/containers/<name>
+    owner_node: str = ""
+    migration_pending: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -277,6 +289,8 @@ class ContainerInfo:
             "disk_used_gb": self.disk_used_gb,
             "snapshots": self.snapshots,
             "path": self.path,
+            "owner_node": self.owner_node,
+            "migration_pending": self.migration_pending,
             "kind": "container",
         }
 
@@ -337,9 +351,21 @@ def lxc_config(spec: ContainerSpec, bridge, rootfs: str = "") -> str:
         f"lxc.cgroup2.memory.swap.max = {spec.swap_mb}M",
         f"lxc.cgroup2.cpu.max = {spec.vcpus * 100000} 100000",
         f"lxc.start.auto = {1 if spec.autostart else 0}",
+        "lxc.tty.max = 0",
+        "lxc.console.path = none",
         "lxc.apparmor.profile = generated",
         f"lxc.apparmor.allow_nesting = {1 if spec.nesting else 0}",
     ]
+    if rootfs:
+        import shlex
+        import sys
+
+        command = shlex.quote(sys.executable) + " -m ibhics.hypervisor.ct_runlock"
+        home = shlex.quote(str(Path(rootfs).parent))
+        lines += [
+            f"lxc.hook.pre-start = {command} acquire {home}",
+            f"lxc.hook.post-stop = {command} release {home}",
+        ]
     # Addresses are set inside the container (guest_network_script), so DHCP and fixed
     # IPs both work with the distribution's own network setup.
     for i, card in enumerate(spec.interfaces()):
@@ -523,6 +549,7 @@ class LxcContainers:
         pools: Callable[[], list[str]],
         jobs: ExecJobs | None = None,
         cgroup_root: Path = Path("/sys/fs/cgroup"),
+        node_name: str | None = None,
     ) -> None:
         self._pool_path = pool_path
         self._bridge_of = bridge_of
@@ -530,6 +557,272 @@ class LxcContainers:
         self._pools = pools
         self._jobs = jobs or ExecJobs()
         self._cgroup = cgroup_root
+        self.node_name = node_name or socket.gethostname()
+
+    def _owner(self, home: Path) -> str:
+        try:
+            hint = json.loads((home / "ibhics.json").read_text()).get("owner_node", "")
+        except FileNotFoundError:
+            hint = ""
+        except (OSError, ValueError) as exc:
+            raise InvalidState("Container ownership metadata cannot be read") from exc
+        if not isinstance(hint, str):
+            raise InvalidState("Invalid container ownership metadata")
+        try:
+            data = json.loads((home / ".ibhics-owner.json").read_text())
+        except FileNotFoundError:
+            # Existing NFS clients can cache a negative lookup for a newly
+            # created owner file. The existing settings inode is revalidated
+            # on open, so retain the same authority in that metadata too.
+            return hint
+        except (OSError, ValueError) as exc:
+            raise InvalidState("Container ownership metadata cannot be read") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("node"), str) or not data["node"]:
+            raise InvalidState("Invalid container ownership metadata")
+        if hint and hint != data["node"]:
+            try:
+                migration = json.loads((home / ".ibhics-migration.json").read_text())
+            except (OSError, ValueError):
+                migration = {}
+            if migration.get("source") != data["node"] or migration.get("destination") != hint:
+                raise InvalidState("Conflicting container ownership metadata")
+        return data["node"]
+
+    def _claim_owner(self, home: Path) -> None:
+        previous = self._owner(home)
+        if previous and previous != self.node_name:
+            raise InvalidState("Container belongs to another node")
+        # Link a fully written file into place atomically: two nodes cannot
+        # overwrite each other's ownership, including on a shared NFS pool.
+        fd, temp = tempfile.mkstemp(prefix=".owner-", dir=home)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump({"node": self.node_name}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temp, home / ".ibhics-owner.json")
+            except FileExistsError:
+                pass
+            if self._owner(home) != self.node_name:
+                raise InvalidState("Container belongs to another node")
+            meta = home / "ibhics.json"
+            if meta.exists():
+                data = json.loads(meta.read_text())
+                if data.get("owner_node") != self.node_name:
+                    data["owner_node"] = self.node_name
+                    fd2, temp2 = tempfile.mkstemp(prefix=".owner-settings-", dir=home)
+                    try:
+                        with os.fdopen(fd2, "w") as stream:
+                            json.dump(data, stream)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.chmod(temp2, meta.stat().st_mode & 0o777)
+                        os.replace(temp2, meta)
+                    finally:
+                        Path(temp2).unlink(missing_ok=True)
+        finally:
+            Path(temp).unlink(missing_ok=True)
+
+    @contextmanager
+    def _creation_lock(self, base: Path, name: str):
+        # Do not unlink a lock inode: a second opener could otherwise bypass it.
+        locks = base / ".creation-locks"
+        locks.mkdir(exist_ok=True)
+        with (locks / f"{name}.lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise InvalidState("Container creation is already in progress") from None
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def migration(self, action, name, body):
+        from .container_migration import operate
+
+        return operate(self, action, name, body)
+
+    def _runlock_acquire(self, home):
+        from .ct_runlock import acquire
+
+        acquire(home)
+
+    def _runlock_release(self, home):
+        from .ct_runlock import release
+
+        release(home)
+
+    def _shared_home(self, home):
+        code, output = self._run(["findmnt", "-T", str(home), "-n", "-o", "FSTYPE,OPTIONS"])
+        parts = output.split()
+        return (code == 0 and len(parts) == 2 and parts[0] == "nfs4"
+                and not {"local_lock=all", "local_lock=posix", "ro"}.intersection(
+                    parts[1].split(",")))
+
+    def ha_takeover(self, name: str, failed: str) -> ContainerInfo:
+        from .container_migration import MARKER, atomic
+
+        if not CT_NAME_RE.fullmatch(name) or not failed or failed == self.node_name:
+            raise InvalidState("Invalid HA takeover source")
+        matches = []
+        for pool in self._pools():
+            try:
+                home = self._dir(pool) / name
+            except InvalidState:
+                continue
+            if (home / "ibhics.json").is_file():
+                matches.append(home)
+        if len(matches) != 1:
+            raise InvalidState("Shared container home is unavailable or ambiguous")
+        home = matches[0]
+        with self._creation_lock(home.parent, name):
+            if not self._shared_home(home) or not (home / "rootfs.img").is_file():
+                raise InvalidState("HA requires visible shared NFSv4 storage with POSIX locks")
+            if (home / MARKER).exists():
+                raise InvalidState("Container migration marker pending; HA takeover refused")
+            owner = self._owner(home)
+            if owner not in (failed, self.node_name):
+                raise InvalidState("Container ownership changed; HA takeover refused")
+            try:
+                self._runlock_acquire(home)
+            except RuntimeError as exc:
+                raise InvalidState(f"still locked by {failed}: {exc}") from exc
+            if (home / MARKER).exists() or self._owner(home) not in (failed, self.node_name):
+                self._runlock_release(home)
+                raise InvalidState("Container ownership or migration changed during takeover")
+            # Each rename is atomic; disagreement after an interrupted pair fails closed.
+            data = json.loads((home / "ibhics.json").read_text())
+            data["owner_node"] = self.node_name
+            atomic(home / "ibhics.json", data)
+            atomic(home / ".ibhics-owner.json", {"node": self.node_name})
+            spec = ContainerSpec(**data)
+            self._write_config(home.parent, spec)
+            # Hook acquire reuses our holder. Keep it on uncertain start errors.
+            if self._info(home.parent, spec).state != "running":
+                self._lxc("start", home.parent, name)
+                self._wait_running(home.parent, name)
+                self._apply_network(spec)
+            return self._info(home.parent, spec)
+
+    def self_fence(self):
+        from .ct_runlock import alive
+
+        # list() deliberately hides guests owned by other nodes.
+        for pool in self._pools():
+            try:
+                base = self._dir(pool)
+            except InvalidState:
+                continue
+            for meta in base.glob("*/ibhics.json"):
+                name = meta.parent.name
+                if not CT_NAME_RE.fullmatch(name):
+                    continue
+                state = self._lxc("info", base, name, "-sH", check=False).strip().upper()
+                if state not in ("RUNNING", "FROZEN"):
+                    continue
+                if (meta.parent / ".ibhics-migration.json").exists():
+                    continue  # the migration fence owns this container until it finishes
+                try:
+                    owner = self._owner(meta.parent)
+                except Exception:
+                    continue  # unreadable metadata (storage hiccup) is not proof of a takeover
+                if owner and owner != self.node_name:
+                    log.error("Self-fencing container %s: now owned by %s", name, owner)
+                    self._lxc("stop", base, name, "-k")
+                    continue
+                # A stalled NFS server only delays the heartbeat: never kill on staleness.
+                # A dead holder (lock lost, I/O error) or a container started before run
+                # locks existed is re-locked; only a lock held elsewhere fences it.
+                if alive(meta.parent):
+                    continue
+                try:
+                    self._runlock_acquire(meta.parent)
+                except RuntimeError as exc:
+                    log.error("Self-fencing container %s: run lock unavailable (%s)", name, exc)
+                    self._lxc("stop", base, name, "-k")
+
+    def claim_owner(self, name: str) -> ContainerInfo:
+        base, spec = self._find(name, require_owner=False)
+        self._claim_owner(base / name)
+        return self._info(base, spec)
+
+    @contextmanager
+    def backup_source(self, name: str, allow_stop=False):
+        base, spec = self._find(name)
+        home = base / name
+        image = home / "rootfs.img"
+        if image.is_symlink() or not image.is_file() or image.stat().st_size == 0:
+            raise InvalidState("Container backup requires a regular rootfs image")
+        running = self._info(base, spec).state == "running"
+        if running and not allow_stop:
+            raise InvalidState("Allow a temporary stop or stop the container before backup")
+        try:
+            if running:
+                self.action(name, "stop")
+            if self._info(base, spec).state != "stopped":
+                raise InvalidState("Container did not stop; no backup was started")
+            includes = []
+            rootfs = []
+            for line in (home / "config").read_text().splitlines():
+                if line.strip().startswith("lxc.rootfs.path"):
+                    rootfs.append(line.partition("=")[2].strip())
+                if line.strip().startswith("lxc.include"):
+                    value = line.partition("=")[2].strip()
+                    if re.fullmatch(r"/usr/share/lxc/config/[A-Za-z0-9_.-]+\.conf", value):
+                        includes.append(value)
+                if line.strip().startswith("lxc.mount.entry") and "/dev/fuse " not in line:
+                    raise InvalidState("Back up custom container mounts separately")
+            if rootfs != [f"loop:{image}"]:
+                raise InvalidState("Container rootfs configuration does not match its backup image")
+            yield (
+                image,
+                {"entity_type": "container", "container": spec.public(), "includes": includes},
+            )
+        finally:
+            if running and self._info(base, spec).state == "stopped":
+                try:
+                    self.action(name, "start")
+                except Exception as exc:
+                    raise ContainerRestartFailed(
+                        f"Backup cleanup could not restart {name}"
+                    ) from exc
+
+    def import_rootfs(self, spec: ContainerSpec, write_image, includes=()) -> ContainerInfo:
+        spec = replace(spec, password="", owner_node=self.node_name, autostart=False)
+        spec.validate()
+        for card in spec.interfaces():
+            self._bridge_of(card["network"])
+        base = self._dir(spec.pool)
+        base.mkdir(parents=True, exist_ok=True)
+        home = base / spec.name
+        with self._creation_lock(base, spec.name):
+            if home.exists():
+                raise InvalidState("A container with this name already exists; choose another name")
+            temp = Path(tempfile.mkdtemp(prefix=f".{spec.name}-restore-", dir=base))
+            try:
+                write_image(temp / "rootfs.img")
+                safe_includes = [
+                    p
+                    for p in includes
+                    if isinstance(p, str)
+                    and re.fullmatch(r"/usr/share/lxc/config/[A-Za-z0-9_.-]+\.conf", p)
+                ]
+                (temp / "config").write_text("\n".join(f"lxc.include = {p}" for p in safe_includes))
+                config = lxc_config(spec, self._bridge_of, str(home / "rootfs.img"))
+                (temp / "config").write_text(_keep_template_lines(temp / "config", config))
+                (temp / "ibhics.json").write_text(json.dumps(asdict(spec)))
+                self._claim_owner(temp)
+                if home.exists():
+                    raise InvalidState("Container destination appeared during restore")
+                temp.rename(home)
+            finally:
+                if temp.exists():
+                    import shutil
+
+                    shutil.rmtree(temp)
+        return self._info(base, spec)
 
     def _dir(self, pool: str) -> Path:
         path = self._pool_path(pool)
@@ -537,14 +830,22 @@ class LxcContainers:
             raise InvalidState(f"containers need a folder or file-system pool; {pool!r} is not")
         return Path(path) / "containers"
 
-    def _find(self, name: str) -> tuple[Path, ContainerSpec]:
+    def _find(self, name: str, *, require_owner=True) -> tuple[Path, ContainerSpec]:
         for pool in self._pools():
             try:
                 meta = self._dir(pool) / name / "ibhics.json"
             except InvalidState:
                 continue
             if meta.is_file():
-                return meta.parent.parent, ContainerSpec(**json.loads(meta.read_text()))
+                owner = self._owner(meta.parent)
+                if owner and owner != self.node_name:
+                    continue
+                if require_owner and (meta.parent / ".ibhics-migration.json").exists():
+                    raise InvalidState("Container migration in progress; normal actions are fenced")
+                if require_owner and not owner:
+                    raise InvalidState("Container has no registered owner; refresh through Manager")
+                spec = ContainerSpec(**json.loads(meta.read_text()))
+                return meta.parent.parent, replace(spec, owner_node=owner)
         raise ContainerNotFound(name)
 
     def _lxc(self, cmd: str, lxcpath: Path, name: str, *args: str, check: bool = True) -> str:
@@ -563,11 +864,16 @@ class LxcContainers:
             if not base.is_dir():
                 continue
             for meta in sorted(base.glob("*/ibhics.json")):
+                if meta.parent.name.startswith("."):
+                    continue
+                owner = self._owner(meta.parent)
+                if owner and owner != self.node_name:
+                    continue
                 out.append(self._info(base, ContainerSpec(**json.loads(meta.read_text()))))
         return out
 
     def get(self, name: str) -> ContainerInfo:
-        base, spec = self._find(name)
+        base, spec = self._find(name, require_owner=False)
         return self._info(base, spec)
 
     def _info(self, base: Path, spec: ContainerSpec) -> ContainerInfo:
@@ -578,7 +884,7 @@ class LxcContainers:
                 key, _, value = line.partition(":")
                 value = value.strip()
                 if key == "State":
-                    info.state = "running" if value == "RUNNING" else "stopped"
+                    info.state = "running" if value in ("RUNNING", "FROZEN") else "stopped"
                 elif key == "IP":
                     info.addresses.append(value)
                 elif key == "CPU use" and value:
@@ -589,6 +895,13 @@ class LxcContainers:
             # lxc-info leaves Memory use out on cgroup v2 hosts: read the cgroup itself.
             info.memory_used_mb = self._cgroup_memory(spec.name) // 2**20
         info.path = str(base / spec.name)
+        info.owner_node = self._owner(base / spec.name)
+        info.migration_pending = (base / spec.name / ".ibhics-migration.json").exists()
+        if (not info.owner_node and info.state == "running") or (
+            info.owner_node == self.node_name and not spec.owner_node
+        ):
+            self._claim_owner(base / spec.name)
+            info.owner_node = self.node_name
         image = base / spec.name / "rootfs.img"
         if image.exists():
             info.disk_used_gb = round(image.stat().st_blocks * 512 / 2**30, 2)
@@ -606,6 +919,15 @@ class LxcContainers:
         return 0
 
     def create(self, spec: ContainerSpec) -> ContainerInfo:
+        spec.validate()
+        base = self._dir(spec.pool)
+        base.mkdir(parents=True, exist_ok=True)
+        with self._creation_lock(base, spec.name):
+            if (base / spec.name).exists():
+                raise InvalidState(f"a container named {spec.name!r} already exists in this pool")
+            return self._create(spec)
+
+    def _create(self, spec: ContainerSpec) -> ContainerInfo:
         spec.validate()
         try:
             self._find(spec.name)
@@ -649,6 +971,8 @@ class LxcContainers:
             )
             if (home / "rootdev").exists():
                 (home / "rootdev").rename(image)
+            self._claim_owner(home)
+            spec = replace(spec, owner_node=self.node_name)
             (home / "config").write_text(
                 _keep_template_lines(home / "config", lxc_config(spec, bridge, str(image)))
             )
@@ -906,6 +1230,7 @@ class FakeContainers:
         self._jobs: dict[str, dict] = {}
         self._networks = networks
         self._pools = pools
+        self._rootfs = {}
 
     def list(self) -> list[ContainerInfo]:
         return list(self._cts.values())
@@ -914,6 +1239,42 @@ class FakeContainers:
         if name not in self._cts:
             raise ContainerNotFound(name)
         return self._cts[name]
+
+    def claim_owner(self, name: str) -> ContainerInfo:
+        # Fake stores are private to one driver rather than shared across hosts.
+        return self.get(name)
+
+    @contextmanager
+    def backup_source(self, name: str, allow_stop=False):
+        info = self.get(name)
+        running = info.state == "running"
+        if running and not allow_stop:
+            raise InvalidState("Allow a temporary stop or stop the container before backup")
+        try:
+            if running:
+                self.action(name, "stop")
+            with tempfile.TemporaryDirectory(prefix="fake-ct-backup-") as directory:
+                image = Path(directory) / "rootfs.img"
+                image.write_bytes(self._rootfs.get(name, ("Fake rootfs " + name).encode() * 512))
+                yield (
+                    image,
+                    {"entity_type": "container", "container": info.spec.public(), "includes": []},
+                )
+        finally:
+            if running:
+                self.action(name, "start")
+
+    def import_rootfs(self, spec: ContainerSpec, write_image, includes=()) -> ContainerInfo:
+        if spec.name in self._cts:
+            raise InvalidState("Container already exists")
+        with tempfile.TemporaryDirectory(prefix="fake-ct-restore-") as directory:
+            image = Path(directory) / "rootfs.img"
+            write_image(image)
+            content = image.read_bytes()
+        info = self.create(replace(spec, autostart=False))
+        self._rootfs[spec.name] = content
+        info.state = "stopped"
+        return info
 
     def create(self, spec: ContainerSpec) -> ContainerInfo:
         spec.validate()
@@ -1075,6 +1436,15 @@ class RemoteContainers:
     def get(self, name: str) -> ContainerInfo:
         return info_from_dict(self._call("GET", f"/{name}"))
 
+    def ha_takeover(self, name, failed):
+        return info_from_dict(self._call("POST", f"/{name}/ha-takeover", json={"from": failed}))
+
+    def migration(self, action, name, body):
+        return self._call("POST", f"/{name}/migration/{action}", json=body, timeout=300)
+
+    def claim_owner(self, name: str) -> ContainerInfo:
+        return info_from_dict(self._call("POST", f"/{name}/owner"))
+
     def create(self, spec: ContainerSpec) -> ContainerInfo:
         return info_from_dict(self._call("POST", json=asdict(spec), timeout=3600))
 
@@ -1149,6 +1519,18 @@ def install_agent_routes(api, get_containers) -> None:
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
         return get_containers().get(name).to_dict()
+
+    @api.post("/containers/{name}/migration/{action}")
+    def ct_migration(name: str, action: str, body: dict) -> dict:
+        return get_containers().migration(action, name, body)
+
+    @api.post("/containers/{name}/ha-takeover")
+    def ct_ha_takeover(name: str, body: dict) -> dict:
+        return get_containers().ha_takeover(name, body.get("from", "")).to_dict()
+
+    @api.post("/containers/{name}/owner")
+    def ct_claim_owner(name: str) -> dict:
+        return get_containers().claim_owner(name).to_dict()
 
     @api.post("/containers/{name}/action")
     def ct_action(name: str, body: dict) -> dict:

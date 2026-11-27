@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-24",
+  "scope": "Migration/replication bulk-data placement and root filesystem guards",
+  "upload_directory": "/mnt/ibhics/virtualstorage/.ibhics-uploads",
+  "persistent_config": "/etc/systemd/system/ibhics-manager.service.d/40-storage-paths.conf",
+  "deployment_backup_parent": "/mnt/ibhics/virtualstorage/.ibhics-maintenance/root-storage",
+  "tests": {
+    "production_payload": {
+      "passed": 119,
+      "skipped": 1
+    },
+    "final_storage_guard_suite": {
+      "passed": 11
+    }
+  },
+  "nodes": {
+    "103": {
+      "checks": {
+        "missing_mount_before_mkdir": true,
+        "migration_root_guard": true,
+        "replication_root_guard": true,
+        "open_root_file_guard": true,
+        "upload_stream_on_storage": true,
+        "p2v_session_on_storage_and_cleanup": true,
+        "300_gib_sparse_inspection_and_guestfs_temp_on_storage": true,
+        "workspace_cleanup": true,
+        "persistent_upload_environment_active": true,
+        "services_active": true
+      },
+      "root_free_before": 11939041280,
+      "guestfs_seconds": 51.42,
+      "root_free_after": 11939041280,
+      "running_vm_count": 2
+    },
+    "104": {
+      "checks": {
+        "missing_mount_before_mkdir": true,
+        "insufficient_storage_space": true,
+        "migration_root_guard": true,
+        "replication_root_guard": true,
+        "open_root_file_guard": true,
+        "existing_replica_files_on_storage": true,
+        "upload_stream_on_storage": true,
+        "p2v_session_on_storage_and_cleanup": true,
+        "300_gib_sparse_inspection_and_guestfs_temp_on_storage": true,
+        "workspace_cleanup": true,
+        "persistent_upload_environment_active": true,
+        "services_active": true
+      },
+      "root_free_before": 3217739776,
+      "guestfs_seconds": 94.35,
+      "root_free_after": 3217739776,
+      "running_vm_count": 3
+    }
+  },
+  "limits": [
+    "Missing mount and full-device failures were injected in tests; production storage was not unmounted while VMs were running.",
+    "KVM/Proxmox source exports require IBHICS_REPLICATION_SOURCE_SCRATCH to name an off-root mount on that source host; unset or invalid configuration stops before snapshot export."
+  ],
+  "follow_up": "Full isolated OS migration passed on 2026-11-25; see migration-root-acceptance-20261125.json. Test Failover and Cutover are excluded at user request."
+}

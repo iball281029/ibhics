@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-26",
+  "scope": "stopped shared-storage handover; running guest restarts at destination",
+  "nodes": [
+    "172.16.12.103",
+    "172.16.12.104"
+  ],
+  "installed": true,
+  "exact_merged_release_tests_passed": 62,
+  "live_test": {
+    "container": "ubututest",
+    "outward": ".103 -> .104",
+    "return": ".104 -> .103",
+    "both_directions_running": true,
+    "proof_file_matches": true,
+    "mac_preserved": true,
+    "snapshots_preserved": true,
+    "single_owner": true,
+    "original_owner_restored": true
+  },
+  "browser_form_live_submitted": false,
+  "browser_limitation": "Existing real browser login expired; backend acceptance used authenticated AgentClient, without minting user sessions",
+  "not_supported": [
+    "private local-storage copying",
+    "live memory migration"
+  ]
+}

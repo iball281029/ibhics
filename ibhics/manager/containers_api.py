@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import urllib.request
+from typing import Literal
 
 from fastapi import status
 from pydantic import BaseModel, Field
@@ -18,6 +19,7 @@ from ..hypervisor.containers import (
     catalog,
     parse_image_index,
 )
+from .schemas import JobOut
 
 
 class ContainerIn(BaseModel):
@@ -81,25 +83,74 @@ class ContainerSnapIn(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 
-def install(api, cluster, backups) -> None:
-    def everywhere():
+class ContainerBackupIn(BaseModel):
+    target: str = Field(min_length=1)
+    allow_stop: bool = False
+    keep_last: int | None = Field(default=None, ge=1, le=1000)
+
+
+class ContainerRestoreIn(BaseModel):
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+    node: str | None = None
+    pool: str | None = None
+    source_node: str | None = None
+
+
+class ContainerMigrateIn(BaseModel):
+    mode: Literal["live", "offline"] = "live"
+    node: str = Field(min_length=1, max_length=253)
+    allow_stop: bool = False
+
+
+def install(api, cluster, backups, ha=None) -> None:
+    def everywhere(strict=False):
+        found = {}
         for member in cluster.compute_members():
             try:
                 cts = member.driver.containers().list()
             except (NodeUnavailable, NotImplementedError) as exc:
                 member.last_error = str(exc) or member.last_error
+                if strict:
+                    raise NodeUnavailable(
+                        f"Cannot verify container ownership on {member.name}; retry when reachable"
+                    ) from exc
                 continue
             for ct in cts:
-                yield member, ct
+                # Both hosts see the same metadata on shared storage. A matching
+                # path alone is insufficient: independent local pools can use it too.
+                key = (
+                    (ct.spec.name, ct.path, ct.spec.mac)
+                    if ct.path and ct.spec.mac
+                    else (member.name, ct.spec.name)
+                )
+                previous = found.get(key)
+                if previous and previous[1].state == "running" and ct.state == "running":
+                    raise InvalidState(f"Container {ct.spec.name!r} is running on multiple nodes")
+                if (
+                    previous is None
+                    or ct.state == "running"
+                    or (ct.owner_node and not previous[1].owner_node)
+                ):
+                    found[key] = (member, ct)
+        yield from found.values()
 
-    def find(name: str):
-        for member, ct in everywhere():
-            if ct.spec.name == name:
-                return member, ct
+    def find(name: str, *, claim=True):
+        matches = [(m, c) for m, c in everywhere(strict=True) if c.spec.name == name]
+        if len(matches) > 1:
+            raise InvalidState(
+                f"Ambiguous container {name!r}; different node copies require review"
+            )
+        if matches:
+            member, ct = matches[0]
+            backend = member.driver.containers()
+            if claim and not ct.owner_node and hasattr(backend, "claim_owner"):
+                ct = backend.claim_owner(name)
+            return member, ct
         raise ContainerNotFound(name)
 
     def out(member, ct) -> dict:
-        return {**ct.to_dict(), "node": member.name}
+        return {**ct.to_dict(), "node": member.name,
+                "ha_enabled": bool(ha and ct.spec.name in ha.enabled)}
 
     def cts(member):
         return member.driver.containers()
@@ -126,9 +177,108 @@ def install(api, cluster, backups) -> None:
     def ct_list() -> list[dict]:
         return [out(m, c) for m, c in everywhere()]
 
+    @api.get("/containers/ha/status")
+    def ct_ha_status() -> dict:
+        return ha.status() if ha else {"containers": [], "events": []}
+
+    @api.put("/containers/{name}/ha")
+    def ct_ha(name: str, body: dict) -> dict:
+        if ha is None:
+            raise InvalidState("Container HA is not available here")
+        if not isinstance(body.get("enabled"), bool):
+            raise ValueError("enabled must be a boolean")
+        ha.set_enabled(name, body["enabled"])
+        return {"name": name, "enabled": name in ha.enabled}
+
     @api.get("/containers/{name}")
     def ct_get(name: str) -> dict:
-        return out(*find(name))
+        return out(*find(name, claim=False))
+
+    @api.post("/containers/{name}/migrate")
+    def ct_migrate(name: str, body: ContainerMigrateIn) -> dict:
+        cluster.require_quorum()
+        source, ct = find(name)
+        destination = cluster.member(body.node)
+        if destination.name == source.name:
+            raise InvalidState("Select a different destination node")
+        if (
+            destination.role != "compute"
+            or destination.maintenance
+            or not cluster.is_healthy(destination)
+        ):
+            raise InvalidState("Destination must be a healthy compute node outside maintenance")
+        if ct.state == "running" and body.mode == "offline" and not body.allow_stop:
+            raise InvalidState("Allow a temporary stop before migrating a running container")
+
+        def migrate():
+            receipt = None
+            committing = False
+            try:
+                receipt = cts(source).migration(
+                    "prepare", name,
+                    {"node": destination.name, "allow_stop": body.allow_stop, "mode": body.mode},
+                )
+                cts(destination).migration("probe", name, receipt)
+                committing = True
+                cts(source).migration("commit", name, receipt)
+                result = cts(destination).migration("finish", name, receipt)
+                message = "Container moved (stopped)"
+                if result.get("method") == "live":
+                    message = "Live (memory kept)"
+                elif result.get("method") == "restart":
+                    message = "Restarted on destination"
+                    if result.get("live_error"):
+                        message += f": {result['live_error']}"
+                return {**result, "node": destination.name, "result": message}
+            except Exception:
+                # After an uncertain commit, leave the durable fence in place.
+                # Restarting a source after a lost RPC could duplicate a running guest.
+                if receipt and not committing:
+                    cts(source).migration("abort", name, receipt)
+                raise
+
+        return task("ct-migrate", f"{source.name} → {destination.name}", name, source, migrate)
+
+    @api.post("/containers/{name}/migration-recover")
+    def ct_migration_recover(name: str) -> dict:
+        cluster.require_quorum()
+        member, ct = find(name, claim=False)
+        return task(
+            "ct-migrate-recover",
+            member.name,
+            name,
+            member,
+            lambda: {**cts(member).migration("recover", name, {}), "node": member.name},
+        )
+
+    @api.post("/containers/{name}/backup", response_model=JobOut, status_code=202)
+    def ct_backup(name: str, body: ContainerBackupIn) -> JobOut:
+        cluster.require_quorum()
+        member, ct = find(name)
+        if ct.state == "running" and not body.allow_stop:
+            raise InvalidState("Allow a temporary stop or stop the container before backup")
+        return JobOut(
+            **backups.start_container_backup(
+                member, name, body.target, body.allow_stop, body.keep_last
+            ).__dict__
+        )
+
+    @api.post(
+        "/backup/targets/{target}/backups/{backup_id}/restore-container",
+        response_model=JobOut,
+        status_code=202,
+    )
+    def ct_restore_backup(target: str, backup_id: str, body: ContainerRestoreIn) -> JobOut:
+        cluster.require_quorum()
+        names = {c.spec.name for _, c in everywhere(strict=True)}
+        names |= {vm.spec.name for _, vm in cluster.all_vms()}
+        if body.name in names:
+            raise InvalidState("A VM or container with this name already exists")
+        return JobOut(
+            **backups.start_container_restore(
+                target, backup_id, body.name, body.node, body.pool, body.source_node
+            ).__dict__
+        )
 
     @api.post("/containers", status_code=status.HTTP_202_ACCEPTED)
     def ct_create(body: ContainerIn) -> dict:
@@ -217,7 +367,7 @@ def install(api, cluster, backups) -> None:
             taken |= {vm.spec.name for _, vm in cluster.all_vms()}
             if body.name in taken:
                 raise InvalidState(f"a VM or container named {body.name!r} already exists")
-        return out(
+        result = out(
             member,
             task(
                 "rename",
@@ -227,12 +377,29 @@ def install(api, cluster, backups) -> None:
                 lambda: cts(member).rename(name, body.name),
             ),  # fmt: skip
         )
+        if ha:
+            ha.renamed(name, body.name)
+            result["ha_enabled"] = body.name in ha.enabled
+        return result
 
     @api.delete("/containers/{name}", status_code=status.HTTP_204_NO_CONTENT)
     def ct_delete(name: str) -> None:
         cluster.require_quorum()
-        member, _ = find(name)
-        task("container-delete", name, name, member, lambda: cts(member).delete(name))
+        member, ct = find(name)
+        if ct.state != "stopped":
+            raise InvalidState("Stop the container before deleting it")
+
+        def remove():
+            # Recheck after acquiring the task lock; another request may have
+            # started it while this deletion was waiting.
+            owner, current = find(name)
+            if owner.name != member.name or current.state != "stopped":
+                raise InvalidState("Container ownership or state changed; refresh before deleting")
+            return cts(owner).delete(name)
+
+        task("container-delete", name, name, member, remove)
+        if ha and name in ha.enabled:
+            ha.set_enabled(name, False)
 
     @api.post("/containers/{name}/exec")
     def ct_exec(name: str, body: ContainerExec) -> dict:
@@ -259,6 +426,8 @@ def install(api, cluster, backups) -> None:
     @api.post("/containers/{name}/move")
     def ct_move(name: str, body: ContainerMove) -> dict:
         cluster.require_quorum()
+        if ha and name in ha.enabled:
+            raise InvalidState("Disable container HA before moving its storage pool")
         member, _ = find(name)
         return out(
             member,

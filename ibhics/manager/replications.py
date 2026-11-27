@@ -17,16 +17,22 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ..hypervisor import InvalidState, PoolNotFound, VMExists
-from ..importer import SourceNotFound, SourceVM
+from ..importer import Source, SourceNotFound, SourceVM
 from ..importer.nics import validate_nics
+from ..importer.resize import ResizeError
 from ..replication.providers import capability
 from ..replication.runtime import ClusterRuntime
+from ..replication.ssh import SourceScratchUnavailable
 from ..replication.store import durable_json
 from .events import publish
 
 
 class SyncStopped(Exception):
     """The operator paused a running sync."""
+
+
+class ReplicationSourceMissing(ValueError):
+    """The job refers to a source that is absent from the manager configuration."""
 
 
 BUSY = {"seeding", "syncing", "cutover-pending", "cutting-over"}
@@ -273,7 +279,8 @@ class ReplicationManager:
                 ) from None
             previous_state = job.state
             job.operation = operation
-            job.error = None
+            if operation != "test-failover" or job.state != "failed":
+                job.error = None
             job.percent = 0
             job.done_bytes = job.total_bytes = 0
             job.run_started = self.clock().isoformat()
@@ -284,8 +291,10 @@ class ReplicationManager:
             self._save()
 
         def run():
+            completed = False
             try:
                 work(job)
+                completed = True
                 if operation in ("sync", "cutover"):
                     publish(
                         self,
@@ -312,9 +321,23 @@ class ReplicationManager:
 
                     job.error = (
                         str(exc)
-                        if isinstance(exc, (CBTRequired, ReplicaMaintenanceRequired))
+                        if isinstance(
+                            exc,
+                            (
+                                CBTRequired,
+                                ReplicaMaintenanceRequired,
+                                ReplicationSourceMissing,
+                                SourceScratchUnavailable,
+                                ResizeError,
+                            ),
+                        )
                         else "Replication operation failed; inspect node and source"
                     )
+                    if isinstance(exc, SourceNotFound):
+                        job.error = (
+                            "Source lookup failed. Check the configured source and refresh "
+                            "its VM inventory. See the active manager journal for this job."
+                        )
                     notify = getattr(self, "notify", lambda *args: None)
                     notify(
                         "critical",
@@ -330,9 +353,13 @@ class ReplicationManager:
                         {
                             "at": self.clock().isoformat(),
                             "operation": operation,
-                            "state": job.state,
+                            "state": (
+                                "done" if operation == "test-failover" and completed else job.state
+                            ),
                             "bytes_transferred": job.bytes_transferred,
-                            "error": job.error,
+                            "error": (
+                                None if operation == "test-failover" and completed else job.error
+                            ),
                             "change_tracking": (
                                 job.change_tracking
                                 if operation in ("sync", "cutover") and not job.error
@@ -362,7 +389,7 @@ class ReplicationManager:
         return job
 
     def _sync(self, job):
-        source = self.imports.source(job.source)
+        source = self._sync_source(job)
         vm = SourceVM.from_dict(job.source_vm)
 
         def progress(done, total):
@@ -386,6 +413,28 @@ class ReplicationManager:
             job.changed_pct = round(100 * result["changed_bytes"] / result["total_bytes"], 2)
             job.percent = 100
             self._save()
+        return source
+
+    def _sync_source(self, job):
+        try:
+            return self.imports.source(job.source)
+        except SourceNotFound:
+            matches = [
+                source
+                for source in self.imports.sources()
+                if source.name.casefold() == job.source.casefold()
+            ]
+            if len(matches) == 1:
+                return matches[0]
+            if matches:
+                raise ReplicationSourceMissing(
+                    f"Replication source '{job.source}' matches multiple configured names. "
+                    f"Restore the exact source name before retrying job {job.id}."
+                ) from None
+            raise ReplicationSourceMissing(
+                f"Replication source '{job.source}' is missing. Restore its configuration "
+                f"before retrying job {job.id}."
+            ) from None
 
     def sync(self, job_id):
         def work(job):
@@ -405,14 +454,12 @@ class ReplicationManager:
             raise ValueError("source_powered_off: true is required; shut down the source VM first")
 
         def work(job):
-            self._sync(job)
+            source = self._sync(job)
             job.state = "cutting-over"
             with self._lock:
                 self._save()
             vm = SourceVM.from_dict(job.source_vm)
-            job.result = self.runtime.materialize(
-                job, self.imports.source(job.source), vm, test=False, networks=None
-            )
+            job.result = self.runtime.materialize(job, source, vm, test=False, networks=None)
             job.state = "done"
 
         job = self.job(job_id)
@@ -434,13 +481,13 @@ class ReplicationManager:
         def work(job):
             job.test_vm = self.runtime.materialize(
                 job,
-                self.imports.source(job.source),
+                Source(job.source, "kvm"),
                 SourceVM.from_dict(job.source_vm),
                 test=True,
                 networks=networks or [],
             )
 
-        return self._submit(job_id, "test-failover", work, allowed={"idle", "paused"})
+        return self._submit(job_id, "test-failover", work, allowed={"idle", "paused", "failed"})
 
     def cleanup_test(self, job_id):
         def work(job):

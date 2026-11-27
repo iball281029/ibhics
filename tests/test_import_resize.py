@@ -24,9 +24,14 @@ class Runner:
     def __init__(self, kind="ext4", used=2 * GIB, fail=None, lvm=False, extra=""):
         self.kind, self.used, self.fail, self.lvm, self.extra = kind, used, fail, lvm, extra
         self.calls = []
+        self.environments = []
 
     def __call__(self, args, **kwargs):
+        if args[0] == "virt-filesystems" and "--blocksize" in args:
+            if args.index("--blocksize") > args.index("-a"):
+                raise subprocess.CalledProcessError(1, args)
         self.calls.append((args, kwargs.get("input")))
+        self.environments.append(kwargs.get("env", {}))
         if args[0] == self.fail:
             raise subprocess.CalledProcessError(1, args, stderr="secret password")
         output = ""
@@ -70,6 +75,9 @@ def image(tmp_path):
 def test_shrink_supported_filesystem(image, kind):
     runner = Runner(kind)
     resize_image(image, 6, runner)
+    for environment in runner.environments:
+        for variable in ("LIBGUESTFS_CACHEDIR", "LIBGUESTFS_TMPDIR", "TMPDIR"):
+            assert Path(environment[variable]) == image.parent.resolve() / ".libguestfs-cache"
     assert image.stat().st_size == 6 * GIB
     script = next(
         script for args, script in runner.calls if args[0] == "guestfish" and "--rw" in args

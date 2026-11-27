@@ -1,0 +1,210 @@
+# Nong ib: Support AI assistant
+
+## Delivered first version
+
+The assistant is named Nong ib. Its panel supports ENG/TH, defaulting to English and remembering the selection per browser. The selected language controls the preferred reply language; an explicit request for another language is respected. The Settings → Support card remains English. Actual infrastructure menu labels stay accurate in replies.
+
+The console includes a floating elephant launcher and chat panel (click the doll to open; click again to collapse), also reachable from Settings → Support → Open AI Assistant. Administrators enable the assistant inside the panel. All signed-in roles may ask documentation questions. Optional context is off by default and can be previewed before sending. Context uses the user's existing permissions: VM counts, node health and recent backup-job status are allowlisted; credentials, full configuration, raw logs and disk contents are not automatically collected.
+
+The first version provides eight curated, version-specific reference topics. It is not a complete repository-document retrieval service. The model has no tools or command executor. Manager-generated action plans added below can change infrastructure after explicit user confirmation through the existing authenticated APIs. Model prose never becomes an executable command. Messages render as plain text. History stays in tab memory; the latest eight turns are sent with each request and are cleared by New chat or reload. The gateway persists usage counters, not conversations. Proxy logging must likewise avoid bodies and authorization headers.
+
+## Architecture and subscription enforcement
+
+Browser → authenticated ibHiCS Manager → company AI gateway → Claude Messages API.
+
+The Manager verifies the existing signed Support license and its expiry, cluster identity and licensed node count for each interaction. AI is disabled by default. A locally edited checkbox cannot grant a Support subscription.
+
+The company gateway independently verifies the license, enrollment token, enrolled cluster and node count before calling the provider. A per-installation daily request allowance is reserved atomically in SQLite, including failed provider attempts. Limits survive service restarts. Requests have bounded message/history/body sizes and a maximum 1,200 output tokens. The model is configured by the company, not by customer requests. Daily requests are a usage allowance, not a guaranteed dollar spend limit; choose the model, allowance and provider billing limits together.
+
+The provider API key exists only on the company gateway host. Customer Managers receive a separate enrollment credential; browsers receive neither credential. Support access does not require a customer Claude login. A signed license is not a substitute for enrollment.
+
+## Company gateway setup (not yet provisioned in the acceptance preview)
+
+1. Prepare a company-controlled HTTPS endpoint with a reverse proxy. The gateway process binds to loopback. Do not deploy the gateway on a customer's Manager with the company's provider key.
+2. Choose a supported model and configure `ANTHROPIC_API_KEY` and `IBHICS_AI_MODEL` using the service's private environment file or secret manager. Do not put real keys in source control, command history, URLs or chat.
+3. Enroll each purchased installation on the gateway host:
+
+```sh
+python -m ibhics.ai.enroll --profiles /var/lib/ibhics-ai/profiles.json --token-file /var/lib/ibhics-ai/customer-installation.token --cluster-id IBHX-CLUSTER-ID --nodes 2 --daily-requests 50
+```
+
+The helper writes a private token file and stores only its hash in the profiles file. It refuses accidental replacement. Deliver the enrollment credential privately to the matching Manager.
+
+4. Run behind HTTPS:
+
+```sh
+ibhics-ai-gateway --profiles /var/lib/ibhics-ai/profiles.json --usage /var/lib/ibhics-ai/usage.sqlite --port 8891
+```
+
+The source checkout also supports `python -m ibhics.ai.gateway` with the same arguments. If the license signer uses an operator-managed public key, supply `--trust-dir /path/to/company-trust`; it must contain `release-public.pem`. The private signing key never belongs on the gateway or customer node.
+
+5. Configure the customer Manager service with `IBHICS_AI_GATEWAY_URL=https://your-company-ai-host/v1/chat` and `IBHICS_AI_GATEWAY_TOKEN` from that installation's private enrollment file. Configure both Manager nodes consistently before enabling AI. No secret is entered in the browser. The enabled flag uses a private `assistant.json` next to `settings.json` and follows shared Manager state across handover.
+6. Apply a valid signed Support license. An administrator opens Settings → Support → AI Assistant and enables AI. Test a documentation question, then preview optional context before sending it.
+
+To revoke an installation independently of license expiry, set its gateway profile `enabled` to false and restart/reload the gateway process. The initial CLI reads profiles at startup. Subscription expiry is checked on every request without needing a restart. Preserve the usage database across restarts. This first version supports one gateway deployment using one local SQLite database; separate replicas with independent databases would each have their own allowance and are not a supported deployment topology.
+
+## Privacy and practical limits
+
+The interface says messages are processed by an external AI service. Common token, authorization-header, password-assignment and private-key patterns receive best-effort redaction before forwarding; this cannot guarantee detection of every secret. Users should not paste secrets. Resource names and job status may still be sensitive, so automatic system context is opt-in. Review the company's privacy terms and provider configuration before offering the service to customers.
+
+Internet connectivity is required for model replies. No provider credential or hosting endpoint was supplied during initial implementation, so those integration tests used simulated providers; no real Claude response or live provider billing has been verified. The real cluster now uses the temporary operator Codex bridge described below. Claude API remains unprovisioned. Local action planning and status checks use Manager data without a model call.
+
+## Responsive mascot behavior
+
+The mascot keeps the original 3D-rendered plush image and uses CSS perspective, a soft floating shadow, gentle bobbing and a hover wiggle. It is an animated image, not a volumetric 3D mesh that can be rotated from arbitrary angles. Reduced-motion preferences disable the animation. The panel opens on demand and is clamped using the visual viewport, including resize/zoom and mobile keyboard viewport changes. The same doll toggles the panel closed.
+
+## Visual assets
+
+`ibhics/manager/static/ai-elephant.png` is the original transparent mascot generated with the built-in imagegen tool. Preview screenshots are in `deliverables/ai-elephant-floating-closed.png` and `deliverables/ai-elephant-floating-chat.png`. The local preview uses simulated infrastructure; its optional Codex adapter returns live model replies. Prompt and asset metadata are in `docs/ai-mascot-design.json`.
+
+
+## Local Codex test adapter
+
+The operator requested testing with the already logged-in Codex account before provisioning Claude. `ibhics.ai.codex_preview.CodexLocalPreview` is an explicitly opt-in adapter for that local development preview. The standard production gateway factory still uses Claude; the temporary operator bridge below explicitly wraps the Codex adapter.
+
+It invokes the supported `codex exec` interface using the operator's existing managed login. Authentication tokens are handled by Codex and are never read or copied by this adapter. Calls use an isolated temporary working directory, replacement assistant instructions, ephemeral sessions, read-only sandbox, no approvals, disabled shell/execution/apps/browser/computer/image/memory/subagent features and no inherited project configuration. Only the question, bounded conversation and explicitly opted-in summary are provided as context. Temporary prompt/reply files are removed after each call. Codex may still retain its own operational logs according to its configuration; this adapter does not promise removal of provider/CLI telemetry.
+
+The local test serializes requests, limits history to four turns, requests short replies, enforces a timeout with process-group cleanup and applies a persistent ten-question daily allowance by default. Failed attempts count toward that allowance. It uses the same ChatGPT/Codex account allowance as the operator, not separate API credit. This path is for one operator's local testing; customer-facing service remains the independently enrolled, signed-Support-gated API gateway described above.
+
+One live question was tested through the browser: the assistant explained Backup versus Snapshot in Thai. This verifies the local Codex path only; Claude API and company hosting remain unprovisioned.
+
+## Real-cluster operator acceptance (2026-11-26)
+
+Installed on both Manager nodes (.103 and .104), accessed at https://172.16.12.111:8888. Both passed health checks. The existing signed Support entitlement is active and AI is enabled in shared Manager state. The exact merged release passed 107 AI, authentication and settings tests.
+
+Temporary test route: Manager -> HTTP loopback port 8891 -> SSH reverse tunnel -> operator Mac loopback port 8771 -> enrolled, license-checking gateway -> Codex CLI. Plain HTTP is allowed only for literal loopback addresses; external gateways still require HTTPS. Per-installation credentials are private service environment files; no Codex OAuth credential was copied to either node.
+
+A real server question returned a Thai Backup versus Snapshot explanation through this route. The authenticated live VIP browser session loaded the real cluster, verified the 64 px launcher stays within the viewport, opened and collapsed the panel, enabled AI through the normal admin control, and received a live Thai answer. The adapter shares the operator account allowance and a ten-attempt daily adapter limit with the local preview. This is an operator test, not a permanent customer AI service: the Mac, bridge process and both SSH tunnels must remain running and connected. Restarting the Mac requires restarting the bridge and tunnels. Company Claude API provisioning remains pending.
+
+The floating launcher is now half its original character size (64 px desktop / 50 px mobile); its readable name badge and chat panel remain independently sized.
+
+
+## Sleeping mascot without Support (2026-11-26)
+
+When `/assistant/status` reports no active signed Support entitlement (missing,
+expired or otherwise invalid), Nong ib uses the matching closed-eye plush asset
+`ai-elephant-sleeping.png`. Gentle breathing and three floating z/Z/Z marks replace
+the awake animation. Reduced-motion preferences disable these animations.
+Clicking the sleeping mascot shows an English reminder instead of the chat panel:
+
+> Please activate or renew your Support License to wake Nong ib and use AI chat.
+
+The **Manage Support License →** link opens Settings → Overview & subscriptions
+and scrolls to the subscription cards. It also works if Settings is already open
+on another tab. Users without subscription-management permission can view the
+page and ask an administrator to apply their signed license.
+
+Status is checked at initialization, on focus/visibility return, every minute while
+the page is visible, and before opening the assistant. Restoring Support returns
+the awake mascot; normal provisioning and enablement checks still apply. Losing
+Support closes an open chat and clears its local history. A failed status request
+does not open chat. The server continues to enforce entitlement on every request.
+
+Browser checks used mocked status responses to cover missing/expired entitlement,
+renewal, revocation while open, English copy, License navigation, mobile bounds,
+Escape dismissal, reduced motion and failed status requests. Existing 16 AI tests
+passed. Both production nodes received static assets only, without changing their
+licenses or restarting services. The active node served all three exact asset
+hashes over HTTP 200; standby files matched their release hashes and the Manager
+reported its expected standby status. No production license was removed for testing.
+
+
+## Controls and Codex reconnection (2026-11-26)
+
+The admin-only **Remove license** button is under Settings → Overview & subscriptions.
+It asks for confirmation and removes the signed entitlement through an authenticated
+DELETE endpoint. Support and Update are removed together; notification settings and
+running workloads are preserved. Uploading a signed replacement restores entitlement.
+The mascot refreshes immediately after either operation.
+
+The chat header has ENG/TH selection. Language reaches the gateway and the Codex
+adapter; the CLI prompt also explicitly states it so the operator's usual language
+does not override the selected locale. Existing conversation content is preserved.
+The Support page itself stays English. Data protection → Schedules now offers
+**VM schedule** and **Container schedule**. Container shortcuts remain available.
+
+Both reverse SSH connections had disappeared, producing connection-refused errors
+at each Manager's loopback port 8891. They were restored and the local bridge was
+reloaded without resetting login or usage. Live questions through the real Manager
+returned Thai and English replies. The temporary adapter still uses the operator's
+ChatGPT/Codex allowance, with a separate ten-question daily test guard. It does not
+use a provider API key; no separately billed API route was enabled. The Mac, bridge
+and SSH tunnels must stay running; automatic recovery after a Mac restart is not
+implemented.
+
+This test cluster currently has one operator Codex account. There is no account
+assignment UI or provider-account pool per customer organization. Signed cluster
+identity, enrollment token and daily gateway usage are separated by installation.
+Conversation history stays in browser memory; optional context is read only and
+opt in. There is no automatic historical system-data warehouse for AI analysis.
+
+The operator deferred Claude and declined additional API billing. Subscription
+access for Codex testing must not be described as a confirmed commercial entitlement
+to serve multiple customer organizations. Anthropic's published authentication terms
+prohibit routing third-party user requests through consumer subscription credentials:
+https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use
+
+
+## Confirmed VLAN and VM actions (2026-11-26)
+
+Open Nong ib and select **Actions / จัดการระบบ** to choose a live VM or create a VLAN.
+Supported direct messages include `Create VLAN 123`, `Start VM example`,
+`Shutdown VM example`, `Restart VM example`, and `Check status VM example`.
+Thai examples include `ช่วยสร้าง VLAN 123`, `เปิด VM example`, `ปิด VM example`
+and `ตรวจสถานะ VM example`. Names must match exactly; use Actions for names the
+bounded text recognizer cannot parse. The model is not the command parser.
+
+A mutation first produces a review card with its resource, node and impact.
+**Confirm action** rechecks Support, permissions, expiry and resource state, then
+submits the normal Network/VM API request. **Cancel** changes nothing. Plans expire
+in five minutes and are signed for the initiating user and cluster. The mutation
+API verifies the signed plan again and checks that method, target and body match.
+Normal audit and approval rules apply. Duplicate submission is rejected in the
+running Manager; this cache is not durable across a Manager restart. The browser
+does not automatically retry failed or ambiguous mutation requests.
+
+VLAN creation requires admin and uses the existing br0 LAN topology on all compute
+nodes. Existing names/tags, missing br0, unavailable nodes and lost quorum stop the
+plan. The review asks the operator to confirm upstream trunk allowance; it cannot
+inspect the physical switch. No existing VM NIC is moved. After creation the UI
+checks the VLAN configuration on every expected node before reporting success.
+
+Users with VM permissions may start/resume, gracefully shut down or restart a VM.
+Template/recycled/ambiguous targets and active backup/migration jobs are refused.
+Restart with pending hardware changes is refused here. Shutdown/restart uses
+`force: false`. A graceful restart that would apply hardware changes no longer
+silently falls back to forced power off if the guest does not shut down.
+Delete, migration and shell execution are outside this action set.
+
+Status checks query actual cluster and VM data, including OS/Guest Agent for a
+selected VM. A hypervisor running state is not reported as proof of OS readiness.
+VM mutation acceptance is reported separately from OS readiness; **Check VM status**
+performs a fresh check. These local operations make no model call or API billing.
+
+Installed and hash-verified on both .103 and .104. Active health was OK and standby
+health was standby. Read-only acceptance saw all five VMs, live Guest Agent/OS data,
+and a valid VLAN plan/review without changing networks or VMs. The feature and
+related code passed 157 tests; the exact merged active-node payload passed 48 tests.
+Browser fixtures covered cancel, duplicate clicks, stale plans, graceful shutdown,
+OS-readiness wording, approval pending and the sleeping mascot. No production VLAN
+creation or VM power operation was executed for this acceptance. Refresh the web
+console to load the new Actions button. Runtime evidence is in
+`ai-operations-acceptance-20261126.json`.
+
+
+## Test quota and menu terminology update (2026-11-26)
+
+The operator test is limited to **10 model questions per UTC day**, configured in
+both the installation Gateway profile and the Codex adapter. Existing usage is
+preserved; raising the limit from 5 to 10 does not reset counters. Reset is
+00:00 UTC / 07:00 Asia/Bangkok. Failed provider attempts still count. This guard
+is separate from the operator's ChatGPT/Codex account allowance and from Support
+license validity. Local action plans and status checks do not call the model.
+
+Quota errors now describe a daily question limit and its reset time, rather than
+suggesting the Support License expired. Network action cards and the Actions form
+use the actual console labels: **Network → Virtual switches → + Add virtual switch
+(VLAN)**. The normal dialog is **Add VLAN network**, with **Name** and **VLAN ID**.
+Adding this virtual switch creates a VLAN-backed VM network on all compute nodes;
+it neither configures a physical switch nor moves VM NICs into the new network.
+Technical bridge names are labeled as automatic implementation details.

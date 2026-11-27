@@ -1,0 +1,172 @@
+{
+  "checked_at": "2026-11-25T09:01:27.082Z",
+  "jobs": [
+    {
+      "id": "32",
+      "kind": "backup",
+      "state": "cancelled",
+      "error": null,
+      "node": "ibhics-node2",
+      "policy": null,
+      "vm": "ubututest",
+      "entity_type": "container",
+      "result": null,
+      "report": {}
+    },
+    {
+      "id": "31",
+      "kind": "backup",
+      "state": "done",
+      "error": null,
+      "node": "ibhics-node2",
+      "policy": "ct-backup-acceptance",
+      "vm": "ubututest",
+      "entity_type": "container",
+      "result": "ubututest@20261125T090031Z",
+      "report": {
+        "id": "ubututest@20261125T090031Z",
+        "vm_name": "ubututest",
+        "vm_uuid": "ct:ubututest",
+        "created": "2026-11-25T09:00:35.890910+00:00",
+        "size_bytes": 8589934593,
+        "stored_bytes": 3407358,
+        "disks": 1,
+        "kind": "full",
+        "source_id": null,
+        "read_bytes": 746586113,
+        "note": "Consistent stopped container filesystem",
+        "new_data_bytes": 54525952,
+        "dedup_saved_bytes": 692060161,
+        "compression": "zlib-6",
+        "verified": "skipped",
+        "verification": null,
+        "immutable_until": "2026-11-28T09:00:35.977919+00:00",
+        "lock_status": "soft",
+        "suspicious": false,
+        "anomaly_reason": "",
+        "entity_type": "container"
+      }
+    },
+    {
+      "id": "27",
+      "kind": "restore",
+      "state": "done",
+      "error": null,
+      "node": "ibhics-node2",
+      "policy": null,
+      "vm": "ubututest-restore-check",
+      "entity_type": "container",
+      "result": "ubututest-restore-check",
+      "report": {
+        "entity_type": "container",
+        "reason": "Restored stopped; review network settings before starting"
+      }
+    },
+    {
+      "id": "26",
+      "kind": "backup",
+      "state": "done",
+      "error": null,
+      "node": "ibhics-node2",
+      "policy": null,
+      "vm": "ubututest",
+      "entity_type": "container",
+      "result": "ubututest@20261125T085146Z",
+      "report": {
+        "id": "ubututest@20261125T085146Z",
+        "vm_name": "ubututest",
+        "vm_uuid": "ct:ubututest",
+        "created": "2026-11-25T08:52:09.221547+00:00",
+        "size_bytes": 8589934593,
+        "stored_bytes": 72277707,
+        "disks": 1,
+        "kind": "full",
+        "source_id": null,
+        "read_bytes": 746586113,
+        "note": "Consistent stopped container filesystem",
+        "new_data_bytes": 331350017,
+        "dedup_saved_bytes": 415236096,
+        "compression": "zlib-6",
+        "verified": "skipped",
+        "verification": null,
+        "immutable_until": "2026-11-28T08:52:09.312992+00:00",
+        "lock_status": "soft",
+        "suspicious": false,
+        "anomaly_reason": "",
+        "entity_type": "container"
+      }
+    },
+    {
+      "id": "25",
+      "kind": "backup",
+      "state": "failed",
+      "error": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+      "node": "ibhics-node2",
+      "policy": null,
+      "vm": "ubututest",
+      "entity_type": "container",
+      "result": null,
+      "report": {}
+    }
+  ],
+  "containers": [
+    {
+      "name": "ubututest",
+      "state": "running",
+      "node": "ibhics-node2",
+      "mac": "00:16:3e:1d:2e:d1"
+    }
+  ],
+  "restore_points": [
+    {
+      "id": "ubututest@20261125T085146Z",
+      "node": "ibhics-test",
+      "entity_type": "container"
+    },
+    {
+      "id": "ubututest@20261125T090031Z",
+      "node": "ibhics-test",
+      "entity_type": "container"
+    },
+    {
+      "id": "ubututest@20261125T085146Z",
+      "node": "ibhics-node2",
+      "entity_type": "container"
+    },
+    {
+      "id": "ubututest@20261125T090031Z",
+      "node": "ibhics-node2",
+      "entity_type": "container"
+    }
+  ],
+  "policies": [
+    {
+      "name": "PNetLab-27H1-V8.12-nightly",
+      "entity_type": "vm"
+    },
+    {
+      "name": "OpenP9-nightly",
+      "entity_type": "vm"
+    },
+    {
+      "name": "npm-vm-nightly",
+      "entity_type": "vm"
+    }
+  ],
+  "validation": {
+    "tests_passed": 111,
+    "production_nodes": [
+      "172.16.12.103",
+      "172.16.12.104"
+    ],
+    "restore_booted": true,
+    "restored_file_matches": "ibhics-container-backup-proof-20261125",
+    "restored_clone_removed": true,
+    "original_remains_running": true,
+    "scheduled_job": "31",
+    "scheduled_time_local": "16:00",
+    "test_schedule_removed": true,
+    "cancellation_initial_failure": "25 (fixed in deployed v2)",
+    "notes": "Manual backup, scheduled backup, restore and cancellation tested. Large VM backup and VM hang tasks remain paused."
+  }
+}

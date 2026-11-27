@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-26",
+  "nodes": [
+    "103",
+    "104"
+  ],
+  "features": [
+    "admin-only license removal with confirmation",
+    "ENG/TH chat controls and preferred response language",
+    "English Support page",
+    "Container schedule entry in Data protection"
+  ],
+  "backend_tests_passed": 95,
+  "exact_merged_payload_tests_passed_each_node": 95,
+  "remote_vm_state_regression_tests_passed": 4,
+  "browser_checks": "Passed sleeping/license navigation, ENG/TH switch, local preference, mobile bounds, Escape and reduced motion with mocked entitlement responses. Production license was not removed during this acceptance.",
+  "live_thai_reply_verified": true,
+  "live_english_reply": "A snapshot captures the state of a workload at a specific point in time, but it isn\u2019t an independent backup. [backup]",
+  "test_allowance": {
+    "used": 3,
+    "limit": 5,
+    "resets": "00:00 UTC"
+  },
+  "api_key_route_enabled": false,
+  "account_assignment_per_tenant_implemented": false,
+  "mac_dependency_remains": true
+}

@@ -64,6 +64,7 @@ class P2VSessions:
     def __init__(self, state_path: Path | None = None, clock=time.time) -> None:
         self._path = state_path
         self._clock = clock
+        self.storage_guard = None  # The application binds its local driver's storage guard.
         self._lock = threading.RLock()
         self._rounds = {}
         self._sessions: dict[str, Session] = {}
@@ -90,6 +91,8 @@ class P2VSessions:
     # Operator side
 
     def open(self, pool: str, pool_folder: Path) -> tuple[Session, str]:
+        if self.storage_guard:
+            self.storage_guard(pool_folder)
         sid = secrets.token_hex(6)
         token = secrets.token_urlsafe(32)
         folder = Path(pool_folder) / ".ibhics-p2v" / sid
@@ -142,6 +145,8 @@ class P2VSessions:
         return session
 
     def delta_begin(self, session: Session, data: dict) -> dict:
+        if self.storage_guard:
+            self.storage_guard(Path(session.folder))
         from ..replication.p2v import PushRound, session_store
 
         try:
@@ -173,6 +178,8 @@ class P2VSessions:
         return pending
 
     def delta_chunk(self, session, round_id, index, chunk, data):
+        if self.storage_guard:
+            self.storage_guard(Path(session.folder))
         with self._lock:
             try:
                 self._round(session, round_id).upload(index, chunk, data)
@@ -180,6 +187,8 @@ class P2VSessions:
                 raise P2VError(str(exc)) from None
 
     def delta_commit(self, session, round_id):
+        if self.storage_guard:
+            self.storage_guard(Path(session.folder))
         from ..replication.p2v import session_store
 
         with self._lock:
@@ -232,6 +241,8 @@ class P2VSessions:
         return Path(session.folder) / f"disk{index}.raw"
 
     def write_disk(self, session: Session, index: int, chunks, gzip: bool) -> int:
+        if self.storage_guard:
+            self.storage_guard(Path(session.folder))
         """Write one disk from an iterator of byte chunks; zero blocks stay holes."""
         target = self.disk_path(session, index)
         size = session.machine["disks"][index]["size_bytes"]
@@ -239,6 +250,8 @@ class P2VSessions:
         inflate = zlib.decompressobj(wbits=31) if gzip else None
         written = 0
         with open(partial, "wb") as out:
+            if self.storage_guard:
+                self.storage_guard(Path(session.folder), file_fd=out.fileno())
             pending = b""
 
             def flush(block: bytes) -> None:

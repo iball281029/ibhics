@@ -65,11 +65,13 @@ from .domain_xml import (
     build_volume_xml,
     cdrom_element,
     disk_element,
+    disk_error_protected,
     disk_iothread_ids,
     file_name,
     hotplug_ready,
     make_hotplug_ready,
     nic_element,
+    normalize_disk_error_policy,
     normalize_disk_io,
     recycled_at,
     set_recycled_mark,
@@ -538,6 +540,13 @@ class LibvirtDriver(HypervisorDriver):
     def start_vm(self, uuid: str) -> VMInfo:
         dom = self._lookup(uuid)
         if dom.isActive():
+            try:
+                paused = dom.state()[0] == libvirt.VIR_DOMAIN_PAUSED
+            except (TypeError, AttributeError):
+                paused = False
+            if paused:
+                dom.resume()
+                return self._info(dom)
             raise InvalidState("VM is already running")
         root = ET.fromstring(dom.XMLDesc(0))
         if template_facts(root)[0]:
@@ -549,6 +558,7 @@ class LibvirtDriver(HypervisorDriver):
             raise InvalidState("this VM is in the recycle bin: restore it first")
         self._nvram_qcow2(dom)
         self._add_tablet(dom)
+        self._enforce_disk_error_policy(dom)
         previous = self._normalize_disk_io(dom)
         try:
             dom.create()
@@ -560,6 +570,15 @@ class LibvirtDriver(HypervisorDriver):
             dom = self._conn.defineXML(previous)
             dom.create()
         return self._info(dom)
+
+    def _enforce_disk_error_policy(self, dom) -> None:
+        if dom.isActive():
+            raise InvalidState("Disk safety policy can only be applied while stopped")
+        root = ET.fromstring(
+            dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE | libvirt.VIR_DOMAIN_XML_SECURE)
+        )
+        if normalize_disk_error_policy(root):
+            self._conn.defineXML(ET.tostring(root, encoding="unicode"))
 
     def _normalize_disk_io(self, dom) -> str | None:
         """Best effort persistent tuning, only while inactive; never edit live XML.
@@ -606,10 +625,7 @@ class LibvirtDriver(HypervisorDriver):
             if force:
                 dom.destroy()
             else:
-                try:
-                    self._power_off(dom, timeout=RESTART_TIMEOUT)
-                except InvalidState:
-                    dom.destroy()  # the guest ignored the shutdown request
+                self._power_off(dom, timeout=RESTART_TIMEOUT)
             return self.start_vm(uuid)
         if force:
             dom.reset(0)
@@ -1550,20 +1566,28 @@ class LibvirtDriver(HypervisorDriver):
         except libvirt.libvirtError:
             raise PoolNotFound(pool) from None
         root = ET.fromstring(target.XMLDesc(0))
-        if root.get("type") in ("dir", "netfs", "fs"):
-            # Raw images are sparse, so this takes only the data actually copied.
-            base = Path(root.findtext("target/path")) / ".ibhics-scratch"
-            base.mkdir(parents=True, exist_ok=True)
+        pool_type = root.get("type")
+        if pool_type in ("dir", "netfs", "fs"):
+            location = root.findtext("target/path")
+            if not location or not target.isActive():
+                raise InvalidState(f"Storage pool {pool!r} is unavailable for migration scratch")
+            directory = Path(location).resolve()
+            if pool_type in ("netfs", "fs") and not directory.is_mount():
+                raise InvalidState(f"Storage pool {pool!r} is not mounted at {directory}")
+            self._check_migration_scratch(pool, directory, size_gb)
+            base = directory / ".ibhics-scratch"
+            if base.is_symlink():
+                raise InvalidState(f"Storage pool {pool!r} migration scratch must not be a symlink")
+            base.mkdir(exist_ok=True)
+            self._check_migration_scratch(pool, base, size_gb)
             path = Path(tempfile.mkdtemp(dir=base))
             try:
                 yield path
             finally:
                 shutil.rmtree(path, ignore_errors=True)
             return
-        if root.get("type") != "logical" or size_gb <= 0:
-            with super().scratch_space(pool, size_gb) as path:
-                yield path
-            return
+        if pool_type != "logical" or size_gb <= 0:
+            raise InvalidState(f"Storage pool {pool!r} cannot provide migration scratch")
         # LVM pool: a temporary logical volume with a filesystem, removed afterwards.
         name = f"ibhics-scratch-{uuidlib.uuid4().hex[:8]}"
         vol = target.createXML(
@@ -1575,12 +1599,25 @@ class LibvirtDriver(HypervisorDriver):
             self.run(["mkfs.xfs", "-q", vol.path()])
             self.run(["mount", vol.path(), str(mount)])
             try:
+                self._check_migration_scratch(pool, mount, size_gb)
                 yield mount
             finally:
                 self.run(["umount", str(mount)])
         finally:
             mount.rmdir()
             vol.delete(0)
+
+    @staticmethod
+    def _check_migration_scratch(pool: str, directory: Path, size_gb: int) -> None:
+        if not directory.is_dir() or directory.stat().st_dev == Path("/").stat().st_dev:
+            raise InvalidState(
+                f"Storage pool {pool!r} scratch at {directory} "
+                "is unavailable or on the root filesystem"
+            )
+        if shutil.disk_usage(directory).free < size_gb * 1024**3:
+            raise InvalidState(
+                f"Storage pool {pool!r} needs {size_gb} GiB of free migration scratch"
+            )
 
     def delete_pool(self, name: str) -> None:
         pool = self._pool(name)
@@ -1921,6 +1958,22 @@ class LibvirtDriver(HypervisorDriver):
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def abort_backup(self, uuid: str, backup_socket: str) -> bool:
+        """Abort only a currently active backup, keeping the domain running."""
+        dom = self._lookup(uuid)
+        try:
+            backup = ET.fromstring(dom.backupGetXMLDesc(0))
+        except libvirt.libvirtError:
+            return False
+        server = backup.find("server")
+        if server is None or server.get("socket") != backup_socket:
+            return False  # never abort a backup owned by another operation
+        try:
+            dom.abortJob()
+        except libvirt.libvirtError:
+            return False  # it may have completed between inspection and abort
+        return True
+
     def export_backup(self, uuid, parent=None):
         from .backup_cbt import capture
 
@@ -2063,11 +2116,22 @@ class LibvirtDriver(HypervisorDriver):
             disk.size_gb = -(-capacity // GIB)
             disk.used_gb = round(allocation / GIB, 1)
         info = VMInfo(uuid=dom.UUIDString(), spec=spec, state=_state_from_libvirt(state))
+        if info.state == VMState.PAUSED:
+            info.pause_reason = (
+                "storage_io"
+                if _reason == getattr(libvirt, "VIR_DOMAIN_PAUSED_IOERROR", None)
+                else "paused"
+            )
+        info.storage_error_protection = (
+            "active" if disk_error_protected(ET.fromstring(xml)) else "not_configured"
+        )
         try:
             spec.autostart = bool(dom.autostart())
             if info.state == VMState.RUNNING:
                 saved = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
                 info.restart_needed = _restart_key(saved) != _restart_key(ET.fromstring(xml))
+                if info.storage_error_protection != "active" and disk_error_protected(saved):
+                    info.storage_error_protection = "pending_restart"
         except libvirt.libvirtError:
             pass
         return info
@@ -2190,6 +2254,10 @@ def _restart_key(root) -> tuple:
         memory.text if memory is not None else None,
         [b.get("dev") for b in root.findall("os/boot")],
         _video_of(root),
+        tuple(
+            (d.get("error_policy"), d.get("rerror_policy"))
+            for d in root.findall("devices/disk[@device='disk']/driver")
+        ),
     )
 
 

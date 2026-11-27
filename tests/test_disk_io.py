@@ -40,12 +40,24 @@ def test_new_disks_and_cd_keep_bus_and_format():
     assert root.findtext("iothreads") == "1"
     virtio, sata, cd = root.findall("devices/disk")
     assert virtio.find("driver").attrib == dict(
-        name="qemu", type="qcow2", cache="none", io="native", discard="unmap", iothread="1"
+        name="qemu",
+        type="qcow2",
+        cache="none",
+        io="native",
+        discard="unmap",
+        iothread="1",
+        error_policy="stop",
+        rerror_policy="stop",
     )
     assert virtio.find("target").get("bus") == "virtio"
     assert sata.find("target").get("bus") == "sata"
     assert sata.find("driver").attrib == dict(
-        name="qemu", type="qcow2", cache="none", discard="unmap"
+        name="qemu",
+        type="qcow2",
+        cache="none",
+        discard="unmap",
+        error_policy="stop",
+        rerror_policy="stop",
     )
     assert cd.find("target").get("bus") == "sata"
     assert cd.find("driver").attrib == dict(name="qemu", type="raw")

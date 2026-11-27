@@ -164,6 +164,13 @@ def install(api, settings, auth):
         future = request.app.state.notifications.test()
         return await asyncio.wrap_future(future)
 
+    @api.post("/settings/notifications/test-line")
+    async def notification_test_line(request: Request):
+        import asyncio
+
+        admin(request)
+        return await asyncio.wrap_future(request.app.state.notifications.test_line())
+
     @api.get("/settings")
     def view(request: Request):
         result = settings.view()
@@ -182,7 +189,12 @@ def install(api, settings, auth):
     @api.post("/settings/subscription")
     async def license_upload(request: Request):
         admin(request)
-        return settings.upload_license(await limited_json_body(request, 65536))
+        return settings.upload_license(await limited_json_body(request, 128 * 1024))
+
+    @api.delete("/settings/subscription")
+    def license_remove(request: Request):
+        admin(request)
+        return settings.remove_license()
 
     @api.post("/settings/support/cases", status_code=201)
     async def case(request: Request):

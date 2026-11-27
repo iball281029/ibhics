@@ -120,43 +120,101 @@ def test_net_test_commands():
             net_test("ping", bad, run)
 
 
-def test_edge_api(tmp_path):
+def test_gateway_api_removed_but_firewall_persistence_and_diagnostics_work(tmp_path):
     driver = FakeDriver(demo_console=False)
     driver.create_network(NetworkSpec("web", 10))
     driver.create_network(NetworkSpec("db", 20))
     client = TestClient(create_app(driver, edge_state=tmp_path / "edge.json"))
-    resp = client.put("/api/v1/edge/routers/web", json={"gateway": "10.0.10.1/24"})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["routers"][0]["network"] == "web"
-    assert driver.edge[1] is True  # this node is the router
-    bad = client.put("/api/v1/edge/routers/db", json={"gateway": "10.0.10.9/24"})
-    assert bad.status_code in (409, 422) and len(driver.edge[0]["routers"]) == 1
+    assert client.put("/api/v1/edge/routers/web", json={"gateway": "10.0.10.1/24"}).status_code in (
+        404,
+        405,
+    )
+    assert client.delete("/api/v1/edge/routers/web").status_code in (404, 405)
+    assert client.put("/api/v1/edge/router-node", json={"node": "node2"}).status_code in (404, 405)
     rules = [{"name": "web-db", "action": "deny", "src": "web", "dst": "db"}]
-    assert client.put("/api/v1/edge/rules", json=rules).json()["rules"][0]["name"] == "web-db"
+    response = client.put("/api/v1/edge/rules", json=rules)
+    assert response.status_code == 200 and response.json()["rules"][0]["name"] == "web-db"
+    assert "routers" not in response.json() and "router_node" not in response.json()
+    assert driver.edge[1] is False and driver.edge[0]["routers"] == []
     assert client.put("/api/v1/edge/rules", json=[{"name": "x", "src": "mars"}]).status_code >= 400
     test = client.post("/api/v1/edge/test", json={"target": "10.0.10.5", "network": "web"})
     assert test.json()["ok"] and "-I ibr10" in test.json()["output"]
-    assert client.delete("/api/v1/edge/routers/web").json()["routers"] == []
-    assert client.delete("/api/v1/edge/routers/web").status_code == 409
-    # Kept across restarts of the manager.
     again = TestClient(create_app(driver, edge_state=tmp_path / "edge.json"))
     assert again.get("/api/v1/edge").json()["rules"][0]["name"] == "web-db"
 
 
-def test_router_on_one_node_firewall_on_all(tmp_path):
+def test_firewall_reaches_all_nodes_without_enabling_a_gateway(tmp_path):
     from test_migration import Env
 
     env = Env(tmp_path)
     for node in (env.node1, env.node2):
         node.create_network(NetworkSpec("web", 10))
     client = TestClient(create_app(env.cluster, edge_state=tmp_path / "edge.json"))
-    view = client.put("/api/v1/edge/routers/web", json={"gateway": "10.0.10.1/24"}).json()
-    router = view["router_node"]
-    nodes = {"node1": env.node1, "node2": env.node2}
-    assert nodes[router].edge[1] is True
-    other = next(n for name, n in nodes.items() if name != router)
-    assert other.edge[1] is False and other.edge[0]["routers"]  # the remote agent got it
+    response = client.put("/api/v1/edge/rules", json=[{"name": "isolate-web", "src": "web"}])
+    assert response.status_code == 200
+    for node in (env.node1, env.node2):
+        assert node.edge[1] is False and node.edge[0]["routers"] == []
+        assert node.edge[0]["rules"][0]["name"] == "isolate-web"
     test = client.post("/api/v1/edge/test", json={"kind": "trace", "target": "1.1.1.1"})
-    assert test.json()["node"] == router
-    moved = client.put("/api/v1/edge/router-node", json={"node": "node2"}).json()
-    assert moved["router_node"] == "node2" and env.node2.edge[1] is True
+    assert test.status_code == 200 and test.json()["node"]
+
+
+def test_agent_rejects_gateway_commands_but_accepts_firewall():
+    from ibhics.agent.app import create_agent_app
+    from ibhics.cluster import NodeRole
+
+    driver = FakeDriver(demo_console=False)
+    client = TestClient(
+        create_agent_app(name="node", role=NodeRole.COMPUTE, token="test-token", driver=driver)
+    )
+    headers = {"X-ibhics-token": "test-token"}
+    assert (
+        client.put(
+            "/agent/v1/edge",
+            headers=headers,
+            json={"router": True, "config": {"routers": [], "rules": []}},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.put(
+            "/agent/v1/edge",
+            headers=headers,
+            json={
+                "router": False,
+                "config": {"routers": [{"network": "web", "gateway": "10.0.10.1/24"}], "rules": []},
+            },
+        ).status_code
+        == 422
+    )
+    assert (
+        client.put(
+            "/agent/v1/edge",
+            headers=headers,
+            json={"router": False, "config": {"routers": [], "rules": []}},
+        ).status_code
+        == 204
+    )
+
+
+def test_legacy_edge_state_keeps_firewall_without_reenabling_gateway(tmp_path):
+    import json
+
+    from ibhics.cluster import Cluster
+    from ibhics.manager.edge import EdgeManager
+
+    driver = FakeDriver(demo_console=False)
+    path = tmp_path / "edge.json"
+    path.write_text(
+        json.dumps(
+            {
+                "routers": [{"network": "web", "gateway": "10.0.10.1/24"}],
+                "router_node": "old",
+                "rules": [{"name": "deny-all", "action": "deny"}],
+            }
+        )
+    )
+    manager = EdgeManager(Cluster.standalone("node", driver), path)
+    manager.push()
+    assert driver.edge[1] is False and driver.edge[0]["routers"] == []
+    assert manager.view()["rules"][0]["name"] == "deny-all"

@@ -79,6 +79,7 @@ const isAdmin = () => !state.me || state.me.role === "admin";
 const canManage = (category) => !state.me || state.me.role === "admin" || (state.me.permissions || []).includes(category);
 const canOperate = () => canManage(({storage:"storage",network:"network",backup:"backup",migrate:"replication",cluster:"cluster",node:"cluster"})[currentPage()] || "vms");
 const JOB_KINDS = { verify: "Boot verification", recovery: "Recovery", synthetic_full: "Synthetic full", backup_copy: "Backup copy", archive: "Archive", backup: "Backup", restore: "Restore", snapshot: "Snapshot", "snapshot-restore": "Restore snapshot", "snapshot-delete": "Delete snapshot", rename: "Rename VM", "to-virtio": "Switch to VirtIO", restart: "Restart to apply changes", sysprep: "Generalize (sysprep)",
+  "ct-ha-restart": "Container HA restart",
   "container-create": "Create container", "container-start": "Start container", "container-stop": "Stop container",
   "container-kill": "Power off container", "container-restart": "Restart container", "container-resize": "Change container",
   "container-delete": "Delete container", "move-disks": "Move disks", "pool-cache": "Pool cache", "ct-move": "Move container", "container-network": "Container network" };
@@ -265,6 +266,7 @@ function show() {
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
   refresh(page).catch(fail);
+  syncJobsPoll();
 }
 window.addEventListener("hashchange", show);
 
@@ -279,6 +281,7 @@ function selectTab(tabsId, name) {
   const tabs = document.getElementById(tabsId);
   $$("button[data-tab]", tabs).forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".subpage", tabs.parentElement).forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
+  syncJobsPoll();
 }
 $$(".tabs").forEach((tabs) => tabs.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-tab]");
@@ -499,7 +502,12 @@ const loaders = {
   },
   users: async () => { state.users = canManage("users") && state.me ? await api("/users") : []; },
 };
-const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
+// Share in-flight reads with navigation/manual refresh and polling.
+const loading = new Map();
+const load = (...names) => Promise.all(names.map((n) => {
+  if (!loading.has(n)) loading.set(n, Promise.resolve().then(() => loaders[n]()).finally(() => loading.delete(n)));
+  return loading.get(n);
+}));
 
 // ---------- tasks ----------
 
@@ -604,7 +612,7 @@ function renderTaskPage() {
         ${isActive(t) ? `<div class="bar${t.percent == null ? " busy" : ""}" style="margin-top:6px"><i style="width:${t.percent ?? 30}%"></i></div>` : ""}</td>
       <td>${esc(when(t.created))}</td><td>${esc(duration(t))}</td></tr>`).join("")
     : empty(6, all.length ? "No tasks match" : "Nothing has run yet. Backups, restores, migrations, imports and deploys show up here.");
-  renderTaskDetail(tasks.find((t) => taskKey(t) === tp.sel));
+  return renderTaskDetail(tasks.find((t) => taskKey(t) === tp.sel));
 }
 async function renderTaskDetail(t) {
   const box = $("#task-detail");
@@ -841,13 +849,50 @@ document.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-task-log]");
   if (b) showLog(b.dataset.taskLog, b.dataset.taskTitle);
 });
-// While something runs, keep the tasks fresh every few seconds, whatever page is open.
-setInterval(async () => {
-  if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
+// Poll only the visible Jobs view. Schedule after completion so slow reads never overlap.
+let jobsPollTimer = null, jobsPollBusy = false;
+function jobsView() {
+  if (document.hidden) return "";
+  const page = document.body.dataset.section;
+  const tab = { tasks: "task-jobs", backup: "jobs", migrate: "imports" }[page];
+  return tab && $(`#tab-${tab}`).classList.contains("active") ? page : "";
+}
+function syncJobsPoll(immediate = false) {
+  clearTimeout(jobsPollTimer);
+  jobsPollTimer = null;
+  if (!jobsView() || jobsPollBusy) return;
+  const active = allTasks().some(t => isActive(t) || t.state === "retry_wait");
+  jobsPollTimer = setTimeout(pollJobs, immediate ? 0 : active ? 3000 : 20000);
+}
+async function pollJobs() {
+  const page = jobsView();
+  if (!page || jobsPollBusy) return;
+  jobsPollBusy = true;
   try {
-    await load("imports", "jobs", "moves", "deploys", "settingsTasks"); renderTasks();
-    if (currentPage() === "tasks") renderTaskPage();
-  } catch { /* next tick */ }
+    const names = ["imports", "jobs", "moves", "deploys", "settingsTasks", "replications"];
+    if (page === "tasks") names.push("activity");
+    // Wait for every read even on partial failure before scheduling another round.
+    const results = await Promise.allSettled(names.map(n => load(n)));
+    if (jobsView() !== page || results.some(r => r.status === "rejected")) return;
+    renderTasks();
+    const selectors = [`#page-${page} .table-wrap`, "#task-detail", "#task-log"];
+    const scroll = selectors.flatMap(s => $$(s).map((el, i) => [s, i, el.scrollTop, el.scrollLeft]));
+    if (page === "tasks") await renderTaskPage();
+    if (page === "backup") renderJobs();
+    if (page === "migrate") renderImports();
+    for (const [s, i, top, left] of scroll) {
+      const el = $$(s)[i];
+      if (el) { el.scrollTop = top; el.scrollLeft = left; }
+    }
+  } catch { /* retry next round */ }
+  finally { jobsPollBusy = false; syncJobsPoll(); }
+}
+document.addEventListener("visibilitychange", () => syncJobsPoll(true));
+// Elsewhere, keep the task tray fresh while something runs or the tray is open.
+setInterval(async () => {
+  if (jobsView() || document.hidden) return;
+  if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
+  try { await load("imports", "jobs", "moves", "deploys", "settingsTasks"); renderTasks(); } catch { /* next tick */ }
 }, 3000);
 
 async function refresh(page, auto = false) {
@@ -881,6 +926,7 @@ async function refresh(page, auto = false) {
   if (page === "system") { await load("users"); await renderSystem(); }
   if (page === "alerts") await window.Alerts.refresh();
   fillSelects();
+  syncJobsPoll();
 }
 
 // ---------- home ----------
@@ -1112,12 +1158,13 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
     ${compact ? "" : summary ? `<a class="btn small" href="#vm/${vm.uuid}">Summary</a>` : `<button class="small" data-vm="edit" data-id="${vm.uuid}">Settings</button>`}
     ${vm.state === "running"
       ? `<button class="small${compact ? " sq" : ""}" data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Open console">${compact ? `<svg><use href="#i-compute"/></svg>` : "Console"}</button>`
-      : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="Power on">${compact ? `<svg><use href="#i-power"/></svg>` : "Power on"}</button>`}
+      : `<button class="small${compact ? " sq" : ""}" data-vm="start" data-id="${vm.uuid}" title="${vm.state === "paused" ? "Resume after storage recovery" : "Power on"}">${compact ? `<svg><use href="#i-power"/></svg>` : vm.state === "paused" ? "Resume" : "Power on"}</button>`}
     ${compact || vm.template ? "" : `<button class="small" data-vm="snapshot" data-id="${vm.uuid}" title="Take a snapshot">Snapshot</button>`}
     <details class="more"><summary class="small" title="More actions">⋯</summary><div class="dropdown open">
       ${vm.state === "running" ? `<button data-vm="stop" data-id="${vm.uuid}">Shut down</button>
         <button data-vm="restart" data-id="${vm.uuid}">Restart</button>
         <button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
+      ${vm.state === "paused" ? `<button data-vm="console" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Console</button><button data-vm="poweroff" data-id="${vm.uuid}">Power off</button>` : ""}
       ${vm.template ? "" : `<button data-vm="migrate" data-id="${vm.uuid}" data-name="${esc(vm.name)}" data-node="${esc(vm.node)}">Migrate… (host or storage)</button>`}
       ${multi && !vm.template ? `<button data-vm="ha" data-id="${vm.uuid}" data-name="${esc(vm.name)}" title="Start this VM on another node if its node fails (shared storage only)">${state.ha?.has(vm.uuid) ? "Turn off HA restart" : "Turn on HA restart"}</button>` : ""}
       ${summary ? `<button data-vm="edit" data-id="${vm.uuid}">Settings</button>` : ""}
@@ -1131,7 +1178,7 @@ function vmMenu(vm, { summary = false, compact = false } = {}) {
       ${vm.state === "running" && /windows/i.test(vm.os_type || "") ? `<button data-vm="sysprep" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Generalize (sysprep) for a template…</button>` : ""}
       ${vm.state === "stopped" ? `<button data-vm="clone" data-id="${vm.uuid}">Clone…</button>
         <button data-vm="totemplate" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Convert to template</button>` : ""}
-      ${vm.state !== "running" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
+      ${vm.state === "stopped" ? `<button class="danger" data-vm="delete" data-id="${vm.uuid}" data-name="${esc(vm.name)}">Delete</button>` : ""}
     </div></details>`;
 }
 
@@ -1175,6 +1222,9 @@ function vmAlerts(vm) {
   const u = diskUsage(vm, g);
   if (u.used != null && pct(u.used, u.total) >= 90) out.push(`Disk ${pct(u.used, u.total)}% full`);
   if (vm.state === "running" && g && !g.agent) out.push("No guest agent");
+  if (vm.pause_reason === "storage_io") out.push("Paused: storage I/O interrupted. Check storage before Resume.");
+  if (vm.storage_error_protection === "pending_restart") out.push("Storage error protection needs power off/on");
+  else if (vm.storage_error_protection === "not_configured") out.push("Storage error protection not configured");
   if (vm.restart_needed) out.push("Restart to apply changes");
   return out;
 }
@@ -1559,8 +1609,8 @@ async function batch(act) {
   }
   if (act === "ungroup") { await moveToGroup(vms.map((v) => v.uuid), ""); return; }
   const fits = {
-    start: (v) => v.state !== "running", stop: (v) => v.state === "running", poweroff: (v) => v.state === "running",
-    restart: (v) => v.state === "running", delete: (v) => v.state !== "running",
+    start: (v) => v.state !== "running", stop: (v) => v.state === "running", poweroff: (v) => ["running", "paused"].includes(v.state),
+    restart: (v) => v.state === "running", delete: (v) => v.state === "stopped",
   }[act];
   const todo = vms.filter(fits), skipped = vms.length - todo.length;
   const label = { start: "Power on", stop: "Shut down", poweroff: "Power off", restart: "Restart", delete: "Delete" }[act];
@@ -3490,6 +3540,7 @@ function renderCluster() {
   const ha = state.clusterHA, haOn = ha && ha.available;
   const tile = (cls, title, value, note) => `<div class="${cls}"><small>${title}</small><b>${value}</b><span>${note}</span></div>`;
   $("#cluster-overview").innerHTML = [
+    tile(c.active_manager ? "ok" : "warn", "Active manager", c.active_manager ? esc(nodeLabel(c.active_manager)) : "Unconfirmed", c.active_manager ? esc(c.active_manager) : "No elected manager reported"),
     tile(online === c.members.length ? "ok" : "warn", "Online", `${online} / ${c.members.length}`, online === c.members.length ? "All servers are up" : `${c.members.length - online} offline`),
     `<div class="cl-ft ${left ? "ok" : "none"}"><small>Can go down</small><b>${left} ${left === 1 ? "server" : "servers"}</b><span>${down ? `${down} already down · design allows ${ft.n}` : ft.n ? "VMs keep running" : `Limited by ${ft.limiting.map((l) => label[l.key].toLowerCase()).join(", ")}`}</span><details><summary>Why?</summary><ul>${ft.limits.map((l) => `<li class="${ft.limiting.includes(l) ? "limit" : ""}"><b>${label[l.key]} · ${l.n === Infinity ? "∞" : l.n}</b> ${esc(l.text)}</li>`).join("")}</ul></details></div>`,
     tile(haOn && ha.vms.length ? "ok" : "warn", "Auto restart (HA)", haOn ? `${ha.vms.length} / ${clusterHAVMs().length}` : "Off", haOn ? `VMs restart on another server if theirs fails${typeof canOperate !== "function" || canOperate() ? '<button class="cl-ha-open" type="button">Choose VMs</button>' : ""}` : "Unavailable on this manager"),
@@ -4475,7 +4526,7 @@ async function protectionOverview() {
   protection.usage = new Map(rows.map(r => [r.t.name, r.usage.status === "fulfilled" ? r.usage.value : [{error:r.usage.reason.message}]]));
   protection.errors = rows.filter(r => r.points.status === "rejected").map(r => r.t.name);
   const vms = state.vms.filter(v => !v.recycled && !v.template), policies = state.policies.filter(p => p.enabled);
-  const covered = vms.filter(v => policies.some(p => !p.vms.length || p.vms.includes(v.name))).length;
+  const covered = vms.filter(v => policies.some(p => p.entity_type !== "container" && (!p.vms.length || p.vms.includes(v.name)))).length;
   const pct = vms.length ? Math.round(covered / vms.length * 100) : 0;
   const jobs = state.jobs.filter(j => j.kind === "backup" && ["done", "failed"].includes(j.state)).sort((a,b) => String(b.finished).localeCompare(String(a.finished)));
   const next = policies.map(protectionNext).filter(Boolean).sort((a,b) => a-b)[0];
@@ -4514,7 +4565,7 @@ function renderProtectionTimeline(backups) {
 function protectionDetail(b) {
   protection.selected = b;
   const el = $("#backup-detail"); el.hidden = false;
-  el.innerHTML = `<div class="bp-card-head"><h3>${esc(b.vm_name)}</h3><button data-bp-close aria-label="Close restore point details">×</button></div><p>${esc(when(b.created))}</p>${protectionBadges(b)}<dl><dt>Logical size</dt><dd>${size(b.size_bytes)}</dd><dt>New stored data</dt><dd>${size(b.stored_bytes)}</dd><dt>Verification</dt><dd>${esc(b.verification?.reason || "No boot verification has run")}</dd>${b.verification?.screenshot_error ? `<dt>Screenshot</dt><dd>${esc(b.verification.screenshot_error)}</dd>` : ""}<dt>Locked until</dt><dd>${esc(when(b.immutable_until))}</dd><dt>Change analysis</dt><dd>${esc(b.anomaly_reason || "No anomaly flag. This does not prove the data is safe.")}</dd></dl>${pointLocked(b) && b.lock_status !== "native" ? '<p class="bp-alert">Soft lock: API deletion is blocked. Host root and storage administrators can still alter data.</p>' : ""}<div class="actions">${canOperate() ? `<button class="primary" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button><button data-bp-recover>Recover &amp; power on</button>` : ""}${b.verification?.screenshot_path ? '<button data-bp-evidence>View boot screenshot</button>' : ""}</div><p class="hint">Instant recovery is unavailable for dedup chunks. Recovery reconstructs all disks into the pool, then powers on. Actual duration appears in Jobs. No live finalize is needed.</p><div id="bp-evidence"></div>`;
+  el.innerHTML = `<div class="bp-card-head"><h3>${esc(b.vm_name)}</h3><button data-bp-close aria-label="Close restore point details">×</button></div><p>${esc(when(b.created))}</p>${protectionBadges(b)}<dl><dt>Logical size</dt><dd>${size(b.size_bytes)}</dd><dt>New stored data</dt><dd>${size(b.stored_bytes)}</dd><dt>Verification</dt><dd>${esc(b.entity_type === "container" ? "Boot verification is not available for container filesystem backups" : b.verification?.reason || "No boot verification has run")}</dd>${b.verification?.screenshot_error ? `<dt>Screenshot</dt><dd>${esc(b.verification.screenshot_error)}</dd>` : ""}<dt>Locked until</dt><dd>${esc(when(b.immutable_until))}</dd><dt>Change analysis</dt><dd>${esc(b.anomaly_reason || "No anomaly flag. This does not prove the data is safe.")}</dd></dl>${pointLocked(b) && b.lock_status !== "native" ? '<p class="bp-alert">Soft lock: API deletion is blocked. Host root and storage administrators can still alter data.</p>' : ""}<div class="actions">${canOperate() ? `<button class="primary" data-restore="${esc(b.id)}" data-vm="${esc(b.vm_name)}" data-node="${esc(b.node || "")}">Restore</button>${b.entity_type === "container" ? "" : `<button data-bp-recover>Recover &amp; power on</button>`}` : ""}${b.verification?.screenshot_path ? '<button data-bp-evidence>View boot screenshot</button>' : ""}</div><p class="hint">${b.entity_type === "container" ? "Container filesystem backup. Restore creates a new, stopped container; review its network before starting it." : "Instant recovery is unavailable for dedup chunks. Recovery reconstructs all disks into the pool, then powers on. Actual duration appears in Jobs. No live finalize is needed."}</p><div id="bp-evidence"></div>`;
 }
 
 async function renderBackups() {
@@ -4529,7 +4580,7 @@ async function renderBackups() {
     protection.current = backups;
     renderProtectionTimeline(backups);
     tbody.innerHTML = backups.length ? backups.slice().reverse().map((b) => `<tr>
-      <td class="vm-name">${esc(b.vm_name)}<span class="backup-kind" title="${esc(b.note || "")}">${esc(({full:"Full",incremental:"Incremental (CBT)",synthetic_full:"Synthetic full",copy:"Backup copy",archive:"Archive"})[b.kind] || "Full")}</span></td>
+      <td class="vm-name">${esc(b.vm_name)}<span class="backup-kind" title="${esc(b.note || "")}">${b.entity_type === "container" ? "Container · " : ""}${esc(({full:"Full",incremental:"Incremental (CBT)",synthetic_full:"Synthetic full",copy:"Backup copy",archive:"Archive"})[b.kind] || "Full")}</span></td>
       <td><button class="small" data-bp-point="${esc(b.id)}" data-node="${esc(b.node || "")}">${esc(when(b.created))}</button>${protectionBadges(b)}</td>
       <td>${esc(b.node || "shared")}</td>
       <td>${size(b.size_bytes)}</td>
@@ -4553,8 +4604,25 @@ function renderPolicies() {
   $("#policies").innerHTML = state.policies.map(p => {
     const jobs = state.jobs.filter(j => j.policy === p.name && j.kind === "backup").sort((a,b)=>String(a.created).localeCompare(String(b.created))).slice(-14);
     const dots = Array.from({length:14-jobs.length},()=>'<span class="bp-history-dot empty" title="No recorded run" aria-label="No recorded run"></span>').join("") + jobs.map(j => `<span class="bp-history-dot ${esc(j.state)}" title="${esc(`${j.vm} · ${when(j.created)} · ${j.state}${j.error ? ` · ${j.error}` : ""}`)}" aria-label="${esc(`${j.vm}: ${j.state}`)}">${j.report?.verification?.verified === "passed" ? "✓" : ""}</span>`).join("");
-    return `<article class="bp-card"><div class="bp-card-head"><h3>${esc(p.name)}</h3><span class="badge ${p.enabled ? "online" : "plain"}">${p.enabled ? "Enabled" : "Disabled"}</span></div><p class="bp-schedule-time">${p.at ? `Daily · ${esc(p.at)}` : `Every ${p.every_hours} hours`}</p><p>${p.vms.length ? esc(p.vms.join(", ")) : "Every VM, including new ones"}</p><small>${esc(p.target)} · Keep ${p.keep_last} recent + GFS</small><div class="bp-history" aria-label="Last 14 VM backup jobs">${dots}</div><small>Last 14 VM runs · green success / red failed / grey no run</small><p>${p.verify_after_backup ? `✓ Verify after backup · ${esc(p.verify_pool)} · ${p.verify_timeout}s` : "Boot verification is off"}</p><div class="actions">${canOperate() ? `<button data-policy-run="${esc(p.name)}">Run now</button>` : ""}${isAdmin() ? `<button data-policy-edit="${esc(p.name)}">Edit</button><button class="danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}</div></article>`;
+    return `<article class="bp-card"><div class="bp-card-head"><h3>${p.entity_type === "container" ? "Container · " : ""}${esc(p.name)}</h3><span class="badge ${p.enabled ? "online" : "plain"}">${p.enabled ? "Enabled" : "Disabled"}</span></div><p class="bp-schedule-time">${p.at ? `Daily · ${esc(p.at)}` : `Every ${p.every_hours} hours`}</p><p>${p.vms.length ? esc(p.vms.join(", ")) : "Every VM, including new ones"}</p><small>${esc(p.target)} · Keep ${p.keep_last} recent + GFS</small><div class="bp-history" aria-label="Last 14 VM backup jobs">${dots}</div><small>Last 14 runs · green success / red failed / grey no run</small><p>${p.entity_type === "container" ? (p.allow_stop ? "Full filesystem · temporary stop allowed" : "Full filesystem · stopped containers only") : p.verify_after_backup ? `✓ Verify after backup · ${esc(p.verify_pool)} · ${p.verify_timeout}s` : "Boot verification is off"}</p><div class="actions">${canOperate() ? `<button data-policy-run="${esc(p.name)}">Run now</button>` : ""}${isAdmin() ? `<button data-policy-edit="${esc(p.name)}">Edit</button><button class="danger" data-policy-del="${esc(p.name)}">Delete</button>` : ""}</div></article>`;
   }).join("") || `<p class="hint">No schedules yet. Create one to protect VMs automatically.</p>`;
+}
+
+function backupLiveDetails(j) {
+  if (j.kind !== "backup" || !["queued", "running", "retry_wait"].includes(j.state)) return "";
+  const p = j.progress || {}, duration = Math.max(0, (Date.now() - Date.parse(j.created)) / 1000);
+  const size = n => `${(Number(n) / 2 ** 30).toFixed(2)} GiB`;
+  const parts = [`Elapsed ${Math.floor(duration / 60)}m ${Math.floor(duration % 60)}s`];
+  if (p.mode) parts.push(p.mode === "incremental" ? "Incremental CBT" : "Full scan");
+  if (p.read_bytes != null) parts.push(`Read ${size(p.read_bytes)}`);
+  if (p.mode === "full" && p.total_bytes && p.scanned_bytes != null) parts.push(`Disk scan ${size(p.scanned_bytes)} / ${size(p.total_bytes)}`);
+  if (p.stored_bytes != null) parts.push(`New data stored ${size(p.stored_bytes)}`);
+  if (p.read_mib_per_second > 0) parts.push(`Average ${Number(p.read_mib_per_second).toFixed(1)} MiB/s`);
+  const age = p.updated_at ? Math.max(0, Date.now() / 1000 - p.updated_at) : null;
+  if (age != null) parts.push(`Last progress ${Math.floor(age)}s ago`);
+  const bar = j.percent != null ? `<progress max="100" value="${Math.max(0, Math.min(100, Number(j.percent)))}"></progress> ${Number(j.percent).toFixed(1)}%` : `<progress max="100" aria-label="Backup in progress"></progress> ${esc(p.phase === "waiting" ? "Waiting for repository" : p.phase === "exporting" ? "Exporting disk image; total progress not yet available" : p.phase === "reading" ? "Reading changed blocks; total size not yet known" : "Preparing backup")}`;
+  const waiting = age > 120 && p.phase !== "waiting" ? '<span class="badge warning">No new progress reported for over 2 minutes; check storage/node</span>' : "";
+  return `<div class="backup-kind">${parts.map(esc).join(" · ")}</div>${bar}${waiting}`;
 }
 
 function renderJobs() {
@@ -4566,9 +4634,20 @@ function renderJobs() {
     <td>${esc(j.node || "")}</td>
     <td>${esc(when(j.created))}</td>
     <td><span class="badge ${esc(j.state)}">${JOB_STATE[j.state] || esc(j.state)}</span></td>
-    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.state === "retry_wait" ? j.step : j.error || j.step || j.result || "")}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
+    <td class="vm-sub" style="display:table-cell">${j.state === "done" && j.report?.recovery_mode ? `Recovered in ${j.report.elapsed_seconds}s · full restore before boot` : j.kind === "verify" ? esc(j.report?.reason || j.error || j.step) : j.state === "done" && j.report && Object.keys(j.report).length ? `<button class="small" data-backup-report="${esc(j.id)}">Report / Export</button><span class="backup-kind">${j.report.new_data_bytes && j.report.stored_bytes ? `Compression ${(j.report.new_data_bytes / j.report.stored_bytes).toFixed(2)}×` : 'No new compressed data'} · ${j.report.new_data_bytes ? `Dedup ${((j.report.new_data_bytes + (j.report.dedup_saved_bytes || 0)) / j.report.new_data_bytes).toFixed(2)}×` : (j.report.dedup_saved_bytes ? 'All data reused' : 'No dedup input')}</span>` : esc(j.state === "retry_wait" ? j.step : j.error || j.step || j.result || "")}${backupLiveDetails(j)}${j.kind === "backup" && ["queued", "running", "retry_wait"].includes(j.state) && canOperate() && !Object.keys(j.report || {}).length && !["committing", "complete"].includes(j.progress?.phase) ? `<button class="small danger" data-backup-cancel="${esc(j.id)}" ${j.cancel_requested ? "disabled" : ""}>${j.cancel_requested ? "Cancelling…" : "Cancel job"}</button>` : ""}${j.report?.suspicious ? '<span class="badge failed">⚠ Suspicious data change</span>' : ""}</td>
   </tr>`).join("") : empty(7, "No jobs yet");
 }
+
+$("#jobs").addEventListener("click", async e => {
+  const b = e.target.closest("[data-backup-cancel]");
+  if (!b || !confirm("Cancel this backup job? The VM stays running and previous restore points are kept.")) return;
+  b.disabled = true;
+  try {
+    await post(`/backup/jobs/${enc(b.dataset.backupCancel)}/cancel`);
+    await load("jobs"); renderJobs();
+    toast("Cancellation requested; waiting for safe cleanup.");
+  } catch (err) { fail(err); b.disabled = false; }
+});
 
 $("#browse-target").addEventListener("change", () => { protection.selected = null; $("#backup-detail").hidden = true; renderBackups(); });
 $("#refresh-backups").addEventListener("click", async () => { await protectionOverview(); await renderBackups(); });
@@ -4612,7 +4691,9 @@ $("#page-backup").addEventListener("click", async (e) => {
     } else if (d.policyEdit) {
       await load("vms", "targets", "policies");
       if (!state.policies.some(p => p.name === d.policyEdit)) throw new Error("This schedule no longer exists. Refresh the list.");
-      openDialog("policy-dialog", {policyName:d.policyEdit});
+      const policy = state.policies.find(p => p.name === d.policyEdit);
+      if (policy.entity_type === "container") await openCtSchedule(policy.vms[0], policy);
+      else openDialog("policy-dialog", {policyName:d.policyEdit});
       return;
     } else if (d.policyRun) {
       const jobs = await post(`/backup/policies/${enc(d.policyRun)}/run`);
@@ -4621,7 +4702,9 @@ $("#page-backup").addEventListener("click", async (e) => {
       if (!confirm(`Delete schedule ${d.policyDel}?`)) return;
       await del(`/backup/policies/${enc(d.policyDel)}`);
     } else if (d.restore) {
-      openDialog("restore-dialog", { target, id: d.restore, sourceNode: d.node }, { name: `${d.vm}-restore` });
+      const point = protection.current.find(p => p.id === d.restore && (p.node || "") === (d.node || ""));
+      if (point?.entity_type === "container") await openCtRestore(point, target);
+      else openDialog("restore-dialog", { target, id: d.restore, sourceNode: d.node }, { name: `${d.vm}-restore` });
       return;
     } else if (d.backupOp) {
       const select = $("#backup-operation-form select[name=destination]");
@@ -4837,7 +4920,7 @@ function rsVmGone(name) { return !state.vms.some((v) => v.name === name); }
 async function rsLoad() {
   const lists = await Promise.all(state.targets.map((t) =>
     api(`/backup/targets/${enc(t.name)}/backups`).then((bs) => bs.map((b) => ({ ...b, target: t.name }))).catch(() => [])));
-  rs.points = lists.flat().sort((a, b) => String(b.created).localeCompare(String(a.created)));
+  rs.points = lists.flat().filter(p => p.entity_type !== "container").sort((a, b) => String(b.created).localeCompare(String(a.created)));
 }
 function rsRenderVms() {
   const q = $(".rs-search", rsForm).value.trim().toLowerCase();
@@ -5397,6 +5480,8 @@ handlers["source-dialog"] = async (f) => {
 // What a running sync is doing, in plain words: amount, speed and time left.
 function replicationLive(j) {
   if (!j.operation) return j.state === "failed" ? "Failed" : "";
+  if (j.operation === "test-failover") return "Preparing an isolated test VM from the last committed replica…";
+  if (j.operation === "test-cleanup") return "Removing the isolated test VM…";
   const verb = j.state === "seeding" ? "Seeding" : j.operation === "sync" ? "Syncing" : j.operation[0].toUpperCase() + j.operation.slice(1);
   if (!j.total_bytes) return `${verb} · preparing the source snapshot…`;
   const gb = (b) => (b / 2 ** 30).toFixed(1);
@@ -5415,7 +5500,7 @@ function renderReplications() {
     const button = (action, label, disabled = false) => `<button class="small operator-only" data-replication-id="${esc(j.id)}" data-replication-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`;
     const cycles = (j.history || []).filter(h => h.change_tracking).slice().reverse();
     const trackingHistory = cycles.length ? `<details><summary>Sync tracking history</summary>${cycles.map(h => `<p>${esc(when(h.at))} · ${esc(h.change_tracking)}${h.fallback_reason ? ` · ${esc(h.fallback_reason)}` : ""}</p>`).join("")}</details>` : "";
-    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${esc(j.state)}">${esc(j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.change_tracking || j.capability.change_tracking)}</p>${j.fallback_reason ? `<p class="hint">${esc(j.fallback_reason)}</p>` : ""}${trackingHistory}<dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>${j.operation ? "Read so far" : "Transferred / changed"}</dt><dd>${j.operation ? (j.total_bytes ? `${(j.done_bytes / 2 ** 30).toFixed(1)} / ${(j.total_bytes / 2 ** 30).toFixed(1)} GB` : "Starting…") : `${(Number(j.bytes_transferred) / 2 ** 30).toFixed(2)} GB / ${Number(j.changed_pct)}%`}</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status" class="${j.state === "failed" ? "bp-alert" : ""}">${esc(j.error || replicationLive(j))}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : j.stop_requested ? "Stopping…" : "Pause", j.state === "done" || !!j.stop_requested || (busy && j.operation !== "sync"))}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
+    return `<article class="mg-panel mg-replica"><h3>${esc(j.name)} <span class="badge ${busy ? "running" : esc(j.state)}">${esc(j.operation || j.state)}</span></h3><p>${esc(j.source)} → ${esc(j.node)} · ${esc(j.change_tracking || j.capability.change_tracking)}</p>${j.fallback_reason ? `<p class="hint">${esc(j.fallback_reason)}</p>` : ""}${trackingHistory}<dl><dt>RPO</dt><dd>${j.rpo_seconds == null ? "Awaiting seed" : `${Math.floor(j.rpo_seconds / 60)}m ${j.rpo_seconds % 60}s`}</dd><dt>Last sync</dt><dd>${j.last_sync ? esc(when(j.last_sync)) : "Never"}</dd><dt>${j.operation ? "Read so far" : "Transferred / changed"}</dt><dd>${j.operation ? (j.total_bytes ? `${(j.done_bytes / 2 ** 30).toFixed(1)} / ${(j.total_bytes / 2 ** 30).toFixed(1)} GB` : "Starting…") : `${(Number(j.bytes_transferred) / 2 ** 30).toFixed(2)} GB / ${Number(j.changed_pct)}%`}</dd><dt>Schedule</dt><dd>${j.schedule.at ? `Daily ${esc(j.schedule.at)}` : `Every ${Number(j.schedule.interval_minutes)} minutes`}</dd></dl><progress max="100" value="${Number(j.percent)}" aria-label="Replication progress"></progress><p role="status" class="${!busy && j.state === "failed" ? "bp-alert" : ""}">${esc(j.operation ? replicationLive(j) : j.error || replicationLive(j))}</p><div class="toolbar">${button("sync", "Sync now", busy || !["new", "idle", "failed"].includes(j.state))}${button("test-failover", "Test failover", busy || !!j.test_vm || !j.last_sync || !["idle", "paused", "failed"].includes(j.state))}${button("test-cleanup", "Clean up test", busy || !j.test_vm)}${button("cutover", "Cutover", busy || !!j.test_vm || !!j.result || !["idle", "failed"].includes(j.state))}${button("pause", j.state === "paused" ? "Resume" : j.stop_requested ? "Stopping…" : "Pause", j.state === "done" || !!j.stop_requested || (busy && j.operation !== "sync"))}${button("delete", "Delete", busy || !!j.test_vm)}</div></article>`;
   }).join("") : '<p class="hint">No replications yet.</p>';
 }
 // New replication picks its source and VMs inside the wizard; a source already
@@ -5914,54 +5999,15 @@ $("#password-form").addEventListener("submit", async (e) => {
 
 window.addEventListener("DOMContentLoaded", () => loadMe().then(show).catch(fail), { once: true });
 setInterval(() => {
-  if (!document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
+  if (!jobsView() && !document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);
 
 
-// ---------- v0.7: virtual router, firewall, connectivity test ----------
+// ---------- Firewall and connectivity test ----------
 
 function renderEdge() {
-  const edge = state.edge || { routers: [], rules: [], router_node: "" };
-  const op = canOperate();
-  $("#edge-router-node").textContent = edge.router_node || "–";
-  $("#routers").innerHTML = edge.routers.length ? edge.routers.map((r) => `<tr>
-    <td><b>${esc(r.network)}</b></td><td class="mono">${esc(r.gateway)}</td>
-    <td>${r.nat ? "Yes" : "No (routed only)"}</td>
-    <td>${r.dhcp ? esc(r.dhcp_start && r.dhcp_end ? `${r.dhcp_start} – ${r.dhcp_end}` : "Automatic range") : "Off"}</td>
-    <td><div class="actions">${op ? `<button class="small" data-router-edit="${esc(r.network)}">Edit</button><button class="small danger" data-router-del="${esc(r.network)}">Remove</button>` : ""}</div></td>
-  </tr>`).join("") : empty(5, "No isolated gateways. VLAN routing is provided by your external L3 switch.");
   renderNetworkStudio();
 }
-
-
-function openRouter(network) {
-  const r = (state.edge?.routers || []).find((x) => x.network === network);
-  const vlans = state.networks.filter((n) => n.vlan);
-  if (!vlans.length) { toast("Add a virtual switch (VLAN) first: the LAN itself keeps its own gateway.", true); return; }
-  $("#router-net").innerHTML = vlans.map((n) => `<option value="${esc(n.name)}">${esc(n.name)} (VLAN ${n.vlan})</option>`).join("");
-  const { nat, dhcp, ...fields } = r || { network: vlans[0].name };
-  openDialog("router-dialog", { edit: Boolean(r) }, fields);
-  const f = $("#router-form");
-  f.elements.network.disabled = Boolean(r);
-  f.elements.nat.checked = r ? r.nat : true;
-  f.elements.dhcp.checked = r ? r.dhcp : true;
-}
-$("#router-add").addEventListener("click", () => openRouter(null));
-handlers["router-dialog"] = async (f) => {
-  const el = $("#router-form").elements, net = el.network.value;
-  const body = { gateway: f.get("gateway").trim(), nat: el.nat.checked, dhcp: el.dhcp.checked,
-    dhcp_start: (f.get("dhcp_start") || "").trim(), dhcp_end: (f.get("dhcp_end") || "").trim(), dns: (f.get("dns") || "").trim() };
-  state.edge = await api(`/edge/routers/${enc(net)}`, { method: "PUT", body: JSON.stringify(body) });
-  toast(`Router for ${net} saved: gateway ${body.gateway}`);
-  renderEdge();
-};
-$("#routers").addEventListener("click", async (e) => {
-  const ed = e.target.closest("[data-router-edit]"), rm = e.target.closest("[data-router-del]");
-  if (ed) openRouter(ed.dataset.routerEdit);
-  if (rm && confirm(`Remove the router of ${rm.dataset.routerDel}? Its VMs lose their gateway and DHCP.`)) {
-    try { state.edge = await api(`/edge/routers/${enc(rm.dataset.routerDel)}`, { method: "DELETE" }); renderEdge(); } catch (err) { fail(err); }
-  }
-});
 
 // Network studio: firewall drafts are independent from live state and topology drafts.
 const nw = { draft: null, base: null, busy: false, conflict: false, from: null, undo: null, applied: null, expired: false, deadline: 0, dragRule: null };
@@ -6306,7 +6352,7 @@ function renderContainers() {
   $("#ct-rows").innerHTML = cts.length ? cts.map((c) => {
     const on = c.state === "running";
     return `<tr>
-    <td><b>${esc(c.name)}</b>${c.description ? `<br><span class="muted">${esc(c.description)}</span>` : ""}</td>
+    <td><b>${esc(c.name)}</b>${c.ha_enabled ? ` <span class="badge plain">HA</span>` : ""}${c.description ? `<br><span class="muted">${esc(c.description)}</span>` : ""}</td>
     <td><span class="badge ${on ? "running" : "plain"}">${esc(c.state)}</span></td>
     <td>${esc(c.node)}</td><td>${esc(title(c.template))}${c.unprivileged ? "" : ` <span class="badge plain">privileged</span>`}</td>
     <td>${c.vcpus}</td><td>${on ? `${gbText(c.memory_used_mb)} / ` : ""}${gbText(c.memory_mb)}</td>
@@ -6315,12 +6361,109 @@ function renderContainers() {
     <td class="actions" data-ct="${esc(c.name)}">
       ${on ? `<button class="small" data-act="stop">Stop</button><button class="small" data-act="restart">Restart</button>` : `<button class="small" data-act="start">Start</button>`}
       ${on && isAdmin() ? `<button class="small" data-act="console">Console</button>` : ""}
+      ${canOperate() ? `<button class="small" data-act="backup">Backup</button><button class="small" data-act="schedule">Schedule</button><button class="small" data-act="migrate">Migrate</button>${c.migration_pending ? `<button class="small" data-act="migration-recover">Recover migration</button>` : ""}` : ""}
       <button class="small" data-act="edit">Settings</button>
       ${on ? "" : `<button class="small" data-act="rename">Rename</button>`}
-      <button class="small danger" data-act="delete">Delete</button>
+      ${on ? "" : `<button class="small danger" data-act="delete">Delete</button>`}
     </td></tr>`;
   }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
 }
+function updateCtMigrateMode(form, running) {
+  const offline = form.elements.mode.value === "offline";
+  $("#ct-migrate-stop").hidden = !offline;
+  form.elements.allow_stop.disabled = !offline;
+  form.elements.allow_stop.required = offline && running;
+  $("#ct-migrate-mode-hint").textContent = offline
+    ? "A running container stops and starts on the destination. Memory and live connections are not transferred."
+    : "Live migration attempts to keep memory using CRIU. Selecting Live also allows a stop and restart if checkpoint or restore fails; in that case memory and live connections are lost.";
+}
+async function openCtMigrate(c) {
+  state.cluster = await api("/cluster");
+  const nodes = (state.cluster.members || []).filter(n => n.role === "compute" && n.name !== c.node && n.healthy && !n.maintenance);
+  if (!nodes.length) throw new Error("No healthy destination node is available.");
+  const form = $("#ct-migrate-form");
+  form.elements.node.innerHTML = nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("");
+  openDialog("ct-migrate-dialog", {name:c.name});
+  form.elements.mode.value = "live";
+  form.elements.allow_stop.checked = false;
+  form.onchange = () => updateCtMigrateMode(form, c.state === "running");
+  updateCtMigrateMode(form, c.state === "running");
+  $("#ct-migrate-summary").textContent = `${c.name} · ${c.node} · ${c.state}`;
+}
+handlers["ct-migrate-dialog"] = async (f, ctx) => {
+  const result = await post(`/containers/${enc(ctx.name)}/migrate`, {node:f.get("node"), mode:f.get("mode") || "live", allow_stop:f.get("allow_stop") === "on"});
+  toast(result.result || "Container migrated.");
+  await refresh("containers");
+  await load("jobs"); renderTasks();
+};
+async function openCtSchedule(name, policy = null) {
+  await load("containers", "targets", "policies");
+  const form = $("#ct-schedule-form");
+  const names = [...new Set([...state.containers.map(c => c.name), ...(policy?.vms || [])])];
+  form.elements.container.innerHTML = names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  form.elements.target.innerHTML = state.targets.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  openDialog("ct-schedule-dialog", {policy}, {name:policy?.name || `${name.slice(0,48)}-nightly`, container:name, target:policy?.target, at:policy?.at || "02:00", frequency:policy?.every_hours ? "interval" : "daily", every_hours:policy?.every_hours || 24, keep_last:policy?.keep_last || 7});
+  form.elements.name.readOnly = Boolean(policy);
+  form.elements.allow_stop.checked = policy?.allow_stop || false;
+  form.elements.enabled.checked = policy?.enabled ?? true;
+  ctScheduleFrequency();
+}
+function ctScheduleFrequency() {
+  const f = $("#ct-schedule-form").elements, daily = f.frequency.value === "daily";
+  f.at.disabled = !daily;
+  f.at.closest("label").hidden = !daily;
+  f.every_hours.disabled = daily;
+  f.every_hours.closest("label").hidden = daily;
+}
+$("#ct-schedule-form select[name=frequency]").addEventListener("change", ctScheduleFrequency);
+handlers["ct-schedule-dialog"] = async (f, ctx) => {
+  const body = {...(ctx.policy || {}), name:f.get("name"), target:f.get("target"), entity_type:"container", vms:[f.get("container")], mode:"active_full", verify_after_backup:false, allow_stop:f.get("allow_stop") === "on", enabled:f.get("enabled") === "on", keep_last:Number(f.get("keep_last")), at:f.get("frequency") === "daily" ? f.get("at") : null, every_hours:f.get("frequency") === "interval" ? Number(f.get("every_hours")) : null};
+  if (ctx.policy) await api(`/backup/policies/${enc(ctx.policy.name)}`, {method:"PUT", body:JSON.stringify(body)});
+  else await post("/backup/policies", body);
+  toast("Container backup schedule saved. Manage it in Data protection → Schedules.");
+  await load("policies");
+};
+async function openCtBackup(c) {
+  await load("targets");
+  if (!state.targets.length) throw new Error("Add a repository in Data protection first.");
+  const form = $("#ct-backup-form");
+  form.elements.target.innerHTML = state.targets.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+  openDialog("ct-backup-dialog", {name:c.name});
+  form.elements.allow_stop.required = c.state === "running";
+  $("#ct-backup-summary").textContent = `${c.name} · ${c.node} · ${c.state}`;
+}
+handlers["ct-backup-dialog"] = async (f, ctx) => {
+  await post(`/containers/${enc(ctx.name)}/backup`, {target:f.get("target"), allow_stop:f.get("allow_stop") === "on"});
+  toast(`Backup started for ${ctx.name}. Follow progress in Data protection → Jobs.`);
+  await load("jobs");
+  renderTasks();
+};
+function ctRestorePools() {
+  const form = $("#ct-restore-form"), previous = form.elements.pool.value;
+  const pools = state.pools.filter(p => p.active && p.node === form.elements.node.value);
+  form.elements.pool.innerHTML = pools.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("");
+  if (pools.some(p => p.name === previous)) form.elements.pool.value = previous;
+}
+async function openCtRestore(point, target) {
+  await load("targets", "pools");
+  state.cluster = await api("/cluster");
+  const repository = state.targets.find(t => t.name === target);
+  if (!repository) throw new Error("Repository no longer exists. Refresh and retry.");
+  const members = (state.cluster?.members || []).filter(m => m.role === "compute" && m.healthy && !m.maintenance && (repository.shared || m.name === point.node));
+  if (!members.length) throw new Error("The restore node is unavailable. Local repositories restore on their source node.");
+  const form = $("#ct-restore-form");
+  form.elements.node.innerHTML = members.map(m => `<option value="${esc(m.name)}">${esc(m.name)}</option>`).join("");
+  openDialog("ct-restore-dialog", {target, id:point.id, sourceNode:point.node}, {name:`${point.vm_name.slice(0,55)}-restore`});
+  ctRestorePools();
+  $("#ct-restore-summary").textContent = `${point.vm_name} · ${when(point.created)} · ${target}`;
+}
+$("#ct-restore-form select[name=node]").addEventListener("change", ctRestorePools);
+handlers["ct-restore-dialog"] = async (f, ctx) => {
+  await post(`/backup/targets/${enc(ctx.target)}/backups/${enc(ctx.id)}/restore-container`, {name:f.get("name").trim(), node:f.get("node"), pool:f.get("pool"), source_node:ctx.sourceNode || null});
+  toast("Container restore started. It will remain stopped; follow progress in Jobs.");
+  await load("jobs");
+  renderTasks();
+};
 function openCtWizard(tpl = "debian-13") {
   const label = { app: "Applications", os: "Popular systems", image: "All images" };
   const opts = ["app", "os", "image"].map((k) => {
@@ -6358,10 +6501,26 @@ $("#ct-rows").addEventListener("click", async (e) => {
   const name = b.closest("[data-ct]").dataset.ct, act = b.dataset.act;
   const c = state.containers.find((x) => x.name === name);
   try {
+    if (act === "migrate") { await openCtMigrate(c); return; }
+    if (act === "migration-recover") {
+      if (!confirm(`Recover interrupted migration for ${name}? The current owner resumes it; the other node remains fenced.`)) return;
+      await post(`/containers/${enc(name)}/migration-recover`, {});
+      await refresh("containers"); return;
+    }
+    if (act === "schedule") {
+      await openCtSchedule(c.name);
+      return;
+    }
+    if (act === "backup") {
+      await openCtBackup(c);
+      return;
+    }
     if (act === "edit") {
       ctCurrent = name;
       openDialog("ct-edit-dialog", { name }, { vcpus: c.vcpus, memory_mb: c.memory_mb, disk_gb: c.disk_gb, description: c.description });
       $("#ct-edit-form").elements.autostart.checked = c.autostart;
+      $("#ct-ha-enabled").checked = Boolean(c.ha_enabled);
+      $("#ct-ha-enabled").disabled = !canManage("cluster");
       $("#ct-edit-form").elements.dns.value = c.dns || "";
       ctNics(c);
       ctStorage(c);
@@ -6458,6 +6617,10 @@ handlers["ct-edit-dialog"] = async (f, ctx) => {
     vcpus: Number(f.get("vcpus")), memory_mb: Number(f.get("memory_mb")), disk_gb: Number(f.get("disk_gb")),
     autostart: f.get("autostart") === "on", description: f.get("description"),
   });
+  const haEnabled = f.get("ha_enabled") === "on";
+  if (canManage("cluster") && haEnabled !== Boolean(c.ha_enabled)) {
+    await api(`/containers/${enc(ctx.name)}/ha`, {method: "PUT", body: JSON.stringify({enabled: haEnabled})});
+  }
   toast(`${ctx.name} changed`);
   await refresh("containers");
 };
@@ -6583,3 +6746,11 @@ function askNewPassword(user) {
     input.focus();
   });
 }
+
+$("#bp-new-container-schedule").addEventListener("click", async () => {
+  try {
+    await load("containers");
+    if (!state.containers.length) {toast("No containers are available to schedule.", true); return;}
+    await openCtSchedule(state.containers[0].name);
+  } catch (err) {fail(err);}
+});

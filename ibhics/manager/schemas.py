@@ -133,6 +133,8 @@ class VMOut(VMHardware):
     boot: list[str] | None = None
     autostart: bool = False
     restart_needed: bool = False
+    pause_reason: str = ""
+    storage_error_protection: str = "unknown"
     template: bool = False
     linked_to: str = ""  # uuid of the template a linked clone's disks are based on
     recycled: str = ""  # when it went into the recycle bin; empty: in use
@@ -165,6 +167,8 @@ class VMOut(VMHardware):
             boot=spec.boot,
             autostart=spec.autostart,
             restart_needed=info.restart_needed,
+            pause_reason=info.pause_reason,
+            storage_error_protection=info.storage_error_protection,
             template=spec.template,
             linked_to=spec.linked_to,
             recycled=spec.recycled,
@@ -178,15 +182,6 @@ class NetworkIn(BaseModel):
 
     def to_spec(self) -> NetworkSpec:
         return NetworkSpec(name=self.name, vlan=self.vlan)
-
-
-class RouterIn(BaseModel):
-    gateway: str = Field(description="router address with prefix, e.g. 192.168.50.1/24")
-    nat: bool = True
-    dhcp: bool = True
-    dhcp_start: str = ""
-    dhcp_end: str = ""
-    dns: str = ""
 
 
 class FirewallRuleIn(BaseModel):
@@ -210,9 +205,7 @@ class FirewallSimulateIn(BaseModel):
 
 class EdgeOut(BaseModel):
     pending_confirm_seconds: int | None = None
-    routers: list[dict]
     rules: list[dict]
-    router_node: str
 
 
 class TerminalIn(BaseModel):
@@ -557,6 +550,7 @@ class ClusterCreate(BaseModel):
 
 
 class ClusterOut(BaseModel):
+    active_manager: str | None = None
     cluster_id: str = ""
     name: str = ""
     topology: Topology
@@ -723,6 +717,7 @@ class BackupTargetOut(BaseModel):
 
 
 class BackupOut(BaseModel):
+    entity_type: Literal["vm", "container"] = "vm"
     id: str
     vm_name: str
     vm_uuid: str
@@ -770,6 +765,8 @@ class RestoreRequest(BaseModel):
 
 
 class PolicyIn(BaseModel):
+    entity_type: Literal["vm", "container"] = "vm"
+    allow_stop: bool = False
     name: str = Field(pattern=NAME_PATTERN)
     target: str
     vms: list[str] = Field(default_factory=list, description="VM names; empty means every VM")
@@ -804,6 +801,7 @@ class PolicyOut(PolicyIn):
 
 
 class JobOut(BaseModel):
+    entity_type: Literal["vm", "container"] = "vm"
     id: str
     kind: str
     state: str
@@ -818,6 +816,8 @@ class JobOut(BaseModel):
     step: str = ""
     percent: float | None = None
     report: dict = Field(default_factory=dict)
+    progress: dict = Field(default_factory=dict)
+    cancel_requested: bool = False
 
 
 # Agent-only request bodies: the manager sends the whole target, credentials included.
@@ -826,7 +826,7 @@ class JobOut(BaseModel):
 class AgentBackupRun(BaseModel):
     uuid: str
     target: dict
-    mode: Literal["incremental", "active_full"] = "incremental"
+    mode: Literal["incremental", "active_full", "container_stop"] = "incremental"
 
 
 class AgentBackupOperation(BaseModel):

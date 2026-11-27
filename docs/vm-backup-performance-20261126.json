@@ -1,0 +1,204 @@
+{
+  "date": "2026-11-26",
+  "change": "Bounded pipeline of up to four DirStore compression and atomic durable chunk writes; NBD reads stay on owner thread; other stores stay synchronous",
+  "nodes": [
+    "172.16.12.103",
+    "172.16.12.104"
+  ],
+  "installed": true,
+  "services_active": [
+    "ibhics-agent",
+    "ibhics-manager"
+  ],
+  "baseline_io_profile": {
+    "logical_bytes": 100663296,
+    "compressed_bytes": 47303861,
+    "read_seconds": 4.883,
+    "compress_seconds": 4.126,
+    "durable_write_seconds": 9.151
+  },
+  "same_data_repository_comparison": {
+    "logical_bytes": 100663296,
+    "compressed_bytes": 47303861,
+    "serial_seconds": 14.548,
+    "pipeline_seconds": 8.345,
+    "elapsed_reduction_percent": 42.64,
+    "restore_exact_both": true,
+    "scope": "24 existing chunks backed up into isolated fresh repositories on actual NFS, then restored and byte-compared; not an end-to-end VM runtime measurement"
+  },
+  "validation": {
+    "existing_tests_passed": 130,
+    "new_integrity_tests_passed": 2,
+    "additional_protection_container_libvirt_tests_passed": 47,
+    "ruff": "passed"
+  },
+  "remaining": [
+    "Physical .103 uplink repair explicitly deferred by operator",
+    "Permanent prevention of guest crashes after network/storage interruptions is a separate task; this test guest was recovered"
+  ],
+  "rollback": "Original repository.py saved on each node at /var/lib/ibhics-backup-pipeline-before.py",
+  "real_vm_validation": {
+    "npm_full": {
+      "job": "33",
+      "seconds": 342.846,
+      "kind": "full",
+      "logical_bytes": 21474836480,
+      "read_bytes": 3808428032,
+      "stored_bytes": 0,
+      "vm_running_after": true,
+      "comparison_note": "Earlier full took about 973 seconds but wrote 1.16 GB; this run deduplicated all data, so not a controlled pipeline-only comparison"
+    },
+    "pnetlab_incremental": {
+      "seconds": 181.107,
+      "kind": "incremental",
+      "read_bytes": 817889280,
+      "stored_bytes": 132248916,
+      "restore_point": "PNetLab-27H1-V8.12@20261125T230749Z",
+      "vm_state_after": "running",
+      "scope": "Direct node-level integration verification, not a Manager Jobs request"
+    },
+    "pnetlab_full_rebaseline": {
+      "job": "35",
+      "state": "done",
+      "read_bytes": 113229430784,
+      "logical_bytes": 536870912000,
+      "note": "Fresh persistent recording bitmap exists; full scan remains limited by NFS throughput"
+    },
+    "openp9_full": {
+      "job": "36",
+      "state": "done",
+      "fresh_persistent_recording_bitmap": true
+    },
+    "pnetlab_incremental_after_immutable_fix": {
+      "seconds": 80.815,
+      "kind": "incremental",
+      "read_bytes": 239075328,
+      "stored_bytes": 36334813,
+      "restore_point": "PNetLab-27H1-V8.12@20261125T231512Z",
+      "vm_state_after": "running",
+      "comparison_note": "Different dirty workload from the 181-second run; not a controlled end-to-end percentage comparison"
+    },
+    "pnetlab_full_on_gateway_104": {
+      "seconds": 916.226,
+      "kind": "full",
+      "logical_bytes": 536870912000,
+      "read_bytes": 113229430784,
+      "stored_bytes": 73916304,
+      "restore_point": "PNetLab-27H1-V8.12@20261125T235257Z",
+      "vm_state_after": "running",
+      "manifest_geometry_valid": true,
+      "sampled_chunks": 16,
+      "sample_restored_bytes": 67108864,
+      "sample_checksums_match": true,
+      "full_disk_restored": false,
+      "scope": "Node-level integration acceptance; not a Manager Jobs/UI request",
+      "comparison_note": "Earlier #35 had the same read_bytes but different changed/unique payload, gateway topology and Manager queue/return timing; do not attribute all elapsed-time difference to backup code alone"
+    }
+  },
+  "immutable_capability_optimization": {
+    "change": "Use Linux immutable ioctls, preserving unrelated flags; cache explicit unsupported capability per filesystem device. Permission errors are retried. Soft retention metadata and S3 behavior unchanged.",
+    "nfs_files": 256,
+    "old_seconds": 0.6486,
+    "new_seconds": 0.1286,
+    "scope": "Native-lock capability attempts only, not whole-backup elapsed time",
+    "tests_passed": 113,
+    "installed_nodes": [
+      "172.16.12.103",
+      "172.16.12.104"
+    ]
+  },
+  "full_backup_root_cause": {
+    "verified": true,
+    "gateway_ip": "172.16.12.106",
+    "physical_host": "172.16.12.103 / ibhics-node2",
+    "interface": "eno1",
+    "driver": "igb",
+    "supported_mbps": 1000,
+    "advertised_mbps": [
+      10,
+      100,
+      1000
+    ],
+    "negotiated_mbps": 100,
+    "duplex": "Full",
+    "auto_negotiation": true,
+    "client_104_negotiated_mbps": 1000,
+    "theoretical_100mbps_ceiling_MB_per_s": 12.5,
+    "controlled_nbd_test": {
+      "bytes": 100663296,
+      "depth_1_seconds": [
+        8.418,
+        8.456
+      ],
+      "depth_8_seconds": [
+        8.356,
+        8.199
+      ],
+      "all_data_byte_compared": true,
+      "test_vm_removed": true,
+      "conclusion": "Extra NBD queue depth does not bypass the 100 Mbps gateway link; no speculative asynchronous-read patch deployed"
+    },
+    "storage_health": {
+      "drbd_gateway_role": "Primary",
+      "local_disks": "UpToDate",
+      "peer_disks": "UpToDate",
+      "filesystem": "xfs"
+    },
+    "action_required": "Restore the gateway uplink to 1 Gbps via cable/switch diagnosis or an explicitly approved auto-negotiation restart, then rerun the same full-backup data comparison",
+    "proposed_lowest_config_change": "ethtool -r eno1 (restart existing auto-negotiation, without forcing a speed); requires approval because NFS/cluster link can drop briefly",
+    "port_restart_executed": true,
+    "operator_authorized_renegotiation": {
+      "command": "systemd-run --unit=ibhics-eno1-renegotiate --on-active=3s --collect /usr/sbin/ethtool -r eno1",
+      "result": "Gateway host .103 became unreachable and has not returned as of immediate recovery checks; no forced speed or bridge changes were made",
+      "ha_recovery": {
+        "storage_primary": "172.16.12.104",
+        "nfs_vip": "172.16.12.106 on .104",
+        "manager_vip": "172.16.12.111 on .104",
+        "nfs_repository_read_verified": true,
+        "vm_domains_104_running": [
+          "npm-vm",
+          "OpenP9",
+          "PNetLab-27H1-V8.12"
+        ],
+        "peer_103": "unreachable; console/cable inspection requested"
+      },
+      "completion": "Not complete. Restore .103 network access and verify physical link before claiming resolution."
+    },
+    "post_renegotiation_recovery": {
+      "host_103_reachable": true,
+      "host_103_link_mbps": 100,
+      "host_103_drbd_role": "Secondary",
+      "host_104_drbd_role": "Primary",
+      "both_data_replicas": "UpToDate",
+      "host_103_vm_block_errors": "No errors found for EXWin2022 and test-ib-Migrate",
+      "host_103_container": "ubututest Running; in-container proof file readable",
+      "gateway_stays_on": "172.16.12.104",
+      "operator_deferred_physical_cable_check": true
+    },
+    "controlled_test_on_gateway_104": {
+      "bytes": 100663296,
+      "depth_1_seconds": [
+        0.132,
+        0.124
+      ],
+      "depth_8_seconds": [
+        0.142,
+        0.134
+      ],
+      "all_data_byte_compared": true,
+      "test_vm_removed": true,
+      "comparison_note": "Same representative data and test workflow; storage gateway moved from the 100 Mbps peer to the VM host. Page/cache and topology differ; this is not a pure backup-code comparison."
+    }
+  },
+  "completion": {
+    "software_and_current_gateway_path": "Full Backup completed and sampled restore verified",
+    "gateway": "172.16.12.106 on .104",
+    "physical_link_103": "100 Mbps; operator explicitly deferred cable/switch inspection",
+    "normal_manager_ui_acceptance": "Browser requires operator login; existing auth not bypassed"
+  },
+  "post_network_guest_check": {
+    "EXWin2022": "guest-ping replied; no block errors",
+    "test-ib-Migrate": "Operator authorized power cycle; Windows Server 2019 lock screen visible, guest-ping and guest-osinfo respond; no block errors",
+    "ubututest": "in-container proof file read successfully"
+  }
+}

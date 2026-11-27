@@ -400,6 +400,8 @@ class VMInfo:
     state: VMState
     # Running with settings saved that only apply after the next power off and on.
     restart_needed: bool = False
+    pause_reason: str = ""
+    storage_error_protection: str = "unknown"
 
 
 @dataclass

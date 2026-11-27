@@ -71,6 +71,7 @@ def test_lxc_rename_moves_folder_and_paths(tmp_path):
     (home / "ibhics.json").write_text(json.dumps(spec.public() | {"password": ""}))
     (home / "config").write_text(lxc_config(spec, "br0", f"{home}/rootfs.img"))
     (home / "snaps/s1/config").write_text(f"lxc.rootfs.path = loop:{home}/snaps/s1/rootfs\n")
+    lxc.claim_owner("old")
     assert lxc.rename("old", "new").spec.name == "new"
     new = tmp_path / "default/containers/new"
     cfg = (new / "config").read_text()
@@ -176,6 +177,8 @@ def test_container_api_lifecycle():
     assert client.post("/api/v1/containers/web/snapshots/s1/restore").status_code == 200
     kinds = {j["kind"] for j in client.get("/api/v1/backup/jobs").json()}
     assert {"container-create", "snapshot"} <= kinds
+    assert client.delete("/api/v1/containers/web").status_code == 409
+    client.post("/api/v1/containers/web/action", json={"action": "stop"})
     assert client.delete("/api/v1/containers/web").status_code == 204
     assert client.get("/api/v1/containers/web").status_code == 404
 
@@ -191,6 +194,8 @@ def test_containers_through_node_agents(tmp_path):
     r = client.post("/api/v1/containers/db/snapshots", json={"name": "before"})
     assert r.json()["snapshots"] == ["before"]
     assert client.delete("/api/v1/containers/db/snapshots/nope").status_code == 409
+    assert client.delete("/api/v1/containers/db").status_code == 409
+    client.post("/api/v1/containers/db/action", json={"action": "stop"})
     assert client.delete("/api/v1/containers/db").status_code == 204
 
 

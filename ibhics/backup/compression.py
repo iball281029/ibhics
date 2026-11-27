@@ -9,22 +9,22 @@ PROFILES = ("fast", "balanced", "maximum")
 def codec(profile):
     if profile not in PROFILES:
         raise ValueError("Compression profile must be fast, balanced or maximum")
-    if profile == "maximum":
-        try:
-            import zstandard  # noqa: F401
-        except ImportError:
-            return "zlib-9"
-        return "zstd-19"
-    return "zlib-1" if profile == "fast" else "zlib-6"
+    try:
+        import zstandard  # noqa: F401
+    except ImportError:
+        return {"fast": "zlib-1", "balanced": "zlib-6", "maximum": "zlib-9"}[profile]
+    return {"fast": "zstd-1", "balanced": "zstd-3", "maximum": "zstd-19"}[profile]
 
 
 def compress(block, profile):
     selected = codec(profile)
-    if selected == "zstd-19":
+    level = int(selected.split("-")[1])
+    if selected.startswith("zstd-"):
         import zstandard
 
-        return ZSTD_MAGIC + zstandard.ZstdCompressor(level=19).compress(block)
-    return zlib.compress(block, int(selected.split("-")[1]))
+        # A compressor belongs to this call; never share it across writer threads.
+        return ZSTD_MAGIC + zstandard.ZstdCompressor(level=level).compress(block)
+    return zlib.compress(block, level)
 
 
 def decompress(data, limit):

@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-26",
+  "feature": "Sleeping Nong ib without active Support",
+  "browser_checks": "passed with mocked status responses",
+  "ai_backend_tests": {
+    "passed": 16
+  },
+  "production": {
+    "103": "static assets verified through HTTP 200",
+    "104": "installed asset hashes verified; expected standby response"
+  },
+  "restarted_services": false,
+  "changed_production_license": false,
+  "release_hashes": {
+    "103": {
+      "assistant.js": {
+        "before": "f673172eba7c1d15e8d60e16e60ef77895bdb7b6f0685536a8edb5ffcf2d8798",
+        "after": "d65805ddd98349a3a8d71f11d6acd5b0c31391e53c539f6189c1c5a030f7e7e9"
+      },
+      "assistant.css": {
+        "before": "e08681de9af14906cad82f72b344c2bc42737ee23caa5f0fa1f67a9c0cdec49a",
+        "after": "54dd5bd4b9399a5859eb7b0e9f24498e04b591f5087e33fa2597c28a9ddb1944"
+      },
+      "ai-elephant-sleeping.png": {
+        "before": null,
+        "after": "1584cb785ccfa16a988bee99d2f9438f1801b2fc036cae5a1339a7338ee52fa6"
+      }
+    },
+    "104": {
+      "assistant.js": {
+        "before": "f673172eba7c1d15e8d60e16e60ef77895bdb7b6f0685536a8edb5ffcf2d8798",
+        "after": "d65805ddd98349a3a8d71f11d6acd5b0c31391e53c539f6189c1c5a030f7e7e9"
+      },
+      "assistant.css": {
+        "before": "e08681de9af14906cad82f72b344c2bc42737ee23caa5f0fa1f67a9c0cdec49a",
+        "after": "54dd5bd4b9399a5859eb7b0e9f24498e04b591f5087e33fa2597c28a9ddb1944"
+      },
+      "ai-elephant-sleeping.png": {
+        "before": null,
+        "after": "1584cb785ccfa16a988bee99d2f9438f1801b2fc036cae5a1339a7338ee52fa6"
+      }
+    }
+  }
+}

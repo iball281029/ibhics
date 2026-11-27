@@ -180,6 +180,7 @@ def main() -> None:
     app = create_app(
         cluster,
         heartbeat_interval=args.heartbeat,
+        active_manager=leader.node if leader else None,
         backups=backups,
         scheduler_interval=30,
         migrations=migrations,
@@ -250,6 +251,7 @@ def _state_files(args) -> list[Path]:
         args.users_file,
         args.users_file.with_name("sessions.json"),
         args.users_file.with_name("settings.json"),
+        args.users_file.with_name("notifications.json"),
         args.users_file.with_name("users-security.json"),
         args.users_file.with_name("approvals.json"),
         args.groups_file,
@@ -257,8 +259,12 @@ def _state_files(args) -> list[Path]:
         state.with_name("replications.json"),
         state.with_name("pool-labels.json"),
         state.with_name("ha.json"),
+        state.with_name("container-ha.json"),
         state.with_name("p2v.json"),
         state.with_name("activity.sqlite3"),
+        # The license's AI pass; Codex refreshes it in place, so a standby needs the
+        # latest copy (replicated flat as state/auth.json, restored into ai-codex/).
+        args.users_file.with_name("ai-codex") / "auth.json",
     ]
 
 

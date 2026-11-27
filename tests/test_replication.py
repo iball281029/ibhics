@@ -18,6 +18,35 @@ from ibhics.replication.providers import ChangeProvider, Disk, Point, capability
 from ibhics.replication.store import ReplicaStore
 
 
+def test_sparse_clone_preserves_holes_and_falls_back_without_seek_data(tmp_path, monkeypatch):
+    import errno
+    import subprocess
+
+    from ibhics.replication import store as storage
+
+    source = tmp_path / "source"
+    with source.open("wb") as image:
+        image.write(b"head")
+        image.seek(1024 * 1024)
+        image.write(b"tail")
+        image.truncate(2 * 1024 * 1024)
+    monkeypatch.setattr(
+        storage.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 1)
+    )
+    expected = source.read_bytes()
+    fast = tmp_path / "fast"
+    storage.sparse_copy(source, fast, chunk=4096)
+    assert fast.read_bytes() == expected
+
+    def unsupported(*args):
+        raise OSError(errno.EINVAL, "SEEK_DATA unavailable")
+
+    monkeypatch.setattr(storage.os, "lseek", unsupported)
+    fallback = tmp_path / "fallback"
+    storage.sparse_copy(source, fallback, chunk=4096)
+    assert fallback.read_bytes() == expected
+
+
 class Provider(ChangeProvider):
     def __init__(self, data, *, fail=False, source_hash=True, fail_begin=False, fail_end=False):
         self.data = data
@@ -226,6 +255,70 @@ def test_api_lifecycle_cutover_and_cleanup(env):
     assert client.delete(url).status_code == 422
     assert client.delete(url + "?confirm=true").status_code == 204
     assert client.get(url).status_code == 404
+
+
+def test_resize_failure_explains_why_test_failover_cannot_finish(env, monkeypatch):
+    from ibhics.importer.resize import ResizeError
+
+    client, manager, runtime, _ = env
+    job = create(client)
+    before = runtime.store(None).current()
+
+    def cannot_shrink(*args, **kwargs):
+        raise ResizeError("Cannot shrink xfs filesystem")
+
+    monkeypatch.setattr(runtime, "materialize", cannot_shrink)
+    result = client.post(f"/api/v1/migrate/replications/{job['id']}/test-failover", json={}).json()
+    assert result["state"] == "failed"
+    assert result["error"] == "Cannot shrink xfs filesystem"
+    assert result["history"][-1]["state"] == "failed"
+    assert result["history"][-1]["error"] == result["error"]
+    assert result["test_vm"] is None
+    assert runtime.store(None).current() == before
+
+
+def test_sync_and_cutover_resolve_unique_source_case_change(env):
+    client, manager, runtime, _ = env
+    job = create(client)
+    url = f"/api/v1/migrate/replications/{job['id']}"
+    manager.imports.remove_source("kvm")
+    manager.imports.add_source(Source("KVM", SourceType.KVM, host="host", password="SECRET"))
+    manager.imports.add_source(Source("Kvm", SourceType.KVM, host="other-host", password="SECRET"))
+
+    failed = client.post(url + "/sync").json()
+    assert failed["state"] == "failed"
+    assert "matches multiple configured names" in failed["error"]
+    assert runtime.calls == ["sync"]
+
+    manager.imports.remove_source("Kvm")
+    assert client.post(url + "/sync").json()["state"] == "idle"
+    result = client.post(url + "/cutover", json={"source_powered_off": True})
+    assert result.json()["state"] == "done"
+    assert runtime.calls == ["sync", "sync", "sync", (False, None)]
+
+
+def test_failover_uses_last_replica_after_failed_sync(env):
+    client, manager, runtime, now = env
+    job = create(client)
+    url = f"/api/v1/migrate/replications/{job['id']}"
+    previous = runtime.store(None).current()
+    manager.imports.remove_source("kvm")
+    failed = client.post(url + "/sync").json()
+    assert failed["state"] == "failed"
+    assert "source 'kvm' is missing" in failed["error"]
+
+    response = client.post(url + "/test-failover", json={})
+    assert response.status_code == 202
+    tested = response.json()
+    assert tested["test_vm"] == "test-vm"
+    assert tested["state"] == "failed"
+    assert tested["error"] == failed["error"]
+    assert tested["history"][-1]["state"] == "done"
+    assert tested["history"][-1]["error"] is None
+    assert tested["history"][-2]["state"] == "failed"
+    assert tested["history"][-2]["error"] == failed["error"]
+    assert runtime.calls == ["sync", (True, [])]
+    assert runtime.store(None).current() == previous
 
 
 def test_schedule_pause_rpo_and_restart(env):

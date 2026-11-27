@@ -5,12 +5,70 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from ibhics.cluster import Cluster
 from ibhics.hypervisor.fake import FakeDriver
+from ibhics.manager import create_app
 from ibhics.manager.leader import Leadership, Replicator, replicate, restore, standby_app
+
+
+def test_cluster_reports_the_elected_manager_without_guessing_local_node():
+    cluster = Cluster.standalone("node1", FakeDriver())
+    response = TestClient(create_app(cluster, active_manager="node1")).get("/api/v1/cluster")
+    assert response.status_code == 200
+    assert response.json()["active_manager"] == "node1"
+    unknown = TestClient(create_app(cluster)).get("/api/v1/cluster")
+    assert unknown.json()["active_manager"] is None
+
+
+def test_notification_channels_survive_manager_takeover(tmp_path):
+    from ibhics.manager.__main__ import _state_files
+    from ibhics.manager.notifications import Notifications
+
+    def arguments(root):
+        root.mkdir()
+        return SimpleNamespace(
+            **{
+                name: root / filename
+                for name, filename in {
+                    "state_file": "cluster.json",
+                    "backup_state_file": "backups.json",
+                    "users_file": "users.json",
+                    "groups_file": "groups.json",
+                    "migrate_state_file": "migrate.json",
+                }.items()
+            }
+        )
+
+    active, standby = arguments(tmp_path / "active"), arguments(tmp_path / "standby")
+    path = active.users_file.with_name("notifications.json")
+    alerts = Notifications(path)
+    alerts.configure(
+        {
+            "host": "smtp.example.test",
+            "from": "alerts@example.test",
+            "password": "fake-smtp-secret",
+            "recipients": ["ops@example.test"],
+            "line": {
+                "enabled": True,
+                "token": "fake-line-secret",
+                "recipient": "U" + "a" * 32,
+                "events": ["backup.failed"],
+            },
+        }
+    )
+    shared = tmp_path / "shared"
+    assert replicate(_state_files(active), shared, {}) == 1
+    assert restore(_state_files(standby), shared, tmp_path / "backup") == ["notifications.json"]
+    target = standby.users_file.with_name("notifications.json")
+    restored = Notifications(target)
+    assert restored.data["smtp"] == alerts.data["smtp"]
+    assert restored.data["line"] == alerts.data["line"]
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert restored.config()["line"]["token"] == "••• set"
 
 
 def contender(shared, node="node2"):

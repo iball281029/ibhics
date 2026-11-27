@@ -56,8 +56,8 @@ class KVMPullProvider(ChangeProvider):
         self.ssh = ssh or SSH(source)
         self.legacy = SnapshotSSHProvider(source, vm, self.ssh)
         self.name = self.legacy.name
-        self.directory = f"/var/tmp/{self.name}"
-        self.socket = f"{self.directory}/nbd.sock"
+        self.directory = ""
+        self.socket = ""
         self.files = []
         self.directory_created = False
         self.attempted = False
@@ -196,9 +196,11 @@ class KVMPullProvider(ChangeProvider):
         if self._active() is not None:
             raise ValueError("An existing libvirt backup job must finish before replication")
         needed = sum(d.size for d in disks)
-        avail = int(self.command("df", "-B1", "--output=avail", "/var/tmp").split()[-1])
-        if avail - needed - CHUNK < max(needed // 10, 2 * 1024**3):
-            raise ValueError("Not enough free space in /var/tmp for NBD backup scratch")
+        scratch = self.legacy.scratch_root(needed + CHUNK)
+        self.directory = f"{scratch}/{self.name}"
+        self.socket = f"{self.directory}/nbd.sock"
+        if len(self.socket.encode()) > 107:
+            raise ValueError("Replication source scratch path is too long for the NBD socket")
         self.command("mkdir", "-m", "700", "--", self.directory)
         self.directory_created = True
         # QEMU creates the UNIX socket and accesses scratch files as its DAC user.

@@ -12,6 +12,11 @@ from ibhics.replication.store import CHUNK, ReplicaStore
 from tests.test_replication_ssh import SOURCE, VM, Commands
 
 
+@pytest.fixture(autouse=True)
+def source_scratch(monkeypatch):
+    monkeypatch.setenv("IBHICS_REPLICATION_SOURCE_SCRATCH", "/mnt/repl")
+
+
 class PullCommands:
     def __init__(self, backing="file"):
         source = {
@@ -105,6 +110,10 @@ class PullCommands:
         if words[0] == "cat":
             assert binary
             return self.files[words[-1]]
+        if words[0] == "mountpoint":
+            return ""
+        if words[:3] == ["stat", "-Lc", "%d"]:
+            return "1" if words[-1] == "/" else "2"
         if words[0] == "df":
             return f"Avail\n{self.avail}\n"
         if words[0] == "rm":
@@ -119,7 +128,7 @@ class PullCommands:
             return ""
         if words[0] == "chown":
             assert words[1] == "107:107"
-            assert words[-1].startswith("/var/tmp/ibhics-repl-")
+            assert words[-1].startswith("/mnt/repl/ibhics-repl-")
             return ""
         raise AssertionError(command)
 

@@ -8,8 +8,10 @@ from fastapi import HTTPException
 from ..cluster import Cluster
 from ..hypervisor import InvalidState
 from ..importer import Source, SourceVM
+from ..importer.resize import ResizeError
 from .cow import CBTRequired, ReplicaMaintenanceRequired
 from .runtime import LocalRuntime
+from .ssh import SourceScratchUnavailable
 from .store import operation_lock
 
 
@@ -83,6 +85,10 @@ def install(api, name, driver, root: Path, guard=Path("/run/lock/ibhics-replicat
                 if action == "delete":
                     runtime.delete(job)
                     return {"ok": True}
+            except ResizeError:
+                raise HTTPException(409, "REPLICA_RESIZE_FAILED") from None
+            except SourceScratchUnavailable:
+                raise HTTPException(409, "SOURCE_SCRATCH_UNAVAILABLE") from None
             except (CBTRequired, ReplicaMaintenanceRequired) as exc:
                 code = (
                     "CBT_REQUIRED"

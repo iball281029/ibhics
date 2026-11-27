@@ -1,0 +1,52 @@
+{
+  "feature": "Nong ib confirmed VLAN and VM operations",
+  "date": "2026-11-26",
+  "related_tests_passed": 157,
+  "merged_payload_tests_passed": 48,
+  "browser_checks": [
+    "cancel without mutation",
+    "confirm through normal API once",
+    "stale review blocks mutation",
+    "force false",
+    "running not OS readiness",
+    "fresh VM status",
+    "approval pending",
+    "sleep/license/mobile"
+  ],
+  "production": [
+    {
+      "node": "103",
+      "health": "ok",
+      "release_hashes_verified": 10,
+      "support_active": true,
+      "inventory_vms": 5,
+      "system_status": "Current status:\narbiter-01: Online\nibhics-test: Online\nibhics-node2: Online\nQuorum: OK\nVM PNetLab-27H1-V8.12: running (ibhics-test)\nVM npm-vm: running (ibhics-test)\nVM OpenP9: running (ibhics-test)\nVM EXWin2022: running (ibhics-node2)\nVM test-ib-Migrate: running (ibhics-node2)\nSpecify a VM name to check OS and Guest Agent readiness.",
+      "vm_status": "VM: test-ib-Migrate\nNode: ibhics-node2\nHypervisor: running\nOS: Windows Server 2019 Standard\nGuest Agent: Responding\nStorage I/O guard: active",
+      "vlan_preflight_and_review_passed": true,
+      "no_network_changes": true,
+      "no_vm_mutations": true,
+      "model_calls": 0
+    },
+    {
+      "node": "104",
+      "health": "standby",
+      "release_hashes_verified": 10,
+      "support_active": true,
+      "inventory_vms": 5,
+      "system_status": "Current status:\narbiter-01: Online\nibhics-test: Online\nibhics-node2: Online\nQuorum: OK\nVM PNetLab-27H1-V8.12: running (ibhics-test)\nVM npm-vm: running (ibhics-test)\nVM OpenP9: running (ibhics-test)\nVM EXWin2022: running (ibhics-node2)\nVM test-ib-Migrate: running (ibhics-node2)\nSpecify a VM name to check OS and Guest Agent readiness.",
+      "vm_status": "VM: test-ib-Migrate\nNode: ibhics-node2\nHypervisor: running\nOS: Windows Server 2019 Standard\nGuest Agent: Responding\nStorage I/O guard: active",
+      "vlan_preflight_and_review_passed": true,
+      "no_network_changes": true,
+      "no_vm_mutations": true,
+      "model_calls": 0
+    }
+  ],
+  "production_mutation_acceptance": false,
+  "codex_connectivity": "loopback gateway HTTP 405 confirms route; no model question sent",
+  "limitations": [
+    "Mac and reverse SSH bridge still required",
+    "bounded text parser; Actions form supports exact VM selection",
+    "duplicate cache is process local",
+    "upstream switch trunk must be checked by operator"
+  ]
+}

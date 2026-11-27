@@ -25,6 +25,7 @@ dev = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]
 ibhics-manager = "ibhics.manager.__main__:main"
+ibhics-ai-gateway = "ibhics.ai.gateway:main"
 ibhics-agent = "ibhics.agent.__main__:main"
 ibhics-setup = "ibhics.installer.setup:main"
 
@@ -32,7 +33,7 @@ ibhics-setup = "ibhics.installer.setup:main"
 include = ["ibhics*"]
 
 [tool.setuptools.package-data]
-"ibhics" = ["storage_assets/*.sh"]
+"ibhics" = ["storage_assets/*.sh", "storage_assets/*.py", "storage_assets/*.conf"]
 "ibhics.manager" = ["static/*", "static/**/*"]
 "ibhics.arbiter_ui" = ["static/*"]
 
