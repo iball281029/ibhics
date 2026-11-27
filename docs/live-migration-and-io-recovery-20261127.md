@@ -60,3 +60,17 @@ nodes, agent restarted, OpenP9 resumed. All 5 VMs: running, guest agent answers.
 
 Next: the early grace lift lets a slow client lose its locks. Consider keeping the full
 grace period (disable early lift in nfsdcld) at the next maintenance window.
+
+## Later on 27 Nov (all pushed)
+
+- Container live migration in the UI by default; systemd guests fall back to a short stop and
+  restart on the destination (ubututest .103 -> .104 in 8.5 to 9 s).
+- Container HA with an NFS run lock. First lab run found a double start (lock holder lived in
+  the agent cgroup; 70 s overlap, fsck clean). Fixed (holder in its own systemd scope, kills its
+  container on lock loss). Re-test: agent stopped 3 min -> no takeover; simulated crash ->
+  restarted on the other node in 30 s. Reboot-based self-fencing: declined by the user.
+- Backup: zstd-3, read-ahead, two concurrent backups per shared repository. test-ib-Migrate
+  full 12 GiB: 6:00 -> 3:44 -> 2:08 while npm-vm backed up at the same time.
+- Stale QEMU io-status cleared on all five VMs by live migration out and back (no downtime).
+- NFSv4 early grace lift: no supported nfs.conf switch for v4 (lift-grace is sm-notify/v3);
+  left as is. The I/O-error auto-recovery covers the pause it can cause.
