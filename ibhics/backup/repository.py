@@ -1,7 +1,7 @@
 """Deduplicating backup repository on top of a Store.
 
 Layout:
-  chunks/<aa>/<sha256>          zlib-compressed fixed-size pieces of disk images
+  chunks/<aa>/<sha256>          zlib/zstd-compressed fixed-size pieces of disk images
   backups/<vm>/<stamp>.json     one manifest per backup: the VM's spec and its disks' chunk lists
   locks/<vm>@<stamp>            present while a backup is being written
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 from collections import Counter, deque
 from collections.abc import Callable
@@ -178,7 +179,10 @@ class Repository:
 
         update("reading", "Reading point-in-time backup data")
         # Keep NBD reads on their owning thread. Only independent, atomic local
-        # chunk writes run concurrently; four chunks bound buffered input to 16 MiB.
+        # chunk writes run concurrently. At most 16 default-sized chunks buffer
+        # 64 MiB of input, plus compressed output and per-worker codec workspace.
+        workers = min(8, os.cpu_count() or 1)
+        max_pending = workers * 2
         pending, submitted = deque(), set()
 
         def write_chunk(key, block):
@@ -192,7 +196,7 @@ class Repository:
             new_data += logical
             stored += physical
 
-        with self.reading(), ThreadPoolExecutor(max_workers=4) as writers:
+        with self.reading(), ThreadPoolExecutor(max_workers=workers) as writers:
             for index, reader in enumerate(readers):
                 count = (reader.size + self.chunk_size - 1) // self.chunk_size
                 old = parent["disks"][index] if incremental else None
@@ -214,7 +218,7 @@ class Repository:
                             new_data += len(block)
                             nonzero += len(block)
                 for offset in reader.changed_chunks(self.chunk_size):
-                    if len(pending) >= 4:
+                    if len(pending) >= max_pending:
                         finish_one()
                     if offset < 0 or offset >= count:
                         raise ValueError("Changed block lies outside disk")
