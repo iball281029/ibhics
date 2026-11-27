@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import urllib.request
+from typing import Literal
 
 from fastapi import status
 from pydantic import BaseModel, Field
@@ -96,6 +97,7 @@ class ContainerRestoreIn(BaseModel):
 
 
 class ContainerMigrateIn(BaseModel):
+    mode: Literal["live", "offline"] = "live"
     node: str = Field(min_length=1, max_length=253)
     allow_stop: bool = False
 
@@ -191,7 +193,7 @@ def install(api, cluster, backups) -> None:
             or not cluster.is_healthy(destination)
         ):
             raise InvalidState("Destination must be a healthy compute node outside maintenance")
-        if ct.state == "running" and not body.allow_stop:
+        if ct.state == "running" and body.mode == "offline" and not body.allow_stop:
             raise InvalidState("Allow a temporary stop before migrating a running container")
 
         def migrate():
@@ -199,13 +201,21 @@ def install(api, cluster, backups) -> None:
             committing = False
             try:
                 receipt = cts(source).migration(
-                    "prepare", name, {"node": destination.name, "allow_stop": body.allow_stop}
+                    "prepare", name,
+                    {"node": destination.name, "allow_stop": body.allow_stop, "mode": body.mode},
                 )
                 cts(destination).migration("probe", name, receipt)
                 committing = True
                 cts(source).migration("commit", name, receipt)
                 result = cts(destination).migration("finish", name, receipt)
-                return {**result, "node": destination.name}
+                message = "Container moved (stopped)"
+                if result.get("method") == "live":
+                    message = "Live (memory kept)"
+                elif result.get("method") == "restart":
+                    message = "Restarted on destination"
+                    if result.get("live_error"):
+                        message += f": {result['live_error']}"
+                return {**result, "node": destination.name, "result": message}
             except Exception:
                 # After an uncertain commit, leave the durable fence in place.
                 # Restarting a source after a lost RPC could duplicate a running guest.

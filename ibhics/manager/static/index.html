@@ -1615,8 +1615,11 @@
     <div class="body">
       <p id="ct-migrate-summary"></p>
       <label>Destination node <select name="node" required></select></label>
-      <label class="check"><input type="checkbox" name="allow_stop"> Allow a temporary stop for migration</label>
-      <p class="hint">Shared storage only: both nodes must see this same pool and container folder. The filesystem, name, MAC and snapshots stay intact. A running container stops and starts on the destination; an already stopped container stays stopped. Memory and live connections are not transferred.</p>
+      <label class="check"><input type="radio" name="mode" value="live" checked> Live migration (keeps memory; falls back to a short stop and restart on the destination if the container cannot be checkpointed)</label>
+      <label class="check"><input type="radio" name="mode" value="offline"> Offline migration (stop, then start on destination)</label>
+      <label class="check" id="ct-migrate-stop" hidden><input type="checkbox" name="allow_stop" disabled> Allow a temporary stop for migration</label>
+      <p class="hint" id="ct-migrate-mode-hint"></p>
+      <p class="hint">Shared storage only: both nodes must see this same pool and container folder. The filesystem, name, MAC and snapshots stay intact. An already stopped container stays stopped.</p>
       <p class="hint">Migration is fenced against duplicate starts. Use Recover migration if a handover is interrupted.</p>
     </div>
     <footer><button value="cancel" formnovalidate>Cancel</button><button class="primary" value="ok">Migrate</button></footer>

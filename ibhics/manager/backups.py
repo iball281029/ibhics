@@ -813,6 +813,8 @@ class BackupManager:
         try:
             with self.upgrade_guard(), self.vm_busy(uuid):
                 result = work()
+            if kind == "ct-migrate" and isinstance(result, dict):
+                job.result = result.get("result", "")
             job.state = "done"
             return result
         except Exception as exc:

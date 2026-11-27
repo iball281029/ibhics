@@ -96,6 +96,13 @@ if [ -n "$missing" ]; then
     rm -f "$LIST"
 fi
 
+# CRIU support for LXC shared-storage migration; preserve other local options.
+mkdir -p /etc/criu
+touch /etc/criu/default.conf
+for option in skip-file-rwx-check manage-cgroups=full; do
+    grep -qxF "$option" /etc/criu/default.conf || echo "$option" >> /etc/criu/default.conf
+done
+
 say "Installing ibHiCS $NEW beside the running version"
 rm -rf "$VENV.new"
 python3 -m venv --system-site-packages "$VENV.new"

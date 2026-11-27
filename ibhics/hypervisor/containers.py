@@ -351,6 +351,8 @@ def lxc_config(spec: ContainerSpec, bridge, rootfs: str = "") -> str:
         f"lxc.cgroup2.memory.swap.max = {spec.swap_mb}M",
         f"lxc.cgroup2.cpu.max = {spec.vcpus * 100000} 100000",
         f"lxc.start.auto = {1 if spec.autostart else 0}",
+        "lxc.tty.max = 0",
+        "lxc.console.path = none",
         "lxc.apparmor.profile = generated",
         f"lxc.apparmor.allow_nesting = {1 if spec.nesting else 0}",
     ]
@@ -1326,7 +1328,7 @@ class RemoteContainers:
         return info_from_dict(self._call("GET", f"/{name}"))
 
     def migration(self, action, name, body):
-        return self._call("POST", f"/{name}/migration/{action}", json=body, timeout=180)
+        return self._call("POST", f"/{name}/migration/{action}", json=body, timeout=300)
 
     def claim_owner(self, name: str) -> ContainerInfo:
         return info_from_dict(self._call("POST", f"/{name}/owner"))

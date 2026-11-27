@@ -19,6 +19,13 @@ apt-get $APT install -y virt-v2v
 apt-get $APT install -y --no-install-recommends $(grep -v '^[[:space:]]*#' "$SRC/packages.txt")
 rm /tmp/ibhics-install.list
 
+# CRIU support for LXC shared-storage migration; preserve other local options.
+mkdir -p /etc/criu
+touch /etc/criu/default.conf
+for option in skip-file-rwx-check manage-cgroups=full; do
+    grep -qxF "$option" /etc/criu/default.conf || echo "$option" >> /etc/criu/default.conf
+done
+
 # Later updates come from the Debian mirror once the node is on a network.
 cat > /etc/apt/sources.list <<'LIST'
 deb http://deb.debian.org/debian trixie main contrib non-free-firmware

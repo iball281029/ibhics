@@ -6367,6 +6367,15 @@ function renderContainers() {
     </td></tr>`;
   }).join("") : empty(11, "No containers yet. Pick a template above to create one in a minute.");
 }
+function updateCtMigrateMode(form, running) {
+  const offline = form.elements.mode.value === "offline";
+  $("#ct-migrate-stop").hidden = !offline;
+  form.elements.allow_stop.disabled = !offline;
+  form.elements.allow_stop.required = offline && running;
+  $("#ct-migrate-mode-hint").textContent = offline
+    ? "A running container stops and starts on the destination. Memory and live connections are not transferred."
+    : "Live migration attempts to keep memory using CRIU. Selecting Live also allows a stop and restart if checkpoint or restore fails; in that case memory and live connections are lost.";
+}
 async function openCtMigrate(c) {
   state.cluster = await api("/cluster");
   const nodes = (state.cluster.members || []).filter(n => n.role === "compute" && n.name !== c.node && n.healthy && !n.maintenance);
@@ -6374,12 +6383,15 @@ async function openCtMigrate(c) {
   const form = $("#ct-migrate-form");
   form.elements.node.innerHTML = nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("");
   openDialog("ct-migrate-dialog", {name:c.name});
-  form.elements.allow_stop.required = c.state === "running";
+  form.elements.mode.value = "live";
+  form.elements.allow_stop.checked = false;
+  form.onchange = () => updateCtMigrateMode(form, c.state === "running");
+  updateCtMigrateMode(form, c.state === "running");
   $("#ct-migrate-summary").textContent = `${c.name} · ${c.node} · ${c.state}`;
 }
 handlers["ct-migrate-dialog"] = async (f, ctx) => {
-  await post(`/containers/${enc(ctx.name)}/migrate`, {node:f.get("node"), allow_stop:f.get("allow_stop") === "on"});
-  toast("Container migrated. Name, MAC, data and snapshots preserved.");
+  const result = await post(`/containers/${enc(ctx.name)}/migrate`, {node:f.get("node"), mode:f.get("mode") || "live", allow_stop:f.get("allow_stop") === "on"});
+  toast(result.result || "Container migrated.");
   await refresh("containers");
   await load("jobs"); renderTasks();
 };
