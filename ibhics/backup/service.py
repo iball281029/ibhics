@@ -21,7 +21,7 @@ from ..hypervisor.serialize import spec_from_json, spec_to_json
 from .console import console_png
 from .container_image import RawImageReader
 from .repository import CHUNK_SIZE, BackupInfo, Repository, RepositoryBusy
-from .store import Mounter, S3Store, open_store
+from .store import Mounter, RepositoryLock, S3Store, open_store
 from .targets import BackupTarget, repository_identity
 from .upgrade_guard import protected
 
@@ -49,9 +49,8 @@ class NodeBackup:
         self._chunk_size = chunk_size
         self._scratch_dir = scratch_dir
         self._verify_lock = threading.Lock()
-        # Jobs on one target run one at a time on this node, so garbage collection never
-        # races a backup started from the same node.
-        self._locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+        # Maintenance is exclusive; backups share two admission slots.
+        self._locks: defaultdict[str, RepositoryLock] = defaultdict(RepositoryLock)
         self._progress_lock = threading.RLock()
         self._progress: dict[tuple[str, str], dict] = {}
         self._cancel: dict[tuple[str, str], threading.Event] = {}
@@ -93,7 +92,7 @@ class NodeBackup:
 
     @contextmanager
     def _repository_turn(self, target, check_cancel):
-        lock = self._locks[target.name]
+        lock = self._locks[target.name].backup
         while not lock.acquire(timeout=0.25):
             check_cancel()
         try:
@@ -117,6 +116,9 @@ class NodeBackup:
         key = (uuid, target.name)
         now = time.time()
         with self._progress_lock:
+            if any(vm == uuid and status["state"] == "running"
+                   for (vm, _), status in self._progress.items()):
+                raise RepositoryBusy("A backup is already running for this VM")
             cancel = self._cancel[key] = threading.Event()
             self._progress[key] = {
                 "state": "running",
@@ -196,7 +198,7 @@ class NodeBackup:
                 compression=target.compression,
                 immutability_days=target.immutability_days,
             )
-            with repo.reading():
+            with repo.reading(shared=True, check_cancel=check_cancel):
                 parent = repo.latest(uuid) if mode == "incremental" else None
                 reason = "CBT is not supported by this driver; full backup used"
                 if hasattr(self._driver, "export_backup"):
@@ -264,7 +266,7 @@ class NodeBackup:
                 compression=target.compression,
                 immutability_days=target.immutability_days,
             )
-            with repo.reading():
+            with repo.reading(shared=True, check_cancel=check_cancel):
                 progress("Preparing stopped container filesystem", None)
                 with self._driver.containers().backup_source(
                     name, allow_stop=mode == "container_stop"
@@ -288,7 +290,11 @@ class NodeBackup:
 
     @protected
     def restore_container(self, target, backup_id, name=None, pool=None):
-        with self._locks[target.name], self._open(target) as store, Repository(store).reading():
+        with (
+            self._locks[target.name],
+            self._open(target) as store,
+            Repository(store).reading(check_cancel=lambda: None),
+        ):
             repo = Repository(store)
             manifest = repo.manifest(backup_id)
             definition = manifest["spec"]
@@ -310,7 +316,7 @@ class NodeBackup:
     @protected
     def synthetic_full(self, target, backup_id, progress=None):
         check_quota(target)
-        with self._locks[target.name], self._open(target) as store:
+        with self._locks[target.name], self._open(target) as store, store.waiting():
             return Repository(
                 store,
                 self._chunk_size,
@@ -337,6 +343,10 @@ class NodeBackup:
                 compression=destination.compression,
                 immutability_days=destination.immutability_days,
             )
+            for repo in sorted((src, dst), key=lambda repo: (
+                repository_identity(source) if repo is src else repository_identity(destination)
+            )):
+                stack.enter_context(repo.store.waiting())
             return src.transfer(
                 backup_id,
                 dst,
@@ -359,44 +369,51 @@ class NodeBackup:
         *,
         isolated: bool = False,
     ) -> VMInfo:
-        with self._locks[target.name], self._open(target) as store, Repository(store).reading():
-            repo = Repository(store)
-            manifest = repo.manifest(backup_id)
-            if manifest["spec"].get("entity_type") == "container":
-                raise InvalidState("Use container restore for this restore point")
-            spec = spec_from_json(manifest["spec"])
-            if name and name != spec.name:
-                spec.name = name
-                # A copy next to the original must not share its MAC addresses.
-                for nic in spec.nics:
-                    nic.mac = None
-            if isolated:
-                spec.nics = []
-                spec.autostart = False
-                spec.iso = spec.driver_iso = None
-                spec.boot = ["hd"]
-                spec.linked_to = ""
-                spec.template = False
-                spec.recycled = ""
-            if pool:
-                for disk in spec.disks:
-                    disk.pool = pool
-            scratch = Path(tempfile.mkdtemp(prefix="ibhics-restore-", dir=self._scratch_dir))
-            vm = None
-            try:
-                vm = self._driver.create_vm(copy.deepcopy(spec))
-                for index in range(len(manifest["disks"])):
-                    image = scratch / f"disk{index}.raw"
-                    repo.restore_disk(manifest, index, image)
-                    self._driver.import_disk(vm.uuid, index, image)
-                    image.unlink()
-            except BaseException:
-                if vm is not None:
-                    self._driver.delete_vm(vm.uuid)
-                raise
-            finally:
-                shutil.rmtree(scratch, ignore_errors=True)
-            return self._driver.get_vm(vm.uuid)
+        with (
+            self._locks[target.name],
+            self._open(target) as store,
+            Repository(store).reading(check_cancel=lambda: None),
+        ):
+            return self._restore(Repository(store), backup_id, name, pool, isolated)
+
+    def _restore(self, repo, backup_id, name, pool, isolated=False):
+        """Materialize a VM under an already-held repository lease."""
+        manifest = repo.manifest(backup_id)
+        if manifest["spec"].get("entity_type") == "container":
+            raise InvalidState("Use container restore for this restore point")
+        spec = spec_from_json(manifest["spec"])
+        if name and name != spec.name:
+            spec.name = name
+            # A copy next to the original must not share its MAC addresses.
+            for nic in spec.nics:
+                nic.mac = None
+        if isolated:
+            spec.nics = []
+            spec.autostart = False
+            spec.iso = spec.driver_iso = None
+            spec.boot = ["hd"]
+            spec.linked_to = ""
+            spec.template = False
+            spec.recycled = ""
+        if pool:
+            for disk in spec.disks:
+                disk.pool = pool
+        scratch = Path(tempfile.mkdtemp(prefix="ibhics-restore-", dir=self._scratch_dir))
+        vm = None
+        try:
+            vm = self._driver.create_vm(copy.deepcopy(spec))
+            for index in range(len(manifest["disks"])):
+                image = scratch / f"disk{index}.raw"
+                repo.restore_disk(manifest, index, image)
+                self._driver.import_disk(vm.uuid, index, image)
+                image.unlink()
+        except BaseException:
+            if vm is not None:
+                self._driver.delete_vm(vm.uuid)
+            raise
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        return self._driver.get_vm(vm.uuid)
 
     def _verify_capacity(self, target, backup_id, pool):
         with self._open(target) as store:
@@ -433,13 +450,19 @@ class NodeBackup:
             "screenshot_path": None,
         }
         vm = None
-        with self._verify_lock:
+        with (
+            self._verify_lock,
+            self._locks[target.name],
+            self._open(target) as store,
+            store.waiting(),
+        ):
             try:
                 if pool:
                     result.update(verified="failed", reason="No guest heartbeat before timeout")
                     self._verify_capacity(target, backup_id, pool)
-                    vm = self.restore(
-                        target, backup_id, f"ibhics-verify-{uuid4().hex[:16]}", pool, isolated=True
+                    vm = self._restore(
+                        Repository(store), backup_id, f"ibhics-verify-{uuid4().hex[:16]}",
+                        pool, isolated=True,
                     )
                     self._driver.start_vm(vm.uuid)
                     deadline = time.monotonic() + timeout
@@ -559,7 +582,7 @@ class NodeBackup:
 
     def delete(self, target: BackupTarget, backup_id: str) -> int:
         """Remove one backup; returns how many chunks were freed."""
-        with self._locks[target.name], self._open(target) as store:
+        with self._locks[target.name], self._open(target) as store, store.waiting():
             repo = Repository(store)
             repo.delete(backup_id)
             return _gc(repo)
@@ -567,7 +590,7 @@ class NodeBackup:
     def prune(
         self, target: BackupTarget, vm_name: str, keep_last: int, weekly=0, monthly=0, yearly=0
     ) -> list[str]:
-        with self._locks[target.name], self._open(target) as store:
+        with self._locks[target.name], self._open(target) as store, store.waiting():
             repo = Repository(store)
             removed = repo.prune(vm_name, keep_last, weekly, monthly, yearly)
             if removed:

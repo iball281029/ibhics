@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..backup import BackupCancelled, BackupInfo, BackupTarget, RepositoryBusy, TargetUnavailable
 from ..backup.repository import parse_id
+from ..backup.store import RepositoryLock
 from ..backup.targets import repository_identity
 from ..backup.upgrade_guard import GUARD_PATH, upgrade_guard
 from ..cluster import Cluster, Member, NodeUnavailable
@@ -185,9 +186,9 @@ class BackupManager:
         self._verify_lock = threading.Lock()
         # One backup or snapshot task at a time per VM: QEMU takes one state change at a time.
         self._vm_locks: dict[str, threading.Lock] = {}
-        # A SAN LUN or USB disk holds an ordinary filesystem that only one node may mount
-        # at a time, so work on such a target is serialised across the whole cluster.
-        self._target_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+        # Shared repositories allow two backups; maintenance holds an exclusive lock.
+        # SAN/USB ordinary filesystems still require one mounted node at a time.
+        self._target_locks: defaultdict[str, RepositoryLock] = defaultdict(RepositoryLock)
 
     # Targets
 
@@ -403,9 +404,6 @@ class BackupManager:
 
     @contextmanager
     def _using(self, target: BackupTarget, wait: bool) -> Iterator[None]:
-        if not target.exclusive:
-            yield
-            return
         lock = self._target_locks[target.name]
         if not lock.acquire(blocking=wait):
             raise RepositoryBusy(f"a job is using target {target.name!r}; try again when it ends")
@@ -542,9 +540,6 @@ class BackupManager:
             )
             job.step = "Waiting for repository or VM lock"
             with ExitStack() as stack:
-                for t in sorted(targets, key=lambda t: t.name):
-                    if t.exclusive:
-                        stack.enter_context(self._backup_lock(job, self._target_locks[t.name]))
                 stack.enter_context(self._backup_lock(job, self.vm_busy(uuid)))
                 job.step = "Waiting for node backup worker"
                 selected = "active_full" if full else p.mode if p else mode
@@ -583,9 +578,18 @@ class BackupManager:
                 try:
                     if job.cancel_requested:
                         raise BackupCancelled("Cancelled by operator")
-                    info = member.backups.backup(uuid, target, selected)
+                    with self._backup_lock(
+                        job, self._target_locks[target.name] if target.exclusive
+                        else self._target_locks[target.name].backup
+                    ):
+                        info = member.backups.backup(uuid, target, selected)
                 finally:
                     done.set()
+                # Release shared admission before acquiring maintenance locks: never
+                # upgrade while another backup may be doing the same thing.
+                if p or keep_last:
+                    for t in sorted(targets, key=lambda t: t.name):
+                        stack.enter_context(self._using(t, wait=True))
                 job.report = asdict(info)
                 if full:
                     self._maintenance[f"{policy}/{uuid}/full"] = date

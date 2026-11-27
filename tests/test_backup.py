@@ -627,8 +627,10 @@ def test_exclusive_target_blocks_listing_while_a_job_runs(api):
         resp = client.get("/api/v1/backup/targets/fc/backups")
         assert resp.status_code == 409 and "try again" in resp.json()["detail"]
     shared = backups.target("local")
-    with backups._using(shared, wait=False), backups._using(shared, wait=False):
-        pass  # directories and NAS shares are never locked
+    with backups._using(shared, wait=False):
+        with pytest.raises(RepositoryBusy):
+            with backups._using(shared, wait=False):
+                pytest.fail("Maintenance must be exclusive on directories too")
 
 
 def test_repository_in_a_storage_pool(api, monkeypatch):

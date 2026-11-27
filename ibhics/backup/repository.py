@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections import Counter, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -31,7 +32,7 @@ from uuid import uuid4
 
 from ..hypervisor.base import NAME_RE, InvalidState, VMInfo
 from .compression import codec, compress, decompress
-from .store import DirStore, RepositoryBusy, Store
+from .store import RepositoryBusy, Store
 
 CHUNK_SIZE = 4 * 1024 * 1024
 STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
@@ -83,6 +84,15 @@ def _chunk_key(digest: str) -> str:
     return f"chunks/{digest[:2]}/{digest}"
 
 
+def _shared(method):
+    @wraps(method)
+    def run(self, *args, **kwargs):
+        with self.store.shared():
+            return method(self, *args, **kwargs)
+
+    return run
+
+
 def _exclusive(method):
     @wraps(method)
     def run(self, *args, **kwargs):
@@ -109,9 +119,13 @@ class Repository:
         codec(compression)
 
     @contextmanager
-    def reading(self):
+    def reading(self, shared=False, check_cancel=None):
         """Keep GC away from source chunks while verifying, copying or restoring."""
-        with self.store.exclusive():
+        lease = (
+            self.store.waiting(shared, check_cancel) if check_cancel is not None
+            else (self.store.shared if shared else self.store.exclusive)()
+        )
+        with lease:
             key = f"locks/operation-{uuid4().hex}"
             self.store.put(key, self._clock().isoformat().encode())
             try:
@@ -135,7 +149,7 @@ class Repository:
         ]
         return self.manifest(max(matches, key=lambda b: (b.created, b.id)).id) if matches else None
 
-    @_exclusive
+    @_shared
     def backup_readers(
         self, vm, readers, spec_json, capture, parent=None, progress=None, metrics=None
     ):
@@ -178,25 +192,42 @@ class Repository:
                 )
 
         update("reading", "Reading point-in-time backup data")
-        # Keep NBD reads on their owning thread. Only independent, atomic local
-        # chunk writes run concurrently. At most 16 default-sized chunks buffer
-        # 64 MiB of input, plus compressed output and per-worker codec workspace.
+        # All libnbd calls (including changed_chunks metadata) stay on their owner.
+        # Workers process blocks while the owner reads ahead. At most 2*workers
+        # blocks are in flight plus one reader block: <=68 MiB at 4 MiB/8 workers.
+        # Up to 8 strip temporaries and compressed outputs/codec workspaces are extra.
         workers = min(8, os.cpu_count() or 1)
         max_pending = workers * 2
         pending, submitted = deque(), set()
+        submitted_lock = threading.Lock()
 
-        def write_chunk(key, block):
-            data = compress(block, self.compression)
-            self.store.put(key, data)
-            return len(block), len(data)
+        def process_chunk(block):
+            has_data = bool(block.strip(b"\0"))
+            digest = hashlib.sha256(block).hexdigest() if has_data else None
+            write = False
+            if digest:
+                with submitted_lock:
+                    if digest not in submitted:
+                        submitted.add(digest)
+                        write = True
+                if write:
+                    write = not self.store.exists(_chunk_key(digest))
+            if write:
+                data = compress(block, self.compression)
+                if self.store.put_chunk(_chunk_key(digest), data) is not False:
+                    return digest, len(block), len(block), len(data)
+            return digest, len(block) if has_data else 0, 0, 0
 
         def finish_one():
-            nonlocal stored, new_data
-            logical, physical = pending.popleft().result()
+            nonlocal stored, new_data, nonzero
+            offset, future = pending.popleft()
+            digest, used, logical, physical = future.result()
+            chunks[offset] = digest
+            nonzero += used
             new_data += logical
             stored += physical
 
-        with self.reading(), ThreadPoolExecutor(max_workers=workers) as writers:
+        with ThreadPoolExecutor(max_workers=workers) as writers:
             for index, reader in enumerate(readers):
                 count = (reader.size + self.chunk_size - 1) // self.chunk_size
                 old = parent["disks"][index] if incremental else None
@@ -213,9 +244,9 @@ class Repository:
                         if not self.store.exists(key):
                             _, block = self._chunk(parent, digest)
                             data = compress(block, self.compression)
-                            self.store.put(key, data)
-                            stored += len(data)
-                            new_data += len(block)
+                            if self.store.put_chunk(key, data) is not False:
+                                stored += len(data)
+                                new_data += len(block)
                             nonzero += len(block)
                 for offset in reader.changed_chunks(self.chunk_size):
                     if len(pending) >= max_pending:
@@ -230,38 +261,18 @@ class Repository:
                             "Short read from backup source; restore point not published"
                         )
                     read_bytes += len(block)
-                    has_data = bool(block.strip(b"\0"))
-                    if has_data:
-                        nonzero += len(block)
-                    digest = hashlib.sha256(block).hexdigest() if has_data else None
-                    if (
-                        digest
-                        and digest not in submitted
-                        and not self.store.exists(_chunk_key(digest))
-                    ):
-                        update(
-                            "writing",
-                            f"Compressing and writing disk {index + 1}/{len(readers)}",
-                            index + 1,
-                        )
-                        if isinstance(self.store, DirStore):
-                            pending.append(writers.submit(write_chunk, _chunk_key(digest), block))
-                        else:
-                            logical, physical = write_chunk(_chunk_key(digest), block)
-                            new_data += logical
-                            stored += physical
-                        submitted.add(digest)
-                    chunks[offset] = digest
+                    pending.append((offset, writers.submit(process_chunk, block)))
+                    del block
                     scanned_bytes = sum(r.size for r in readers[:index]) + min(
                         reader.size, (offset + 1) * self.chunk_size
                     )
                     update("reading", f"Reading disk {index + 1}/{len(readers)}", index + 1)
                 scanned_bytes = sum(r.size for r in readers[: index + 1])
                 update("reading", f"Scanned disk {index + 1}/{len(readers)}", index + 1)
+                while pending:
+                    update("writing", "Finishing compressed chunk writes", index + 1)
+                    finish_one()
                 disks.append({"size_bytes": reader.size, "chunks": chunks})
-            while pending:
-                update("writing", "Finishing compressed chunk writes")
-                finish_one()
             manifest = {
                 "format": 1,
                 "id": backup_id,
@@ -314,9 +325,14 @@ class Repository:
                     )
                 else:
                     data = compress(block, destination.compression)
-                    destination.store.put(key, data)
-                    stored += len(data)
-                    new_data += len(block)
+                    if prefix == "chunks":
+                        added = destination.store.put_chunk(key, data) is not False
+                    else:
+                        destination.store.put(key, data)
+                        added = True
+                    if added:
+                        stored += len(data)
+                        new_data += len(block)
                 if progress:
                     progress(
                         "Verifying and writing backup chunks",
@@ -351,7 +367,7 @@ class Repository:
 
     # Writing
 
-    @_exclusive
+    @_shared
     def backup(
         self,
         vm: VMInfo,
@@ -500,11 +516,11 @@ class Repository:
                 key = _chunk_key(digest)
                 if not self.store.exists(key):
                     data = compress(block, self.compression)
-                    self._new_data += len(block)
                     if progress:
                         progress(size, added, "writing")
-                    self.store.put(key, data)
-                    added += len(data)
+                    if self.store.put_chunk(key, data) is not False:
+                        self._new_data += len(block)
+                        added += len(data)
                 chunks.append(digest)
         if progress:
             progress(size, added)

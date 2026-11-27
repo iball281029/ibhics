@@ -291,11 +291,11 @@ def test_overlapping_writes_deduplicate_and_restore_exactly(tmp_path):
             self.barrier = threading.Barrier(2)
             self.writes = []
 
-        def put(self, key, data):
+        def put_chunk(self, key, data):
             if key.startswith("chunks/"):
                 self.writes.append(key)
                 self.barrier.wait(timeout=3)
-            super().put(key, data)
+            super().put_chunk(key, data)
 
     store = PairedStore(tmp_path / "repo")
     repo = Repository(store, CHUNK)
@@ -310,10 +310,10 @@ def test_overlapping_writes_deduplicate_and_restore_exactly(tmp_path):
 
 def test_failed_background_chunk_write_never_publishes_restore_point(tmp_path):
     class FailingStore(DirStore):
-        def put(self, key, data):
+        def put_chunk(self, key, data):
             if key.startswith("chunks/"):
                 raise OSError("storage write failed")
-            super().put(key, data)
+            super().put_chunk(key, data)
 
     repo = Repository(FailingStore(tmp_path / "repo"), CHUNK)
     data = b"a" * CHUNK + b"b" * CHUNK
