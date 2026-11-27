@@ -265,6 +265,7 @@ function show() {
   if (page === "vm") selectTab("vm-tabs", "vm-summary");
   if (page === "node") selectTab("node-tabs", "node-summary");
   refresh(page).catch(fail);
+  syncJobsPoll();
 }
 window.addEventListener("hashchange", show);
 
@@ -279,6 +280,7 @@ function selectTab(tabsId, name) {
   const tabs = document.getElementById(tabsId);
   $$("button[data-tab]", tabs).forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".subpage", tabs.parentElement).forEach((p) => p.classList.toggle("active", p.id === `tab-${name}`));
+  syncJobsPoll();
 }
 $$(".tabs").forEach((tabs) => tabs.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-tab]");
@@ -499,7 +501,12 @@ const loaders = {
   },
   users: async () => { state.users = canManage("users") && state.me ? await api("/users") : []; },
 };
-const load = (...names) => Promise.all(names.map((n) => loaders[n]()));
+// Share in-flight reads with navigation/manual refresh and polling.
+const loading = new Map();
+const load = (...names) => Promise.all(names.map((n) => {
+  if (!loading.has(n)) loading.set(n, Promise.resolve().then(() => loaders[n]()).finally(() => loading.delete(n)));
+  return loading.get(n);
+}));
 
 // ---------- tasks ----------
 
@@ -604,7 +611,7 @@ function renderTaskPage() {
         ${isActive(t) ? `<div class="bar${t.percent == null ? " busy" : ""}" style="margin-top:6px"><i style="width:${t.percent ?? 30}%"></i></div>` : ""}</td>
       <td>${esc(when(t.created))}</td><td>${esc(duration(t))}</td></tr>`).join("")
     : empty(6, all.length ? "No tasks match" : "Nothing has run yet. Backups, restores, migrations, imports and deploys show up here.");
-  renderTaskDetail(tasks.find((t) => taskKey(t) === tp.sel));
+  return renderTaskDetail(tasks.find((t) => taskKey(t) === tp.sel));
 }
 async function renderTaskDetail(t) {
   const box = $("#task-detail");
@@ -841,13 +848,50 @@ document.addEventListener("click", (e) => {
   const b = e.target.closest("button[data-task-log]");
   if (b) showLog(b.dataset.taskLog, b.dataset.taskTitle);
 });
-// While something runs, keep the tasks fresh every few seconds, whatever page is open.
-setInterval(async () => {
-  if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
+// Poll only the visible Jobs view. Schedule after completion so slow reads never overlap.
+let jobsPollTimer = null, jobsPollBusy = false;
+function jobsView() {
+  if (document.hidden) return "";
+  const page = document.body.dataset.section;
+  const tab = { tasks: "task-jobs", backup: "jobs", migrate: "imports" }[page];
+  return tab && $(`#tab-${tab}`).classList.contains("active") ? page : "";
+}
+function syncJobsPoll(immediate = false) {
+  clearTimeout(jobsPollTimer);
+  jobsPollTimer = null;
+  if (!jobsView() || jobsPollBusy) return;
+  const active = allTasks().some(t => isActive(t) || t.state === "retry_wait");
+  jobsPollTimer = setTimeout(pollJobs, immediate ? 0 : active ? 3000 : 20000);
+}
+async function pollJobs() {
+  const page = jobsView();
+  if (!page || jobsPollBusy) return;
+  jobsPollBusy = true;
   try {
-    await load("imports", "jobs", "moves", "deploys", "settingsTasks"); renderTasks();
-    if (currentPage() === "tasks") renderTaskPage();
-  } catch { /* next tick */ }
+    const names = ["imports", "jobs", "moves", "deploys", "settingsTasks", "replications"];
+    if (page === "tasks") names.push("activity");
+    // Wait for every read even on partial failure before scheduling another round.
+    const results = await Promise.allSettled(names.map(n => load(n)));
+    if (jobsView() !== page || results.some(r => r.status === "rejected")) return;
+    renderTasks();
+    const selectors = [`#page-${page} .table-wrap`, "#task-detail", "#task-log"];
+    const scroll = selectors.flatMap(s => $$(s).map((el, i) => [s, i, el.scrollTop, el.scrollLeft]));
+    if (page === "tasks") await renderTaskPage();
+    if (page === "backup") renderJobs();
+    if (page === "migrate") renderImports();
+    for (const [s, i, top, left] of scroll) {
+      const el = $$(s)[i];
+      if (el) { el.scrollTop = top; el.scrollLeft = left; }
+    }
+  } catch { /* retry next round */ }
+  finally { jobsPollBusy = false; syncJobsPoll(); }
+}
+document.addEventListener("visibilitychange", () => syncJobsPoll(true));
+// Elsewhere, keep the task tray fresh while something runs or the tray is open.
+setInterval(async () => {
+  if (jobsView() || document.hidden) return;
+  if (!allTasks().some(isActive) && !$("#tasks-panel").classList.contains("open")) return;
+  try { await load("imports", "jobs", "moves", "deploys", "settingsTasks"); renderTasks(); } catch { /* next tick */ }
 }, 3000);
 
 async function refresh(page, auto = false) {
@@ -881,6 +925,7 @@ async function refresh(page, auto = false) {
   if (page === "system") { await load("users"); await renderSystem(); }
   if (page === "alerts") await window.Alerts.refresh();
   fillSelects();
+  syncJobsPoll();
 }
 
 // ---------- home ----------
@@ -5953,7 +5998,7 @@ $("#password-form").addEventListener("submit", async (e) => {
 
 window.addEventListener("DOMContentLoaded", () => loadMe().then(show).catch(fail), { once: true });
 setInterval(() => {
-  if (!document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
+  if (!jobsView() && !document.querySelector("dialog[open], details.more[open]") && !document.hidden) refresh(currentPage(), true).catch(() => {});
 }, 10000);
 
 
