@@ -66,6 +66,17 @@ def main() -> None:
         if args.driver == "libvirt"
         else None,
     )
+    if (
+        driver is not None
+        and type(driver).__name__ == "LibvirtDriver"
+        and os.environ.get("IBHICS_IO_AUTORECOVER", "1") != "0"
+    ):
+        # Resume guests paused by a storage I/O error once the shared storage is back.
+        import libvirt
+
+        from ..hypervisor.io_recovery import IORecovery
+
+        IORecovery(lambda: libvirt.open(args.libvirt_uri)).start()
     uvicorn.run(app, host=args.host, port=args.port)
 
 
