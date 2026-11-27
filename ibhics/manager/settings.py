@@ -12,8 +12,11 @@ import json
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Protocol
@@ -22,6 +25,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .. import __version__
+from ..license_identity import cluster_key
 from .auth import Forbidden
 from .events import publish
 
@@ -61,6 +65,60 @@ def private_json(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def private_bytes(path: Path, data: bytes) -> None:
+    """Atomically replace a credential file without a predictable temporary filename."""
+    fd, temporary = tempfile.mkstemp(prefix=".auth-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+@contextmanager
+def ai_auth_transaction(home: Path | None, auth: bytes | None):
+    """Restore the prior runtime credentials if persisting the license fails."""
+    if home is None:
+        if auth is not None:
+            raise ValueError("AI pass requires a persistent Manager state directory")
+        yield
+        return
+    if auth is None:
+        backup = None
+        if home.exists():
+            backup = Path(tempfile.mkdtemp(prefix=".ai-codex-", dir=home.parent))
+            home.rename(backup / "home")
+        try:
+            yield
+        except Exception:
+            if backup:
+                (backup / "home").rename(home)
+                backup.rmdir()
+            raise
+        else:
+            if backup:
+                shutil.rmtree(backup)
+        return
+    existed = home.exists()
+    previous = (home / "auth.json").read_bytes() if (home / "auth.json").exists() else None
+    home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    home.chmod(0o700)
+    private_bytes(home / "auth.json", auth)
+    try:
+        yield
+    except Exception:
+        if previous is not None:
+            private_bytes(home / "auth.json", previous)
+        elif not existed:
+            shutil.rmtree(home)
+        else:
+            (home / "auth.json").unlink(missing_ok=True)
+        raise
+
+
 def https_url(url: str) -> str:
     parts = urlsplit(url)
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
@@ -81,14 +139,6 @@ def fetch_bytes(url: str, limit: int = MAX_PACKAGE) -> bytes:
                 raise ValueError("download exceeds size limit")
             chunks.append(chunk)
         return b"".join(chunks)
-
-
-def cluster_key(value: str) -> str:
-    """Compare cluster IDs in either form: the UUID or IBHX-XXXX-... shown on the page."""
-    text = str(value).strip().lower()
-    if text.startswith("ibhx-"):
-        text = text[5:]
-    return text.replace("-", "")
 
 
 class NodeUpdater(Protocol):
@@ -145,6 +195,7 @@ class Settings:
             "previous_available": False,
             "previous_version": None,
         }
+        self._license_state_stamp = path.stat().st_mtime_ns if path and path.exists() else None
         if path and path.exists():
             self.data.update(json.loads(path.read_text()))
             for job in self.data["jobs"]:
@@ -155,6 +206,7 @@ class Settings:
         with self.lock:
             if self.path:
                 private_json(self.path, self.data)
+                self._license_state_stamp = self.path.stat().st_mtime_ns
 
     def verify(self, envelope: dict) -> dict:
         if self.verifier is None:
@@ -171,6 +223,19 @@ class Settings:
         return dict(payload)
 
     def license(self) -> dict | None:
+        # Active/standby Managers share this file; notice entitlement changes on handover.
+        if self.path:
+            try:
+                stamp = self.path.stat().st_mtime_ns if self.path.exists() else None
+                if stamp != self._license_state_stamp:
+                    self.data["license"] = (
+                        json.loads(self.path.read_text()).get("license")
+                        if stamp is not None
+                        else None
+                    )
+                    self._license_state_stamp = stamp
+            except (OSError, ValueError):
+                return None
         if not self.data["license"]:
             return None
         try:
@@ -192,6 +257,10 @@ class Settings:
             for key in ("update_until", "support_until"):
                 if key in payload:
                     date.fromisoformat(payload[key])
+            if "ai" in payload:
+                from ..ai.license_auth import validate_ai
+
+                validate_ai(payload["ai"])
             return payload
         except (ValueError, TypeError):
             return None
@@ -212,19 +281,47 @@ class Settings:
     def upload_license(self, envelope: dict) -> dict:
         with self.lock:
             self.verify(envelope)
+            self.license()  # Refresh a license issued through the other Manager first.
             old = self.data["license"]
             self.data["license"] = envelope
             if not self.license():
                 self.data["license"] = old
                 raise ValueError("invalid license fields, cluster identity or node entitlement")
-            self.save()
+            saved = False
+            try:
+                payload = self.license()
+                auth = None
+                if "ai" in payload:
+                    from ..ai.license_auth import open_sealed, validate_auth
+
+                    auth = open_sealed(payload["ai"]["auth"], self.cluster_id())
+                    validate_auth(auth)
+                home = self.path.parent / "ai-codex" if self.path else None
+                with ai_auth_transaction(home, auth):
+                    self.save()
+                    saved = True
+            except (ValueError, OSError) as exc:
+                if not saved:
+                    self.data["license"] = old
+                raise ValueError(f"Unable to install license AI pass: {exc}") from None
             return self.subscription()
 
     def remove_license(self) -> dict:
         """Remove the signed entitlement, preserving notification and other settings."""
         with self.lock:
-            self.data["license"] = None
-            self.save()
+            self.license()
+            old = self.data["license"]
+            home = self.path.parent / "ai-codex" if self.path else None
+            saved = False
+            try:
+                with ai_auth_transaction(home, None):
+                    self.data["license"] = None
+                    self.save()
+                    saved = True
+            except OSError:
+                if not saved:
+                    self.data["license"] = old
+                raise
             return self.subscription()
 
     def configure(self, body: dict):

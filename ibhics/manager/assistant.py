@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ValidationError
 
 from .. import __version__
+from ..ai.codex_preview import AI_PASS_EXPIRED, CodexLocalPreview
 from ..ai.common import KNOWLEDGE, ChatIn, redact
 from .auth import Forbidden
 from .settings import https_url, private_json
@@ -75,23 +76,52 @@ class Assistant:
         )
         self.path = settings.path.with_name("assistant.json") if settings.path else None
         self.enabled = False
-        self.lock = threading.Lock()
+        self.explicit_enabled = None
+        self.local_client = None
+        self.local_identity = None
+        self.provider = self.client
+        self.lock = threading.RLock()
 
     def status(self):
         import json
 
         # Refresh small shared state so an Active Manager handover sees the last setting.
         with self.lock:
+            payload = self.settings.license() or {}
+            ai = payload.get("ai")
+            home = self.settings.path.parent / "ai-codex" if self.settings.path else None
+            auth = home / "auth.json" if home else None
+            try:
+                auth_stamp = auth.stat().st_mtime_ns if auth and auth.is_file() else None
+            except OSError:
+                auth_stamp = None
+            if ai and auth_stamp is not None:
+                identity = (ai["auth"], ai["daily_limit"], auth_stamp)
+                if identity != self.local_identity:
+                    self.local_client = CodexLocalPreview(
+                        home,
+                        enabled=True,
+                        daily_limit=ai["daily_limit"],
+                        codex_home=home,
+                    )
+                    self.local_identity = identity
+                self.provider = self.local_client
+            else:
+                self.provider = self.client if not ai else None
+            self.enabled = bool(ai) if self.explicit_enabled is None else self.explicit_enabled
             if self.path and self.path.exists():
                 try:
                     self.enabled = json.loads(self.path.read_text()).get("enabled") is True
                 except (ValueError, OSError):
                     self.enabled = False
             licensed = self.settings.subscription()["support"]["status"] == "Active"
-            configured = self.client.configured()
+            configured = bool(self.provider and self.provider.configured())
+            expired = bool(ai and self.local_client and self.local_client.auth_failed)
             reason = (
                 "An active Support subscription is required."
                 if not licensed
+                else AI_PASS_EXPIRED
+                if expired
                 else "Contact Support to provision the AI service."
                 if not configured
                 else "Ask your administrator to enable AI Assistant."
@@ -102,16 +132,27 @@ class Assistant:
                 "licensed": licensed,
                 "configured": configured,
                 "enabled": self.enabled,
-                "available": licensed and configured and self.enabled,
+                "available": licensed and configured and self.enabled and not expired,
                 "reason": reason,
                 "reason_code": (
                     "no_support"
                     if not licensed
+                    else "ai_pass_expired"
+                    if expired
                     else "not_provisioned"
                     if not configured
                     else "disabled"
                     if not self.enabled
                     else "ready"
+                ),
+                "ai": (
+                    {
+                        "account": ai["account"],
+                        "daily_limit": ai["daily_limit"],
+                        "state": "expired" if expired else "ready" if configured else "unavailable",
+                    }
+                    if ai
+                    else None
                 ),
                 "support_until": self.settings.subscription()["support"]["until"],
                 "context_notice": (
@@ -134,16 +175,23 @@ class Assistant:
             if self.path:
                 private_json(self.path, {"enabled": enabled})
             self.enabled = enabled
+            self.explicit_enabled = enabled
         return self.status()
 
     def ask(self, body, snapshot):
-        self.require()
+        # Snapshot provider and entitlement together; a concurrent status refresh or
+        # license replacement must never redirect an AI pass to the legacy gateway.
+        with self.lock, self.settings.lock:
+            self.require()
+            provider = self.provider
+            envelope = self.settings.data["license"]
         payload = body.model_dump()
         payload.update(
             cluster_id=self.settings.cluster_id(),
-            license=self.settings.data["license"],
             snapshot=snapshot,
         )
+        if provider is self.client:
+            payload["license"] = envelope
         payload["message"] = redact(payload["message"])
         payload["history"] = [
             {**turn, "content": redact(turn["content"])} for turn in payload["history"]
@@ -159,7 +207,7 @@ class Assistant:
             return value
 
         payload["snapshot"] = clean(snapshot)
-        result = self.client.chat(payload)
+        result = provider.chat(payload)
         result["references"] = [{"id": k, "title": k.capitalize()} for k in KNOWLEDGE]
         return result
 

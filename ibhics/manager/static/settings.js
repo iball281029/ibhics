@@ -86,12 +86,12 @@ async function fileBase64(file, limit) {
   for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
   return btoa(binary);
 }
-async function jsonFile(file) {
-  if (file.size > 65536) throw new Error("Signed JSON files must be under 64 KiB.");
+async function jsonFile(file, limit = 65536) {
+  if (file.size > limit) throw new Error(`Signed JSON files must be under ${limit / 1024} KiB.`);
   return JSON.parse(await file.text());
 }
 settingsForm("#subscription-upload", async (f, form) => {
-  await post("/settings/subscription", await jsonFile(f.get("license")));
+  await post("/settings/subscription", await jsonFile(f.get("license"), 128 * 1024));
   window.dispatchEvent(new Event("ibhics-license-changed"));
   form.reset(); await renderSettings(); toast("Subscription verified and saved");
 });

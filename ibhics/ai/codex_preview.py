@@ -1,4 +1,4 @@
-"""Opt-in local UI testing with the operator's logged-in Codex CLI, never a SaaS backend."""
+"""Isolated local Codex adapter for previews and cluster-bound AI license passes."""
 
 import json
 import os
@@ -30,10 +30,24 @@ DISABLED = (
 )
 
 
-class CodexLocalPreview:
-    """Explicitly constructed by the local preview, not selected by production config."""
+AI_PASS_EXPIRED = "The AI pass in this license has expired. Contact your vendor for a new license."
 
-    def __init__(self, state_dir, *, enabled=False, binary=None, timeout=75, daily_limit=10):
+
+class CodexLocalPreview:
+    """Run tool-free Codex with a bounded quota and an optional explicit credential home."""
+
+    def __init__(
+        self,
+        state_dir,
+        *,
+        enabled=False,
+        binary=None,
+        timeout=75,
+        daily_limit=10,
+        codex_home=None,
+    ):
+        self.codex_home = Path(codex_home) if codex_home else None
+        self.auth_failed = False
         self.enabled = enabled
         self.binary = binary or shutil.which("codex")
         self.timeout, self.daily_limit = timeout, daily_limit
@@ -56,7 +70,7 @@ class CodexLocalPreview:
                     if key in payload
                 }
             )
-            # This test adapter uses the same account as the operator. Keep runs short.
+            # Keep history bounded for both local previews and license-backed requests.
             body.history = body.history[-4:]
             system, messages = prompt_messages(
                 body, payload.get("snapshot", {}) if body.include_context else {}
@@ -119,11 +133,13 @@ class CodexLocalPreview:
                     "NO_PROXY",
                 )
                 environment = {key: os.environ[key] for key in allowed if key in os.environ}
+                if self.codex_home:
+                    environment["CODEX_HOME"] = str(self.codex_home)
                 process = subprocess.Popen(
                     command,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE if self.codex_home else subprocess.DEVNULL,
                     text=True,
                     encoding="utf-8",
                     cwd=root,
@@ -131,7 +147,7 @@ class CodexLocalPreview:
                     start_new_session=True,
                 )
                 try:
-                    process.communicate(
+                    _, error = process.communicate(
                         json.dumps(messages, ensure_ascii=False), timeout=self.timeout
                     )
                 except subprocess.TimeoutExpired:
@@ -144,6 +160,29 @@ class CodexLocalPreview:
                     raise HTTPException(
                         503, "AI service is unavailable. Check connectivity or contact Support."
                     ) from None
+                if self.codex_home and process.returncode != 0:
+                    # Inspect only in memory. Never expose CLI stderr (it can contain secrets).
+                    detail = (error or "").lower()
+                    if process.returncode in (401, 403) or any(
+                        marker in detail
+                        for marker in (
+                            "401",
+                            "unauthorized",
+                            "authentication",
+                            "not logged in",
+                            "please log in",
+                            "refresh_token",
+                            "refresh token",
+                            "token expired",
+                            "token has expired",
+                            "invalid token",
+                            "invalid_grant",
+                            "auth token",
+                            "login required",
+                        )
+                    ):
+                        self.auth_failed = True
+                        raise HTTPException(503, AI_PASS_EXPIRED)
                 if process.returncode != 0 or not answer.is_file():
                     raise HTTPException(
                         503, "AI service is unavailable. Check connectivity or contact Support."

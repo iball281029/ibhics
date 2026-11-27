@@ -189,7 +189,7 @@ def install(api, settings, auth):
     @api.post("/settings/subscription")
     async def license_upload(request: Request):
         admin(request)
-        return settings.upload_license(await limited_json_body(request, 65536))
+        return settings.upload_license(await limited_json_body(request, 128 * 1024))
 
     @api.delete("/settings/subscription")
     def license_remove(request: Request):

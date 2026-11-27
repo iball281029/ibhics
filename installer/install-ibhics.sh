@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs inside the freshly installed system (from the preseed late_command): installs the
-# Debian packages and ibHiCS from the ISO, with no network, and arranges for ibhics-setup
-# to run on first boot.
+# Debian packages and ibHiCS from the ISO, and arranges for ibhics-setup on first boot.
+# Optional Codex CLI provisioning uses the network and warns if unavailable.
 set -eu
 SRC=/opt/ibhics-installer
 export DEBIAN_FRONTEND=noninteractive
@@ -32,6 +32,21 @@ deb http://deb.debian.org/debian trixie main contrib non-free-firmware
 deb http://deb.debian.org/debian trixie-updates main contrib non-free-firmware
 deb http://security.debian.org/debian-security trixie-security main contrib non-free-firmware
 LIST
+
+# Optional AI pass runtime. Offline nodes can finish installation and retry later.
+if ! command -v codex >/dev/null 2>&1; then
+    if { command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; } || {
+        timeout 120 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=15 update -qq &&
+        timeout 180 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=15 \
+            install -y --no-install-recommends nodejs npm
+    }; then
+        if ! timeout 180 npm install -g @openai/codex; then
+            echo "WARNING: Codex CLI unavailable (possibly offline). Retry: npm install -g @openai/codex" >&2
+        fi
+    else
+        echo "WARNING: AI runtime unavailable (possibly offline). Install nodejs npm, then npm install -g @openai/codex" >&2
+    fi
+fi
 
 python3 -m venv --system-site-packages /opt/ibhics/venv   # libvirt comes from python3-libvirt
 /opt/ibhics/venv/bin/pip install --no-index --find-links "$SRC/wheelhouse" ibhics

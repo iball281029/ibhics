@@ -262,6 +262,9 @@ def _state_files(args) -> list[Path]:
         state.with_name("container-ha.json"),
         state.with_name("p2v.json"),
         state.with_name("activity.sqlite3"),
+        # The license's AI pass; Codex refreshes it in place, so a standby needs the
+        # latest copy (replicated flat as state/auth.json, restored into ai-codex/).
+        args.users_file.with_name("ai-codex") / "auth.json",
     ]
 
 

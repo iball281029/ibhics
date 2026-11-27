@@ -8,12 +8,14 @@ const AI_TEXT = Object.freeze({
   privacy: "ข้อความจะถูกประมวลผลด้วยบริการ AI ภายนอก หากแนบสรุประบบ จะมีชื่อทรัพยากรและสถานะงานด้วย กรุณาไม่ส่งรหัสผ่านหรือข้อมูลลับ ประวัติแชตจะหายเมื่อรีโหลดหรือเริ่มแชตใหม่ค่ะ",
   status: {
     no_support: "ต้องมีสิทธิ์บริการ Support ที่ยังไม่หมดอายุ จึงจะใช้ผู้ช่วย AI ได้ค่ะ",
+    ai_pass_expired: "บัตรผ่าน AI ใน License นี้หมดอายุแล้ว กรุณาติดต่อผู้จำหน่ายเพื่อรับ License ใหม่ค่ะ",
     not_provisioned: "กรุณาติดต่อทีม Support เพื่อตั้งค่าบริการ AI ให้ระบบนี้ค่ะ",
     disabled: "ให้ผู้ดูแลระบบเปิดใช้ผู้ช่วย AI ก่อนนะคะ",
     ready: "พร้อมช่วยแล้วค่ะ คำตอบเป็นคำแนะนำ ควรตรวจสอบก่อนเปลี่ยนแปลงระบบนะคะ"
   },
   usage: (used, limit) => ` วันนี้ใช้ไป ${used} จาก ${limit} คำถาม`,
   errors: {
+    "The AI pass in this license has expired. Contact your vendor for a new license.": "บัตรผ่าน AI ใน License นี้หมดอายุแล้ว กรุณาติดต่อผู้จำหน่ายเพื่อรับ License ใหม่ค่ะ",
     "Daily AI allowance reached. Contact Support.": "ครบโควตาคำถาม AI สำหรับวันนี้แล้วค่ะ รีเซ็ตเวลา 07:00 น. (เวลาไทย) ข้อความนี้ไม่ได้หมายความว่า Support License หมดอายุ",
     "A preview question is already running. Please wait.": "น้อง ib กำลังตอบคำถามอื่นอยู่ค่ะ รอสักครู่แล้วลองใหม่นะคะ",
     "AI allowance reached. Contact Support.": "ครบโควตาคำถาม AI สำหรับวันนี้แล้วค่ะ รีเซ็ตเวลา 07:00 น. (เวลาไทย) ข้อความนี้ไม่ได้หมายความว่า Support License หมดอายุ",
@@ -38,6 +40,7 @@ const AI_LOCALES = Object.freeze({
     privacy: "Messages are processed by an external AI service. Optional context includes resource names and job status. Do not send passwords or secrets. Chat history is cleared on reload or New chat.",
     status: {
       no_support: "An active Support License is required to use AI chat.",
+      ai_pass_expired: "The AI pass in this license has expired. Contact your vendor for a new license.",
       not_provisioned: "Contact Support to configure the AI service for this installation.",
       disabled: "Ask your administrator to enable AI Assistant.",
       ready: "Ready. Answers are guidance; verify before changing your system."

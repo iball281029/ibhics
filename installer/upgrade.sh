@@ -6,7 +6,8 @@
 # VMs keep running. Kept as they are: /etc/ibhics (config, TLS, users), /var/lib/ibhics,
 # libvirt VMs, storage pools and networks, /root/.ssh. Replaced: the ibHiCS program in
 # /opt/ibhics/venv, its systemd units, the virtio-win drivers and the guest tools CD.
-# Debian packages the new version needs come from the ISO; nothing is downloaded.
+# Core Debian packages come from the ISO. Optional Codex CLI provisioning uses
+# the network and warns if unavailable.
 #
 # Before changing anything it saves a backup under /var/backups/ibhics/. If the new
 # version does not answer on its health check, the old one is put back by itself; to go
@@ -94,6 +95,21 @@ if [ -n "$missing" ]; then
             || die "could not install: $missing"
     fi
     rm -f "$LIST"
+fi
+
+# Optional AI pass runtime. Offline nodes can finish installation and retry later.
+if ! command -v codex >/dev/null 2>&1; then
+    if { command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; } || {
+        timeout 120 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=15 update -qq &&
+        timeout 180 apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=15 \
+            install -y --no-install-recommends nodejs npm
+    }; then
+        if ! timeout 180 npm install -g @openai/codex; then
+            echo "WARNING: Codex CLI unavailable (possibly offline). Retry: npm install -g @openai/codex" >&2
+        fi
+    else
+        echo "WARNING: AI runtime unavailable (possibly offline). Install nodejs npm, then npm install -g @openai/codex" >&2
+    fi
 fi
 
 # CRIU support for LXC shared-storage migration; preserve other local options.
