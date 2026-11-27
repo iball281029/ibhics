@@ -81,7 +81,19 @@ def test_waits_while_storage_probe_fails():
 def test_refuses_disks_outside_managed_storage():
     rec, calls = make(disks=({**DISK, "filename": "/var/lib/libvirt/images/x.qcow2"},))
     out = rec.recover(Dom(), 1)
-    assert not out["recovered"] and "outside" in out["reason"] and calls == []
+    assert not out["recovered"] and "managed storage" in out["reason"] and calls == []
+
+
+def test_skips_local_firmware_and_seed_files_but_reopens_managed_disk():
+    local = [
+        {"driver": "file", "filename": "/usr/share/OVMF/OVMF_CODE_4M.ms.fd", "node-name": "p0"},
+        {"driver": "file", "filename": "/var/lib/ibhics/seeds/vm-seed.iso", "node-name": "s1"},
+    ]
+    rec, calls = make(disks=(*local, DISK))
+    dom = Dom()
+    out = rec.recover(dom, 1)
+    assert out["recovered"] and dom.resumed == 1
+    assert {c["arguments"]["options"][0]["node-name"] for c in calls} == {"libvirt-2-storage"}
 
 
 def test_stops_when_qemu_refuses_reopen():

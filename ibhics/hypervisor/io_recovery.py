@@ -128,9 +128,11 @@ class IORecovery:
         if not files:
             result["reason"] = "no file-backed disks to reopen"
             return result
-        outside = [o["filename"] for o in files if not self._allowed(o["filename"])]
-        if outside:
-            result["reason"] = "disk outside managed storage; left for an operator"
+        # Local files (UEFI firmware/NVRAM, seed ISOs) do not lose their descriptor when
+        # shared storage drops: reopen only the nodes on managed storage.
+        files = [o for o in files if self._allowed(o["filename"])]
+        if not files:
+            result["reason"] = "no disk on managed storage; left for an operator"
             return result
         dirs = sorted({os.path.dirname(o["filename"]) for o in files})
         if not all(self.probe(d) for d in dirs):

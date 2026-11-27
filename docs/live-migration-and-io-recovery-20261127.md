@@ -40,3 +40,23 @@ inotify watch on its cgroup2 files; CRIU resolves it outside the container's cgr
 namespace while restoring). This is a CRIU/LXC limit for systemd guests on cgroup v2,
 not an ibHiCS bug. After each failed restore the container was cold-started on its owner
 (.103); it runs there now with its own IP.
+
+## NFS grace 240 s applied on .104 (17:02, user approved)
+
+Applied without `systemctl restart nfs-server` (its `exportfs -r` would drop the exports
+that drbd-reactor's OCF exportfs resources add, since /etc/exports is empty) and with the
+OCF server scope kept: `nfsdctl threads 0`, write `nfsv4gracetime=240`, `nfsv4leasetime=90`,
+then `nfsdctl threads 16` inside `unshare -u` with hostname 172.16.12.106. nfsd was down
+about 7 s. Result: gracetime 240, leasetime 90, scope 172.16.12.106, exports unchanged.
+Do not use `nfsdctl autostart` here: it failed with "lockd configuration failure".
+
+Effect: the kernel ended grace after 3 s ("all clients done reclaiming"), yet the .104
+client (it mounts its own VIP) logged "lost 4 locks" and its three VMs paused with an
+I/O error; the two VMs on .103 were not affected. The agent resumed PNetLab-27H1-V8.12,
+a manual run of the same code resumed npm-vm. OpenP9 was refused ("disk outside managed
+storage") because its UEFI firmware, NVRAM and seed ISO are local files; the recovery
+now skips local files and reopens only managed-storage nodes (new test), deployed on both
+nodes, agent restarted, OpenP9 resumed. All 5 VMs: running, guest agent answers.
+
+Next: the early grace lift lets a slow client lose its locks. Consider keeping the full
+grace period (disable early lift in nfsdcld) at the next maintenance window.
